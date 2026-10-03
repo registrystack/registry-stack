@@ -4,7 +4,7 @@ This beta integration is installed from a Registry Stack source release.
 It is not yet listed in Zed Extensions and no release artifact is provided.
 Set up a project with `python3 editors/configure.py <product> <project>` before
 opening it. The helper uses the current product's maintained schemas and check
-commands where they exist. For Evidence and Relay, it runs their existing
+commands where they exist. For Evidence, it runs their existing
 `tooling editor` command. Install this integration for semantic navigation.
 
 This extension attaches the shared Registry Stack language server to Zed's built-in YAML and JSON languages.
@@ -15,7 +15,7 @@ remains responsible for YAML syntax, schema validation, formatting, and ordinary
 ## Install and launch
 
 Zed requires Rust installed through `rustup`, the `zed` command-line tool, and a matching
-`evidencectl` or `relayctl`. Run the installer once from the repository root:
+`evidencectl`. Run the installer once from the repository root:
 
 ```console
 ./editors/install.sh zed
@@ -50,14 +50,14 @@ Zed trust boundary, not missing automation.
 ## Supported projects
 
 The shared server covers Base Registry Engine, Casework, Scheduling, Messaging, Discovery,
-Manifest, Render, Evidence OID4VCI, Evidence, and Relay authoring projects. Run
+Manifest, Render, Evidence OID4VCI, and Evidence authoring projects. Run
 `python3 editors/configure.py <product> <project>` from this source checkout to set up
 editor settings and check tasks. Manifest and Evidence OID4VCI projects with an arbitrary
 authored YAML filename need `--document <project-relative.yaml>`; the helper writes a
 project marker so the language server can identify that file.
 
 The Zed extension launches the same language server for every product. A matching
-`evidencectl` or `relayctl` supplies it for all project families; the launcher does not
+`evidencectl` supplies it for all project families; the launcher does not
 need a separate server binary for each product.
 
 Rhai request-preparation and derivation scripts (`*.rhai`) get no support from this extension: no
@@ -98,9 +98,9 @@ means in practice.
 - If the development extension does not compile, confirm `rustup` owns the active Rust installation
   and that `cargo check` for `wasm32-wasip2` passes.
 - If Zed cannot find the server, close it, export the updated `PATH`, and relaunch it from that
-  terminal. The launcher tries `evidencectl` and then `relayctl` on `PATH`, accepts only a CLI
+  terminal. The launcher tries matching `evidencectl` copies on `PATH`, accepts only a CLI
   reporting this extension's version (or that version with `-dev`), and checks that it answers
-  `tooling language-server --help`. If the first CLI is old or lacks the server, the second can
+  `tooling language-server --help`. If an earlier copy is old or lacks the server, a later matching copy can
   still serve the worktree. A standalone `registry-language-server` has no version command; select
   it through `lsp.registry-stack.binary.path` when iterating on source.
 - Use `dev: open language server logs` to inspect how the server was launched. Use

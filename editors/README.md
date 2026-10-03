@@ -39,10 +39,9 @@ cannot replace unsaved content.
 | Registry Render | `manifest.yaml` declaring `RenderBundle` | Documents and their template, schema, and locale files |
 | Evidence wallet delivery | Explicitly selected configuration | Configuration sections and contained, configuration-relative key-file navigation |
 | Evidence | `evidence-project.yaml`, or the legacy OpenAPI/questions pair | Questions, sources, selectors, policies, facts, and authored file references |
-| Registry Relay | `registry.yaml` declaring `RegistryContract` | Governed resources, operations, profiles, bindings, and file references |
 
 Each family uses its own names and scopes. A BReg `registry.yaml` never receives
-Relay diagnostics. Discovery's remote vocabulary identifiers are not unresolved
+diagnostics from another product. Discovery's remote vocabulary identifiers are not unresolved
 local references. The server does not fetch remote descriptions, execute scripts,
 query databases, or read private key bytes. Navigation to a contained key file
 opens it only when the author requests that editor action.
@@ -64,7 +63,7 @@ python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/
 ```
 
 The product argument also accepts `casework`, `messaging`, `discovery`,
-`render`, `evidence`, and `relay`. Manifest and wallet-delivery setup records the
+`render` and `evidence`. Manifest and wallet-delivery setup records the
 selected document in `.registry-stack-editor/project.json`, so an arbitrary
 configuration filename can be recognized without claiming unrelated YAML.
 
@@ -84,10 +83,8 @@ the error identifies the file to resolve before retrying. Rerun setup from the
 matching checkout after upgrading. The generated setup contains local paths;
 regenerate it when moving a workspace.
 
-Evidence and Relay retain their canonical `tooling editor` schema generators.
-The shared helper invokes the matching CLI for those products. Relay's generator
-supports project-local settings only, so use its project directory as the workspace.
-Schema setup and
+Evidence retains its canonical `tooling editor` schema generator.
+The shared helper invokes the matching Evidence CLI. Schema setup and
 CLI tasks can be used without installing the semantic extension.
 
 ## Install
@@ -97,10 +94,9 @@ project's version-matched schema settings with its adopter CLI:
 
 ```console
 evidencectl tooling editor /path/to/evidence-project
-relayctl tooling editor /path/to/relay-v2-project
 ```
 
-Install the `evidencectl` or `relayctl` version that matches this source checkout, then install
+Install the `evidencectl` version that matches this source checkout, then install
 an integration once from the repository root:
 
 ```console
@@ -109,7 +105,7 @@ an integration once from the repository root:
 ```
 
 The installer verifies a CLI's version and embedded language server without reading or changing a
-project. It tries `evidencectl` and `relayctl` in that order, and a candidate that
+project. It tries matching `evidencectl` copies on PATH, and a candidate that
 fails either check does not stop the one behind it. VS Code is packaged and installed into the active profile. Pass
 `--profile <existing-name>` to select another VS Code profile. The local VSIX records the verified
 CLI path, so an already-running VS Code process does not need to inherit the installer's `PATH`.
@@ -132,7 +128,7 @@ a project created before the marker existed, the legacy pair of a `source.openap
 `questions` directory. Either form gets the same cross-file definitions, references,
 workspace/document symbols, and reference diagnostics over its authoring documents (selectors,
 questions, sources, access policies, and the schemas they cite) that a `registry.yaml` root
-gets for Relay.
+gets for supported products.
 
 Project setup and schema refresh use `evidencectl`:
 
@@ -144,81 +140,21 @@ evidencectl tooling editor /path/to/evidence-project
 `evidencectl tooling editor` writes project-local, version-matched YAML schema
 mappings. Run it again after changing the authoring project's shape.
 
-## Relay V2 projects
-
-A Relay V2 project is rooted by a regular `registry.yaml` that declares a
-governed contract; `runtime.yaml` and the exact governed files named by the
-contract join the same bounded index.
-Configure version-matched schemas and refresh them after upgrading Relay V2:
-
-```console
-relayctl tooling editor /path/to/relay-v2-project
-```
-
-The language server validates the current buffers through the shared Relay V2
-authoring compiler, navigates the contract's named sources, resources,
-Record properties, statistical components, disclosure and access profiles,
-operations, runtime bindings, and
-governed files, and reports diagnostics under the `relay-v2` source. It never
-opens the project's SQLite source.
-
-Two gaps to know about before relying on this for Evidence work:
-
-- The language server completes Evidence YAML values it can name a candidate for: cross-file
-  references (source, selector profile, operation, and question names, and similar) and the fact
-  paths a source's operation makes selectable. Manually invoking completion (Ctrl+Space) always
-  returns that list, because the server answers an invoked request and one opened by a trigger
-  character (`:`, `.`, `/`) identically. An automatic popup while typing inside a string, without
-  invoking it, still needs `editor.quickSuggestions.strings: true`, since VS Code decides whether
-  to ask at all before the request reaches the server. Two things get no candidates from this
-  server at all: a mapping key, whose completion comes from the generated schema through the
-  `redhat.vscode-yaml` extension rather than from here, and a source's `request.prepareScript` and
-  `extractScript` pointers, which the project index does not walk into references yet.
-- Rhai request-preparation and derivation scripts (`*.rhai`) get no editor behavior from this
-  integration in either editor. Neither the VS Code client's document selector nor the Zed
-  extension associates `.rhai` files with the language server yet; the watcher that reindexes a
-  project on an external change to one is not the same as offering completion, diagnostics, or
-  navigation inside it.
-
 ## Local end-to-end smoke test
 
-Run the commands in this section from the repository root. They create a disposable HTTP starter
-outside the checkout, so the diagnostic checks below cannot modify a tracked golden project.
+Use Evidence's maintained editor journey from an authored project with a named
+source, question, and selector profile. Configure it with:
 
 ```console
-export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
-export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
-relayctl --version
-relayctl init "$REGISTRY_STACK_SMOKE_PROJECT"
-relayctl tooling editor "$REGISTRY_STACK_SMOKE_PROJECT"
+evidencectl tooling editor /path/to/evidence-project
 ```
 
-Keep that terminal open so the two variables remain available. Then follow the editor-specific
-installation and launch instructions:
-
-- [VS Code](vscode/README.md#install-and-launch)
-- [Zed](zed/README.md#install-and-launch)
-
-### Expected behavior
-
-Use the following checks in either editor:
-
-1. Confirm the Registry Stack language-server output or log says that the project was indexed.
-2. In `registry.yaml`, invoke **Go to Definition** on `registry` in the resource's
-   `source: {source: registry, ...}` binding. It must open the `registry` key under `sources`.
-3. Invoke **Find References** on that source definition. Results must include the resource binding.
-4. Invoke **Go to Definition** on `default` in `defaultAccessProfile: default`. It must open the
-   `default` key under the operation's `accessProfiles`.
-5. Search workspace symbols for `record`. Results must include the Record resource and its
-   `recordValue` property. The document outline for `registry.yaml` must list the Registry, source,
-   resource, property, disclosure profile, access profile, and read operation.
-6. Temporarily change the resource's source reference to `source: missing-source`. The editor
-   must report an unknown Relay V2 source reference. Restore `registry` and
-   confirm that the diagnostic clears.
-
-The YAML language server may report additional schema or syntax diagnostics.
-Semantic diagnostics identify their product in the source, such as `relay-v2`,
-`evidence`, or `breg`.
+Follow the installation instructions for [VS Code](vscode/README.md#install-and-launch)
+or [Zed](zed/README.md#install-and-launch). In a question, Go to Definition on its
+source or selector-profile name must open the authored definition. Find References
+must include the question. Temporarily use a nonexistent source name and confirm
+that the Evidence diagnostic appears; restore the name and confirm it clears.
+The editor indexes reviewed metadata only and performs no source request.
 
 ### Automated checks
 
@@ -228,7 +164,6 @@ The same core behavior has non-GUI coverage:
 bash editors/tests/install_test.sh
 python3 -m unittest discover -s editors/tests -p 'test_*.py'
 cargo test --locked -p registry-language-server
-cargo test --locked -p registry-relayctl --test language_server
 cargo build --locked -p registry-language-server
 cd editors/vscode && npm ci && npm test
 ```
@@ -250,7 +185,7 @@ When finished, close the smoke project and remove the temporary directory shown 
 
 ## Develop the language server from source
 
-The installer deliberately uses a matching `evidencectl` or `relayctl` from `PATH`, which exercises the
+The installer deliberately uses a matching `evidencectl` from `PATH`, which exercises the
 language server embedded in the installed release. To iterate on language-server source changes,
 build the standalone server and configure the editor to use it explicitly:
 

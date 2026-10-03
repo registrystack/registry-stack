@@ -33,7 +33,7 @@ Options:
 
 Installed commands:
   breg bregctl casework caseworkctl discovery discoveryctl evidence
-  evidence-oid4vci evidencectl registry-manifest relay relayctl
+  evidence-oid4vci evidencectl registry-manifest
 EOF
 }
 
@@ -80,17 +80,13 @@ binaries=(
 	evidence-oid4vci
 	evidencectl
 	registry-manifest
-	relay
-	relayctl
 )
 
 cd "$repo_root"
 
 # The invocation grouping follows release/scripts/build-release-binaries.sh.
-# bregctl and relayctl enable authoring-only tooling features on their server
-# libraries, and one cargo invocation unifies features across everything it
-# builds, so the breg and relay servers build apart from them to keep the
-# production feature set.
+# bregctl enables authoring-only tooling features on its server library.
+# Build the server separately to keep its production feature set.
 cargo build --locked --profile "$profile" \
 	-p registry-manifest-cli \
 	-p registry-evidence \
@@ -105,11 +101,7 @@ cargo build --locked --profile "$profile" \
 	-p registry-breg --bin breg --features runtime
 
 cargo build --locked --profile "$profile" \
-	-p registry-relay-v2 --bin relay --no-default-features
-
-cargo build --locked --profile "$profile" \
-	-p registry-bregctl \
-	-p registry-relayctl
+	-p registry-bregctl
 
 for binary in "${binaries[@]}"; do
 	if [ ! -x "$bin_dir/$binary" ]; then

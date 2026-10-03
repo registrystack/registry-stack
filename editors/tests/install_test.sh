@@ -168,32 +168,18 @@ assert_contains 'Workspace trust remains your decision' "${vscode_output}"
 assert_contains 'Project setup: python3 editors/configure.py <product> <project>' "${vscode_output}"
 assert_contains 'Using evidencectl 0.16.3' "${vscode_output}"
 
-# A registryctl on PATH is ignored, and Relay V2 can install from relayctl
-# alone when evidencectl is absent.
+# Retired Relay tooling cannot host the server when Evidence tooling is absent.
 reset_log
 rm -f "${FAKE_BIN}/evidencectl"
 ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/relayctl"
-relayctl_output="${TEST_ROOT}/relayctl-output"
-PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" "${INSTALLER}" vscode > "${relayctl_output}"
-assert_contains 'relayctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
-assert_not_contains 'registryctl <' "${COMMAND_LOG}"
-assert_not_contains 'evidencectl <' "${COMMAND_LOG}"
-assert_contains 'Using relayctl 0.16.3' "${relayctl_output}"
+retired_output="${TEST_ROOT}/retired-output"
+if PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" "${INSTALLER}" vscode > "${retired_output}" 2>&1; then
+  fail 'retired relayctl must not satisfy the language-server host requirement'
+fi
+assert_contains "required external command 'evidencectl' was not found on PATH" "${retired_output}"
+assert_not_contains 'relayctl <' "${COMMAND_LOG}"
 rm -f "${FAKE_BIN}/relayctl"
 ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/evidencectl"
-
-# An older evidencectl must not hide the matching Relay V2 CLI that can host
-# this checkout's language server.
-reset_log
-ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/relayctl"
-older_clis_output="${TEST_ROOT}/older-clis-output"
-FAKE_EVIDENCECTL_VERSION=0.10.0 \
-  "${INSTALLER}" vscode > "${older_clis_output}"
-assert_not_contains 'registryctl <' "${COMMAND_LOG}"
-assert_contains 'evidencectl <--version>' "${COMMAND_LOG}"
-assert_contains 'relayctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
-assert_contains 'Using relayctl 0.16.3' "${older_clis_output}"
-rm -f "${FAKE_BIN}/relayctl"
 
 reset_log
 "${INSTALLER}" vscode > /dev/null
@@ -245,18 +231,6 @@ assert_contains 'this checkout is 0.16.3 but evidencectl is 0.10.0' "${mismatch_
 assert_not_contains 'registryctl <' "${COMMAND_LOG}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
-# Both supported CLIs are on PATH and evidencectl is version-mismatched, so
-# the installer must fall through to relayctl instead of aborting.
-reset_log
-ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/relayctl"
-both_present_output="${TEST_ROOT}/both-present-output"
-FAKE_EVIDENCECTL_VERSION=0.10.0 "${INSTALLER}" vscode > "${both_present_output}"
-assert_not_contains 'registryctl <' "${COMMAND_LOG}"
-assert_contains 'evidencectl <--version>' "${COMMAND_LOG}"
-assert_contains 'relayctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
-assert_contains 'Using relayctl 0.16.3' "${both_present_output}"
-rm -f "${FAKE_BIN}/relayctl"
-
 # An evidencectl built from this checkout reports a development version, which
 # is the ordinary case for anyone running this installer from source.
 reset_log
@@ -281,8 +255,7 @@ assert_not_contains 'npm <' "${COMMAND_LOG}"
 # the version-mismatch cases above (which get a version back and reject it).
 # Both failure shapes below must still name the reason on stderr. PATH is
 # narrowed to FAKE_BIN plus REAL_TOOLS_PATH so evidencectl is genuinely the
-# only supported Registry Stack CLI found rather than falling through to a
-# real relayctl elsewhere on this machine.
+# only supported Registry Stack CLI found.
 reset_log
 version_probe_exit_output="${TEST_ROOT}/version-probe-exit-output"
 if FAKE_EVIDENCECTL_VERSION_EXIT=7 PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
