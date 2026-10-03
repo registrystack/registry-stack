@@ -2336,13 +2336,8 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
     assert_eq!(action.href(), recovered.href());
     assert_eq!(action.if_match(), recovered.if_match());
     assert_eq!(action.body(), recovered.body());
-    let legacy = BRegPreparedLifecycle::from_slice(&legacy_saved).unwrap();
-    let (legacy_recovered, legacy_key) = fixture
-        .client
-        .recover_lifecycle_action(&authority, &legacy)
-        .unwrap();
-    assert_eq!(legacy_recovered, action);
-    assert_eq!(legacy_key.as_str(), "attempt-apply");
+    // Version 1 evidence carried the record itself; only version 2 is accepted.
+    assert!(BRegPreparedLifecycle::from_slice(&legacy_saved).is_err());
     fixture
         .client
         .execute_lifecycle_action(&recovered, &key)

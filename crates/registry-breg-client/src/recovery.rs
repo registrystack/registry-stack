@@ -70,19 +70,6 @@ struct CreateEvidence {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LegacyLifecycleEvidence {
-    version: u8,
-    source: String,
-    registry_revision: String,
-    record: Value,
-    href: String,
-    body: String,
-    if_match: String,
-    idempotency_key: String,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct LifecycleEvidence {
     version: u8,
     source: String,
@@ -90,11 +77,6 @@ struct LifecycleEvidence {
     action: Value,
     body: String,
     idempotency_key: String,
-}
-
-enum DecodedLifecycleEvidence {
-    Legacy(LegacyLifecycleEvidence),
-    Minimal(LifecycleEvidence),
 }
 
 capsule!(BRegPreparedCreate, CreateEvidence);
@@ -124,7 +106,7 @@ impl BRegPreparedLifecycle {
         Self::from_slice(&bytes)
     }
 
-    fn decode(&self) -> Result<DecodedLifecycleEvidence, BaseRegistryClientError> {
+    fn decode(&self) -> Result<LifecycleEvidence, BaseRegistryClientError> {
         let value = serde_json::from_slice(&self.0).map_err(|_| refusal())?;
         decode_lifecycle_evidence(value)
     }
@@ -136,16 +118,9 @@ impl fmt::Debug for BRegPreparedLifecycle {
     }
 }
 
-fn decode_lifecycle_evidence(
-    value: Value,
-) -> Result<DecodedLifecycleEvidence, BaseRegistryClientError> {
+fn decode_lifecycle_evidence(value: Value) -> Result<LifecycleEvidence, BaseRegistryClientError> {
     match value.get("version").and_then(Value::as_u64) {
-        Some(1) => serde_json::from_value(value)
-            .map(DecodedLifecycleEvidence::Legacy)
-            .map_err(|_| refusal()),
-        Some(2) => serde_json::from_value(value)
-            .map(DecodedLifecycleEvidence::Minimal)
-            .map_err(|_| refusal()),
+        Some(2) => serde_json::from_value(value).map_err(|_| refusal()),
         _ => Err(refusal()),
     }
 }
@@ -273,21 +248,6 @@ impl BaseRegistryClient {
         prepared: &BRegPreparedLifecycle,
     ) -> Result<(BRegLifecycleAction, BRegIdempotencyKey), BaseRegistryClientError> {
         let evidence = prepared.decode()?;
-        match evidence {
-            DecodedLifecycleEvidence::Legacy(evidence) => {
-                self.recover_legacy_lifecycle_action(authority, evidence)
-            }
-            DecodedLifecycleEvidence::Minimal(evidence) => {
-                self.recover_minimal_lifecycle_action(authority, evidence)
-            }
-        }
-    }
-
-    fn recover_minimal_lifecycle_action(
-        &self,
-        authority: &BRegLifecycleAuthority,
-        evidence: LifecycleEvidence,
-    ) -> Result<(BRegLifecycleAction, BRegIdempotencyKey), BaseRegistryClientError> {
         if evidence.version != 2
             || evidence.source != self.source_binding()
             || !authority.matches_source(&evidence.source)
@@ -298,53 +258,6 @@ impl BaseRegistryClient {
         let action = authority
             .recover_action(evidence.action, &evidence.body)
             .map_err(|_| refusal())?;
-        let key = BRegIdempotencyKey::parse(evidence.idempotency_key).map_err(|_| refusal())?;
-        Ok((action, key))
-    }
-
-    fn recover_legacy_lifecycle_action(
-        &self,
-        authority: &BRegLifecycleAuthority,
-        evidence: LegacyLifecycleEvidence,
-    ) -> Result<(BRegLifecycleAction, BRegIdempotencyKey), BaseRegistryClientError> {
-        if evidence.version != 1
-            || evidence.source != self.source_binding()
-            || evidence.registry_revision != authority.registry_revision()
-        {
-            return Err(refusal());
-        }
-        let representation = if evidence.record.get("@context").is_some() {
-            RegistryRecordRepresentation::JsonLdSharedContext
-        } else {
-            RegistryRecordRepresentation::Json
-        };
-        let RegistryRecordResponse::Single(record) =
-            RegistryRecordResponse::from_value(evidence.record, representation)
-                .map_err(|_| refusal())?
-        else {
-            return Err(refusal());
-        };
-        let mut matches = self
-            .lifecycle_actions(authority, &record)
-            .map_err(|_| refusal())?
-            .into_iter()
-            .filter(|action| action.href() == evidence.href);
-        let action = matches
-            .next()
-            .filter(|_| matches.next().is_none())
-            .ok_or_else(refusal)?;
-        let body =
-            crate::strict_json::from_slice(evidence.body.as_bytes()).map_err(|_| refusal())?;
-        let action = match body.get("reason") {
-            Some(Value::String(reason)) => action.with_reason(reason).map_err(|_| refusal())?,
-            Some(_) => return Err(refusal()),
-            None => action,
-        };
-        if action.if_match().as_str() != evidence.if_match
-            || serde_json::to_string(action.body()).map_err(|_| refusal())? != evidence.body
-        {
-            return Err(refusal());
-        }
         let key = BRegIdempotencyKey::parse(evidence.idempotency_key).map_err(|_| refusal())?;
         Ok((action, key))
     }
