@@ -2043,17 +2043,10 @@ async fn real_postgres_review_feed_checkpoint_uses_the_client_uuid_cursor_contra
                 request_id uuid NOT NULL,
                 proposal_version bigint NOT NULL,
                 PRIMARY KEY (request_entity_id,request_id,proposal_version)
-            );
-            CREATE TABLE registry_internal.registry_request_review_feed_checkpoints (
-                authority text PRIMARY KEY CHECK (authority <> '' AND octet_length(authority) <= 128),
-                cursor text CHECK (cursor IS NULL OR (cursor <> '' AND octet_length(cursor) <= 4096)),
-                updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()
-            );
-            INSERT INTO registry_internal.registry_request_review_feed_checkpoints(authority,cursor)
-            VALUES ('legacy-casework','opaque-trial-cursor');",
+            );",
         )
         .await
-        .expect("proposal parent and legacy checkpoint tables");
+        .expect("proposal parent table");
     install_review_storage_for_test(&database.admin, &database.runtime_role)
         .await
         .expect("review storage");
@@ -2070,17 +2063,6 @@ async fn real_postgres_review_feed_checkpoint_uses_the_client_uuid_cursor_contra
         .expect("checkpoint cursor type")
         .get::<_, String>(0);
     assert_eq!(cursor_type, "uuid");
-    let reset_cursor = database
-        .admin
-        .query_one(
-            "SELECT cursor FROM registry_internal.registry_request_review_feed_checkpoints
-              WHERE authority='legacy-casework'",
-            &[],
-        )
-        .await
-        .expect("upgraded legacy checkpoint")
-        .get::<_, Option<Uuid>>(0);
-    assert_eq!(reset_cursor, None, "opaque trial cursor restarts safely");
     let accepted = Uuid::from_u128(0xc0ffee);
     database
         .admin

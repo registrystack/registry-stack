@@ -1501,18 +1501,6 @@ pub(crate) async fn install(
              ALTER TABLE registry_internal.registry_request_review_submissions
                  ADD COLUMN IF NOT EXISTS withdrawn boolean NOT NULL DEFAULT false;
              ALTER TABLE registry_internal.registry_request_review_submissions
-                 ADD COLUMN IF NOT EXISTS producer_id text;
-             DO $$ BEGIN
-                 IF EXISTS (
-                     SELECT 1 FROM registry_internal.registry_request_review_submissions
-                      WHERE producer_id IS NULL
-                 ) THEN
-                     RAISE EXCEPTION 'legacy review submissions require explicit producer cutover';
-                 END IF;
-             END $$;
-             ALTER TABLE registry_internal.registry_request_review_submissions
-                 ALTER COLUMN producer_id SET NOT NULL;
-             ALTER TABLE registry_internal.registry_request_review_submissions
                  ADD COLUMN IF NOT EXISTS recovery_deadline timestamptz NOT NULL
                      DEFAULT (transaction_timestamp()+interval '30 days');
              ALTER TABLE registry_internal.registry_request_review_submissions
@@ -1614,27 +1602,7 @@ pub(crate) async fn install(
         .map_err(|_| MutationError::Unavailable)?;
     client
         .batch_execute(
-            "DO $$
-             BEGIN
-                 IF EXISTS (
-                     SELECT 1 FROM information_schema.columns
-                      WHERE table_schema='registry_internal'
-                        AND table_name='registry_request_review_feed_checkpoints'
-                        AND column_name='cursor' AND data_type='text'
-                 ) THEN
-                     -- Opaque cursors from the trial contract cannot be interpreted as
-                     -- event UUIDs. Restarting the idempotent feed is the safe upgrade.
-                     UPDATE registry_internal.registry_request_review_feed_checkpoints
-                        SET cursor=NULL,updated_at=transaction_timestamp()
-                      WHERE cursor IS NOT NULL;
-                     ALTER TABLE registry_internal.registry_request_review_feed_checkpoints
-                         DROP CONSTRAINT IF EXISTS registry_request_review_feed_checkpoints_cursor_check;
-                     ALTER TABLE registry_internal.registry_request_review_feed_checkpoints
-                         ALTER COLUMN cursor TYPE uuid USING NULL::uuid;
-                 END IF;
-             END
-             $$;
-             ALTER TABLE registry_internal.registry_request_application_jobs
+            "ALTER TABLE registry_internal.registry_request_application_jobs
                  ADD COLUMN IF NOT EXISTS claim_token uuid;
              ALTER TABLE registry_internal.registry_request_application_jobs
                  ADD COLUMN IF NOT EXISTS action_href text;
