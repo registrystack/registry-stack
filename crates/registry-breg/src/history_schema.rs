@@ -832,7 +832,6 @@ mod tests {
             temporal: Some(CompiledTemporal {
                 start_field: "valid-from".to_owned(),
                 end_field: "valid-to".to_owned(),
-                scope_fields: vec!["person".to_owned()],
             }),
             canonical_id: logical("id", "id", FieldTypeSource::Uuid),
             stored_fields: fields,

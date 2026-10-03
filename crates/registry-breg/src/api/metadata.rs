@@ -596,9 +596,6 @@ fn readable_text_or_string(surface: &AuthorizedSurface<'_>, id: &str) -> bool {
 
 fn temporal_scope_title_field(surface: &AuthorizedSurface<'_>) -> Option<String> {
     let temporal = surface.response_entity.temporal.as_ref()?;
-    if let [field] = temporal.scope_fields.as_slice() {
-        return readable_text_or_string(surface, field).then(|| field.clone());
-    }
     let fields = surface
         .response_entity
         .constraints
