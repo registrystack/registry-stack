@@ -2164,7 +2164,6 @@ impl PostgresRecordMutationService {
                     | MutationError::Unavailable
                     | MutationError::RetryableConflict
                     | MutationError::CommitUnresolved
-                    | MutationError::LegacyReviewDataPresent
                     | MutationError::RetiredAuditRowsPresent
                     | MutationError::MigrationLockHeld
                     | MutationError::PackagePinMismatch(_)

@@ -1540,9 +1540,6 @@ impl RequestState {
             "submitted" => Ok(Self::Submitted),
             "cancelled" => Ok(Self::Cancelled),
             "applied" => Ok(Self::Applied),
-            "approved" | "needs_changes" | "rejected" | "canceled" => {
-                Err(WorkflowError::OccupiedLegacyApprovalState)
-            }
             _ => Err(WorkflowError::InvalidRestoredState),
         }
     }
@@ -2254,8 +2251,6 @@ pub enum WorkflowError {
     AlreadyApplied,
     #[error("restored request workflow state is inconsistent")]
     InvalidRestoredState,
-    #[error("request occupies an obsolete local approval state and requires explicit migration")]
-    OccupiedLegacyApprovalState,
 }
 
 fn validate_effects(
@@ -2777,11 +2772,11 @@ mod source_owned_review_tests {
 
     #[cfg(feature = "runtime")]
     #[test]
-    fn occupied_local_approval_states_require_explicit_migration() {
-        for state in ["approved", "needs_changes", "rejected", "canceled"] {
+    fn unknown_stored_request_states_are_invalid() {
+        for state in ["approved", "needs_changes", "rejected", "canceled", ""] {
             assert_eq!(
                 RequestState::from_storage(state),
-                Err(WorkflowError::OccupiedLegacyApprovalState)
+                Err(WorkflowError::InvalidRestoredState)
             );
         }
     }
