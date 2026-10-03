@@ -1083,8 +1083,8 @@ impl BRegMetadataOperation {
     }
 
     /// Change-request metadata this operation's profile may read, such as
-    /// `review_state`. An engine that predates the grant projection names
-    /// none, so a caller that needs one refuses rather than assumes it.
+    /// `review_state`. Empty when the profile holds no such grant, so a caller
+    /// that needs one refuses rather than assumes it.
     #[must_use]
     pub fn readable_request_fields(&self) -> &[String] {
         &self.readable_request_fields
@@ -3294,11 +3294,8 @@ fn parse_operation(value: Value) -> Result<BRegMetadataOperation, BRegMetadataEr
         .remove("readPath")
         .map(parse_read_path)
         .transpose()?;
-    let readable_request_fields = operation
-        .remove("readableRequestFields")
-        .map(parse_request_metadata_fields)
-        .transpose()?
-        .unwrap_or_default();
+    let readable_request_fields =
+        parse_request_metadata_fields(required(&mut operation, "readableRequestFields")?)?;
     finish(operation)?;
     Ok(BRegMetadataOperation {
         id,

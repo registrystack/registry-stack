@@ -410,18 +410,11 @@ async fn reader_diagnostic_refuses_missing_get_or_routing_projection_grants() {
 
 #[tokio::test]
 async fn reader_diagnostic_refuses_a_reader_whose_grant_conceals_review_state() {
-    for concealed in [json!(["reason"]), Value::Null] {
+    for concealed in [json!(["reason"]), json!([])] {
         let server = MockServer::start().await;
         let mut metadata = diagnostic_metadata(&["get", "list"], &[("record", "record")]);
         for operation in metadata["operations"].as_array_mut().unwrap() {
-            if concealed.is_null() {
-                operation
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("readableRequestFields");
-            } else {
-                operation["readableRequestFields"] = concealed.clone();
-            }
+            operation["readableRequestFields"] = concealed.clone();
         }
         mount_reader_diagnostic(&server, metadata, 200, false).await;
 

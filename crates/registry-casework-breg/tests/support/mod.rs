@@ -14,7 +14,7 @@ pub fn lifecycle_metadata(revision: &str) -> Value {
             "requiredCapabilities":["change_request_lifecycle"],"entityLabel":"Corrections",
             "identifier":{"apiName":"id","location":"envelope"},"titleFields":["value"],
             "fields":[{"id":"value","apiName":"value","label":"Value","schema":{"type":"string"},"required":true,"nullable":true,"readOnly":false,"removable":true}],
-            "readableFields":["value"],"createWritableFields":[],"patchWritableFields":[],"selectors":[],"query":null,
+            "readableFields":["value"],"readableRequestFields":[],"createWritableFields":[],"patchWritableFields":[],"selectors":[],"query":null,
             "request":{"fieldNames":"api","queryParameters":[],"body":"change_request_action","contentType":"application/json",
                 "ifMatchRequired":true,"idempotencyKeyRequired":true,"mutationSemantics":"change_request_lifecycle",
                 "schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,

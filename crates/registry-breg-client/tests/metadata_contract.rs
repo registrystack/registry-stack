@@ -71,6 +71,7 @@ fn operation(
         "titleFields": ["legal-name"],
         "fields": [field("legal-name", "legalName")],
         "readableFields": ["legal-name"],
+        "readableRequestFields": [],
         "createWritableFields": create_writable,
         "patchWritableFields": patch_writable,
         "selectors": [],
@@ -1190,12 +1191,24 @@ fn exact_tombstone_batch_and_immediate_action_contracts_promote() {
 }
 
 #[test]
-fn request_metadata_grants_are_retained_and_an_older_engine_grants_none() {
-    let older = parse(&fixture());
-    assert!(older
+fn request_metadata_grants_are_retained_and_required_on_every_operation() {
+    let ungranted = parse(&fixture());
+    assert!(ungranted
         .operations()
         .iter()
         .all(|operation| operation.readable_request_fields().is_empty()));
+
+    let mut missing = fixture();
+    missing["operations"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableRequestFields");
+    assert_eq!(
+        BRegMetadata::from_slice(&serde_json::to_vec(&missing).unwrap())
+            .unwrap_err()
+            .kind(),
+        BRegMetadataErrorKind::Shape
+    );
 
     let mut granted = fixture();
     granted["operations"][0]["readableRequestFields"] = json!(["reason", "review_state"]);
