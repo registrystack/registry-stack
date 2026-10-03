@@ -219,22 +219,16 @@ struct State {
     breg_port: u16,
     issuer_port: u16,
     /// A separate ready BREG dev session owns this issuer and its registrations.
-    #[serde(default)]
     issuer_project: Option<PathBuf>,
-    #[serde(default)]
     issuer_owner: Option<String>,
-    #[serde(default)]
     issuer_image: Option<String>,
     /// Session-owned loopback assertion endpoint used only while issuing
     /// multi-purpose rehearsal tokens.
-    #[serde(default)]
     purpose_port: Option<u16>,
     database_port: u16,
     /// Fixed at first start from the compiled schema; retained with the database.
-    #[serde(default)]
     requires_postgis: bool,
     /// Kernel-selected loopback receiver port, retained with destination bindings.
-    #[serde(default)]
     webhook_port: Option<u16>,
     clients_file: PathBuf,
     /// The pin `capture` derives from what the session runs: the compiled
@@ -254,27 +248,20 @@ struct State {
     /// Import authorities opened for a seed but not yet closed. Keeping the
     /// identifiers makes a failed start recover its own authority before it
     /// retries the seed.
-    #[serde(default)]
     seed_import_authorities: BTreeMap<String, String>,
     /// When each seed with an unresolved open attempt was about to open its
     /// import authority, saved before the open is requested. Only an
     /// authority opened no earlier than this may be recovered as the seed's
     /// own when the open commits but its identifier never reaches
-    /// `seed_import_authorities`. A state document written by an earlier
-    /// session records none.
-    #[serde(default)]
+    /// `seed_import_authorities`.
     seed_import_intents: BTreeMap<String, chrono::DateTime<chrono::Utc>>,
     outputs: Vec<CredentialOutput>,
     /// Installed prerequisites this session resolved, keyed by command name.
-    /// A state document written by an earlier session records none.
-    #[serde(default)]
     binaries: BTreeMap<String, Binary>,
     /// Why the detached supervisor stopped, recorded so the terminal that
     /// asked for the start can report it. The supervisor writes both its
     /// streams to a private log, so this is the only path a refusal has back
-    /// to the owner. A state document written by an earlier session, and a
-    /// session that has not failed, record none.
-    #[serde(default)]
+    /// to the owner. A session that has not failed records none.
     failure: Option<String>,
 }
 
@@ -673,45 +660,6 @@ fn receiver_port(state: &State) -> Result<u16> {
     }
 }
 
-/// Older versions could retain a failed rehearsal with declared events but
-/// no receiver binding. Repair that incomplete local setup without touching
-/// its database, credentials, or captured source.
-fn prepare_receiver(state: &mut State, clients: &Clients) -> Result<()> {
-    if !clients.event_destinations.is_empty() {
-        if state.webhook_port.is_some() {
-            bail!("retained inbox binding conflicts with explicit event destinations");
-        }
-        return Ok(());
-    }
-    if state.webhook_port.is_some() {
-        return Ok(());
-    }
-    let root = state.root();
-    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
-        .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
-    if compiled.event_deliveries().deliveries.is_empty() {
-        return Ok(());
-    }
-    if state.package_digest.is_some() || state.activated {
-        bail!("an activated local event package lacks its retained receiver binding; preserve its state for inspection");
-    }
-    let port = receiver_port(state)?;
-    let key = root.join("secrets/webhook-key");
-    if fs::symlink_metadata(&key).is_ok() {
-        private::check(&key, false)?;
-    } else {
-        config::webhook_secret(&root)?;
-    }
-    state.webhook_port = Some(port);
-    let runtime = root.join("runtime-test.yaml");
-    if runtime.exists() {
-        private::check(&runtime, false)?;
-        fs::remove_file(runtime)?;
-    }
-    config::runtime(&root, state, clients, true)?;
-    state.save()
-}
-
 /// Name the first journey step whose access profile no local client binds.
 ///
 /// The schema-test stage makes the same lookup, but by then the database has
@@ -1093,7 +1041,6 @@ fn start(args: StartArgs) -> Result<Value> {
     if state.sequence > 1 && state.container_id.is_none() {
         bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session");
     }
-    prepare_receiver(&mut state, &clients)?;
     verify_outputs(&state)?;
     let breg = executable("breg", args.breg_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;

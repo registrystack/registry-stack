@@ -1306,16 +1306,24 @@ fn a_seed_import_intent_has_the_database_timestamp_resolution() {
 }
 
 #[test]
-fn retained_state_without_seed_import_intents_still_loads() {
+fn retained_state_missing_a_recorded_field_is_invalid() {
     let (_temp, state, _clients, _files) = fixture();
-    let mut document = serde_json::to_value(&state).unwrap();
-    assert!(document
-        .as_object_mut()
-        .unwrap()
-        .remove("seedImportIntents")
-        .is_some());
-    let loaded: State = serde_json::from_value(document).unwrap();
-    assert!(loaded.seed_import_intents.is_empty());
+    for field in [
+        "requiresPostgis",
+        "seedImportAuthorities",
+        "seedImportIntents",
+        "binaries",
+    ] {
+        let mut document = serde_json::to_value(&state).unwrap();
+        assert!(
+            document.as_object_mut().unwrap().remove(field).is_some(),
+            "{field}"
+        );
+        assert!(
+            serde_json::from_value::<State>(document).is_err(),
+            "{field}"
+        );
+    }
 }
 
 #[test]
@@ -1500,15 +1508,6 @@ fn resolved_prerequisites_record_a_canonical_path_and_their_reported_version() {
     recorded_state.binaries = BTreeMap::from([("probe".into(), recorded.clone())]);
     recorded_state.save().unwrap();
     assert_eq!(read_state(&root).unwrap().binaries["probe"], recorded);
-    // A state document written before this record stays readable.
-    let mut document = serde_json::to_value(&recorded_state).unwrap();
-    document.as_object_mut().unwrap().remove("binaries");
-    private::replace(
-        &root.join("state.json"),
-        &serde_json::to_vec(&document).unwrap(),
-    )
-    .unwrap();
-    assert!(read_state(&root).unwrap().binaries.is_empty());
 }
 
 #[test]
@@ -1969,16 +1968,6 @@ fn a_supervisor_refusal_reaches_the_owner_who_asked_for_the_start() {
     );
     assert_eq!(named.matches(&logs).count(), 1, "{named}");
     assert!(named.contains("Retry the same command"), "{named}");
-
-    // A state document written before this record stays readable.
-    let mut document = serde_json::to_value(&read).unwrap();
-    document.as_object_mut().unwrap().remove("failure");
-    private::replace(
-        &root.join("state.json"),
-        &serde_json::to_vec(&document).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(read_state(&root).unwrap().failure, None);
 }
 
 #[test]
@@ -2939,35 +2928,6 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
     private::validate_tree(&root).unwrap();
     let saved = read_state(&root).unwrap();
     assert_eq!(saved.webhook_port, Some(18996));
-    // Reproduce an older failed first start: owned database and credentials,
-    // but empty destination bindings and no retained receiver state/key.
-    let credentials = fs::read(root.join("credentials/operator/assertion-key.jwk")).unwrap();
-    let mut old = saved.clone();
-    old.webhook_port = None;
-    old.container_id = Some("a".repeat(64));
-    old.status = Status::Failed;
-    fs::remove_file(root.join("secrets/webhook-key")).unwrap();
-    fs::remove_file(root.join("runtime-test.yaml")).unwrap();
-    config::runtime(&root, &old, &clients, true).unwrap();
-    old.save().unwrap();
-    prepare_receiver(&mut old, &clients).unwrap();
-    let retained_port = old.webhook_port.unwrap();
-    let retained_key = fs::read(root.join("secrets/webhook-key")).unwrap();
-    prepare_receiver(&mut old, &clients).unwrap();
-    assert_eq!(old.webhook_port, Some(retained_port));
-    assert_eq!(old.container_id.as_deref(), Some("a".repeat(64).as_str()));
-    assert_eq!(
-        fs::read(root.join("secrets/webhook-key")).unwrap(),
-        retained_key
-    );
-    assert_eq!(
-        fs::read(root.join("credentials/operator/assertion-key.jwk")).unwrap(),
-        credentials
-    );
-    registry_breg::runtime_config::load_runtime_config(&root.join("runtime-test.yaml"))
-        .unwrap()
-        .activate_event_destinations(&compiled)
-        .unwrap();
     let mut invalid = saved;
     invalid.webhook_port = Some(invalid.breg_port);
     invalid.save().unwrap();
@@ -3772,16 +3732,10 @@ fn local_evidence_provider_revocations_match_the_verifiers_bound() {
 }
 
 #[test]
-fn old_event_free_sessions_keep_working_without_receiver_state() {
+fn event_free_sessions_keep_working_without_receiver_state() {
     let (_temp, state, clients, files) = fixture();
+    assert_eq!(state.webhook_port, None);
     initialize(&state.root(), &state, &clients, &files).unwrap();
-    let mut value = serde_json::to_value(&state).unwrap();
-    value.as_object_mut().unwrap().remove("webhookPort");
-    private::replace(
-        &state.root().join("state.json"),
-        &serde_json::to_vec(&value).unwrap(),
-    )
-    .unwrap();
     assert_eq!(read_state(&state.root()).unwrap().webhook_port, None);
     assert!(!state.root().join("secrets/webhook-key").exists());
     let report = events::report(&state.root(), false).unwrap();
@@ -3829,12 +3783,6 @@ fn candidate_issuer_image_is_immutable_and_retained() {
     let encoded = serde_json::to_vec(&state).unwrap();
     let restored: State = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(restored.issuer_image, Some(image));
-    let mut legacy = serde_json::to_value(&state).unwrap();
-    legacy.as_object_mut().unwrap().remove("issuerImage");
-    assert!(serde_json::from_value::<State>(legacy)
-        .unwrap()
-        .issuer_image
-        .is_none());
 }
 
 #[test]
@@ -3866,11 +3814,10 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
 }
 
 #[test]
-fn retained_database_selection_preserves_spatial_and_legacy_sessions() {
+fn retained_database_selection_preserves_the_spatial_choice() {
     let (_temporary, mut state, _clients, _files) = fixture();
-    let mut legacy = serde_json::to_value(&state).unwrap();
-    legacy.as_object_mut().unwrap().remove("requiresPostgis");
-    let restored: State = serde_json::from_value(legacy).unwrap();
+    assert!(!state.requires_postgis);
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.database_image(), IMAGE);
     state.requires_postgis = true;
     let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
