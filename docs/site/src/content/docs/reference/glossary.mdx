@@ -325,8 +325,8 @@ Product names are always in English, including on future translated pages.
   <dt>request batch</dt>
   <dd>An Evidence Gateway envelope that asks `POST /v1/evidence/batch` to evaluate between one and sixteen ordered audience-scoped subject sets for one common requirement and purpose. Each item has its own request nonce and complete subject-role set. The response preserves order and contains either one independently signed flattened JWS or `evidence_not_available` for each item; any other failure aborts the complete request. This envelope is distinct from the holder-bound issuance batch on `POST /v1/evidence`, which performs one subject evaluation and emits one credential per holder key.</dd>
 
-  <dt id="resource">resource</dt>
-  <dd>One governed thing a Registry contract publishes, bound to one named source and one view inside it: the resource carries its semantic class, its declared properties and their classifications, its record context, its disclosure profiles, its access profiles, and the operations that answer questions about it. A resource is the authored intent; the view is storage, and the two are deliberately not the same name.</dd>
+  <dt id="resource">resource (retired Relay term)</dt>
+  <dd>A named collection in the retired Registry Relay read-only publication contract. Current Base Registry Engine projects declare entities and operations instead; Evidence Gateway projects declare fixed sources and requirements.</dd>
 
   <dt id="rhai">Rhai</dt>
   <dd>The bounded scripting language both Evidence Gateway and Base Registry Engine embed for adopter-authored logic, reviewed with the rest of the configuration. Evidence Gateway uses it for requirement-specific derivations, which read the facts, selectors, and context the host gathered and return the answer. Base Registry Engine uses it for change-request <a href="#planner">planners</a>, which see only the submitted request's fields and may write only what the project's YAML declares.</dd>
