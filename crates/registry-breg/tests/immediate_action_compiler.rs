@@ -26,6 +26,18 @@ fn permission_targets_without_discriminators_are_refused() {
         error.to_string().contains("missing field `operation`"),
         "{error}"
     );
+
+    let error = serde_json::from_value::<CompiledActionTargetPermission>(serde_json::json!({
+        "entityId": "person",
+        "operation": "create",
+        "rowBoundaries": []
+    }))
+    .expect_err("a permission target names its source");
+
+    assert!(
+        error.to_string().contains("missing field `source`"),
+        "{error}"
+    );
 }
 
 #[test]
