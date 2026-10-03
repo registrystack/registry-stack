@@ -260,7 +260,18 @@ def assemble(
         raise NightlyError("build plan identity mismatch")
     output.mkdir()
     for directory in directories:
+        # The merged canonical Linux bin carries the shard SHA256SUMS. It
+        # authenticates the binaries beside it and is never published.
+        shard_sums = None
+        copied = {}
         for asset in sorted(directory.iterdir()):
+            if (
+                asset.name == "SHA256SUMS"
+                and asset.is_file()
+                and not asset.is_symlink()
+            ):
+                shard_sums = asset
+                continue
             if (
                 not asset.is_file()
                 or asset.is_symlink()
@@ -273,6 +284,16 @@ def assemble(
             if (output / asset.name).exists():
                 raise NightlyError(f"duplicate nightly payload: {asset.name}")
             shutil.copy2(asset, output / asset.name)
+            copied[asset.name] = digest(output / asset.name)
+        if shard_sums is not None:
+            listed = {}
+            for line in shard_sums.read_text().splitlines():
+                checksum, separator, name = line.partition("  ")
+                if not separator or name in listed:
+                    raise NightlyError(f"invalid shard checksums in {directory}")
+                listed[name] = checksum
+            if listed != copied:
+                raise NightlyError(f"shard checksums differ from {directory}")
     # Compare against the maintained release platform roster, changing only
     # the tag. A missing platform or binary cannot advance the channel.
     import release_candidate
