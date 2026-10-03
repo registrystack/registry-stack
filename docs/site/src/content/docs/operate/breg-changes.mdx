@@ -558,12 +558,11 @@ keeps the system identifier and needs none.
 `migration explain --runtime-config <file>` describes the configured package's migration plan
 without executing it; it does not report live database status. New schema fingerprints identify
 columns by name, so a fresh installation and an in-place upgrade match even when PostgreSQL stores
-columns in a different order. A package measured with the updated algorithm needs the updated
-server binary, and earlier packages keep verifying under their recorded rules.
+columns in a different order. The runtime verifies a package under that fingerprint only.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, MigrationExplainArgs;
     crates/registry-breg/src/package.rs;
-    crates/registry-breg/src/postgres/catalog.rs, CatalogFingerprintVersion. */}
+    crates/registry-breg/src/postgres/catalog.rs, managed_schema_fingerprint(). */}
 
 ## Troubleshooting
 
