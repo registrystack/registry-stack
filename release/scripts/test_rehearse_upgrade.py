@@ -51,12 +51,12 @@ class ReleaseSelectionTest(unittest.TestCase):
         with self.assertRaisesRegex(Error, "no published release"):
             MODULE.select_from_tag(["v0.34.0"], "0.33.0")
 
-    def test_refuses_the_v032_to_v033_exception_explicitly(self) -> None:
-        for tag in ("v0.32.0", "v0.31.4", "v0.1.0"):
-            with self.subTest(tag=tag), self.assertRaisesRegex(Error, "v0.32 to v0.33"):
-                MODULE.check_forward_path(tag, "0.34.0")
-        MODULE.check_forward_path("v0.33.0", "0.33.0")
-        MODULE.check_forward_path("v0.33.0", "0.34.0")
+    def test_refuses_a_start_before_the_immediate_predecessor(self) -> None:
+        for tag in ("v0.37.0", "v0.33.0", "v0.1.0"):
+            with self.subTest(tag=tag), self.assertRaisesRegex(Error, "immediate predecessor"):
+                MODULE.check_forward_path(tag, "0.39.0")
+        MODULE.check_forward_path("v0.38.0", "0.38.0")
+        MODULE.check_forward_path("v0.38.0", "0.39.0")
 
     def test_refuses_to_move_state_backward(self) -> None:
         with self.assertRaisesRegex(Error, "only moves state forward"):
@@ -72,17 +72,17 @@ class ReleaseSelectionTest(unittest.TestCase):
     def test_reads_the_workspace_version(self) -> None:
         MODULE.parse_version(MODULE.workspace_version(ROOT))
 
-    def test_main_refuses_the_exception_before_any_download_or_container(self) -> None:
+    def test_main_refuses_an_earlier_start_before_any_download_or_container(self) -> None:
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr):
             work = Path(temporary) / "work"
             status = MODULE.main([
-                "--from-tag", "v0.32.0", "--platform", "linux-amd64",
+                "--from-tag", "v0.37.0", "--platform", "linux-amd64",
                 "--to-bin-dir", temporary, "--work-dir", str(work),
             ])
             self.assertFalse(work.exists())
         self.assertEqual(status, 1)
-        self.assertIn("no forward state path", stderr.getvalue())
+        self.assertIn("immediate predecessor", stderr.getvalue())
 
     def test_fetch_only_needs_no_binaries_under_test(self) -> None:
         args = MODULE.parse_args(["--fetch-only", "--platform", "linux-amd64",
@@ -100,17 +100,17 @@ class ReleaseSelectionTest(unittest.TestCase):
             bin_dir.mkdir(mode=0o700)
             for binary in binaries:
                 script = bin_dir / binary
-                script.write_text(f"#!/bin/sh\necho '{binary} 0.33.0'\n", encoding="utf-8")
+                script.write_text(f"#!/bin/sh\necho '{binary} 0.38.0'\n", encoding="utf-8")
                 script.chmod(0o755)
 
         with tempfile.TemporaryDirectory() as temporary, \
                 contextlib.redirect_stdout(io.StringIO()), \
                 unittest.mock.patch.object(MODULE, "fetch_release", side_effect=fetch) as fetched, \
                 unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("started")), \
-                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.34.0"):
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.39.0"):
             work = Path(temporary) / "work"
             report = Path(temporary) / "report.json"
-            status = MODULE.main(["--fetch-only", "--from-tag", "v0.33.0", "--platform",
+            status = MODULE.main(["--fetch-only", "--from-tag", "v0.38.0", "--platform",
                                   "linux-amd64", "--product", "breg", "--work-dir", str(work),
                                   "--report", str(report)])
             self.assertEqual(status, 0)
@@ -192,16 +192,18 @@ class ProductSelectionTest(unittest.TestCase):
 
     def test_main_refuses_an_unshipped_product_before_any_download_or_container(self) -> None:
         stderr = io.StringIO()
-        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr):
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr), \
+                unittest.mock.patch.object(MODULE.release_roster, "MESSAGING_FIRST_RELEASE",
+                                           (0, 39, 0)):
             work = Path(temporary) / "work"
             status = MODULE.main([
-                "--from-tag", "v0.33.0", "--platform", "linux-amd64",
+                "--from-tag", "v0.38.0", "--platform", "linux-amd64",
                 "--product", "messaging",
                 "--to-bin-dir", temporary, "--work-dir", str(work),
             ])
             self.assertFalse(work.exists())
         self.assertEqual(status, 1)
-        self.assertIn("messaging was first shipped in v0.36.0, so v0.33.0 holds no",
+        self.assertIn("messaging was first shipped in v0.39.0, so v0.38.0 holds no",
                       stderr.getvalue())
 
 
@@ -459,8 +461,6 @@ class BregLedgerTest(unittest.TestCase):
         breg.work = root
         breg.secrets = root / "secrets"
         breg.project = root / "project"
-        breg.identity = {"instanceId": "rehearsal-instance", "sourceRevision": "starter-0.1.0"}
-        breg.instance_id = "rehearsal-instance"
         breg.clients = [MODULE.BREG_CLIENT]
         return breg
 
@@ -472,33 +472,6 @@ class BregLedgerTest(unittest.TestCase):
             self.assertEqual(load_json(root / "runtime.yaml")["package"],
                              {"root": str(root / "pkg")})
 
-    def test_a_signing_release_runtime_names_its_trust_anchor_and_active_package(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.breg(root).write_runtime(root / "runtime.yaml", "registry", root / "pkg",
-                                          8000, signed=(self.DIGEST, 1))
-            self.assertEqual(load_json(root / "runtime.yaml")["package"], {
-                "root": str(root / "pkg"),
-                "trustAnchorPath": str(root / "trust-anchor.json"),
-                "compilerSourceRevision": "starter-0.1.0",
-                "activeRevision": self.DIGEST, "activeSequence": 1})
-
-    def test_retiring_the_package_identity_keeps_the_source_revision(self) -> None:
-        registry = {"package": {"environment": "staging", "instanceId": "a",
-                                "sequence": 1, "sourceRevision": "starter-0.1.0"}}
-        self.assertEqual(MODULE.retire_package_identity(registry),
-                         ["environment", "instanceId", "sequence"])
-        self.assertEqual(registry, {"package": {"sourceRevision": "starter-0.1.0"}})
-        self.assertEqual(MODULE.retire_package_identity(registry), [])
-
-    def test_a_signing_release_is_told_apart_by_its_package_flags(self) -> None:
-        side = unittest.mock.Mock()
-        side.run.return_value.stdout = "  --signatures <PATH>\n"
-        self.assertTrue(MODULE.signs_packages(side))
-        side.run.assert_called_once_with("bregctl", "package", "--help")
-        side.run.return_value.stdout = "  --baseline-package <DIR>\n"
-        self.assertFalse(MODULE.signs_packages(side))
-
     def test_a_ledger_package_is_tested_and_built_against_its_baseline_unsigned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -506,7 +479,6 @@ class BregLedgerTest(unittest.TestCase):
             breg.create_database = unittest.mock.Mock()
             breg.credentials = unittest.mock.Mock()
             side = unittest.mock.Mock()
-            side.has_legacy_breg_audit.return_value = False
             side.run_json.side_effect = [{"ok": True}, {"ok": True, "packageDigest": self.DIGEST}]
             baseline = root / "build-1" / "out" / "package"
             package, digest = breg.package(side, root / "build-2", baseline=baseline)
@@ -529,12 +501,11 @@ class BregLedgerTest(unittest.TestCase):
             breg.create_database = unittest.mock.Mock()
             breg.credentials = unittest.mock.Mock()
             side = unittest.mock.Mock()
-            side.has_legacy_breg_audit.return_value = False
             side.run_json.side_effect = [{"ok": True}, {"ok": True}]
             with self.assertRaisesRegex(Error, "packageDigest"):
                 breg.package(side, Path(directory) / "build")
 
-    def author(self, root: Path, package: dict[str, Any], help_text: str) -> tuple[object, object]:
+    def author(self, root: Path, package: dict[str, Any]) -> dict[str, Any]:
         breg = self.breg(root)
         breg.keys = unittest.mock.Mock()
         breg.operator = {}
@@ -546,39 +517,27 @@ class BregLedgerTest(unittest.TestCase):
                 dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": [
                     {"id": "j", "steps": [{"id": "s", "accessProfile": "operator",
                                            "claims": {"principal": "p"}}]}]})
-            return unittest.mock.Mock(stdout=help_text)
+            return unittest.mock.Mock(stdout="")
 
         side = unittest.mock.Mock()
         side.run.side_effect = run
-        with unittest.mock.patch.object(MODULE.Keys, "ed25519_x", return_value="x"):
-            breg.author(side)
-        return breg, load_json(breg.project / "registry.yaml")
+        breg.author(side)
+        self.assertEqual(breg.operator, {"principal": "p"})
+        side.run.assert_called_once_with("bregctl", "init", str(breg.project))
+        return load_json(breg.project / "registry.yaml")
 
-    def test_a_signing_release_starter_gets_an_environment_and_a_trust_anchor(self) -> None:
+    def test_the_starter_project_package_is_left_as_init_wrote_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            breg, registry = self.author(root, {"instanceId": "starter", "sequence": 1},
-                                         "--signatures")
-            self.assertEqual(registry["package"]["environment"], MODULE.BREG_ENVIRONMENT)
-            self.assertEqual(breg.instance_id, "starter")
-            self.assertEqual(load_json(root / "trust-anchor.json")["instanceId"], "starter")
-
-    def test_a_ledger_release_starter_is_left_without_retired_keys(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            breg, registry = self.author(root, {"sourceRevision": "starter-0.1.0"},
-                                         "--baseline-package")
+            registry = self.author(Path(directory), {"sourceRevision": "starter-0.1.0"})
             self.assertEqual(registry["package"], {"sourceRevision": "starter-0.1.0"})
-            self.assertEqual(breg.instance_id, MODULE.BREG_INSTANCE_ID)
-            self.assertFalse((root / "trust-anchor.json").exists())
 
     def test_a_plan_must_name_the_expected_pending_activation(self) -> None:
-        plan = {"pending": True, "activation": "adopted", "packageDigest": self.DIGEST}
-        MODULE.expect_plan(plan, "adopted", self.DIGEST)
-        for changed in ({"pending": False}, {"activation": "successor"},
+        plan = {"pending": True, "activation": "successor", "packageDigest": self.DIGEST}
+        MODULE.expect_plan(plan, "successor", self.DIGEST)
+        for changed in ({"pending": False}, {"activation": "initial"},
                         {"packageDigest": "sha256:" + "b" * 64}):
             with self.subTest(changed=changed), self.assertRaisesRegex(Error, "plan"):
-                MODULE.expect_plan({**plan, **changed}, "adopted", self.DIGEST)
+                MODULE.expect_plan({**plan, **changed}, "successor", self.DIGEST)
 
     def ledger(self) -> dict[str, Any]:
         second = "sha256:" + "b" * 64
@@ -588,14 +547,14 @@ class BregLedgerTest(unittest.TestCase):
                     {"applyOrder": 2, "planKind": "successor", "outcome": "applied",
                      "packageDigest": second, "predecessorPackageDigest": self.DIGEST,
                      "activationId": "two"},
-                    {"applyOrder": 1, "planKind": "adopted", "outcome": "applied",
+                    {"applyOrder": 1, "planKind": "initial", "outcome": "applied",
                      "packageDigest": self.DIGEST, "predecessorPackageDigest": None,
                      "activationId": "one"}]}
 
     def test_the_ledger_lists_each_activation_in_apply_order(self) -> None:
         status = self.ledger()
         self.assertEqual(MODULE.expect_ledger(status, "sha256:" + "b" * 64),
-                         ["adopted:applied", "successor:applied"])
+                         ["initial:applied", "successor:applied"])
 
     def test_a_ledger_whose_active_package_is_not_the_last_applied_is_refused(self) -> None:
         cases = {
@@ -706,10 +665,8 @@ class EvidenceGrammarTest(unittest.TestCase):
                          ["check", "--runtime-config", "/srv/runtime.yaml"])
         self.assertEqual(MODULE.evidence_arguments(False, runtime, "check"),
                          ["--runtime", "/srv/runtime.yaml", "check"])
-        self.assertEqual(MODULE.breg_arguments(True, runtime),
+        self.assertEqual(MODULE.breg_arguments(runtime),
                          ["--runtime-config", "/srv/runtime.yaml"])
-        self.assertEqual(MODULE.breg_arguments(False, runtime),
-                         ["--config", "/srv/runtime.yaml"])
 
     def test_a_local_target_becomes_a_production_target_in_either_grammar(self) -> None:
         local = {
@@ -843,15 +800,7 @@ class StateComparisonTest(unittest.TestCase):
     def test_only_retired_audit_tables_can_be_replaced_by_an_archive(self) -> None:
         self.assertTrue(MODULE.row_count_losses({"public.records": 3}, {}, {"public.records": 3}))
 
-    def test_a_relocated_table_may_disappear_only_when_named(self) -> None:
-        before = {"registry_internal.registry_instance_claim": 1, "public.a": 2}
-        self.assertEqual(MODULE.row_count_losses(
-            before, {"public.a": 2}, relocated={"registry_internal.registry_instance_claim"}), [])
-        self.assertTrue(MODULE.row_count_losses(before, {"public.a": 2}))
-        self.assertTrue(MODULE.row_count_losses(
-            before, {"public.a": 1}, relocated={"registry_internal.registry_instance_claim"}))
-
-    def test_adoption_carries_the_instance_claim_over_or_records_one(self) -> None:
+    def test_the_upgrade_carries_the_instance_claim_over_or_records_one(self) -> None:
         claim = {"systemIdentifier": "7", "databaseOid": 16384, "epoch": 1,
                  "claimedAt": "2026-09-28T00:00:00Z"}
         self.assertEqual(MODULE.claim_differences(claim, dict(claim)), [])
@@ -913,17 +862,17 @@ class AuditUpgradeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             postgres = unittest.mock.Mock()
             postgres.sql.return_value = '{"record":1}\n{"record":2}\n'
-            table = "registry_internal.registry_audit"
-            before = {table: 2, "registry_internal.registry_state": 1}
-            archive = MODULE.archive_audit_tables(postgres, "registry", before, Path(temporary))
+            table = "public.casework_audit_outbox"
+            before = {table: 2, "public.casework_items": 1}
+            archive = MODULE.archive_audit_tables(postgres, "casework", before, Path(temporary))
             self.assertEqual(archive, {table: 2})
             self.assertEqual(MODULE.row_count_losses(before,
-                {"registry_internal.registry_state": 1}, archive), [])
+                {"public.casework_items": 1}, archive), [])
             self.assertTrue(MODULE.row_count_losses(before, {}, archive))
             self.assertTrue(MODULE.row_count_losses(before, {}, {table: 1}))
             postgres.sql.return_value = '{"record":1}\n'
             with self.assertRaisesRegex(Error, "archive"):
-                MODULE.archive_audit_tables(postgres, "registry", before, Path(temporary) / "bad")
+                MODULE.archive_audit_tables(postgres, "casework", before, Path(temporary) / "bad")
 
     def test_outbox_drain_waits_and_refuses_a_timeout(self) -> None:
         postgres = unittest.mock.Mock()
@@ -949,10 +898,10 @@ class GateWiringTest(unittest.TestCase):
         for refused in ("--from-bin-dir", "contents: write", "id-token: write"):
             self.assertFalse(refused in workflow, f"workflow carries {refused!r}")
 
-    def test_api_stability_states_the_same_exception(self) -> None:
+    def test_api_stability_states_the_same_floor(self) -> None:
         page = API_STABILITY.read_text(encoding="utf-8")
         floor = "v{}.{}.{}".format(*MODULE.FORWARD_PATH_FLOOR)
-        for required in (floor, "v0.32", "rehearse-upgrade.py"):
+        for required in (floor, "immediate predecessor", "rehearse-upgrade.py"):
             self.assertTrue(required in page, f"api-stability page lacks {required!r}")
 
 
