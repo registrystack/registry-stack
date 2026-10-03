@@ -1163,18 +1163,23 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         }
     }
 
-    let removed_flag = Command::new(env!("CARGO_BIN_EXE_breg"))
+    let unknown_flag = Command::new(env!("CARGO_BIN_EXE_breg"))
         .args([
             "--config",
             config_path.to_str().expect("config path is UTF-8"),
         ])
         .output()
         .expect("breg process runs");
-    assert_eq!(removed_flag.status.code(), Some(2));
-    assert!(removed_flag.stdout.is_empty());
-    assert_eq!(
-        std::str::from_utf8(&removed_flag.stderr).expect("refusal is UTF-8"),
-        "breg: --config is no longer accepted; pass --runtime-config FILE\n"
+    assert_eq!(unknown_flag.status.code(), Some(2));
+    assert!(unknown_flag.stdout.is_empty());
+    let unknown_stderr = std::str::from_utf8(&unknown_flag.stderr).expect("refusal is UTF-8");
+    assert!(
+        unknown_stderr.starts_with("error: unexpected argument '--config' found"),
+        "{unknown_stderr}"
+    );
+    assert!(
+        !unknown_stderr.contains(config_path.to_str().expect("config path is UTF-8")),
+        "{unknown_stderr}"
     );
 
     let invalid_level = Command::new(env!("CARGO_BIN_EXE_breg"))

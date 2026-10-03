@@ -2,7 +2,7 @@
 //! Base Registry Engine process entry point.
 
 use clap::Parser;
-use registry_breg::cli::{removed_config_flag, Arguments};
+use registry_breg::cli::Arguments;
 use registry_breg::startup::{
     operational_log_level, prepare, serve, OperationalEvent, OperationalLogLevel,
 };
@@ -11,10 +11,6 @@ use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() {
-    if let Some(refusal) = removed_config_flag(std::env::args_os().skip(1)) {
-        eprintln!("breg: {refusal}");
-        std::process::exit(2);
-    }
     let arguments = Arguments::parse();
     let level = match operational_log_level(std::env::var("BREG_LOG").ok().as_deref()) {
         Ok(level) => level,
