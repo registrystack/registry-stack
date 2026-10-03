@@ -1535,3 +1535,101 @@ file run only in builds with the feature.
 - **Refusal at load, not at the hook.** A deployment that switches to a
   feature-off build with a WASM-hook package active cannot load that package;
   the operator replaces it or deploys a build with the feature.
+
+## State older than the immediate predecessor
+
+Before 1.0 a release reads only the state its immediate predecessor wrote.
+The change removes the steps that upgraded, converted, or specifically
+refused state written by builds older than v0.38.0: the webhook delivery
+table upgrades in `crates/registry-platform-hooks/src/delivery_schema.rs`,
+the legacy review data refusals and table upgrades in the registry's internal
+schema install, and the retired spellings `bregctl` still recognized. It
+touches data minimization (the raw handler answer), deployment defaults (what
+schema install does to an existing database), and release provenance (the
+release image and the upgrade rehearsal).
+
+### Threat
+
+1. A delivered webhook row keeps the raw handler answer bytes beside the
+   payload erasure that promises value-free settlement, now that install no
+   longer erases them while replacing the legacy answer constraint
+   (BREG-SEC-69).
+2. A request row holds a state from the retired local approval vocabulary
+   (`approved`, `needs_changes`, `rejected`, `canceled`), and the runtime
+   treats it as a current state instead of refusing it.
+3. Removing the specific refusals turns a refusal into an acceptance: a
+   retired package flag, a Mint-era or incomplete dev state file, or a
+   `bregctl-data/v1` import sidecar is read as if it were current.
+4. A release image ships without `bregctl`, or an upgrade is rehearsed from a
+   release the promise does not cover, and the release evidence claims an
+   upgrade path that was never exercised.
+
+### Enforcement and defaults
+
+- The delivery schema's
+  `registry_webhook_delivery_state_answer_digest_required` constraint is
+  part of the table definition, so every insert and update that keeps raw
+  answer bytes on a row is refused by PostgreSQL. Terminal settlement still
+  writes the answer digest only. v0.38.0 created the table with the same
+  constraint, so no row it wrote can carry the bytes.
+- `RequestState::from_storage` accepts only the current vocabulary. Any other
+  stored value is `WorkflowError::InvalidRestoredState`, which the API
+  reports as the generic service-unavailable problem. No row is read past the
+  refusal and the response names no stored value.
+- Schema install is `CREATE ... IF NOT EXISTS` plus the constraint steps a
+  v0.38.0 database or a fresh install still needs. Installing over an
+  installed schema changes nothing.
+- The retired package flags are no longer defined, so the argument parser
+  refuses them as unknown arguments with exit status 2 before any file or
+  database is read. Dev state is read strictly: a version other than the
+  current one, or a missing recorded field, is invalid retained dev state and
+  the file is left untouched. An import sidecar that is not the current
+  format is an ordinary checkpoint refusal raised before any HTTP request,
+  and its message renders no value.
+- `release/docker/Dockerfile.breg` installs `bregctl` unconditionally, and
+  `check-debian13-images.py` marks the tool required. `rehearse-upgrade.py`
+  refuses a start before `FORWARD_PATH_FLOOR` (v0.38.0) before any download
+  or container starts.
+
+### Tests
+
+1. `crates/registry-breg/tests/postgres_webhook_outbox.rs`:
+   `real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_answer_bytes`
+   (BREG-NEG-69),
+   `real_postgres_internal_schema_reinstall_is_idempotent`.
+   `crates/registry-platform-hooks/src/delivery_schema.rs`:
+   `a_recorded_answer_belongs_to_a_delivered_row`,
+   `installing_over_an_installed_schema_changes_nothing`.
+2. `crates/registry-breg/src/request_workflow.rs`:
+   `unknown_stored_request_states_are_invalid`.
+3. `crates/registry-bregctl/tests/cli.rs`:
+   `retired_package_flags_are_refused_as_unknown_arguments`,
+   `dev_start_takes_no_mint_issuer_flags`,
+   `keygen_names_its_destination_only_with_output`.
+   `crates/registry-bregctl/src/dev/tests.rs`:
+   `a_retained_v1_state_is_invalid_without_mutation`,
+   `retained_state_missing_a_recorded_field_is_invalid`.
+   `crates/registry-bregctl/src/data_lifecycle.rs`:
+   `an_unknown_sidecar_version_is_refused_without_a_request_and_without_rendering_values`.
+4. `release/scripts/test_rehearse_upgrade.py`:
+   `test_refuses_a_start_before_the_immediate_predecessor`,
+   `test_main_refuses_an_earlier_start_before_any_download_or_container`.
+   `release/scripts/test_check_debian13_images.py`:
+   `test_required_operator_tools_cannot_be_optional`.
+
+### Accepted residuals
+
+- **A database older than v0.38.0 is not upgraded and not specifically
+  refused.** Installing this release's schema over such a database leaves its
+  old columns and constraints in place, and any failure surfaces later as a
+  generic database error. The supported path is one release at a time, finishing
+  each release's upgrade steps before starting the next.
+- **Legacy answer bytes in a database that skipped v0.38.0.** A delivery
+  state table created before the answer constraint, and never upgraded by
+  v0.38.0, keeps whatever raw answer bytes it held, because
+  `CREATE TABLE IF NOT EXISTS` does not add the constraint to an existing
+  table. That database is outside the upgrade promise.
+- **Legacy review data is no longer named.** A request row in a retired
+  approval state fails reads with the generic unavailable problem instead of
+  a refusal at install that names the cause. v0.38.0 already refused to
+  install over such data, so a database it served holds none.

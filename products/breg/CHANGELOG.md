@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+- BREAKING: before 1.0, a release reads only the state its immediate
+  predecessor wrote. This release reads state written by v0.38.0 and nothing
+  older. If you run an older release, upgrade one release at a time and finish
+  each release's upgrade steps before starting the next. The entries below
+  remove what served only releases before v0.38.0.
+  - `release/scripts/rehearse-upgrade.py` refuses to start from any release
+    before v0.38.0.
+  - Building the Base Registry Engine release image fails when no `bregctl` is
+    staged beside the runtime.
+  - Installing the webhook delivery tables (`registry_outbox`,
+    `registry_webhook_deliveries`, `registry_webhook_delivery_state`) no
+    longer upgrades tables written by builds older than v0.38.0. It no longer
+    backfills `payload_expires_at`, `handler_kind`, `data_schema`, or the
+    proposal columns, no longer replaces the legacy answer constraint, and no
+    longer refuses pre-Version 1 webhook history with `pre-V1 webhook history
+    requires explicit operator migration`. Registry Scheduling installs the
+    same tables and is affected the same way.
+  - Schema install no longer refuses or drops legacy review data
+    (`registry_request_decisions`, and the request states `approved`,
+    `needs_changes`, `rejected`, `canceled`). A database still holding such a
+    state fails reads with the generic unavailable problem.
+  - Schema install no longer upgrades review submissions that have no
+    producer, or text feed-checkpoint cursors.
+  - Schema install no longer upgrades revision, idempotency, request, review,
+    attachment, ingestion-run, or field-encryption flip tables created before
+    v0.38.0.
+  - `bregctl project migrate` is removed. Declare the projection by hand as
+    `manifestProjection.datasets[]` and `manifestProjection.dataServices[]`,
+    each with an `id`, and point every entity's `primaryDataset` at one of
+    them.
+  - The retired package flags `--database-id`, `--baseline-runtime-config`,
+    `--signature-threshold`, `--signature-key-id`, and `--signatures` are
+    refused as unknown arguments (exit status 2) instead of with a removal
+    message. Remove them from scripts.
+  - `bregctl field-encryption keygen --out` is no longer accepted. Use
+    `--output`.
+  - `bregctl dev start --clients` is no longer accepted. Use `--clients-file`.
+  - `bregctl dev start --mint-port` and `--mint-bin` are unknown arguments.
+    Dev state version 1 is refused as invalid retained dev state and kept for
+    inspection. Stop it with the release that wrote it, or move it aside, then
+    start a fresh session.
+  - Dev state that lacks `requiresPostgis`, `seedImportAuthorities`,
+    `seedImportIntents`, or `binaries` is refused as invalid. Start a fresh
+    session.
+  - A `bregctl-data/v1` import sidecar is reported as
+    `data.import.checkpoint.refused`, where it was
+    `data.import.checkpoint.legacy`. Start the import again with a fresh
+    checkpoint path.
 - Derived SQL now accepts only explicitly reviewed raw PostgreSQL grammar
   nodes (#1841). `JSON_VALUE` and `JSON_EXISTS` remain available for scalar
   structured-field access; `JSON_QUERY`, `JSON_TABLE`, `XMLTABLE`, SQL/JSON
