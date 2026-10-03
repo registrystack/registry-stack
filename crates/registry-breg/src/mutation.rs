@@ -2488,7 +2488,8 @@ pub enum MutationError {
     IngestionRefusal(IngestionRefusal),
     /// Another session held the exclusive migration lock past the lock
     /// timeout when an operator maintenance transaction took it, so an
-    /// apply or other registry maintenance is in progress.
+    /// apply, an instance claim adoption, or other registry maintenance is
+    /// in progress.
     /// Only operator maintenance, such as action Evidence retention, takes
     /// that lock and can produce this cause.
     #[error("another session held the exclusive migration lock past the lock timeout")]

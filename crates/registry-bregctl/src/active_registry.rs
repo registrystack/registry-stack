@@ -20,7 +20,8 @@ pub(crate) enum ActiveRegistryError {
     /// The database could not be read.
     Unavailable,
     /// Another session held the exclusive migration lock past the lock
-    /// timeout: an apply or a migration reconcile is in progress.
+    /// timeout: an apply, an instance claim adoption, or a migration
+    /// reconcile is in progress.
     InProgress,
     /// The database records no activated registry for this package id.
     Uninitialized,
