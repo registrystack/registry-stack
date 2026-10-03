@@ -2431,7 +2431,7 @@ async fn audited_mutation_refusal(
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             grant: context.grant_audit().cloned(),
-            method: route.method,
+            method: route.method.into(),
             operation_id: &route.id,
             target_record,
             action_id: None,
@@ -2471,7 +2471,7 @@ async fn audited_mutation_concealment(
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
             grant: crate::audit::GrantAuditContext::from_claims(claims),
-            method: route.method,
+            method: route.method.into(),
             operation_id: &route.id,
             target_record,
             action_id: None,
@@ -2492,12 +2492,13 @@ async fn not_found(
     claims: Option<Extension<VerifiedRequestClaims>>,
     Extension(correlation): Extension<RequestCorrelation>,
     uri: axum::http::Uri,
+    method: axum::http::Method,
 ) -> Response {
     if uri.path().starts_with("/v1/statistics/") && service.statistics.is_some() {
         let claims = claims
             .map(|Extension(c)| c)
             .unwrap_or_else(VerifiedRequestClaims::anonymous);
-        return statistics::unknown(&service, &claims, &correlation).await;
+        return statistics::unknown(&service, &claims, &correlation, &method).await;
     }
     concealed()
 }

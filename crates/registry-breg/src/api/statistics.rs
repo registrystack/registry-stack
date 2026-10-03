@@ -4,8 +4,8 @@
 use super::*;
 use crate::audit::{
     begin_statistics_pre_io_audit, record_http_refusal_audit, statistics_terminal_entry,
-    HttpRefusalAudit, PreIoAudit, PreIoAuditKind, ReadTerminalAudit, StatisticsTerminalAudit,
-    TerminalAudit, TerminalAuditOutcome,
+    HttpRefusalAudit, PreIoAudit, PreIoAuditKind, ReadTerminalAudit, RefusalHttpMethod,
+    StatisticsTerminalAudit, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::correlation::{statistics_problem, RequestDeadline};
 use crate::cursor::{
@@ -25,6 +25,21 @@ use crate::statistics::{
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
+
+// Keep database work inside the outer HTTP budget while leaving time to
+// construct and enqueue its terminal audit response.
+const STATISTICS_TERMINAL_AUDIT_RESERVE: Duration = Duration::from_millis(500);
+
+fn statistics_work_deadline(
+    now: tokio::time::Instant,
+    outer: tokio::time::Instant,
+) -> tokio::time::Instant {
+    outer
+        .checked_sub(STATISTICS_TERMINAL_AUDIT_RESERVE)
+        .unwrap_or(now)
+        .max(now)
+        .min(outer)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Kind {
@@ -248,12 +263,6 @@ async fn refusal(
     correlation: &RequestCorrelation,
     response: Response,
 ) -> Response {
-    if claims.principal().is_none() {
-        return anonymous_refusal(response, AnonymousRefusalReason::ReadConcealed);
-    }
-    let Some(backend) = &service.statistics else {
-        return unavailable();
-    };
     let selected = selected.filter(|id| {
         service
             .registry
@@ -261,13 +270,40 @@ async fn refusal(
             .get(&route.dataset)
             .is_some_and(|d| d.access_profiles.contains_key(*id))
     });
+    refusal_for_operation(
+        service,
+        claims,
+        selected,
+        correlation,
+        response,
+        route.kind.method().into(),
+        &route.id(),
+    )
+    .await
+}
+
+async fn refusal_for_operation(
+    service: &HttpService,
+    claims: &VerifiedRequestClaims,
+    selected: Option<&str>,
+    correlation: &RequestCorrelation,
+    response: Response,
+    method: RefusalHttpMethod,
+    operation_id: &str,
+) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::ReadConcealed);
+    }
+    let Some(backend) = &service.statistics else {
+        return unavailable();
+    };
     if record_http_refusal_audit(
         backend.audit(),
         backend.expected(),
         HttpRefusalAudit {
             grant: crate::audit::GrantAuditContext::from_claims(claims),
-            method: route.kind.method(),
-            operation_id: &route.id(),
+            method,
+            operation_id,
             target_record: None,
             action_id: None,
             principal: claims.principal(),
@@ -362,30 +398,37 @@ async fn dispatch(
         return unavailable();
     };
     let now = chrono::Utc::now();
-    let deadline = deadline
-        .map(|Extension(d)| d.0)
-        .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(10))
-        .min(tokio::time::Instant::now() + Duration::from_secs(30));
+    let deadline = statistics_work_deadline(
+        tokio::time::Instant::now(),
+        deadline
+            .map(|Extension(d)| d.0)
+            .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(10))
+            .min(tokio::time::Instant::now() + Duration::from_secs(30)),
+    );
     let period = path.get("period").map(String::as_str);
     let version = path
         .get("version")
         .and_then(|s| s.parse::<i64>().ok())
         .filter(|v| *v > 0 && path.get("version") == Some(&v.to_string()));
     let mut lifecycle = None;
-    let result = execute(
-        &service,
-        &route,
-        &context,
-        &options,
-        period,
-        version,
-        &headers,
-        body,
-        deadline,
-        now,
-        &mut lifecycle,
-    )
-    .await;
+    let result = if deadline <= tokio::time::Instant::now() {
+        Err(service_problem(StatisticsServiceError::Timeout))
+    } else {
+        execute(
+            &service,
+            &route,
+            &context,
+            &options,
+            period,
+            version,
+            &headers,
+            body,
+            deadline,
+            now,
+            &mut lifecycle,
+        )
+        .await
+    };
     let (response, count) = match result {
         Ok(v) => v,
         Err(response) => (response, 0),
@@ -935,17 +978,16 @@ pub(super) async fn unknown(
     service: &HttpService,
     claims: &VerifiedRequestClaims,
     correlation: &RequestCorrelation,
+    method: &axum::http::Method,
 ) -> Response {
-    refusal(
+    refusal_for_operation(
         service,
-        &Route {
-            dataset: String::new(),
-            kind: Kind::Live,
-        },
         claims,
         None,
         correlation,
         concealed(),
+        RefusalHttpMethod::from_request(method),
+        "statistics.unknown",
     )
     .await
 }
@@ -961,6 +1003,25 @@ fn statistics_invalid_query_at(parameter: &'static str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_deadline_reserves_terminal_audit_without_extending_short_budgets() {
+        let now = tokio::time::Instant::now();
+        let outer = now + Duration::from_secs(10);
+        assert_eq!(
+            statistics_work_deadline(now, outer),
+            outer - Duration::from_millis(500)
+        );
+        for budget in [
+            Duration::ZERO,
+            Duration::from_millis(50),
+            Duration::from_millis(500),
+        ] {
+            assert_eq!(statistics_work_deadline(now, now + budget), now);
+        }
+        let expired = now - Duration::from_secs(1);
+        assert_eq!(statistics_work_deadline(now, expired), expired);
+    }
 
     #[test]
     fn statistical_parameters_are_bounded_and_unknown_names_are_not_echoed() {

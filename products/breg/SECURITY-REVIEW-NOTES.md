@@ -1590,14 +1590,19 @@ reuses the ordinary read relations and visibility predicates for the grouped
 count, including the request-owner visibility context. Source entity
 dependencies are extracted from the reviewed raw SQL
 syntax tree and closed transitively. Publisher visibility must be independent
-of its caller on every entity in that closure. Anonymous profiles, encrypted
+of its caller on every entity in that closure, with an operation that installs
+an ordinary SELECT policy on each dependency. The compiler checks that operation
+set and includes it in the definition digest. Anonymous profiles, encrypted
 processing fields, and consent-gated count grants are refused.
 
 Publication computes one ended period under the current package binding and
 one statement snapshot, retaining its shared history head for the freshness
 check. History erasure can make the release's snapshot bookmark unavailable;
-the header then carries `snapshot: null` while publication continues. Rebaseline
-restores bookmarks for later releases. Publication and withdrawal bind an idempotency receipt to the caller, route, selected profile,
+the header then carries `snapshot: null` while publication continues. Persistence
+rechecks bookmark coverage under the shared registry lock, so erasure between
+computation and persistence also produces a null bookmark. Storage errors and
+invalid history identity still fail closed. Rebaseline restores bookmarks for
+later releases. Publication and withdrawal bind an idempotency receipt to the caller, route, selected profile,
 package, and canonical request. A per-dataset-period transaction lock serializes
 version allocation and final-status ordering. Only canonical disclosed documents
 are persisted; exact live counts are not stored in release content.
@@ -1612,7 +1617,9 @@ retained reads, including a released-reader profile with no record authority.
 Audit entries contain dataset, period, release identity, status, and digest
 references, never cell values or true counts. Attempts precede database work;
 terminal audit acceptance gates response bytes. Each request has an absolute
-deadline, including lock waits and statement execution. JSON representation
+deadline, including lock waits and statement execution. Statistical work reserves
+500 ms before the outer HTTP deadline to construct and enqueue its terminal
+audit response. JSON representation
 digests cover exact response bytes; CSV digests cover the CSV representation.
 Both are sent with no-store cache policy.
 
@@ -1620,6 +1627,8 @@ Anonymous refusals return before authenticated refusal auditing, preventing
 unauthenticated requests from filling that journal or observing sink health.
 Authenticated unknown datasets and ungranted profiles enter refusal auditing;
 unknown IDs use a fixed route identity so caller input cannot enter the journal.
+Unmatched routes record the actual standard HTTP method and a fixed unknown
+operation; extension-method tokens become `OTHER`.
 Caller-filtered OpenAPI names only the selected profile; its query selector
 still follows the runtime's actual default admission rules.
 
@@ -1634,7 +1643,10 @@ atomic withdrawal, unexpected grants and altered withdrawal functions, and the
 authenticated HTTP release lifecycle. They also pin alias remapping in definition
 digests, owner count parity, anonymous refusals under audit failure, stored-byte
 digest equality, real definition successor activation, and publication after
-maintained history erasure and rebaseline. The facility
+maintained history erasure and rebaseline, including erasure between computation
+and persistence. The outer HTTP timeout test blocks the source table and verifies
+a refused terminal with no release or idempotency rows; unmatched-route tests
+verify method classification without recording caller-controlled values. The facility
 workflow executes publication and JSON/CSV series reads through native CLI and
 HTTP clients with separate access profiles.
 

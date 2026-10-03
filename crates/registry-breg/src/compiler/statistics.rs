@@ -833,6 +833,16 @@ fn validate_publisher_independence(
             ));
             continue;
         };
+        if dependency_select_operations(grant).is_empty() {
+            errors.push(error(
+                "statistical_dataset.publisher.dependency_read_required",
+                root,
+                &source.id,
+                &format!(
+                    "grant publisher `{publisher}` get, lookup, list, batch, revisions, or snapshot access to dependency entity `{entity_id}`"
+                ),
+            ));
+        }
         let violation = if !grant.row_boundaries.is_empty() {
             Some("rowBoundaries")
         } else if !grant.membership_boundaries.is_empty() {
@@ -857,6 +867,25 @@ fn validate_publisher_independence(
             ));
         }
     }
+}
+
+fn dependency_select_operations(profile: &AccessProfileSource) -> BTreeSet<Operation> {
+    profile
+        .operations
+        .iter()
+        .copied()
+        .filter(|operation| {
+            matches!(
+                operation,
+                Operation::Get
+                    | Operation::Lookup
+                    | Operation::List
+                    | Operation::Batch
+                    | Operation::Revisions
+                    | Operation::Snapshot
+            )
+        })
+        .collect()
 }
 
 fn dependencies(
@@ -897,6 +926,7 @@ fn definition_digest(
     #[serde(rename_all = "camelCase")]
     struct Visibility<'a> {
         entity: &'a str,
+        read_operations: BTreeSet<Operation>,
         row_boundaries: serde_json::Value,
         membership_boundaries: serde_json::Value,
         required_purposes: serde_json::Value,
@@ -931,6 +961,7 @@ fn definition_digest(
                     let profile = entity.access_profiles.get(publisher)?;
                     Some(Visibility {
                         entity: entity_id,
+                        read_operations: dependency_select_operations(profile),
                         row_boundaries: json!(profile.row_boundaries),
                         membership_boundaries: json!(profile.membership_boundaries),
                         required_purposes: json!(profile.required_purposes),

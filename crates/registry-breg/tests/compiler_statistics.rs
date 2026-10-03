@@ -1113,6 +1113,63 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         BTreeSet::from(["lookup".to_owned(), "record".to_owned()])
     );
     assert!(relation.uses_evaluation_date);
+    let baseline_digest = dataset.definition_digest.clone();
+
+    let mut additional_read = value.clone();
+    additional_read["accessProfiles"][1]["permissions"][1]["operations"] = json!(["get", "list"]);
+    let additional_read = compile_with_sql(&additional_read, sql)
+        .expect("another ordinary dependency read operation compiles");
+    assert_ne!(
+        baseline_digest,
+        additional_read.statistical_datasets()["records-by-category"].definition_digest,
+        "the definition digest binds dependency read operations"
+    );
+
+    let mut batch_select = value.clone();
+    batch_select["entities"][1]["batch"] = json!({"maximumItems": 10, "maximumBytes": 4096});
+    batch_select["accessProfiles"][1]["permissions"][1] = json!({
+        "entity":"lookup","operations":["patch","batch"],"writableFields":["flag"],
+        "rowBoundaries":[]
+    });
+    let batch_select = compile_with_sql(&batch_select, sql)
+        .expect("batch supplies ordinary dependency SELECT visibility");
+    assert_ne!(
+        baseline_digest,
+        batch_select.statistical_datasets()["records-by-category"].definition_digest,
+        "the definition digest binds batch SELECT visibility"
+    );
+
+    let mut additional_mutation = value.clone();
+    additional_mutation["accessProfiles"][1]["permissions"][1]["operations"] =
+        json!(["list", "patch"]);
+    additional_mutation["accessProfiles"][1]["permissions"][1]["writableFields"] = json!(["flag"]);
+    let additional_mutation = compile_with_sql(&additional_mutation, sql)
+        .expect("an unrelated dependency mutation grant compiles");
+    assert_eq!(
+        baseline_digest,
+        additional_mutation.statistical_datasets()["records-by-category"].definition_digest,
+        "unrelated mutation grants do not change the definition digest"
+    );
+
+    for permission in [
+        json!({
+            "entity":"lookup","operations":["create"],"writableFields":["flag"],
+            "rowBoundaries":[]
+        }),
+        json!({
+            "entity":"lookup","operations":["patch"],"writableFields":["flag"],
+            "rowBoundaries":[]
+        }),
+    ] {
+        let mut mutation_only_dependency = value.clone();
+        mutation_only_dependency["accessProfiles"][1]["permissions"][1] = permission;
+        let failure = compile_with_sql(&mutation_only_dependency, sql)
+            .expect_err("a publisher needs an ordinary read operation on every derived dependency");
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "statistical_dataset.publisher.dependency_read_required"
+                && diagnostic.message.contains("dependency entity `lookup`")
+        }));
+    }
 
     let mut missing_dependency_grant = value.clone();
     missing_dependency_grant["accessProfiles"][1]["permissions"]

@@ -13,6 +13,7 @@ use tokio_postgres::types::ToSql;
 
 use crate::api::{AuthorizedRequestContext, ReadServiceError};
 use crate::audit::RegistryAudit;
+use crate::history_reference::SnapshotReference;
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_binding, HeldResponse, IdempotencyBinding,
     IdempotencyError, IdempotencyKeyDomain, PermittedResponseHeader, StoredResultMetadata,
@@ -325,7 +326,7 @@ impl PostgresStatisticsService {
         let history_head = computation
             .history_head
             .ok_or(StatisticsServiceError::Unavailable)?;
-        let snapshot = computation.snapshot.take();
+        let mut snapshot = computation.snapshot.take();
         let claims = strict_claim_context(&self.registry, request.context, &dataset.unit_entity_id)
             .map_err(map_read_error)?;
         let response_fields = BTreeSet::new();
@@ -432,6 +433,9 @@ impl PostgresStatisticsService {
             transaction.rollback().await.map_err(unavailable)?;
             return Err(StatisticsServiceError::VersionConflict);
         }
+        snapshot =
+            revalidate_snapshot_for_persist(transaction.transaction(), history_head, snapshot)
+                .await?;
         let version = previous_version
             .checked_add(1)
             .ok_or(StatisticsServiceError::Unavailable)?;
@@ -1383,6 +1387,57 @@ impl PostgresStatisticsService {
         allowed
             .then_some(dataset)
             .ok_or(StatisticsServiceError::Concealed)
+    }
+}
+
+async fn revalidate_snapshot_for_persist(
+    transaction: &tokio_postgres::Transaction<'_>,
+    captured_head: i64,
+    snapshot: Option<String>,
+) -> Result<Option<String>, StatisticsServiceError> {
+    let Some(snapshot) = snapshot else {
+        // Publication computed while coverage was unavailable. A later
+        // rebaseline must not retroactively attach a bookmark to those counts.
+        return Ok(None);
+    };
+    let reference =
+        SnapshotReference::parse(&snapshot).map_err(|_| StatisticsServiceError::Unavailable)?;
+    let row = transaction
+        .query_opt(
+            "SELECT head.history_lineage, head.latest_position,
+                    head.coverage_baseline_position, head.coverage_ready,
+                    head.unavailable_after_position,
+                    commit.commit_position, commit.history_lineage
+               FROM registry_internal.registry_commit_head AS head
+          LEFT JOIN registry_internal.registry_revision_commits AS commit
+                 ON commit.snapshot_reference = $1
+              WHERE head.singleton",
+            &[&reference.uuid()],
+        )
+        .await
+        .map_err(unavailable)?
+        .ok_or(StatisticsServiceError::Unavailable)?;
+    let head_lineage = row.get::<_, uuid::Uuid>(0);
+    let latest_position = row.get::<_, i64>(1);
+    let coverage_baseline = row.get::<_, i64>(2);
+    let coverage_ready = row.get::<_, bool>(3);
+    let unavailable_after = row.get::<_, Option<i64>>(4);
+    let position = row
+        .get::<_, Option<i64>>(5)
+        .ok_or(StatisticsServiceError::Unavailable)?;
+    let lineage = row
+        .get::<_, Option<uuid::Uuid>>(6)
+        .ok_or(StatisticsServiceError::Unavailable)?;
+    if lineage != head_lineage || position > latest_position || position != captured_head {
+        return Err(StatisticsServiceError::Unavailable);
+    }
+    if !coverage_ready
+        || position < coverage_baseline
+        || unavailable_after.is_some_and(|boundary| position > boundary)
+    {
+        Ok(None)
+    } else {
+        Ok(Some(snapshot))
     }
 }
 

@@ -200,31 +200,59 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         );
     }
     database.audit_capture().restore();
-    for path in [
-        "/v1/statistics/unknown-id-canary:live",
-        "/v1/statistics/unknown/route/garbage",
+    for (method, audited_method) in [
+        (Method::POST, "POST"),
+        (Method::GET, "GET"),
+        (Method::PATCH, "PATCH"),
+        (Method::DELETE, "DELETE"),
+        (Method::PUT, "PUT"),
+        (Method::OPTIONS, "OPTIONS"),
+        (Method::HEAD, "HEAD"),
+        (Method::from_bytes(b"METHOD-CANARY").unwrap(), "OTHER"),
     ] {
-        let before = database.audit_records().len();
-        let unknown = send(
-            &app,
-            Method::GET,
-            path,
-            Some(claims("reader", false)),
-            &[],
-            Vec::new(),
-        )
-        .await;
-        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
-        let records = database.audit_records();
-        assert_eq!(
-            records.len(),
-            before + 1,
-            "authenticated unknown routes are journaled"
-        );
-        let refusal = records.last().unwrap();
-        assert_eq!(refusal["phase"], "refusal");
-        assert!(!refusal.to_string().contains("unknown-id-canary"));
+        for path in [
+            "/v1/statistics/unknown-id-canary:live",
+            "/v1/statistics/unknown/route/garbage",
+        ] {
+            let before = database.audit_records().len();
+            let unknown = send(
+                &app,
+                method.clone(),
+                path,
+                Some(claims("reader", false)),
+                &[],
+                Vec::new(),
+            )
+            .await;
+            assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+            let records = database.audit_records();
+            assert_eq!(
+                records.len(),
+                before + 1,
+                "authenticated unknown routes are journaled"
+            );
+            let refusal = records.last().unwrap();
+            assert_eq!(refusal["phase"], "refusal");
+            assert_eq!(refusal["method"], audited_method);
+            assert_eq!(refusal["operationId"], "statistics.unknown");
+            assert!(!refusal.to_string().contains("unknown-id-canary"));
+            assert!(!refusal.to_string().contains("METHOD-CANARY"));
+        }
     }
+    let wrong_method = send(
+        &app,
+        Method::POST,
+        "/v1/statistics/records-by-category:live",
+        Some(claims("reader", false)),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(wrong_method.status(), StatusCode::NOT_FOUND);
+    let records = database.audit_records();
+    let refusal = records.last().unwrap();
+    assert_eq!(refusal["method"], "POST");
+    assert_eq!(refusal["operationId"], "statistics.unknown");
 
     let analyst = claims("analyst", true);
     let count = send(
@@ -1576,6 +1604,101 @@ async fn activation_between_compute_and_persist_is_a_version_conflict_without_wr
         .expect("persisted result count reads")
         .get(0);
     assert_eq!(persisted, 0);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publication_statement_timeout_reserves_the_terminal_audit_before_outer_cancellation() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-statistics-outer-timeout-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+    let table = compiled.entities()["record"].physical_table.clone();
+    let app = registry_breg::startup::with_request_timeout_for_test(
+        statistics_router(
+            database.runtime_config.build_pool().expect("pool builds"),
+            compiled,
+            identity,
+            RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
+            database.audit(
+                AuditProfile::production_from_secret_bytes(vec![0x7e; 32].into())
+                    .expect("audit profile is keyed"),
+            ),
+            Arc::new(std::sync::Mutex::new(Vec::new())),
+            None,
+        ),
+        Duration::from_secs(2),
+    );
+    let (mut blocker, blocker_task) = database.connect_migration().await;
+    let blocker_transaction = blocker.transaction().await.expect("blocker begins");
+    blocker_transaction
+        .batch_execute(&format!(
+            "LOCK TABLE registry_data.{} IN ACCESS EXCLUSIVE MODE",
+            quote_identifier(&table)
+        ))
+        .await
+        .expect("source read is deterministically blocked");
+    let today = Utc::now().date_naive();
+    let prior = today
+        .with_day(1)
+        .unwrap()
+        .checked_sub_days(Days::new(1))
+        .unwrap();
+    let response = publish(
+        &app,
+        &month_code(prior),
+        "outer-timeout-publish",
+        "final",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    let records = database.audit_records();
+    assert_eq!(records.len(), 2, "one attempt has one terminal response");
+    assert_eq!(records[0]["phase"], "attempt");
+    assert_eq!(records[1]["phase"], "terminal");
+    assert_eq!(records[1]["outcome"], "refused");
+    assert_eq!(records[0]["requestId"], records[1]["requestId"]);
+    assert_eq!(
+        records[1]["operationId"],
+        "statistics.records-by-category.publish_release"
+    );
+    for table in [
+        "registry_statistical_release_versions",
+        "registry_statistical_release_contents",
+        "registry_idempotency",
+    ] {
+        let count: i64 = database
+            .admin
+            .query_one(
+                &format!("SELECT count(*) FROM registry_internal.{table}"),
+                &[],
+            )
+            .await
+            .expect("protected effects read")
+            .get(0);
+        assert_eq!(count, 0, "a timed-out publication creates no {table} row");
+    }
+    blocker_transaction
+        .rollback()
+        .await
+        .expect("blocker releases");
+    blocker_task.abort();
     database.cleanup().await;
 }
 

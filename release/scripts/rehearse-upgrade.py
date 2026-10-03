@@ -1320,6 +1320,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
             service.stop()
 
     counts_before_upgrade = postgres.row_counts("registry")
+    ledger_upgrade_applied = False
     if signed is not None:
         # A database a signing release activated has no activation ledger, and
         # the runtime refuses to serve it until the first apply adopts it. That
@@ -1333,6 +1334,16 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         # The retired tables are already archived and row-counted above, so
         # this apply may acknowledge dropping them.
         apply(package, digest, "adopted", "--acknowledge-retired-audit-discard")
+    else:
+        # Ledger-era packages still bind the compiler that built them. Rebuild
+        # against the verified predecessor and apply a changed managed catalog
+        # before any current-binary read or runtime startup.
+        upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
+        if upgraded_digest != digest:
+            apply(upgraded, upgraded_digest, "successor")
+            ledger_upgrade_applied = True
+        package, digest = upgraded, upgraded_digest
+        breg.write_runtime(breg.runtime, "registry", package, breg.port)
     claim_after = instance_claim(new, breg.runtime)
     adopted_views = serve("breg-adopted.log")
 
@@ -1347,8 +1358,9 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     ledger = expect_ledger(
         new.run_json("bregctl", "--format", "json", "status", "--runtime-config",
                      str(breg.runtime)), successor_digest)
-    expected = ["adopted:applied" if signed is not None else "initial:applied",
-                "successor:applied"]
+    predecessor_activation = ("adopted" if signed is not None else
+                              "successor" if ledger_upgrade_applied else "initial")
+    expected = [f"{predecessor_activation}:applied", "successor:applied"]
     if ledger[-2:] != expected:
         raise RehearsalError(f"the activation ledger recorded {ledger}, expected it to end "
                              f"with {expected}")

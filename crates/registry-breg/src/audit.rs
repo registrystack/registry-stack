@@ -254,9 +254,57 @@ pub struct PreIoAudit<'a> {
     pub correlation: &'a RequestCorrelation,
 }
 
+/// Closed method vocabulary for refusals, including methods with no governed
+/// route. Extension-method text is caller input and is minimized to `OTHER`.
+#[derive(Clone, Copy)]
+pub(crate) enum RefusalHttpMethod {
+    Governed(HttpMethod),
+    Head,
+    Put,
+    Options,
+    Connect,
+    Trace,
+    Other,
+}
+
+impl From<HttpMethod> for RefusalHttpMethod {
+    fn from(method: HttpMethod) -> Self {
+        Self::Governed(method)
+    }
+}
+
+impl RefusalHttpMethod {
+    pub(crate) fn from_request(method: &axum::http::Method) -> Self {
+        match *method {
+            axum::http::Method::GET => HttpMethod::Get.into(),
+            axum::http::Method::POST => HttpMethod::Post.into(),
+            axum::http::Method::PATCH => HttpMethod::Patch.into(),
+            axum::http::Method::DELETE => HttpMethod::Delete.into(),
+            axum::http::Method::HEAD => Self::Head,
+            axum::http::Method::PUT => Self::Put,
+            axum::http::Method::OPTIONS => Self::Options,
+            axum::http::Method::CONNECT => Self::Connect,
+            axum::http::Method::TRACE => Self::Trace,
+            _ => Self::Other,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Governed(method) => method_name(method),
+            Self::Head => "HEAD",
+            Self::Put => "PUT",
+            Self::Options => "OPTIONS",
+            Self::Connect => "CONNECT",
+            Self::Trace => "TRACE",
+            Self::Other => "OTHER",
+        }
+    }
+}
+
 pub(crate) struct HttpRefusalAudit<'a> {
     pub grant: Option<GrantAuditContext>,
-    pub method: HttpMethod,
+    pub method: RefusalHttpMethod,
     pub operation_id: &'a str,
     pub target_record: Option<&'a str>,
     pub action_id: Option<&'a str>,
@@ -749,7 +797,7 @@ async fn record_http_refusal_audit_inner(
         ("phase".to_owned(), Value::String("refusal".to_owned())),
         (
             "method".to_owned(),
-            Value::String(method_name(event.method).to_owned()),
+            Value::String(event.method.name().to_owned()),
         ),
         (
             "operationId".to_owned(),

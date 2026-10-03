@@ -542,7 +542,7 @@ impl SnapshotReadService for PostgresSnapshotReadService {
                 &self.expected,
                 crate::audit::HttpRefusalAudit {
                     grant: None,
-                    method: request.method,
+                    method: request.method.into(),
                     operation_id: &request.operation_id,
                     target_record: request.target_record.as_deref(),
                     action_id: None,

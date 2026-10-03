@@ -21,10 +21,10 @@ use registry_breg::field_encryption_backfill::{
 };
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, plan_verified_package, read_activation_status,
-    read_recorded_registry_state, ActivationDeployment, ActivationPlan,
-    AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, PlannedActivation,
-    RecordedRegistryState, ReviewedMigrationFaultPoint,
+    read_recorded_registry_state, successor_plan_is_empty, successor_plan_is_empty_for_predecessor,
+    ActivationDeployment, ActivationPlan, AppliedFieldEncryptionKeySource, ApplyPrecondition,
+    ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence,
+    MigrationError, PlannedActivation, RecordedRegistryState, ReviewedMigrationFaultPoint,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
@@ -456,6 +456,140 @@ async fn a_pre_statistics_active_package_recovers_a_failed_successor_and_applies
         .expect("the corrected successor installs its governed field")
         .get(0);
     assert!(field_present);
+    database.cleanup().await;
+}
+
+/// A verified package from before engine capability declarations may have no
+/// authored model delta while the current compiler adds the statistical
+/// release store to its closed catalog. That one capability transition is
+/// real apply work; omitting the verified predecessor binding remains an
+/// ordinary empty-plan refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_statistics_empty_successor_installs_the_release_store_once() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let predecessor = load_person_pre_statistics_package();
+    assert!(!predecessor.statistical_release_store_present());
+    let assets = person_registration_assets();
+    let project = person_registration_project(false);
+    let registry = compile_person_registration(&project, &assets);
+    assert_eq!(predecessor.package_id(), registry.registry_id());
+    let target_fingerprint = initial_fingerprint(&database, &registry).await;
+    let initial = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the current package establishes the fixture catalog");
+
+    let (migration, task) = database.connect_migration().await;
+    migration
+        .batch_execute(
+            "DROP FUNCTION registry_internal.withdraw_statistical_release(text, text, bigint, text);
+             DROP TABLE registry_internal.registry_statistical_release_contents;
+             DROP TABLE registry_internal.registry_statistical_release_withdrawals;
+             DROP TABLE registry_internal.registry_statistical_release_versions;",
+        )
+        .await
+        .expect("the fixture removes the later engine-owned store");
+    let legacy_catalog = ExpectedManagedCatalog::compiled_predecessor(&registry, false);
+    let legacy_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &legacy_catalog)
+            .await
+            .expect("the pre-statistics catalog fingerprints against its closed shape");
+    active.package_digest = predecessor.package_digest().to_owned();
+    active.schema_fingerprint = legacy_fingerprint;
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET active_package_digest = $1, schema_fingerprint = $2
+              WHERE singleton",
+            &[&active.package_digest, &active.schema_fingerprint],
+        )
+        .await
+        .expect("the fixture records the predecessor identity");
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+                SET package_digest = $1
+              WHERE activation_id = $2::text::uuid",
+            &[&active.package_digest, &active.activation_id],
+        )
+        .await
+        .expect("the activation ledger names the predecessor package");
+    drop(migration);
+    task.abort();
+
+    let successor = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        Some(predecessor.package_digest()),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(registry.clone()),
+        },
+    );
+    assert!(successor_plan_is_empty(&successor));
+    assert!(!successor_plan_is_empty_for_predecessor(
+        &successor,
+        &predecessor
+    ));
+    assert_value_free(
+        apply(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .await
+        .err(),
+        MigrationError::EmptyPlan,
+    );
+
+    let history = predecessor.history_schema_descriptor();
+    let plan = plan_verified_package(
+        request(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_predecessor_migration_baseline(predecessor.migration_baseline())
+        .with_predecessor_history_descriptor(&history)
+        .with_predecessor_engine_capabilities(&predecessor),
+    )
+    .await
+    .expect("the verified legacy capability transition plans");
+    assert_eq!(plan.activation, PlannedActivation::Successor);
+    let upgraded = apply_verified_package(
+        request(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_predecessor_migration_baseline(predecessor.migration_baseline())
+        .with_predecessor_history_descriptor(&history)
+        .with_predecessor_engine_capabilities(&predecessor),
+    )
+    .await
+    .expect("the verified legacy capability transition applies");
+    assert_ready_target(&database, &upgraded).await;
+    verify_catalog_identity_for_catalog(
+        &database.admin,
+        &upgraded,
+        &ExpectedManagedCatalog::compiled(&registry),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("the activated catalog is the exact current catalog");
     database.cleanup().await;
 }
 

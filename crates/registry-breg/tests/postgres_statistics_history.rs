@@ -9,23 +9,34 @@ mod pilot_acceptance_harness;
 #[allow(dead_code)]
 mod postgres_harness;
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::to_bytes;
-use axum::http::{Method, StatusCode};
+use axum::body::{to_bytes, Body};
+use axum::http::{Method, Request, Response, StatusCode};
 use chrono::{Days, Utc};
 use pilot_acceptance_harness::{response_json, PilotHarness};
+use registry_breg::api::{
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedRequestClaims,
+};
+use registry_breg::cursor::CursorCodec;
 use registry_breg::history_erasure::{
     erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
 };
 use registry_breg::history_rebaseline::{
     rebaseline_history_coverage, HistoryRebaselineRequest, HistoryRebaselineTimeouts,
 };
-use registry_breg::postgres::{ExpectedRegistryIdentity, RegistryLockKey};
+use registry_breg::postgres::{
+    ExpectedRegistryIdentity, PostgresRecordReadService, PostgresStatisticsService,
+    RegistryLockKey, StatisticsPublishPause,
+};
 use registry_breg::statistics::{current_period, PeriodGranularity};
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
+use tower::Service as _;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publication_uses_null_snapshot_until_erased_history_is_rebaselined() {
@@ -219,9 +230,178 @@ async fn publication_uses_null_snapshot_until_erased_history_is_rebaselined() {
     assert_eq!(second_head.get::<_, i64>(0), rebaseline.baseline_position);
     assert!(second_head.get::<_, bool>(1));
 
+    let pause = StatisticsPublishPause::default();
+    let paused_app = statistics_router(
+        &harness,
+        expected.clone(),
+        lock_key,
+        audit.clone(),
+        pause.clone(),
+    );
+    let paused_path = publish_path.clone();
+    let paused = tokio::spawn(async move {
+        publish_through_router(
+            &paused_app,
+            &paused_path,
+            "history-publish-after-compute-erasure",
+        )
+        .await
+    });
+    pause.wait_until_reached().await;
+    let captured_head: i64 = migration
+        .query_one(
+            "SELECT latest_position
+               FROM registry_internal.registry_commit_head
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("the history head captured by computation remains readable")
+        .get(0);
+    assert_eq!(captured_head, rebaseline.baseline_position);
+
+    let erased_after_compute = erase_record_history(
+        &mut migration,
+        HistoryErasureRequest {
+            expected: &expected,
+            migration_role: &harness.database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit: &audit,
+            operator_reference: "history-statistics-race-operator",
+            reason: "approved statistics publish coverage race test",
+            target: RecordHistoryErasureTarget::new(
+                "permit",
+                Uuid::parse_str(&permit.id).unwrap(),
+                2,
+            ),
+        },
+    )
+    .await
+    .expect("history erasure between computation and persistence succeeds");
+    assert!(!erased_after_compute.coverage_ready);
+    let retained_head: i64 = migration
+        .query_one(
+            "SELECT latest_position
+               FROM registry_internal.registry_commit_head
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("history erasure retains the required commit head")
+        .get(0);
+    assert_eq!(retained_head, captured_head);
+
+    pause.resume();
+    let response = paused.await.expect("paused publication task joins");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let third = response_json(response).await;
+    assert_eq!(third["version"], 3);
+    assert_eq!(third["snapshot"], Value::Null);
+    let persisted = migration
+        .query_one(
+            "SELECT version.history_head_position, version.snapshot_reference,
+                    content.document
+               FROM registry_internal.registry_statistical_release_versions AS version
+               JOIN registry_internal.registry_statistical_release_contents AS content
+                 USING (dataset_id, period_code, release_version)
+              WHERE version.dataset_id = 'monthly-valid-permits-fields'
+                AND version.period_code = $1 AND version.release_version = 3",
+            &[&prior.code],
+        )
+        .await
+        .expect("post-erasure publication is persisted");
+    assert_eq!(persisted.get::<_, i64>(0), captured_head);
+    assert_eq!(persisted.get::<_, Option<Uuid>>(1), None);
+    let persisted_document: Value =
+        serde_json::from_slice(&persisted.get::<_, Vec<u8>>(2)).unwrap();
+    assert_eq!(persisted_document["release"]["snapshot"], Value::Null);
+
     drop(migration);
     migration_task.abort();
     harness.finish().await;
+}
+
+fn statistics_router(
+    harness: &PilotHarness,
+    expected: ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    audit: registry_breg::audit::RegistryAudit,
+    pause: StatisticsPublishPause,
+) -> axum::Router {
+    let pool = harness
+        .database
+        .runtime_config
+        .build_pool()
+        .expect("statistics race pool builds");
+    let cursors = Arc::new(
+        CursorCodec::new(Zeroizing::new(vec![0x4f; 32]), Duration::from_secs(300))
+            .expect("statistics race cursor key is valid"),
+    );
+    let records = Arc::new(PostgresRecordReadService::new(
+        pool.clone(),
+        harness.registry.clone(),
+        expected.clone(),
+        lock_key,
+        Duration::from_secs(5),
+        audit.clone(),
+        cursors.clone(),
+    ));
+    let statistics = Arc::new(
+        PostgresStatisticsService::new(
+            pool,
+            harness.registry.clone(),
+            expected.clone(),
+            lock_key,
+            Duration::from_secs(5),
+            audit,
+        )
+        .with_publish_pause_for_test(pause),
+    );
+    router(Arc::new(
+        HttpService::new(
+            harness.registry.clone(),
+            ReadRuntimeIdentity {
+                package_revision: expected.activation_id,
+                schema_fingerprint: expected.schema_fingerprint,
+            },
+            records,
+            Arc::new(AlwaysReady),
+            cursors,
+        )
+        .with_statistics(statistics),
+    ))
+}
+
+async fn publish_through_router(app: &axum::Router, path: &str, key: &str) -> Response<Body> {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("idempotency-key", key)
+        .body(Body::from(r#"{"status":"final"}"#))
+        .expect("paused publication request builds");
+    request.extensions_mut().insert(
+        VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            "history-statistics-publisher",
+            BTreeSet::from(["registry:facility:statistics:publish".to_owned()]),
+            None,
+            BTreeMap::new(),
+        )
+        .expect("publisher claims are valid"),
+    );
+    let mut app = app.clone();
+    app.call(request).await.expect("statistics router responds")
+}
+
+struct AlwaysReady;
+
+impl ReadinessProbe for AlwaysReady {
+    fn is_ready(&self) -> ServiceFuture<'_, bool> {
+        Box::pin(async { true })
+    }
 }
 
 struct CreatedRecord {
