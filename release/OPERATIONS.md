@@ -703,20 +703,23 @@ published historical exception and must not be modified after publication.
 
 ### Rehearse the upgrade from the previous release
 
-Every release promises a forward state path from its immediate predecessor.
+Before 1.0, a release reads only the state its immediate predecessor wrote, and
+promises a forward state path from that predecessor alone. An operator on an
+older release upgrades one release at a time.
 The release PR adds its manifest under `release/manifests/`, which starts
 `release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Casework,
 Evidence, and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The
 script downloads the previous published release's binaries for those products,
 authenticates `SHA256SUMS` with its protected-main Sigstore identity, and checks
-each asset against it as `release/VERIFY.md` describes. It writes a signed
+each asset against it as `release/VERIFY.md` describes. It writes a
 registry package with records and revisions, a Casework queue with answered
 and in-flight work, and an Evidence audit stream with the old binaries, using a
 disposable loopback PostgreSQL container. It then runs the documented upgrade
 steps with the PR's binaries and fails when any captured view is served
-differently or any retained table holds fewer rows. BReg rebuilds and applies
-a signed successor before serving with the new catalog; its package-bound ETags
-change, while record data and stored revisions must remain identical. Require
+differently or any retained table holds fewer rows. BReg serves the
+predecessor's package with the new binaries, then applies an additive successor
+and serves again; its package-bound ETags may change, while record data and
+stored revisions must remain identical. Require
 that run to succeed before
 merging the release PR. To rehearse without a release PR, dispatch it by hand:
 
@@ -726,16 +729,10 @@ gh workflow run release-upgrade-rehearsal.yml \
   --ref <branch>
 ```
 
-The promise starts at `v0.33.0`. v0.32 to v0.33 has no forward state path,
-because no adopter ran v0.32, so the script refuses to start from any earlier
-release rather than skipping the check. Scheduling runtime binaries join from `v0.38.0`. Scheduling state is not rehearsed:
-the script verifies and runs release binaries, and `v0.33.0` and `v0.34.0`
-shipped Scheduling only as a container image. Scheduling's
-`scheduling_audit_outbox` retirement is therefore covered by migration 8,
-which refuses while the outbox still holds unpublished rows, and by the
-operator archiving the old audit file before the upgraded runtime starts, as
-the Scheduling changelog and the retention page describe. An image-driven
-Scheduling leg is tracked separately.
+`FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
+earliest release this source reads state from, `v0.38.0`, and the script
+refuses to start from any earlier release rather than skipping the check.
+Scheduling state is not rehearsed; a Scheduling leg is tracked separately.
 
 Messaging joins the rehearsal from `v0.38.0`.
 `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that
