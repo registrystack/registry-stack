@@ -123,16 +123,15 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        casework_included = client_registry.includes_casework(
+        if not client_registry.includes_casework(
             args.version, include_casework=args.include_casework
-        )
+        ):
+            parser.error(
+                "this checkout contains the Casework Python facade; versions before "
+                "0.30.0 require the explicit --include-casework local-candidate option"
+            )
     except client_registry.ClientRegistryError as exc:
         parser.error(str(exc))
-    if not casework_included:
-        parser.error(
-            "this checkout contains the Casework Python facade; versions before "
-            "0.30.0 require the explicit --include-casework local-candidate option"
-        )
     if not client_registry.includes_messaging(
         args.version, include_messaging=args.include_messaging
     ):
