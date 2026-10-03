@@ -50,7 +50,8 @@
   one commit, including aliased patch effects. Latest snapshots and coverage
   rebaselines can therefore observe action writes. Replays and rolled-back
   actions allocate no commit. Existing unindexed action revisions are not backfilled by this fix and
-  still cause coverage rebaselining to refuse.
+  still cause coverage rebaselining to refuse. Rebuild affected pre-1.0
+  development databases before using history snapshots or coverage rebaselining.
 
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and

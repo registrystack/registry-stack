@@ -1,11 +1,21 @@
 'use strict';
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const http = require('node:http');
 const { test } = require('node:test');
 const { BaseRegistryClient } = process.env.BREG_CLIENT_PACKAGE
   ? require(process.env.BREG_CLIENT_PACKAGE).breg : require('..');
 
 const traceparent = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+
+function problem(code, status, detail, extension = {}) {
+  const titles = { 404: 'Not Found', 409: 'Conflict', 410: 'Gone', 422: 'Unprocessable Entity', 500: 'Internal Server Error' };
+  return JSON.stringify({
+    type: `https://id.registrystack.org/problems/registry-breg/${code.replaceAll('.', '/')}`,
+    title: titles[status], status, detail, code, traceId, ...extension,
+  });
+}
 
 test('statistics methods preserve route, representation, status and caller key', async () => {
   const requests = [];
@@ -20,20 +30,45 @@ test('statistics methods preserve route, representation, status and caller key',
         key: request.headers['idempotency-key'],
         body: Buffer.concat(chunks).toString('utf8'),
       });
+      const failures = [
+        ['/statistics/missing:live', 404, 'resource.not_found', 'The requested resource was not found.', {}],
+        ['/statistics/release-refused/', 422, 'statistical_dataset.release_refused', 'The statistical dataset release operation is not eligible.', { refusalCode: 'period-not-ended' }],
+        ['/statistics/version-conflict/', 409, 'statistical_dataset.version_conflict', 'The statistical dataset computation was superseded or its package changed.', {}],
+        ['/statistics/version-withdrawn/', 410, 'statistical_dataset.version_withdrawn', 'The statistical dataset version was withdrawn.', { reasonCode: 'source-data-error' }],
+        ['/statistics/domain-violation:live', 500, 'statistical_dataset.domain_violation', 'A statistical dataset contains a code outside its declared domain.', {}],
+      ];
+      const failure = failures.find(([path]) => request.url.includes(path));
+      if (failure) {
+        const [, status, code, detail, extension] = failure;
+        response.statusCode = status;
+        response.setHeader('content-type', 'application/problem+json');
+        response.setHeader('cache-control', 'no-store');
+        response.setHeader('traceparent', traceparent);
+        response.end(problem(code, status, detail, extension));
+        return;
+      }
       response.statusCode = request.method === 'POST' && request.url.endsWith('/versions?accessProfile=publisher') ? 201 : 200;
-      response.setHeader('content-type', request.headers.accept);
+      response.setHeader('content-type', request.headers.accept === 'text/csv' ? 'text/csv; charset=utf-8' : request.headers.accept);
       response.setHeader('traceparent', traceparent);
       if (request.method === 'POST') {
         response.setHeader('cache-control', 'no-store');
         response.setHeader('vary', 'authorization, accept');
       }
-      response.end(request.headers.accept === 'text/csv' ? 'period,periodStart,periodEnd,value,status\r\n' : '{"ok":true}');
+      const body = request.headers.accept === 'text/csv' ? 'period,periodStart,periodEnd,value,status\r\n' : '{"ok":true}';
+      if (request.method !== 'POST' && !request.url.includes('/releases?')) {
+        response.setHeader('repr-digest', `sha-256=:${createHash('sha256').update(body).digest('base64')}:`);
+      }
+      response.end(body);
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const client = new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
-    assert.equal((await client.statisticsLive('enrolments', '2025-01', '2025-02', 'analyst', 'csv')).mediaType, 'text/csv');
+    const live = await client.statisticsLive('enrolments', '2025-01', '2025-02', 'analyst', 'csv');
+    assert.equal(live.mediaType, 'text/csv; charset=utf-8');
+    assert.match(live.reprDigest, /^sha-256=:/);
+    await client.statisticsLive('enrolments', '2025-01');
+    await client.statisticsLive('enrolments', null, '2025-02');
     await client.statisticsReleases('enrolments', 10, 'cursor', 'reader');
     await client.statisticsLatestRelease('enrolments', '2025-01', 'final', 'reader', 'json');
     await client.statisticsReleaseVersion('enrolments', '2025-01', 7, 'reader', 'csv');
@@ -41,13 +76,34 @@ test('statistics methods preserve route, representation, status and caller key',
     await client.statisticsPublish('enrolments', '2025-01', 'final', 'publisher', 'caller-owned-key');
     await client.statisticsWithdraw('enrolments', '2025-01', 7, 'disclosure-risk', 'publisher', 'caller-owned-key');
     assert.equal(requests[0].url, '/v1/statistics/enrolments:live?from=2025-01&to=2025-02&accessProfile=analyst');
-    assert.equal(requests[3].accept, 'text/csv');
-    assert.equal(requests[5].body, '{"status":"final"}');
-    assert.equal(requests[5].key, 'caller-owned-key');
-    assert.equal(requests[6].body, '{"reason":"disclosure-risk"}');
+    assert.equal(requests[1].url, '/v1/statistics/enrolments:live?from=2025-01');
+    assert.equal(requests[2].url, '/v1/statistics/enrolments:live?to=2025-02');
+    assert.equal(requests[5].accept, 'text/csv');
+    assert.equal(requests[7].body, '{"status":"final"}');
+    assert.equal(requests[7].key, 'caller-owned-key');
+    assert.equal(requests[8].body, '{"reason":"disclosure-risk"}');
     const count = requests.length;
     await assert.rejects(client.statisticsReleaseVersion('enrolments', '2025-01', 0), error => error.kind === 'invalid_request');
     assert.equal(requests.length, count);
+
+    await assert.rejects(client.statisticsLive('missing'), error => error.kind === 'not_found' && error.code === 'resource.not_found');
+    await assert.rejects(
+      client.statisticsPublish('release-refused', '2025-01', 'final', 'publisher', 'refusal-key'),
+      error => error.code === 'statistical_dataset.release_refused' && error.refusalCode === 'period-not-ended',
+    );
+    await assert.rejects(
+      client.statisticsPublish('version-conflict', '2025-01', 'final', 'publisher', 'conflict-key'),
+      error => error.code === 'statistical_dataset.version_conflict',
+    );
+    await assert.rejects(
+      client.statisticsReleaseVersion('version-withdrawn', '2025-01', 7, 'reader'),
+      error => error.code === 'statistical_dataset.version_withdrawn'
+        && error.reasonCode === 'source-data-error' && error.refusalCode === undefined,
+    );
+    await assert.rejects(
+      client.statisticsLive('domain-violation', null, null, 'reader'),
+      error => error.code === 'statistical_dataset.domain_violation',
+    );
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

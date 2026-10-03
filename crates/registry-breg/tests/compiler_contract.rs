@@ -5310,6 +5310,10 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "runtime.field_encryption.unavailable",
             "service.unavailable",
             "source.unavailable",
+            "statistical_dataset.domain_violation",
+            "statistical_dataset.release_refused",
+            "statistical_dataset.version_conflict",
+            "statistical_dataset.version_withdrawn",
             "unsupported.media_type"
         ])
     );
@@ -5997,13 +6001,13 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
             {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
             ]},
-            {"id":"case_file","primaryDataset":"test-dataset","route":"case_file_records","mutationMode":"create_only","fields":[
+            {"id":"case_file_record","primaryDataset":"test-dataset","route":"case_file_records","mutationMode":"create_only","fields":[
               {"id":"code","type":"string","maxLength":8,"classification":"internal"}
             ]}
           ],
           "accessProfiles":[{"id":"reader","principalClaim":"principal","permissions":[
             {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": []},
-            {"entity":"case_file","operations":["get"],"readableFields":["code"], "rowBoundaries": []}
+            {"entity":"case_file_record","operations":["get"],"readableFields":["code"], "rowBoundaries": []}
           ]}]
         }"#,
     )
@@ -6020,7 +6024,7 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
 
     assert_eq!(unique.len(), operation_ids.len());
     assert!(unique.contains("records.case-file.get"));
-    assert!(unique.contains("records.case_file.get"));
+    assert!(unique.contains("records.case_file_record.get"));
 }
 
 #[test]

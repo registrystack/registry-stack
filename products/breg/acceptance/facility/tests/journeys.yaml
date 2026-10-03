@@ -8,8 +8,9 @@ journeys:
         claims: &north_operator_claims
           principal: synthetic-facility-operator
           purpose: facility-registry
+          scopes: []
           directClaims:
-            administrative_boundaries: north-district
+            administrative_boundaries: [north-district]
         request:
           operation: create
           data:
@@ -72,8 +73,9 @@ journeys:
         claims:
           principal: synthetic-facility-operator
           purpose: facility-registry
+          scopes: []
           directClaims:
-            administrative_boundaries: south-district
+            administrative_boundaries: [south-district]
         request:
           operation: get
           recordRef: updated-north-facility

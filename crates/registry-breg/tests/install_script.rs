@@ -292,12 +292,72 @@ exec /bin/mv "${arguments[@]}"
         let suffix = &self.asset_suffix;
         let mut sums = String::new();
         for binary in BINARIES {
-            let asset = format!("{binary}-{TEST_VERSION}-{suffix}");
+            let asset = if self.uses_macos_bundle() {
+                format!("{binary}-{TEST_VERSION}-{suffix}.tar.gz")
+            } else {
+                format!("{binary}-{TEST_VERSION}-{suffix}")
+            };
             let path = self.release_dir.join(&asset);
-            fs::write(&path, format!("{binary} release binary\n")).unwrap();
+            if self.uses_macos_bundle() {
+                self.write_macos_bundle(binary, &path);
+            } else {
+                fs::write(&path, format!("{binary} release binary\n")).unwrap();
+            }
             sums.push_str(&format!("{}  {asset}\n", sha256(&path)));
         }
         fs::write(self.release_dir.join("SHA256SUMS"), sums).unwrap();
+    }
+
+    fn uses_macos_bundle(&self) -> bool {
+        self.asset_suffix.starts_with("macos-")
+    }
+
+    fn write_macos_bundle(&self, binary: &str, archive: &Path) {
+        let stem = format!("{binary}-{TEST_VERSION}-{}", self.asset_suffix);
+        let bundle = self.root.join("bundle-source").join(binary);
+        fs::create_dir_all(&bundle).unwrap();
+        write_executable(
+            &bundle.join(&stem),
+            &format!(
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${{1:-}}" == "--version" ]]; then
+  printf '%s\n' "{binary} {}"
+  exit 0
+fi
+printf '%s\n' "{binary} release binary"
+"#,
+                TEST_VERSION.trim_start_matches('v')
+            ),
+        );
+        write_executable(
+            &bundle.join("libaws_lc_fips_fixture.dylib"),
+            "macOS FIPS fixture library\n",
+        );
+        fs::write(
+            bundle.join("THIRD_PARTY_NOTICES"),
+            "macOS installer fixture notices\n",
+        )
+        .unwrap();
+        fs::set_permissions(
+            bundle.join("THIRD_PARTY_NOTICES"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let status = Command::new("tar")
+            .args(["-czf"])
+            .arg(archive)
+            .arg("-C")
+            .arg(&bundle)
+            .args([
+                stem.as_str(),
+                "libaws_lc_fips_fixture.dylib",
+                "THIRD_PARTY_NOTICES",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "macOS installer fixture archive builds");
     }
 
     fn preinstall_previous_toolset(&self) {
@@ -398,10 +458,26 @@ exec "$REAL_MV" "$@"
 
     fn assert_release_toolset_active(&self) {
         for binary in BINARIES {
-            assert_eq!(
-                fs::read_to_string(self.install_dir.join(binary)).unwrap(),
-                format!("{binary} release binary\n")
-            );
+            let path = self.install_dir.join(binary);
+            if self.uses_macos_bundle() {
+                let version = Command::new(&path).arg("--version").output().unwrap();
+                assert!(version.status.success());
+                assert_eq!(
+                    String::from_utf8(version.stdout).unwrap(),
+                    format!("{binary} {}\n", TEST_VERSION.trim_start_matches('v'))
+                );
+                let payload = Command::new(&path).output().unwrap();
+                assert!(payload.status.success());
+                assert_eq!(
+                    String::from_utf8(payload.stdout).unwrap(),
+                    format!("{binary} release binary\n")
+                );
+            } else {
+                assert_eq!(
+                    fs::read_to_string(path).unwrap(),
+                    format!("{binary} release binary\n")
+                );
+            }
         }
     }
 

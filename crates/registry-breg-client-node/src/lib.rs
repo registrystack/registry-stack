@@ -181,6 +181,7 @@ pub struct RawOutcome {
     pub media_type: String,
     pub trace_id: String,
     pub etag: Option<String>,
+    pub repr_digest: Option<String>,
 }
 
 /// One inert caller-visible target written by an applied request.
@@ -432,6 +433,7 @@ fn protocol_code(value: BRegProtocolFailure) -> &'static str {
         BRegProtocolFailure::ProfileLink => "profile_link",
         BRegProtocolFailure::Location => "location",
         BRegProtocolFailure::CachePolicy => "cache_policy",
+        BRegProtocolFailure::RepresentationDigest => "representation_digest",
         BRegProtocolFailure::Status => "status",
         _ => "protocol",
     }
@@ -491,9 +493,21 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
                 BRegProblemCode::RequestPlanRefused(value) => Some(value.kind()),
                 _ => None,
             },
-            // The refusal catalogue belongs to the package, so the declared code
-            // travels as the bounded string the Problem schema admits.
-            "refusalCode": refusal_code.as_ref().map(|value| value.as_str()),
+            // Problem detail codes travel as bounded strings after their
+            // operation-specific vocabulary has been checked by the Rust client.
+            "refusalCode": match code {
+                BRegProblemCode::ActionRefused
+                | BRegProblemCode::StatisticalDatasetReleaseRefused => {
+                    refusal_code.as_ref().map(|value| value.as_str())
+                }
+                _ => None,
+            },
+            "reasonCode": match code {
+                BRegProblemCode::StatisticalDatasetVersionWithdrawn => {
+                    refusal_code.as_ref().map(|value| value.as_str())
+                }
+                _ => None,
+            },
             "traceId": trace_id.as_str(),
             "message": "Base Registry Engine refused the request",
         }),
@@ -1556,6 +1570,10 @@ fn raw_value(value: BRegComplete<BRegRawDocument>) -> RawOutcome {
         media_type: value.value.media_type().to_owned(),
         trace_id,
         etag,
+        repr_digest: value
+            .value
+            .representation_digest()
+            .map(|digest| digest.as_str().to_owned()),
     }
 }
 

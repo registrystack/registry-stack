@@ -148,7 +148,9 @@ impl From<IdempotencyError> for HistoryErasureError {
         match error {
             IdempotencyError::InvalidInput => Self::InvalidInput,
             IdempotencyError::CachedResponseUnreadable => Self::CachedResponseUnreadable,
-            IdempotencyError::Conflict | IdempotencyError::Unavailable => Self::Unavailable,
+            IdempotencyError::Conflict
+            | IdempotencyError::Timeout
+            | IdempotencyError::Unavailable => Self::Unavailable,
         }
     }
 }

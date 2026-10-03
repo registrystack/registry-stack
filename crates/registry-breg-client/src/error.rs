@@ -81,14 +81,12 @@ impl std::fmt::Display for BRegPlanRefusal {
     }
 }
 
-/// One package-declared reason an immediate-action handler refused a call.
+/// One bounded machine-readable Problem detail code.
 ///
-/// Every other Base Registry Engine refusal names a closed vocabulary this
-/// crate can enumerate. A refusal catalogue is declared by the package instead,
-/// so the code is carried as the bounded string the published Problem schema
-/// admits: 1 through 128 characters, none of them a control character. The
-/// value is service-supplied text, so it is read through `as_str` rather than
-/// rendered into the error message.
+/// Immediate actions use package-declared refusal codes. Statistical release
+/// refusals and withdrawals use closed engine vocabularies validated by the
+/// decoder. The value is service-supplied text, so callers read it through
+/// `as_str` rather than rendering it in an error message.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BRegRefusalCode(String);
 
@@ -139,11 +137,15 @@ pub enum BRegProblemCode {
     RuntimeNotReady,
     ServiceUnavailable,
     SourceUnavailable,
+    StatisticalDatasetDomainViolation,
+    StatisticalDatasetReleaseRefused,
+    StatisticalDatasetVersionConflict,
+    StatisticalDatasetVersionWithdrawn,
     UnsupportedMediaType,
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 35] = [
         Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
@@ -174,6 +176,10 @@ impl BRegProblemCode {
         Self::RuntimeNotReady,
         Self::ServiceUnavailable,
         Self::SourceUnavailable,
+        Self::StatisticalDatasetDomainViolation,
+        Self::StatisticalDatasetReleaseRefused,
+        Self::StatisticalDatasetVersionConflict,
+        Self::StatisticalDatasetVersionWithdrawn,
         Self::UnsupportedMediaType,
     ];
 
@@ -204,6 +210,10 @@ impl BRegProblemCode {
             Self::RuntimeNotReady => "runtime.not_ready",
             Self::ServiceUnavailable => "service.unavailable",
             Self::SourceUnavailable => "source.unavailable",
+            Self::StatisticalDatasetDomainViolation => "statistical_dataset.domain_violation",
+            Self::StatisticalDatasetReleaseRefused => "statistical_dataset.release_refused",
+            Self::StatisticalDatasetVersionConflict => "statistical_dataset.version_conflict",
+            Self::StatisticalDatasetVersionWithdrawn => "statistical_dataset.version_withdrawn",
             Self::UnsupportedMediaType => "unsupported.media_type",
         }
     }
@@ -224,12 +234,14 @@ impl BRegProblemCode {
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
             | Self::IngestionRunNotOpen
-            | Self::MutationConflict => 409,
-            Self::IngestionReceiptErased => 410,
+            | Self::MutationConflict
+            | Self::StatisticalDatasetVersionConflict => 409,
+            Self::IngestionReceiptErased | Self::StatisticalDatasetVersionWithdrawn => 410,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
-            Self::ActionRefused => 422,
+            Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
+            Self::StatisticalDatasetDomainViolation => 500,
             Self::RuntimeFieldEncryptionUnavailable
             | Self::RuntimeNotReady
             | Self::ServiceUnavailable
@@ -293,6 +305,18 @@ impl BRegProblemCode {
             Self::RuntimeNotReady => "Registry runtime is not ready.",
             Self::ServiceUnavailable => "The Registry mutation service is unavailable.",
             Self::SourceUnavailable => "The Registry data service is unavailable.",
+            Self::StatisticalDatasetDomainViolation => {
+                "A statistical dataset contains a code outside its declared domain."
+            }
+            Self::StatisticalDatasetReleaseRefused => {
+                "The statistical dataset release operation is not eligible."
+            }
+            Self::StatisticalDatasetVersionConflict => {
+                "The statistical dataset computation was superseded or its package changed."
+            }
+            Self::StatisticalDatasetVersionWithdrawn => {
+                "The statistical dataset version was withdrawn."
+            }
             Self::UnsupportedMediaType => "The request media type is not supported.",
         }
     }
@@ -345,6 +369,7 @@ pub enum BRegProtocolFailure {
     ProfileLink,
     Location,
     CachePolicy,
+    RepresentationDigest,
     Status,
 }
 
@@ -364,6 +389,9 @@ impl std::fmt::Display for BRegProtocolFailure {
             }
             Self::Location => "response location did not match the mutation result",
             Self::CachePolicy => "response cache policy did not match the operation contract",
+            Self::RepresentationDigest => {
+                "response representation digest did not match the response bytes"
+            }
             Self::Status => "response status was not valid for this operation",
         })
     }
@@ -373,9 +401,8 @@ impl std::fmt::Display for BRegProtocolFailure {
 ///
 /// Values controlled by the caller or service are deliberately absent from
 /// every variant and from `Debug`/`Display` output. The one exception is the
-/// declared refusal code an immediate action is refused by, which is the whole
-/// machine-readable outcome of that refusal: it is carried bounded, and it is
-/// read through `refusal_code` rather than rendered.
+/// bounded detail code carried by immediate-action and statistical refusals.
+/// Callers read it through `refusal_code` or `reason_code`; it is not rendered.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BaseRegistryClientError {
@@ -501,12 +528,29 @@ impl BaseRegistryClientError {
         }
     }
 
-    /// The declared reason an immediate-action handler refused the call, set
-    /// only for `BRegProblemCode::ActionRefused`.
+    /// The declared reason an immediate action or statistical release was refused.
     #[must_use]
     pub fn refusal_code(&self) -> Option<&BRegRefusalCode> {
         match self {
-            Self::Problem { refusal_code, .. } => refusal_code.as_ref(),
+            Self::Problem {
+                code:
+                    BRegProblemCode::ActionRefused | BRegProblemCode::StatisticalDatasetReleaseRefused,
+                refusal_code,
+                ..
+            } => refusal_code.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The closed withdrawal reason carried by a withdrawn statistical version.
+    #[must_use]
+    pub fn reason_code(&self) -> Option<&str> {
+        match self {
+            Self::Problem {
+                code: BRegProblemCode::StatisticalDatasetVersionWithdrawn,
+                refusal_code: Some(reason_code),
+                ..
+            } => Some(reason_code.as_str()),
             _ => None,
         }
     }

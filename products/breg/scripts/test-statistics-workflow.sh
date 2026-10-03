@@ -11,6 +11,7 @@ repository_root=$(cd -- "$script_dir/../../.." && pwd)
 . "$repository_root/scripts/cargo-runtime-library-path.sh"
 
 temporary_root=""
+temporary_base=$(cd -- "${TMPDIR:-/tmp}" && pwd -P)
 project=""
 bregctl=${BREGCTL_BIN:-"$repository_root/target/debug/bregctl"}
 breg=${BREG_BIN:-"$repository_root/target/debug/breg"}
@@ -35,7 +36,7 @@ cleanup() {
       "$project" >/dev/null 2>&1 || true
   fi
   case "$temporary_root" in
-    "$repository_root"/.breg-statistics-workflow.*)
+    "$temporary_base"/breg-statistics-workflow.*)
       if [[ -d "$temporary_root" && ! -L "$temporary_root" ]]; then
         rm -rf -- "$temporary_root"
       fi
@@ -55,7 +56,7 @@ fi
 require_command docker
 require_command python3
 umask 077
-temporary_root=$(mktemp -d "$repository_root/.breg-statistics-workflow.XXXXXX")
+temporary_root=$(mktemp -d "$temporary_base/breg-statistics-workflow.XXXXXX")
 project="$temporary_root/facility"
 cp -R "$repository_root/products/breg/acceptance/facility" "$project"
 
@@ -92,10 +93,13 @@ PY
 )
 
 checkpoint "starting the facility project and its local issuer"
-"$bregctl" --format json dev start \
+if ! "$bregctl" --format json dev start \
   --breg-bin "$breg" --docker-bin "$(command -v docker)" \
   --breg-port "$breg_port" --issuer-port "$issuer_port" --database-port "$database_port" \
-  "$project" >"$temporary_root/dev.json"
+  "$project" >"$temporary_root/dev.json"; then
+  cat "$temporary_root/dev.json" >&2
+  fail "bregctl dev start did not reach ready"
+fi
 breg_url=$(python3 - "$temporary_root/dev.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -181,21 +185,23 @@ for number in range(1, 6):
 PY
 
 checkpoint "publishing the ended period with the public CLI"
-"$bregctl" --format json statistics publish \
+if ! "$bregctl" --format json statistics publish \
   --breg-url "$breg_url" \
   --access-token-file "$temporary_root/statistics-publisher-token" \
   --dataset monthly-discharge-reports --period 2025-01 --status final \
   --profile statistics-publisher \
   --idempotency-key 8a2c2c35-354f-43d5-83a4-7cbe39a5f2f0 \
-  >"$temporary_root/publish.json"
+  >"$temporary_root/publish.json"; then
+  cat "$temporary_root/publish.json" >&2
+  fail "statistics publish did not complete"
+fi
 python3 - "$temporary_root/publish.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-release = report.get("release", {})
 if report.get("ok") is not True or report.get("command") != "statistics publish":
     raise SystemExit("statistics publish did not complete")
-if release.get("period") != "2025-01" or release.get("version") != 1 or release.get("status") != "final":
-    raise SystemExit(f"statistics publish returned the wrong release: {release}")
+if report.get("period") != "2025-01" or report.get("version") != 1 or report.get("status") != "final":
+    raise SystemExit(f"statistics publish returned the wrong release: {report}")
 PY
 
 checkpoint "reading JSON, CSV, released series, and live authorization boundaries"
@@ -252,6 +258,50 @@ refused_path = "/v1/statistics/monthly-discharge-reports:live?accessProfile=stat
 refused_body, _ = get(refused_path, reader, expected=404)
 if json.loads(refused_body).get("code") != "resource.not_found":
     raise SystemExit("the release-only reader was not concealed from live mode")
+PY
+
+checkpoint "withdrawing the release with the public CLI"
+if ! "$bregctl" --format json statistics withdraw \
+  --breg-url "$breg_url" \
+  --access-token-file "$temporary_root/statistics-publisher-token" \
+  --dataset monthly-discharge-reports --period 2025-01 --version 1 \
+  --reason source-data-error --profile statistics-publisher \
+  --idempotency-key 6ce29952-dd3e-495c-949e-60bbca473dae \
+  >"$temporary_root/withdraw.json"; then
+  cat "$temporary_root/withdraw.json" >&2
+  fail "statistics withdraw did not complete"
+fi
+python3 - "$temporary_root/withdraw.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+if report.get("ok") is not True or report.get("command") != "statistics withdraw":
+    raise SystemExit("statistics withdraw did not complete")
+if report.get("dataset") != "monthly-discharge-reports" or report.get("period") != "2025-01" or report.get("version") != 1:
+    raise SystemExit(f"statistics withdraw returned the wrong release: {report}")
+if report.get("withdrawal", {}).get("reason") != "source-data-error":
+    raise SystemExit(f"statistics withdraw returned the wrong reason: {report}")
+PY
+
+checkpoint "proving the dedicated reader receives the stable withdrawn response"
+python3 - "$breg_url" "$temporary_root/statistics-reader-token" <<'PY'
+import json, sys, urllib.error, urllib.request
+
+origin, token_file = sys.argv[1:]
+token = open(token_file, encoding="ascii").read().strip()
+path = "/v1/statistics/monthly-discharge-reports/releases/2025-01/versions/1?accessProfile=statistics-reader"
+request = urllib.request.Request(origin + path, headers={
+    "Accept": "application/json", "Authorization": f"Bearer {token}",
+})
+try:
+    urllib.request.urlopen(request, timeout=20)
+except urllib.error.HTTPError as error:
+    if error.code != 410:
+        raise SystemExit(f"withdrawn release returned {error.code}, expected 410")
+    problem = json.load(error)
+else:
+    raise SystemExit("withdrawn release remained readable")
+if problem.get("code") != "statistical_dataset.version_withdrawn" or problem.get("reasonCode") != "source-data-error":
+    raise SystemExit(f"withdrawn release returned the wrong Problem: {problem}")
 PY
 
 checkpoint "completed"

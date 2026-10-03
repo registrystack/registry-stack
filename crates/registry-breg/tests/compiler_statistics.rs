@@ -122,6 +122,8 @@ fn assert_refused(mutator: impl FnOnce(&mut Value), code: &str) {
     );
 }
 
+type RefusalCase = (Box<dyn FnOnce(&mut Value)>, &'static str);
+
 #[test]
 fn statistical_dataset_compiles_with_release_reader_authentication() {
     let compiled = compile(&source()).expect("statistical dataset compiles");
@@ -144,12 +146,22 @@ fn statistical_dataset_compiles_with_release_reader_authentication() {
         Some("principal")
     );
     assert!(dataset.access_profiles["reader"].operations.is_empty());
-    assert!(dataset.definition_digest.starts_with("sha256:"));
+    let digest = dataset
+        .definition_digest
+        .strip_prefix("sha256:")
+        .expect("definition digest uses the sha256 scheme");
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "definition digest is exactly sha256 followed by 64 lowercase hex characters"
+    );
 }
 
 #[test]
 fn statistical_dataset_core_refusals_are_stable_and_actionable() {
-    let cases: Vec<(Box<dyn FnOnce(&mut Value)>, &str)> = vec![
+    let cases: Vec<RefusalCase> = vec![
         (
             Box::new(|v| v["statisticalDatasets"][0]["unit"] = json!("missing")),
             "statistical_dataset.unit.unknown",
@@ -183,6 +195,20 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
         (
             Box::new(|v| v["statisticalDatasets"][0]["disclosure"]["roundingBase"] = json!(1)),
             "statistical_dataset.disclosure.rounding_base",
+        ),
+        (
+            Box::new(|v| {
+                v["statisticalDatasets"][0]["disclosure"]["minimumCount"] =
+                    json!(9_007_199_254_740_992_u64)
+            }),
+            "statistical_dataset.disclosure.minimum_count_exceeded",
+        ),
+        (
+            Box::new(|v| {
+                v["statisticalDatasets"][0]["disclosure"]["roundingBase"] =
+                    json!(9_007_199_254_740_992_u64)
+            }),
+            "statistical_dataset.disclosure.rounding_base_exceeded",
         ),
         (
             Box::new(|v| {
@@ -260,7 +286,298 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
 }
 
 #[test]
-fn temporal_and_pair_stock_compile_and_timestamp_period_is_refused() {
+fn statistical_dataset_refuses_anonymous_live_publisher_and_reader_profiles() {
+    for profile_index in [0_usize, 1, 2] {
+        assert_refused(
+            |value| {
+                value["accessProfiles"][profile_index]["anonymous"] = json!(true);
+                value["accessProfiles"][profile_index]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("principalClaim");
+                value["entities"][0]["classification"] = json!("public");
+                for field in value["entities"][0]["fields"].as_array_mut().unwrap() {
+                    field["classification"] = json!("public");
+                }
+            },
+            "statistical_dataset.profile.anonymous",
+        );
+    }
+}
+
+#[test]
+fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
+    assert_refused(
+        |value| {
+            value["entities"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id":"organization","type":"reference","target":"organization",
+                    "required":true,"classification":"internal"
+                }));
+            value["entities"].as_array_mut().unwrap().extend([
+                json!({
+                    "id":"organization","primaryDataset":"statistics-test","route":"organizations",
+                    "mutationMode":"mutable","fields":[
+                        {"id":"name","type":"string","maxLength":80,"classification":"internal"}
+                    ]
+                }),
+                json!({
+                    "id":"membership","primaryDataset":"statistics-test","route":"memberships",
+                    "mutationMode":"mutable","classification":"restricted",
+                    "fields":[
+                        {"id":"organization","type":"reference","target":"organization","required":true,"classification":"internal"},
+                        {"id":"principal","type":"string","maxLength":80,"required":true,"classification":"restricted"},
+                        {"id":"active","type":"boolean","required":true,"classification":"internal"}
+                    ],
+                    "indexes":[{"id":"membership-principal-key","fields":["principal","organization","active"]}],
+                    "accessRequirements":{"requiredScopes":["membership:use"]}
+                }),
+            ]);
+            value["accessProfiles"][1]["requiredScopes"] = json!(["membership:use"]);
+            value["accessProfiles"][1]["permissions"][0]["membershipBoundaries"] = json!([{
+                "field":"organization","membershipEntity":"membership",
+                "membershipKeyField":"organization","principalField":"principal","activeField":"active"
+            }]);
+        },
+        "statistical_dataset.publisher.caller_dependent",
+    );
+    assert_refused(
+        |value| {
+            value["entities"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id":"target","type":"reference","target":"target-record",
+                    "required":true,"classification":"internal"
+                }));
+            value["entities"][0]["changeRequest"] = json!({
+                "effects":[{
+                    "id":"apply-active","target":{"fromField":"target"},"operation":"patch",
+                    "set":{"active":{"fromField":"active"}}
+                }],
+                "review":{"mode":"none"},"onApproved":{"mode":"manual"}
+            });
+            value["entities"].as_array_mut().unwrap().push(json!({
+                "id":"target-record","primaryDataset":"statistics-test","route":"target-records",
+                "mutationMode":"mutable","changeControl":{"requiredFor":["patch"]},
+                "fields":[
+                    {"id":"active","type":"boolean","required":true,"classification":"internal"}
+                ]
+            }));
+            value["accessProfiles"][1]["permissions"][0]["requestVisibility"] = json!("owner");
+        },
+        "statistical_dataset.publisher.caller_dependent",
+    );
+    assert_refused(
+        |value| {
+            value["recipients"] = json!({
+                "organizations":[{
+                    "id":"publisher-organization","name":"Publisher organization",
+                    "contact":"privacy@publisher.example.test","clients":["publisher-client"]
+                }],
+                "groups":[]
+            });
+            value["vocabularies"].as_array_mut().unwrap().extend([
+                json!({"id":"data-use-purpose","values":["statistics"]}),
+                json!({"id":"consent-decision","values":["given","refused","withdrawn"]}),
+            ]);
+            value["entities"].as_array_mut().unwrap().push(json!({
+                "id":"consent-decision","primaryDataset":"statistics-test",
+                "route":"consent-decisions","mutationMode":"create_only","classification":"restricted",
+                "fields":[
+                    {"id":"subject","type":"reference","target":"record","required":true,"classification":"restricted"},
+                    {"id":"recipient","type":"vocabulary-code","vocabulary":"registry-recipients","required":true,"classification":"internal"},
+                    {"id":"purpose","type":"vocabulary-code","vocabulary":"data-use-purpose","required":true,"classification":"internal"},
+                    {"id":"scope","type":"vocabulary-code","vocabulary":"registry-consent-scopes","required":true,"classification":"internal"},
+                    {"id":"decision","type":"vocabulary-code","vocabulary":"consent-decision","required":true,"classification":"internal"},
+                    {"id":"effective-at","type":"timestamp","required":true,"classification":"internal"},
+                    {"id":"expires-at","type":"timestamp","classification":"internal"}
+                ],
+                "consentRecord":{
+                    "subject":"subject","recipient":"recipient","purpose":"purpose","scope":"scope",
+                    "decision":{"field":"decision","gives":["given"],"revokes":["refused","withdrawn"],"refusals":["refused"]},
+                    "validity":{"from":"effective-at","until":"expires-at","maxDuration":"P365D"}
+                }
+            }));
+            value["accessProfiles"][1]["actorKind"] = json!("service");
+            value["accessProfiles"][1]["requesterClients"] = json!(["publisher-client"]);
+            value["accessProfiles"][1]["requiredPurposes"] = json!(["statistics"]);
+            value["accessProfiles"][1]["permissions"][0]["requireConsent"] =
+                json!([{"record":"consent-decision","on":"id"}])
+        },
+        "statistical_dataset.count_grant.consent",
+    );
+    assert_refused(
+        |value| {
+            let boundary = json!({"field":"category","claim":"categories","operator":"in"});
+            value["entities"][0]["accessRequirements"] =
+                json!({"rowBoundaries":[boundary.clone()]});
+            for profile in [0_usize, 1] {
+                value["accessProfiles"][profile]["permissions"][0]["rowBoundaries"] =
+                    json!([boundary.clone()]);
+            }
+        },
+        "statistical_dataset.publisher.entity_row_boundary",
+    );
+}
+
+#[test]
+fn statistical_dataset_refuses_encrypted_reserved_and_unbounded_dimensions() {
+    assert_refused(
+        |value| {
+            value["entities"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                        "id":"secret","type":"string","maxLength":80,"encrypted":true,
+                        "classification":"restricted"
+                }));
+            for profile in [0_usize, 1] {
+                value["accessProfiles"][profile]["permissions"][0]["readableFields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!("secret"));
+            }
+            value["statisticalDatasets"][0]["population"] =
+                json!("active eq true and secret eq 'x'");
+        },
+        "statistical_dataset.field.encrypted",
+    );
+    assert_refused(
+        |value| value["vocabularies"][0]["values"] = json!(["_reserved", "a"]),
+        "statistical_dataset.dimension.code_reserved",
+    );
+
+    for id in ["period", "value", "status"] {
+        assert_refused(
+            |value| {
+                value["entities"][0]["fields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "id":id,"type":"boolean","required":true,"classification":"internal"
+                    }));
+                value["statisticalDatasets"][0]["dimensions"] = json!([id]);
+            },
+            "statistical_dataset.dimension.reserved",
+        );
+    }
+
+    let codes = (0..100)
+        .map(|index| format!("v{index:03}"))
+        .collect::<Vec<_>>();
+    assert_refused(
+        |value| {
+            value["vocabularies"][0]["values"] = json!(codes);
+            value["vocabularies"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"id":"category-two","values":codes}));
+            value["entities"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id":"category-two","type":"vocabulary-code","vocabulary":"category-two",
+                    "required":true,"classification":"internal"
+                }));
+            for profile in [0_usize, 1] {
+                for member in ["readableFields", "filterableFields"] {
+                    value["accessProfiles"][profile]["permissions"][0][member]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!("category-two"));
+                }
+            }
+            value["statisticalDatasets"][0]["dimensions"] = json!(["category", "category-two"]);
+        },
+        "statistical_dataset.cells.exceeded",
+    );
+}
+
+#[test]
+fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
+    let mut value = source();
+    for id in ["period-start", "period-end"] {
+        value["entities"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id":id,"type":"boolean","required":true,"classification":"internal"
+            }));
+        for profile in [0_usize, 1] {
+            for member in ["readableFields", "filterableFields"] {
+                value["accessProfiles"][profile]["permissions"][0][member]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(id));
+            }
+        }
+    }
+    value["statisticalDatasets"][0]["dimensions"] = json!(["period-start", "period-end"]);
+    let compiled = compile(&value).expect("logical dimension ids do not collide with CSV names");
+    assert_eq!(
+        compiled.statistical_datasets()["records-by-category"]
+            .dimensions
+            .iter()
+            .map(|dimension| dimension.field.as_str())
+            .collect::<Vec<_>>(),
+        ["period-start", "period-end"]
+    );
+
+    assert_refused(
+        |value| {
+            value["entities"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "id":"period","apiName":"dimensionPeriod","type":"boolean",
+                    "required":true,"classification":"internal"
+                }));
+            value["statisticalDatasets"][0]["dimensions"] = json!(["period"]);
+        },
+        "statistical_dataset.dimension.reserved",
+    );
+}
+
+#[test]
+fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
+    assert_refused(
+        |value| {
+            let mut dimensions = Vec::new();
+            for index in 0..13 {
+                let field = format!("dimension-{index:02}-{}", "x".repeat(51));
+                let code = format!("code-{index:02}-{}", "x".repeat(120));
+                value["vocabularies"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"id":field,"values":[code]}));
+                value["entities"][0]["fields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "id":field,"type":"vocabulary-code","vocabulary":field,
+                        "required":true,"classification":"internal"
+                    }));
+                for profile in [0_usize, 1] {
+                    for member in ["readableFields", "filterableFields"] {
+                        value["accessProfiles"][profile]["permissions"][0][member]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(json!(field));
+                    }
+                }
+                dimensions.push(field);
+            }
+            value["statisticalDatasets"][0]["dimensions"] = json!(dimensions);
+        },
+        "statistical_dataset.document.exceeded",
+    );
+}
+
+#[test]
+fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
     for validity in [
         json!("temporal"),
         json!({"from":"valid-from","until":"valid-to"}),
@@ -274,6 +591,52 @@ fn temporal_and_pair_stock_compile_and_timestamp_period_is_refused() {
     assert_refused(
         |value| value["entities"][0]["fields"][2]["type"] = json!("timestamp"),
         "statistical_dataset.period.field_type",
+    );
+    assert_refused(
+        |value| value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-13"),
+        "statistical_dataset.period.first_period",
+    );
+    for (granularity, invalid_periods) in [
+        (
+            "day",
+            ["0000-01-01", "-001-01-01", "2025-1-01", "9999-12-31"],
+        ),
+        ("month", ["0000-01", "-001-01", "2025-1", "9999-12"]),
+        ("quarter", ["0000-Q1", "-001-Q1", "2025€", "9999-Q4"]),
+        ("year", ["0000", "-001", "２０２５", "9999"]),
+    ] {
+        for invalid in invalid_periods {
+            assert_refused(
+                |value| {
+                    value["statisticalDatasets"][0]["period"]["granularity"] = json!(granularity);
+                    value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!(invalid);
+                },
+                "statistical_dataset.period.first_period",
+            );
+        }
+    }
+    for (granularity, first_period) in [
+        ("day", "9999-12-30"),
+        ("month", "9999-11"),
+        ("quarter", "9999-Q3"),
+        ("year", "9998"),
+    ] {
+        let mut value = source();
+        value["statisticalDatasets"][0]["period"]["granularity"] = json!(granularity);
+        value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!(first_period);
+        compile(&value).expect("the latest period fitting the wire date domain compiles");
+    }
+    assert_refused(
+        |value| {
+            value["statisticalDatasets"][0]["period"] = json!({
+                "kind":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"
+            });
+            value["entities"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("temporal");
+        },
+        "statistical_dataset.period.temporal_missing",
     );
 }
 
@@ -357,6 +720,27 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
             "read_released_series"
         ])
     );
+    assert_eq!(
+        dataset["accessProfiles"]["analyst"],
+        json!([
+            "list_releases",
+            "read_latest_release",
+            "read_live",
+            "read_release_version",
+            "read_released_series"
+        ])
+    );
+    assert_eq!(
+        dataset["accessProfiles"]["publisher"],
+        json!([
+            "list_releases",
+            "publish_release",
+            "read_latest_release",
+            "read_release_version",
+            "read_released_series",
+            "withdraw_release"
+        ])
+    );
 
     let openapi = artifact_json(&compiled, "generated/openapi.json");
     let statistical_paths = openapi["paths"]
@@ -385,11 +769,90 @@ fn generated_artifacts_cover_the_effective_model_metadata_and_seven_routes() {
         true
     );
     assert_eq!(
+        openapi["paths"]["/v1/statistics/records-by-category/releases:series"]["get"]
+            ["x-registry-accessProfiles"],
+        json!(["analyst", "publisher", "reader"])
+    );
+    let release_access_profile = &openapi["paths"]
+        ["/v1/statistics/records-by-category/releases:series"]["get"]["parameters"][0];
+    assert_eq!(release_access_profile["name"], "accessProfile");
+    assert_eq!(release_access_profile["required"], true);
+    assert!(release_access_profile["schema"].get("default").is_none());
+    assert_eq!(
+        openapi["paths"]["/v1/statistics/records-by-category/releases:series"]["get"]
+            ["x-registry-defaultAccessProfile"],
+        Value::Null
+    );
+    let live = &openapi["paths"]["/v1/statistics/records-by-category:live"]["get"];
+    assert_eq!(live["parameters"][0]["required"], false);
+    assert_eq!(live["parameters"][0]["schema"]["default"], "analyst");
+    assert_eq!(live["x-registry-defaultAccessProfile"], "analyst");
+    let publish =
+        &openapi["paths"]["/v1/statistics/records-by-category/releases/{period}/versions"]["post"];
+    assert_eq!(publish["parameters"][0]["required"], false);
+    assert_eq!(publish["parameters"][0]["schema"]["default"], "publisher");
+    assert_eq!(publish["x-registry-defaultAccessProfile"], "publisher");
+    assert_eq!(
         openapi["paths"]
             ["/v1/statistics/records-by-category/releases/{period}/versions/{version}/withdrawal"]
             ["post"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
-        "#/components/schemas/StatisticalWithdrawalResponse"
+        "#/components/schemas/StatisticalReleaseHeader"
     );
+    assert_eq!(
+        openapi["components"]["schemas"]["StatisticalDatasetDocument"]["properties"]["live"]
+            ["properties"]["evaluatedAt"]["format"],
+        "date"
+    );
+    for path in [
+        "/v1/statistics/records-by-category/releases/{period}/versions",
+        "/v1/statistics/records-by-category/releases/{period}/versions/{version}/withdrawal",
+    ] {
+        let idempotency = openapi["paths"][path]["post"]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|parameter| parameter["name"] == "Idempotency-Key")
+            .expect("the mutation declares its idempotency header");
+        assert_eq!(idempotency["schema"]["minLength"], 1);
+        assert_eq!(idempotency["schema"]["maxLength"], 256);
+        assert_eq!(
+            idempotency["schema"]["pattern"],
+            r"^[\x21-\x2B\x2D-\x3A\x3C-\x7E]+$"
+        );
+        assert!(idempotency["schema"].get("format").is_none());
+    }
+    for (path, item) in openapi["paths"].as_object().unwrap() {
+        if !path.starts_with("/v1/statistics/") {
+            continue;
+        }
+        let template_parameters = path
+            .split('{')
+            .skip(1)
+            .map(|part| part.split('}').next().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        for operation in item.as_object().unwrap().values() {
+            let declared_parameters = operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|parameter| parameter["in"] == "path")
+                .map(|parameter| parameter["name"].as_str().unwrap().to_owned())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(declared_parameters, template_parameters, "{path}");
+        }
+    }
+    assert!(openapi["components"]["schemas"]
+        .get("StatisticalWithdrawalResponse")
+        .is_none());
+
+    let mut with_default = source();
+    with_default["accessProfiles"][2]["default"] = json!(true);
+    let compiled = compile(&with_default).expect("configured statistical default compiles");
+    let openapi = artifact_json(&compiled, "generated/openapi.json");
+    let release = &openapi["paths"]["/v1/statistics/records-by-category/releases"]["get"];
+    assert_eq!(release["parameters"][0]["required"], false);
+    assert_eq!(release["parameters"][0]["schema"]["default"], "reader");
+    assert_eq!(release["x-registry-defaultAccessProfile"], "reader");
 }
 
 #[test]
@@ -534,5 +997,22 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     assert!(failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "statistical_dataset.publisher.caller_dependent"
             && diagnostic.message.contains("dependency entity `lookup`")
+    }));
+
+    let long_entity = "l".repeat(64);
+    value["entities"][1]["id"] = json!(long_entity.clone());
+    value["entities"][1]["route"] = json!("long-lookups");
+    value["accessProfiles"][1]["permissions"][1]["entity"] = json!(long_entity.clone());
+    let long_sql = sql.replace(
+        "registry_source.lookup",
+        &format!("registry_source.{long_entity}"),
+    );
+    let failure = compile_with_sql(&value, &long_sql)
+        .expect_err("a long caller-dependent relation remains in the dependency closure");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "statistical_dataset.publisher.caller_dependent"
+            && diagnostic
+                .message
+                .contains(&format!("dependency entity `{long_entity}`"))
     }));
 }

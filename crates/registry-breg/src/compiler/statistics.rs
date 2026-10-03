@@ -5,7 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use registry_platform_canonical_json::canonicalize_json;
 use serde::Serialize;
 use serde_json::json;
-use time::{Date, Month};
 
 use crate::contract::{
     AccessProfileSource, FieldTypeSource, Operation, RegistryProject,
@@ -18,9 +17,10 @@ use crate::model::{
     CompiledStatisticalValidity,
 };
 use crate::query::{ComparisonOp, FilterExpr, FilterPredicate, Literal};
-use crate::statistics::{DisclosureParameters, PeriodGranularity};
+use crate::statistics::{period_for_code, DisclosureParameters, PeriodGranularity};
 
 pub const MAX_STATISTICAL_CELLS_PER_PERIOD: usize = 10_000;
+const MAX_EXACT_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 
 pub(super) fn compile(
     project: &RegistryProject,
@@ -170,12 +170,32 @@ pub(super) fn compile(
                 "set minimumCount to at least 2",
             ));
         }
+        if disclosure_source
+            .is_some_and(|disclosure| disclosure.minimum_count > MAX_EXACT_JSON_INTEGER)
+        {
+            errors.push(error(
+                "statistical_dataset.disclosure.minimum_count_exceeded",
+                &format!("{root}.disclosure.minimumCount"),
+                &source.id,
+                &format!("set minimumCount to at most {MAX_EXACT_JSON_INTEGER}"),
+            ));
+        }
         if disclosure_source.is_none_or(|disclosure| disclosure.rounding_base < 2) {
             errors.push(error(
                 "statistical_dataset.disclosure.rounding_base",
                 &format!("{root}.disclosure.roundingBase"),
                 &source.id,
                 "set roundingBase to at least 2",
+            ));
+        }
+        if disclosure_source
+            .is_some_and(|disclosure| disclosure.rounding_base > MAX_EXACT_JSON_INTEGER)
+        {
+            errors.push(error(
+                "statistical_dataset.disclosure.rounding_base_exceeded",
+                &format!("{root}.disclosure.roundingBase"),
+                &source.id,
+                &format!("set roundingBase to at most {MAX_EXACT_JSON_INTEGER}"),
             ));
         }
         let cell_count = dimensions.iter().try_fold(1_usize, |cells, dimension| {
@@ -207,20 +227,51 @@ pub(super) fn compile(
         let Some(period) = period else {
             continue;
         };
+        let Some(disclosure_source) = disclosure_source.filter(|disclosure| {
+            (2..=MAX_EXACT_JSON_INTEGER).contains(&disclosure.minimum_count)
+                && (2..=MAX_EXACT_JSON_INTEGER).contains(&disclosure.rounding_base)
+        }) else {
+            continue;
+        };
         let disclosure = DisclosureParameters {
-            minimum_count: disclosure_source.map_or(0, |value| value.minimum_count),
-            rounding_base: disclosure_source.map_or(0, |value| value.rounding_base),
+            minimum_count: disclosure_source.minimum_count,
+            rounding_base: disclosure_source.rounding_base,
         };
         let definition_digest = definition_digest(
             source,
             &period,
             &dimensions,
             &disclosure,
-            entities,
-            &dependency_entities,
-            &used_relations,
+            DefinitionDependencies {
+                entities,
+                entity_ids: &dependency_entities,
+                relation_ids: &used_relations,
+            },
             releases.as_ref().map(|release| release.publisher.as_str()),
         );
+        if cell_count.is_some_and(|cells| {
+            cells <= MAX_STATISTICAL_CELLS_PER_PERIOD
+                && maximum_release_document_bytes(
+                    source,
+                    &period,
+                    &dimensions,
+                    disclosure,
+                    &definition_digest,
+                    cells,
+                )
+                .is_none_or(|bytes| bytes > super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES)
+        }) {
+            errors.push(error(
+                "statistical_dataset.document.exceeded",
+                &format!("{root}.dimensions"),
+                &source.id,
+                &format!(
+                    "reduce dimension names, domain codes, or cells so one release fits within {} bytes",
+                    super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES
+                ),
+            ));
+            continue;
+        }
         compiled.insert(
             source.id.clone(),
             CompiledStatisticalDataset {
@@ -245,6 +296,134 @@ pub(super) fn compile(
     } else {
         Err(errors)
     }
+}
+
+fn maximum_release_document_bytes(
+    source: &crate::contract::StatisticalDatasetSource,
+    period: &CompiledStatisticalPeriod,
+    dimensions: &[CompiledStatisticalDimension],
+    disclosure: DisclosureParameters,
+    definition_digest: &str,
+    cell_count: usize,
+) -> Option<usize> {
+    let (period_kind, granularity) = match period {
+        CompiledStatisticalPeriod::Flow { granularity, .. } => ("flow", granularity),
+        CompiledStatisticalPeriod::Stock { granularity, .. } => ("stock", granularity),
+    };
+    let digest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    let timestamp = "9999-12-31T23:59:59.999999999Z";
+    let snapshot = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+    let dimension_documents = dimensions
+        .iter()
+        .map(|dimension| {
+            let mut codes = dimension.codes.clone();
+            if dimension.include_unknown {
+                codes.push(crate::statistics::UNKNOWN_CODE.to_owned());
+            }
+            codes.push(crate::statistics::TOTAL_CODE.to_owned());
+            let vocabulary = match &dimension.domain {
+                CompiledStatisticalDimensionDomain::Boolean => "boolean",
+                CompiledStatisticalDimensionDomain::Vocabulary { vocabulary } => vocabulary,
+            };
+            json!({
+                "field": dimension.field,
+                "vocabulary": vocabulary,
+                "codes": codes,
+            })
+        })
+        .collect::<Vec<_>>();
+    // Include both optional route envelopes. A response uses at most one, so
+    // this remains an upper bound while accounting exactly for authored names,
+    // population text, domains, and disclosure parameters.
+    let envelope = canonicalize_json(&json!({
+        "dataset": {
+            "id": source.id,
+            "unit": source.unit,
+            "measure": "count",
+            "periodKind": period_kind,
+            "granularity": granularity,
+            "population": source.population,
+            "definitionDigest": definition_digest,
+        },
+        "periods": [{
+            "code": "9999-12-31",
+            "start": "9999-12-31",
+            "end": "9999-12-31",
+            "referenceDate": "9999-12-31",
+            "ended": true,
+            "version": {
+                "version": MAX_EXACT_JSON_INTEGER,
+                "status": "provisional",
+                "contentDigest": digest,
+                "snapshot": snapshot,
+            },
+        }],
+        "dimensions": dimension_documents,
+        "cells": [],
+        "release": {
+            "period": "9999-12-31",
+            "version": MAX_EXACT_JSON_INTEGER,
+            "status": "provisional",
+            "snapshot": snapshot,
+            "computedAt": timestamp,
+            "packageDigest": digest,
+        },
+        "live": {
+            "evaluatedAt": timestamp,
+            "accessProfile": "x".repeat(64),
+        },
+        "disclosure": {
+            "method": "minimum-count-and-rounding",
+            "minimumCount": disclosure.minimum_count,
+            "roundingBase": disclosure.rounding_base,
+            "roundingRule": "nearest-multiple-halves-up",
+            "totals": "rounded-independently",
+        },
+    }))
+    .expect("statistical release size envelope canonicalizes")
+    .len();
+
+    let dimension_members = dimensions.iter().try_fold(0_usize, |bytes, dimension| {
+        let code_bytes = dimension
+            .codes
+            .iter()
+            .map(|code| canonical_json_string_bytes(code))
+            .chain(std::iter::once(canonical_json_string_bytes(
+                crate::statistics::TOTAL_CODE,
+            )))
+            .chain(
+                dimension
+                    .include_unknown
+                    .then(|| canonical_json_string_bytes(crate::statistics::UNKNOWN_CODE)),
+            )
+            .max()?;
+        bytes
+            .checked_add(canonical_json_string_bytes(&dimension.field))?
+            .checked_add(1)?
+            .checked_add(code_bytes)
+    })?;
+    let dimension_object = 2_usize
+        .checked_add(dimension_members)?
+        .checked_add(dimensions.len().saturating_sub(1))?;
+    let empty_cell = canonicalize_json(&json!({
+        "period": "9999-12-31",
+        "dimensions": {},
+        "value": MAX_EXACT_JSON_INTEGER,
+        "status": "suppressed",
+    }))
+    .expect("statistical cell size envelope canonicalizes")
+    .len();
+    let cell_bytes = empty_cell.checked_sub(2)?.checked_add(dimension_object)?;
+    let cells_bytes = 2_usize
+        .checked_add(cell_count.checked_mul(cell_bytes)?)?
+        .checked_add(cell_count.saturating_sub(1))?;
+    envelope.checked_sub(2)?.checked_add(cells_bytes)
+}
+
+fn canonical_json_string_bytes(value: &str) -> usize {
+    canonicalize_json(&json!(value))
+        .expect("compiler-validated statistical string canonicalizes")
+        .len()
 }
 
 fn authentication_profile(
@@ -415,10 +594,7 @@ fn compile_dimensions(
             ));
             continue;
         }
-        if matches!(
-            field_id.as_str(),
-            "period" | "periodStart" | "periodEnd" | "value" | "status"
-        ) {
+        if matches!(field_id.as_str(), "period" | "value" | "status") {
             errors.push(error(
                 "statistical_dataset.dimension.reserved",
                 &path,
@@ -701,14 +877,18 @@ fn dependencies(
     (entities, relations, evaluation_date)
 }
 
+struct DefinitionDependencies<'a> {
+    entities: &'a BTreeMap<String, CompiledEntity>,
+    entity_ids: &'a BTreeSet<String>,
+    relation_ids: &'a BTreeSet<String>,
+}
+
 fn definition_digest(
     source: &crate::contract::StatisticalDatasetSource,
     period: &CompiledStatisticalPeriod,
     dimensions: &[CompiledStatisticalDimension],
     disclosure: &DisclosureParameters,
-    entities: &BTreeMap<String, CompiledEntity>,
-    dependency_entities: &BTreeSet<String>,
-    used_relations: &BTreeSet<String>,
+    dependencies: DefinitionDependencies<'_>,
     publisher: Option<&str>,
 ) -> String {
     #[derive(Serialize)]
@@ -722,10 +902,11 @@ fn definition_digest(
         request_visibility: serde_json::Value,
         access_requirement_row_boundaries: serde_json::Value,
     }
-    let derived = used_relations
+    let derived = dependencies
+        .relation_ids
         .iter()
         .filter_map(|relation_id| {
-            entities[&source.unit]
+            dependencies.entities[&source.unit]
                 .derived_relations
                 .get(relation_id)
                 .map(|relation| {
@@ -740,10 +921,11 @@ fn definition_digest(
         .collect::<Vec<_>>();
     let visibility = publisher
         .map(|publisher| {
-            dependency_entities
+            dependencies
+                .entity_ids
                 .iter()
                 .filter_map(|entity_id| {
-                    let entity = &entities[entity_id];
+                    let entity = &dependencies.entities[entity_id];
                     let profile = entity.access_profiles.get(publisher)?;
                     Some(Visibility {
                         entity: entity_id,
@@ -781,7 +963,7 @@ fn definition_digest(
         "publisherVisibility": visibility,
     });
     let bytes = canonicalize_json(&value).expect("statistical dataset definition canonicalizes");
-    format!("sha256:{}", super::sha256_hex(&bytes))
+    super::sha256_hex(&bytes)
 }
 
 fn unique_profiles(
@@ -964,36 +1146,8 @@ fn granularity(value: StatisticalPeriodGranularitySource) -> PeriodGranularity {
 }
 
 fn valid_period_code(value: &str, granularity: PeriodGranularity) -> bool {
-    match granularity {
-        PeriodGranularity::Day => Date::parse(
-            value,
-            time::macros::format_description!("[year]-[month]-[day]"),
-        )
-        .is_ok(),
-        PeriodGranularity::Month => {
-            let Some((year, month)) = value.split_once('-') else {
-                return false;
-            };
-            year.len() == 4
-                && year.parse::<i32>().is_ok()
-                && month.len() == 2
-                && month
-                    .parse::<u8>()
-                    .ok()
-                    .and_then(|month| Month::try_from(month).ok())
-                    .is_some()
-        }
-        PeriodGranularity::Quarter => {
-            value.len() == 7
-                && value.as_bytes().get(4..6) == Some(b"-Q")
-                && value[..4].parse::<i32>().is_ok()
-                && value
-                    .as_bytes()
-                    .get(6)
-                    .is_some_and(|quarter| (b'1'..=b'4').contains(quarter))
-        }
-        PeriodGranularity::Year => value.len() == 4 && value.parse::<i32>().is_ok(),
-    }
+    // Admission must match runtime period bounds, including the exclusive end.
+    period_for_code(granularity, value, chrono::NaiveDate::MIN).is_ok()
 }
 
 fn error(code: &'static str, path: &str, dataset: &str, fix: &str) -> Diagnostic {

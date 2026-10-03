@@ -63,6 +63,7 @@ struct MappedError {
     code: Option<String>,
     plan_refusal: Option<String>,
     refusal_code: Option<String>,
+    reason_code: Option<String>,
     status: Option<u16>,
     trace_id: Option<String>,
     transport_kind: Option<&'static str>,
@@ -93,6 +94,9 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("refusal_code", mapped.refusal_code)
+        .expect("fresh exception accepts attributes");
+    instance
+        .setattr("reason_code", mapped.reason_code)
         .expect("fresh exception accepts attributes");
     instance
         .setattr("status", mapped.status)
@@ -166,9 +170,12 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             if let BRegProblemCode::RequestPlanRefused(value) = code {
                 mapped.plan_refusal = Some(value.kind().to_owned());
             }
-            // The refusal catalogue belongs to the package, so the declared code
-            // travels as the bounded string the Problem schema admits.
+            // Problem detail codes travel as bounded strings after their
+            // operation-specific vocabulary has been checked by the Rust client.
             mapped.refusal_code = refusal_code.map(|value| value.as_str().to_owned());
+            if code == BRegProblemCode::StatisticalDatasetVersionWithdrawn {
+                mapped.reason_code = mapped.refusal_code.take();
+            }
         }
         RustClientError::Protocol {
             status,
@@ -188,6 +195,7 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
                     BRegProtocolFailure::ProfileLink => "profile_link",
                     BRegProtocolFailure::Location => "location",
                     BRegProtocolFailure::CachePolicy => "cache_policy",
+                    BRegProtocolFailure::RepresentationDigest => "representation_digest",
                     BRegProtocolFailure::Status => "status",
                     _ => "protocol",
                 }
@@ -451,6 +459,10 @@ fn raw_value<'py>(
     result.set_item("kind", "complete")?;
     result.set_item("body", PyBytes::new(py, value.as_bytes()))?;
     result.set_item("media_type", value.media_type())?;
+    result.set_item(
+        "repr_digest",
+        value.representation_digest().map(|digest| digest.as_str()),
+    )?;
     result.set_item("trace_id", metadata.trace_id().as_str())?;
     result.set_item("etag", metadata.etag().map(BRegEtag::as_str))?;
     Ok(result.into_any())

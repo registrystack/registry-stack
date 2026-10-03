@@ -57,6 +57,8 @@ one of them. Encrypted fields and consent-gated source grants are refused.
 Every dataset profile is authenticated. A declaration needs live profiles,
 release grants, or both. Releases have exactly one publisher and at least one
 reader. A released-data reader can have no record permissions at all.
+Release GET routes authorize the publisher, every live profile, and every
+profile listed in `releases.readers`. A reader can have no entity permission.
 
 A live profile and the publisher must have an ordinary `list` grant on the unit
 with `allowCount: true`. That grant must permit the fields and typed filter
@@ -82,8 +84,14 @@ the same authorization checks; a release-only reader receives no entity grant.
 
 Supported granularities are day, month, quarter, and year, using UTC calendar
 periods. Codes are `YYYY-MM-DD`, `YYYY-MM`, `YYYY-Qn`, and `YYYY`. A range
+uses positive four-digit years, and each period's exclusive end must also fit
+that date range. For example, `9999-11` is valid and `9999-12` is refused. A range
 includes both named periods and contains at most 366 periods. Responses contain
 at most 10,000 cells, including totals and zero-filled domain combinations.
+Canonical JSON documents and CSV responses are limited to 8 MiB, matching the
+maintained clients' default body limit. The compiler bounds a single-period
+document; reduce a multi-period range if it returns `400 query.invalid` at
+`from` because its representation exceeds that limit.
 
 A flow counts unit rows whose date field is in `[start, end)`. A stock counts
 rows valid at the reference date. It may use the entity's temporal declaration:
@@ -135,6 +143,10 @@ populations. Exact zeros disclose absence and can disclose group attributes.
 There is no privacy budget, differential privacy, or claim of universal
 statistical confidentiality. Review each dataset's population, dimensions,
 release cadence, and auxiliary information before granting readers access.
+
+If the interval-pinning residual is unacceptable, evaluate cell key
+perturbation through a separate statistical design and review. That mechanism
+is outside the implemented release path.
 
 ## Release lifecycle
 
@@ -194,6 +206,7 @@ contains `period`, dimension codes, `value`, and `status`. Dimensions contain
 codes rather than labels. A released series explicitly represents missing
 periods without inventing cells for them.
 
+An absent or unmatched `Accept` header selects JSON.
 Use `Accept: application/json` or `Accept: text/csv` for live, latest, version,
 and series reads. CSV has RFC 4180 quoting and these columns:
 

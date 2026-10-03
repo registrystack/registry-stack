@@ -384,6 +384,7 @@ export interface RawOutcome {
   mediaType: string
   traceId: string
   etag?: string
+  reprDigest?: string
 }
 
 /** Authenticated BReg webhook metadata and exact body. */

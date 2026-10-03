@@ -5,14 +5,19 @@ use axum::extract::State;
 use axum::http::{Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_breg_client::{
-    BRegIdempotencyKey, BRegReleaseSelection, BRegReleaseStatus, BRegStatisticsFormat,
-    BRegWithdrawalReason, BaseRegistryClient, BaseRegistryClientConfig, StaticToken,
+    BRegIdempotencyKey, BRegProblemCode, BRegProtocolFailure, BRegReleaseSelection,
+    BRegReleaseStatus, BRegStatisticsFormat, BRegWithdrawalReason, BaseRegistryClient,
+    BaseRegistryClientConfig, BaseRegistryClientError, StaticToken,
 };
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use url::Url;
 
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 
 #[derive(Clone, Debug)]
 struct Captured {
@@ -46,21 +51,98 @@ async fn handler(
         idempotency_key,
         body,
     });
+    let problem = if uri.contains("/statistics/missing:live") {
+        Some((BRegProblemCode::ResourceNotFound, None))
+    } else if uri.contains("/statistics/release-refused/") {
+        Some((
+            BRegProblemCode::StatisticalDatasetReleaseRefused,
+            Some(("refusalCode", "period-not-ended")),
+        ))
+    } else if uri.contains("/statistics/invalid-refusal/") {
+        Some((
+            BRegProblemCode::StatisticalDatasetReleaseRefused,
+            Some(("refusalCode", "response-invented")),
+        ))
+    } else if uri.contains("/statistics/version-conflict/") {
+        Some((BRegProblemCode::StatisticalDatasetVersionConflict, None))
+    } else if uri.contains("/statistics/version-withdrawn/") {
+        Some((
+            BRegProblemCode::StatisticalDatasetVersionWithdrawn,
+            Some(("reasonCode", "source-data-error")),
+        ))
+    } else if uri.contains("/statistics/invalid-reason/") {
+        Some((
+            BRegProblemCode::StatisticalDatasetVersionWithdrawn,
+            Some(("reasonCode", "response-invented")),
+        ))
+    } else if uri.contains("/statistics/domain-violation:live") {
+        Some((
+            BRegProblemCode::StatisticalDatasetDomainViolation,
+            Some((
+                "fieldPath",
+                "statisticalDatasets[id=domain-violation].dimensions[id=category]",
+            )),
+        ))
+    } else {
+        None
+    };
+    if let Some((code, extension)) = problem {
+        let mut document = json!({
+            "type": format!(
+                "https://id.registrystack.org/problems/registry-breg/{}",
+                code.code().replace('.', "/")
+            ),
+            "title": match code.status() {
+                404 => "Not Found",
+                409 => "Conflict",
+                410 => "Gone",
+                422 => "Unprocessable Entity",
+                500 => "Internal Server Error",
+                _ => unreachable!(),
+            },
+            "status": code.status(),
+            "detail": code.detail(),
+            "code": code.code(),
+            "traceId": TRACE_ID,
+        });
+        if let Some((name, value)) = extension {
+            document[name] = json!(value);
+        }
+        let mut response = Response::new(Body::from(serde_json::to_vec(&document).unwrap()));
+        *response.status_mut() = StatusCode::from_u16(code.status()).unwrap();
+        response
+            .headers_mut()
+            .insert("content-type", "application/problem+json".parse().unwrap());
+        response
+            .headers_mut()
+            .insert("cache-control", "no-store".parse().unwrap());
+        response
+            .headers_mut()
+            .insert("traceparent", TRACEPARENT.parse().unwrap());
+        return response;
+    }
+
     let publish = method == "POST" && uri.ends_with("/versions?accessProfile=publisher");
-    let mut response = Response::new(Body::from(if accept == "text/csv" {
+    let response_body = if accept == "text/csv" {
         b"period,periodStart,periodEnd,value,status\r\n2025-01,2025-01-01,2025-02-01,5,rounded\r\n"
             .to_vec()
     } else {
         br#"{"dataset":"enrolments","ok":true}"#.to_vec()
-    }));
+    };
+    let mut response = Response::new(Body::from(response_body.clone()));
     *response.status_mut() = if publish {
         StatusCode::CREATED
     } else {
         StatusCode::OK
     };
-    response
-        .headers_mut()
-        .insert("content-type", accept.parse().unwrap());
+    response.headers_mut().insert(
+        "content-type",
+        if accept == "text/csv" {
+            "text/csv; charset=utf-8".parse().unwrap()
+        } else {
+            accept.parse().unwrap()
+        },
+    );
     response
         .headers_mut()
         .insert("traceparent", TRACEPARENT.parse().unwrap());
@@ -71,6 +153,28 @@ async fn handler(
         response
             .headers_mut()
             .insert("vary", "authorization, accept".parse().unwrap());
+    } else if !uri.contains("/releases?") && !uri.contains("missing-digest") {
+        let digest_body = if uri.contains("bad-digest") {
+            b"different bytes".as_slice()
+        } else {
+            response_body.as_slice()
+        };
+        let digest = if uri.contains("malformed-digest") {
+            "sha-256=:not-base64:".parse().unwrap()
+        } else {
+            format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(digest_body)))
+                .parse()
+                .unwrap()
+        };
+        response.headers_mut().insert("repr-digest", digest);
+        if uri.contains("repeated-digest") {
+            response.headers_mut().append(
+                "repr-digest",
+                "sha-256=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=:"
+                    .parse()
+                    .unwrap(),
+            );
+        }
     }
     response
 }
@@ -98,7 +202,7 @@ async fn client() -> (BaseRegistryClient, Arc<Mutex<Vec<Captured>>>) {
 #[tokio::test]
 async fn statistics_reads_map_every_route_query_and_media_type() {
     let (client, captured) = client().await;
-    client
+    let live = client
         .statistics_live(
             "enrolments",
             Some("2025-01"),
@@ -127,7 +231,7 @@ async fn statistics_reads_map_every_route_query_and_media_type() {
         )
         .await
         .unwrap();
-    client
+    let version = client
         .statistics_release_version(
             "enrolments",
             "2025-01",
@@ -156,6 +260,8 @@ async fn statistics_reads_map_every_route_query_and_media_type() {
         "/tenant/v1/statistics/enrolments:live?from=2025-01&to=2025-03&accessProfile=analyst"
     );
     assert_eq!(requests[0].accept, "text/csv");
+    assert_eq!(live.value.media_type(), "text/csv; charset=utf-8");
+    assert!(live.value.representation_digest().is_some());
     assert_eq!(requests[1].uri, "/tenant/v1/statistics/enrolments/releases?$top=25&$skiptoken=opaque%20cursor&accessProfile=reader");
     assert_eq!(
         requests[2].uri,
@@ -166,7 +272,188 @@ async fn statistics_reads_map_every_route_query_and_media_type() {
         "/tenant/v1/statistics/enrolments/releases/2025-01/versions/7?accessProfile=reader"
     );
     assert_eq!(requests[3].accept, "text/csv");
-    assert_eq!(requests[4].uri, "/tenant/v1/statistics/enrolments/releases:series?from=2025-01&to=2025-03&status=any&accessProfile=reader");
+    assert_eq!(version.value.media_type(), "text/csv; charset=utf-8");
+    assert!(version.value.representation_digest().is_some());
+    assert_eq!(requests[4].uri, "/tenant/v1/statistics/enrolments/releases:series?from=2025-01&to=2025-03&accessProfile=reader");
+}
+
+#[tokio::test]
+async fn statistics_live_emits_each_optional_period_bound_independently() {
+    let (client, captured) = client().await;
+    client
+        .statistics_live(
+            "enrolments",
+            Some("2025-01"),
+            None,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap();
+    client
+        .statistics_live(
+            "enrolments",
+            None,
+            Some("2025-03"),
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap();
+
+    let requests = captured.lock().unwrap();
+    assert_eq!(
+        requests[0].uri,
+        "/tenant/v1/statistics/enrolments:live?from=2025-01"
+    );
+    assert_eq!(
+        requests[1].uri,
+        "/tenant/v1/statistics/enrolments:live?to=2025-03"
+    );
+}
+
+#[tokio::test]
+async fn statistics_problems_keep_concealment_and_closed_domain_details() {
+    let (client, _) = client().await;
+    let missing = client
+        .statistics_live("missing", None, None, None, BRegStatisticsFormat::Json)
+        .await
+        .unwrap_err();
+    assert_eq!(missing.kind(), "not_found");
+    assert_eq!(
+        missing.problem_code(),
+        Some(BRegProblemCode::ResourceNotFound)
+    );
+
+    let key = BRegIdempotencyKey::parse("problem-key").unwrap();
+    let release_refused = client
+        .statistics_publish(
+            "release-refused",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher",
+            &key,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        release_refused.problem_code(),
+        Some(BRegProblemCode::StatisticalDatasetReleaseRefused)
+    );
+    assert_eq!(
+        release_refused.refusal_code().map(|value| value.as_str()),
+        Some("period-not-ended")
+    );
+
+    let version_conflict = client
+        .statistics_publish(
+            "version-conflict",
+            "2025-01",
+            BRegReleaseStatus::Final,
+            "publisher",
+            &key,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        version_conflict.problem_code(),
+        Some(BRegProblemCode::StatisticalDatasetVersionConflict)
+    );
+
+    let withdrawn = client
+        .statistics_release_version(
+            "version-withdrawn",
+            "2025-01",
+            7,
+            Some("reader"),
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        withdrawn.problem_code(),
+        Some(BRegProblemCode::StatisticalDatasetVersionWithdrawn)
+    );
+    assert_eq!(withdrawn.reason_code(), Some("source-data-error"));
+    assert!(withdrawn.refusal_code().is_none());
+
+    let domain = client
+        .statistics_live(
+            "domain-violation",
+            None,
+            None,
+            Some("reader"),
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        domain.problem_code(),
+        Some(BRegProblemCode::StatisticalDatasetDomainViolation)
+    );
+
+    for error in [
+        client
+            .statistics_publish(
+                "invalid-refusal",
+                "2025-01",
+                BRegReleaseStatus::Final,
+                "publisher",
+                &key,
+            )
+            .await
+            .unwrap_err(),
+        client
+            .statistics_release_version(
+                "invalid-reason",
+                "2025-01",
+                7,
+                Some("reader"),
+                BRegStatisticsFormat::Json,
+            )
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::Problem,
+                ..
+            }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn statistics_refuses_missing_repeated_or_mismatched_representation_digests() {
+    // The ordinary fixture proves the accepted digest and exact CSV media type.
+    let (client, _) = client().await;
+    let accepted = client
+        .statistics_live("enrolments", None, None, None, BRegStatisticsFormat::Csv)
+        .await
+        .unwrap();
+    assert_eq!(accepted.value.media_type(), "text/csv; charset=utf-8");
+    let digest = accepted.value.representation_digest().unwrap();
+    assert!(digest.as_str().starts_with("sha-256=:"));
+
+    for dataset in [
+        "missing-digest",
+        "bad-digest",
+        "repeated-digest",
+        "malformed-digest",
+    ] {
+        let error = client
+            .statistics_live(dataset, None, None, None, BRegStatisticsFormat::Json)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::RepresentationDigest,
+                ..
+            }
+        ));
+    }
 }
 
 #[tokio::test]
@@ -221,13 +508,7 @@ async fn invalid_statistics_arguments_fail_before_token_or_io() {
         .await
         .is_err());
     assert!(client
-        .statistics_live(
-            "enrolments",
-            Some("2025-01"),
-            None,
-            None,
-            BRegStatisticsFormat::Json,
-        )
+        .statistics_releases("enrolments", Some(101), None, None)
         .await
         .is_err());
     assert!(captured.lock().unwrap().is_empty());

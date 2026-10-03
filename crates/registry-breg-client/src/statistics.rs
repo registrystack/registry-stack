@@ -13,7 +13,7 @@ pub const STATISTICS_JSON_MEDIA_TYPE: &str = "application/json";
 pub const STATISTICS_CSV_MEDIA_TYPE: &str = "text/csv";
 const MAX_PERIOD_CODE_BYTES: usize = 10;
 const MAX_SKIP_TOKEN_BYTES: usize = 2_048;
-const MAX_RELEASE_PAGE_SIZE: u16 = 1_000;
+const MAX_RELEASE_PAGE_SIZE: u16 = 100;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BRegStatisticsFormat {
@@ -43,15 +43,6 @@ pub enum BRegReleaseStatus {
 pub enum BRegReleaseSelection {
     Any,
     Final,
-}
-
-impl BRegReleaseSelection {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Any => "any",
-            Self::Final => "final",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -89,6 +80,7 @@ impl BaseRegistryClient {
             &["v1", "statistics", &format!("{dataset}:live")],
             &pairs,
             format.media_type(),
+            true,
         )
         .await
     }
@@ -118,6 +110,7 @@ impl BaseRegistryClient {
             &["v1", "statistics", dataset, "releases"],
             &pairs,
             STATISTICS_JSON_MEDIA_TYPE,
+            false,
         )
         .await
     }
@@ -142,6 +135,7 @@ impl BaseRegistryClient {
             &["v1", "statistics", dataset, "releases", period],
             &pairs,
             format.media_type(),
+            true,
         )
         .await
     }
@@ -173,6 +167,7 @@ impl BaseRegistryClient {
             ],
             &pairs,
             format.media_type(),
+            true,
         )
         .await
     }
@@ -189,12 +184,15 @@ impl BaseRegistryClient {
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         validate_dataset(dataset)?;
         let mut pairs = range_query(Some(from), Some(to))?;
-        pairs.push(("status".to_owned(), selection.as_str().to_owned()));
+        if selection == BRegReleaseSelection::Final {
+            pairs.push(("status".to_owned(), "final".to_owned()));
+        }
         pairs.extend(access_profile_query(access_profile)?);
         self.statistics_get_raw(
             &["v1", "statistics", dataset, "releases:series"],
             &pairs,
             format.media_type(),
+            true,
         )
         .await
     }
@@ -265,18 +263,16 @@ fn range_query(
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<Vec<(String, String)>, BaseRegistryClientError> {
-    match (from, to) {
-        (None, None) => Ok(Vec::new()),
-        (Some(from), Some(to)) => {
-            validate_period(from)?;
-            validate_period(to)?;
-            Ok(vec![
-                ("from".to_owned(), from.to_owned()),
-                ("to".to_owned(), to.to_owned()),
-            ])
-        }
-        _ => Err(invalid("statistics period ranges require both from and to")),
+    let mut pairs = Vec::with_capacity(2);
+    if let Some(from) = from {
+        validate_period(from)?;
+        pairs.push(("from".to_owned(), from.to_owned()));
     }
+    if let Some(to) = to {
+        validate_period(to)?;
+        pairs.push(("to".to_owned(), to.to_owned()));
+    }
+    Ok(pairs)
 }
 
 fn validate_dataset(dataset: &str) -> Result<(), BaseRegistryClientError> {

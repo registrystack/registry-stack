@@ -118,11 +118,15 @@ pub use schema::{
     SchemaTestDatabaseIdentity,
 };
 pub use statistics::{
-    PostgresStatisticsService, StatisticsLiveRequest, StatisticsPublishRequest,
-    StatisticsReleaseListRequest, StatisticsReleasePage, StatisticsReleaseRefusal,
-    StatisticsReleaseSelection, StatisticsSeriesRequest, StatisticsServiceError,
-    StatisticsStoredDocument, StatisticsVersionReadRequest, StatisticsWithdrawalRequest,
+    PostgresStatisticsService, StatisticsLiveRequest, StatisticsMutationOutcome,
+    StatisticsPublishRequest, StatisticsReleaseListCursor, StatisticsReleaseListRequest,
+    StatisticsReleasePage, StatisticsReleaseRefusal, StatisticsReleaseSelection,
+    StatisticsSeriesRequest, StatisticsServiceError, StatisticsStoredDocument,
+    StatisticsVersionReadRequest, StatisticsWithdrawalRequest,
 };
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub use statistics::{StatisticsPublishPause, StatisticsWithdrawalPause};
 
 use thiserror::Error;
 

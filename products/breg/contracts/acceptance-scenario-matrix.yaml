@@ -125,3 +125,4 @@ scenarios:
     evidence:
       - path: crates/registry-breg/tests/postgres_consent_examples.rs
         name: land_registry_consent_journeys_run_through_the_authenticated_postgres_runner
+  - {"id": "BREG-J24", "state": "enforced", "domain": "facility", "fixture": "acceptance/facility", "doneWhen": "The authored facility project offers monthly discharge flows and temporal and validity-pair permit stocks; native CLI publication, JSON and CSV series reads, and withdrawal use separate authenticated publisher, analyst, and released-reader profiles.", "evidence": [{"path": "crates/registry-breg/tests/postgres_statistics_http.rs", "name": "statistical_http_full_journey_preserves_visibility_release_and_withdrawal_rules"}, {"path": "products/breg/scripts/test-statistics-workflow.sh", "name": "test-statistics-workflow.sh"}]}

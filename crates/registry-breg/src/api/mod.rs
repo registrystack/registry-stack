@@ -100,6 +100,18 @@ const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 ///
 /// This seam preserves focused authorization and record-kernel tests without
 /// allowing request headers or query values to construct authority.
+/// Inject the absolute request deadline at the same seam production startup uses.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub fn set_request_deadline_for_test(
+    request: &mut axum::http::Request<axum::body::Body>,
+    deadline: tokio::time::Instant,
+) {
+    request
+        .extensions_mut()
+        .insert(crate::correlation::RequestDeadline(deadline));
+}
+
 pub fn router(service: Arc<HttpService>) -> Router {
     route_set(service)
         .layer(middleware::from_fn(metadata::no_store))

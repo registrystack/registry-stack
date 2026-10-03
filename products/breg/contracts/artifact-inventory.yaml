@@ -52,3 +52,6 @@ artifacts:
   - {path: scripts/local-postgres-tls.sh, kind: local-postgresql-tls-helper, state: authored}
   - {path: scripts/test-adopter-workflow.sh, kind: adopter-workflow-entrypoint, state: authored}
   - {path: scripts/test-historical-workflow.sh, kind: historical-workflow-entrypoint, state: authored}
+  - {"path": "STATISTICS.md", "kind": "statistical-dataset-guide", "state": "authored"}
+  - {"path": "scripts/test-statistics-workflow.sh", "kind": "statistical-adopter-workflow-entrypoint", "state": "authored"}
+  - {"path": "generated/facility", "kind": "generated-baseline", "state": "authored"}

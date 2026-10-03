@@ -1063,3 +1063,84 @@ replay assertions with normal activation initialization.
 This corrects future action commits. It does not fabricate historical commit
 positions for revisions that an earlier runtime left unindexed. The existing rebaseline command continues to refuse a retained journal head
 that has no commit member; this change supplies no repair for those rows.
+
+Affected pre-1.0 development databases containing unindexed action revisions
+must be rebuilt before relying on snapshots or coverage rebaselining.
+
+## Statistical datasets
+
+### Threat
+
+A count can disclose records beyond the caller's ordinary read authority. A
+published release can expose small populations, depend on caller-specific
+visibility, retain hidden true counts, or be silently rewritten after readers
+have used it. The statistical invariants are BREG-SEC-146 through BREG-SEC-156.
+
+### Enforcement and defaults
+
+The compiler admits a live grant only when the selected profile already has
+list and count authority and can filter every processing field. PostgreSQL
+reuses the ordinary read relations and visibility predicates for the grouped
+count. Source entity dependencies are extracted from the reviewed raw SQL
+syntax tree and closed transitively. Publisher visibility must be independent
+of its caller on every entity in that closure. Anonymous profiles, encrypted
+processing fields, and consent-gated count grants are refused.
+
+Publication computes one ended period under the current package binding and
+one statement snapshot, retaining its shared history head. Publication and
+withdrawal bind an idempotency receipt to the caller, route, selected profile,
+package, and canonical request. A per-dataset-period transaction lock serializes
+version allocation and final-status ordering. Only canonical disclosed documents
+are persisted; exact live counts are not stored in release content.
+
+Immutable version headers and content tables grant the runtime only SELECT and
+INSERT. Withdrawal grants no table DELETE or UPDATE: one fixed owner function
+records the closed withdrawal reason and erases the content atomically. Latest
+and series reads omit withdrawn versions; a direct version read returns a
+value-free withdrawal problem. Current grants and definition digests govern
+retained reads, including a released-reader profile with no record authority.
+
+Audit entries contain dataset, period, release identity, status, and digest
+references, never cell values or true counts. Attempts precede database work;
+terminal audit acceptance gates response bytes. Each request has an absolute
+deadline, including lock waits and statement execution. JSON representation
+digests cover exact response bytes; CSV digests cover the CSV representation.
+Both are sent with no-store cache policy.
+
+### Tests
+
+`compiler_statistics.rs` exercises typed count admission, publisher dependency
+closure, period models, generated contracts, definition digests, and grant
+changes. `statistics.rs` verifies calendar periods, zero filling and margins,
+checked arithmetic, suppression, independent rounding, canonical bytes, and
+CSV escaping. The PostgreSQL statistics tests verify exact runtime privileges,
+atomic withdrawal, and the authenticated HTTP release lifecycle. The facility
+workflow executes publication and JSON/CSV series reads through native CLI and
+HTTP clients with separate access profiles.
+
+### Accepted residuals
+
+Independent suppression and rounding do not prevent reconstruction. The tests
+pin a four-plus-four case and seven positive cells whose rounded total reveals
+that each suppressed value was one. Overlapping datasets, periods, revisions,
+and external knowledge can amplify disclosure. Institutions must review their
+population, dimensions, cadence, and release policy; this mechanism makes no
+statistical confidentiality guarantee. With minimumCount 5 and roundingBase 5,
+two suppressed positive cells and a rounded total of 10 force both cells to 4:
+each lies in 1..4, and only a sum of 8 rounds to 10. Seven suppressed positive
+cells and a rounded total of 5 force all seven to 1. Zero cells also disclose
+group attributes. Deterministic rounding supports differencing across releases,
+and no privacy budget limits repeated observations.
+
+If an institution cannot accept the interval-pinning residual, cell key
+perturbation is the next mechanism to evaluate through a separate statistical
+design and review. It is not implemented by this threshold-and-rounding release
+path.
+
+Withdrawal erases the engine's stored content, not copies a reader already
+obtained. Release headers and withdrawal reasons remain. Historical definitions
+remain retained but unavailable under a different active definition digest.
+Live evaluation-date-dependent datasets serve only the current period; released
+computation evaluates at the period's reference date. Aggregate reads do not
+emit per-subject access-log hits. Publication scans the declared source views;
+there is no background refresh or shared aggregate cache.

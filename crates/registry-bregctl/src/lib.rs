@@ -14964,6 +14964,7 @@ mod tests {
                 "migration",
                 "history",
                 "data",
+                "statistics",
                 "webhook",
                 "request-retention",
                 "review-recovery",

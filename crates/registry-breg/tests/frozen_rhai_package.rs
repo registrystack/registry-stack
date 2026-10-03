@@ -2,15 +2,16 @@
 
 #![cfg(feature = "runtime")]
 
-//! Frozen pre-change package compatibility.
+//! Frozen package compatibility across compiler generations.
 //!
 //! `tests/fixtures/person-registration-rhai-package` is a complete package
-//! produced by the package compiler as it stood before the compiled action
-//! handler representation evolved further. The directory is frozen test input:
-//! it is never regenerated in place, and the tests below prove the current
-//! compiler still produces every byte of it, still verifies it through
-//! candidate-package inspection, still accepts it for predecessor inspection,
-//! and still runs its Rhai action handler.
+//! produced by the current package compiler. The current fixture pins exact
+//! bytes, current integrity inspection, and Rhai execution.
+//! `person-registration-rhai-package-pre-statistics` preserves the package
+//! produced before engine-owned statistical release storage changed every
+//! package DDL. It pins the compatibility contract used for successor planning:
+//! historical bytes remain a readable predecessor without being rederived as a
+//! current candidate package.
 //!
 //! The loading tests read a temporary copy, so a run never touches the frozen
 //! bytes.
@@ -31,13 +32,15 @@ use registry_breg::action_handler::{evaluate_action_detailed, ActionHandlerOutco
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
 use registry_breg::package::{
-    inspect_package_integrity, load_predecessor_package, prepare_package_with_project_assets,
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
+    change_set_to_applicable_migration_plan, compiled_registry_change_set_from_baseline,
+    inspect_package_integrity, load_package, load_predecessor_package,
+    prepare_package_with_project_assets, PackageBuildRequest, PackageEnvelope, PackageError,
+    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::package::SUM_FILE;
-use serde_json::{Map, Value};
+use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 const ENVIRONMENT: &str = "local";
@@ -56,8 +59,21 @@ fn frozen_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/person-registration-rhai-package")
 }
 
+fn legacy_frozen_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/person-registration-rhai-package-pre-statistics")
+}
+
 /// A temporary copy of the frozen package, leaving the frozen bytes untouched.
 fn frozen_copy() -> tempfile::TempDir {
+    fixture_copy(&frozen_root())
+}
+
+fn legacy_frozen_copy() -> tempfile::TempDir {
+    fixture_copy(&legacy_frozen_root())
+}
+
+fn fixture_copy(root: &Path) -> tempfile::TempDir {
     let copy = tempfile::Builder::new()
         .prefix("registry-frozen-package-")
         .tempdir_in(
@@ -66,7 +82,7 @@ fn frozen_copy() -> tempfile::TempDir {
                 .expect("canonical temporary root"),
         )
         .expect("temporary package directory");
-    copy_tree(&frozen_root(), copy.path());
+    copy_tree(root, copy.path());
     copy
 }
 
@@ -260,6 +276,53 @@ fn frozen_package_bytes_match_the_current_compiler() {
 }
 
 #[test]
+fn package_manifest_refuses_unknown_engine_features() {
+    let package = prepare_frozen_package();
+    let mut envelope = serde_json::to_value(package.envelope()).unwrap();
+    envelope["manifest"]["engineFeatures"] = json!(["unknown_engine_feature"]);
+    assert!(serde_json::from_value::<PackageEnvelope>(envelope).is_err());
+}
+
+#[test]
+fn current_package_without_required_engine_feature_is_predecessor_only() {
+    let package = frozen_copy();
+    let manifest_path = package.path().join("package.json");
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    envelope["manifest"]
+        .as_object_mut()
+        .unwrap()
+        .remove("engineFeatures");
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("mutated envelope canonicalizes"),
+    )
+    .unwrap();
+    fs::remove_file(package.path().join(SUM_FILE)).unwrap();
+    write_sum_file(
+        package.path(),
+        None,
+        &PackageLimits {
+            max_files: 1_026,
+            max_file_bytes: 16 * 1024 * 1024,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 16,
+            max_path_bytes: 512,
+        },
+        "test package",
+    )
+    .expect("mutated package envelope is closed");
+
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    assert!(matches!(
+        load_package(package.path(), &context),
+        Err(PackageError::Derivation)
+    ));
+    assert!(load_predecessor_package(package.path(), &context).is_ok());
+}
+
+#[test]
 fn frozen_package_loads_and_runs_its_rhai_handler() {
     let package = frozen_copy();
     let inspected =
@@ -311,17 +374,14 @@ fn frozen_package_loads_and_runs_its_rhai_handler() {
 
 #[test]
 fn frozen_package_remains_a_readable_predecessor() {
-    let package = frozen_copy();
-    let inspected = inspect_package_integrity(package.path())
-        .expect("the frozen package revision is derived before predecessor binding");
-    let package_revision = inspected.package_digest().to_owned();
+    let package = legacy_frozen_copy();
     let context = PackageLoadContext {
         database_initialization_environment: ENVIRONMENT,
     };
     let predecessor = load_predecessor_package(package.path(), &context)
-        .expect("the frozen package is still accepted for predecessor inspection");
+        .expect("the frozen package remains a verified predecessor baseline");
     let baseline = predecessor.migration_baseline();
-    assert_eq!(baseline.package_digest, package_revision);
+    assert_eq!(baseline.package_digest, predecessor.package_digest());
     assert_eq!(baseline.registry_id, "person-registration-rhai");
     assert!(
         baseline
@@ -331,6 +391,46 @@ fn frozen_package_remains_a_readable_predecessor() {
             .any(|action| action.id == "register-person"),
         "the predecessor baseline carries the compiled action inventory"
     );
+    assert!(!predecessor.statistical_release_store_present());
+
+    let candidate = prepare_frozen_package();
+    let changes = compiled_registry_change_set_from_baseline(
+        baseline,
+        candidate.registry(),
+        predecessor.package_digest(),
+    );
+    let plan = change_set_to_applicable_migration_plan(&changes)
+        .expect("the current compiler plans an automatic successor from the legacy baseline");
+    assert_eq!(
+        plan.from_package_digest.as_deref(),
+        Some(predecessor.package_digest())
+    );
+
+    let assets = handler_assets();
+    let successor = prepare_package_with_project_assets(
+        PackageBuildRequest {
+            from_package_digest: Some(predecessor.package_digest().to_owned()),
+            compiler_source_revision: SOURCE_REVISION.to_owned(),
+            schema_fingerprint: digest(candidate.registry().ddl().script().as_bytes()),
+            project: PackageSourceFile {
+                path: "source/registry.yaml".to_owned(),
+                bytes: serde_json::to_vec(&local_project()).unwrap(),
+            },
+            modules: vec![],
+            fixture_journeys: fixture_journeys(),
+            migration_plan: PackageMigrationPlanInput::SuccessorFromBaseline {
+                prior_baseline: Box::new(baseline.clone()),
+            },
+        },
+        assets,
+    )
+    .expect("the current compiler builds a successor from the legacy package baseline");
+    assert_eq!(successor.manifest().migration_plan, plan);
+
+    let current_package = frozen_copy();
+    let current_predecessor = load_predecessor_package(current_package.path(), &context)
+        .expect("the current frozen package is also a verified predecessor");
+    assert!(current_predecessor.statistical_release_store_present());
 }
 
 #[test]

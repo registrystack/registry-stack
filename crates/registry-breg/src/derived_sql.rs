@@ -10,7 +10,7 @@ use pg_query::NodeRef;
 
 use crate::contract::DerivedSource;
 use crate::diagnostics::Diagnostic;
-use crate::logical_names::default_sql_name;
+use crate::logical_names::canonical_sql_name;
 
 pub(crate) const MAX_DERIVED_SQL_BYTES: usize = 256 * 1024;
 
@@ -31,7 +31,7 @@ pub(crate) fn derived_sql_dependencies(sql: &[u8]) -> DerivedSqlDependencies {
         return DerivedSqlDependencies::default();
     };
     let mut dependencies = DerivedSqlDependencies::default();
-    for (node, _, _, _) in parsed.protobuf.nodes() {
+    for node in raw_nodes(&parsed) {
         match node {
             NodeRef::RangeVar(range)
                 if range.catalogname.is_empty() && range.schemaname == "registry_source" =>
@@ -295,7 +295,7 @@ fn declared_output_aliases(select: &SelectStmt, derived: &DerivedSource) -> bool
             derived
                 .fields
                 .iter()
-                .map(|field| default_sql_name(&field.id)),
+                .map(|field| canonical_sql_name(&field.id)),
         )
         .collect::<Vec<_>>();
     if select.target_list.len() != expected.len() {
@@ -1070,6 +1070,19 @@ fn sql_error(path: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dependency_inventory_walks_nested_source_and_evaluation_nodes() {
+        let dependencies = derived_sql_dependencies(
+            b"WITH selected AS (SELECT m.id, registry_context.evaluation_date() AS evaluated_on FROM registry_source.member m) SELECT h.id FROM registry_source.household h LEFT JOIN selected s ON s.id = h.id",
+        );
+
+        assert_eq!(
+            dependencies.source_relations,
+            BTreeSet::from(["household".to_owned(), "member".to_owned()])
+        );
+        assert!(dependencies.uses_evaluation_date);
+    }
 
     fn accepts(sql: &str) -> bool {
         let parsed = pg_query::parse(sql)

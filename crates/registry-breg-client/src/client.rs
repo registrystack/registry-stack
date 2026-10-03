@@ -8,6 +8,7 @@
 use std::fmt;
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use reqwest::header::{
@@ -16,6 +17,7 @@ use reqwest::header::{
 };
 use reqwest::{Method, Response, StatusCode};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::query::{breg_encoded_query, MAX_BREG_REQUEST_URI_BYTES};
@@ -1493,24 +1495,95 @@ impl BaseRegistryClient {
         segments: &[&str],
         pairs: &[(String, String)],
         media_type: &str,
+        representation_digest_required: bool,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
-        let wire = self
-            .get(
-                segments,
-                pairs,
-                media_type,
-                Credential::Optional,
-                EntityTagExpectation::Forbidden,
-            )
+        let url = self.url_with_query(segments, pairs)?;
+        let builder = self.transport.http.get(url).header(ACCEPT, media_type);
+        let builder = self.authorize(builder, Credential::Optional).await?;
+        let response = self.transport.send(builder).await?;
+        let (wire, representation_digest) = self
+            .statistics_wire(response, media_type, representation_digest_required)
             .await?;
         if media_type == APPLICATION_JSON {
             crate::strict_json::from_slice(&wire.body)
                 .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
         }
         Ok(BRegComplete {
-            value: BRegRawDocument::new(wire.media_type, wire.body),
+            value: BRegRawDocument::with_representation_digest(
+                wire.media_type,
+                wire.body,
+                representation_digest,
+            ),
             metadata: wire.metadata,
         })
+    }
+
+    async fn statistics_wire(
+        &self,
+        response: Response,
+        requested_media: &str,
+        representation_digest_required: bool,
+    ) -> Result<(BRegWire, Option<BRegRepresentationDigest>), BaseRegistryClientError> {
+        let status = response.status();
+        if status != StatusCode::OK {
+            return Err(breg_problem(response, &self.transport).await);
+        }
+        let headers = response.headers().clone();
+        let trace_id = breg_trace_id(status, &headers)?;
+        let media_type =
+            statistics_response_media_type(&headers, requested_media).ok_or_else(|| {
+                BaseRegistryClientError::protocol(
+                    status.as_u16(),
+                    BRegProtocolFailure::MediaType,
+                    Some(trace_id.clone()),
+                )
+            })?;
+        if breg_response_etag(status, &headers, &trace_id)?.is_some() {
+            return Err(etag_failure(status, trace_id));
+        }
+        let link = breg_response_link(status, &headers, &trace_id)?;
+        if breg_response_location(status, &headers, &trace_id)?.is_some() {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::Location,
+                Some(trace_id),
+            ));
+        }
+        let digest = parse_representation_digest(
+            status,
+            &headers,
+            &trace_id,
+            representation_digest_required,
+        )?;
+        let engine_version = breg_engine_version(&headers);
+        let body = self
+            .transport
+            .read(response, self.config.max_response_bytes)
+            .await?;
+        let representation_digest = match digest {
+            Some((value, expected)) if expected == Sha256::digest(&body).as_slice() => {
+                Some(BRegRepresentationDigest::new(value))
+            }
+            Some(_) => {
+                return Err(BaseRegistryClientError::protocol(
+                    status.as_u16(),
+                    BRegProtocolFailure::RepresentationDigest,
+                    Some(trace_id),
+                ));
+            }
+            None => None,
+        };
+        Ok((
+            BRegWire {
+                body,
+                metadata: BRegResponseMetadata::new(trace_id, None)
+                    .with_engine_version(engine_version),
+                media_type,
+                link,
+                status: status.as_u16(),
+            },
+            representation_digest,
+        ))
     }
 
     pub(crate) async fn statistics_post_json(
@@ -2264,6 +2337,53 @@ fn single_media_type(headers: &reqwest::header::HeaderMap) -> Option<String> {
     }
 }
 
+fn statistics_response_media_type(
+    headers: &reqwest::header::HeaderMap,
+    requested: &str,
+) -> Option<String> {
+    let actual = single_media_type(headers)?;
+    match (requested, actual.as_str()) {
+        (APPLICATION_JSON, APPLICATION_JSON)
+        | (STATISTICS_CSV_MEDIA_TYPE, "text/csv; charset=utf-8") => Some(actual),
+        _ => None,
+    }
+}
+
+fn parse_representation_digest(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    trace_id: &TraceId,
+    required: bool,
+) -> Result<Option<(String, [u8; 32])>, BaseRegistryClientError> {
+    let mut values = headers.get_all("repr-digest").iter();
+    let Some(value) = values.next() else {
+        return if required {
+            Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::RepresentationDigest,
+                Some(trace_id.clone()),
+            ))
+        } else {
+            Ok(None)
+        };
+    };
+    let value = value.to_str().ok();
+    let parsed = value.and_then(|value| {
+        let encoded = value.strip_prefix("sha-256=:")?.strip_suffix(':')?;
+        let bytes = STANDARD.decode(encoded).ok()?;
+        let digest: [u8; 32] = bytes.try_into().ok()?;
+        (STANDARD.encode(digest) == encoded).then(|| (value.to_owned(), digest))
+    });
+    if values.next().is_some() || parsed.is_none() {
+        return Err(BaseRegistryClientError::protocol(
+            status.as_u16(),
+            BRegProtocolFailure::RepresentationDigest,
+            Some(trace_id.clone()),
+        ));
+    }
+    Ok(parsed)
+}
+
 fn breg_trace_id(
     status: StatusCode,
     headers: &reqwest::header::HeaderMap,
@@ -2557,7 +2677,23 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         || extensions
             .field_path
             .is_some_and(|path| !path.permits(code))
-        || extensions.refusal_code.is_some() != (code == BRegProblemCode::ActionRefused)
+        || extensions.refusal_code.is_some()
+            != matches!(
+                code,
+                BRegProblemCode::ActionRefused | BRegProblemCode::StatisticalDatasetReleaseRefused
+            )
+        || extensions.reason_code.is_some()
+            != (code == BRegProblemCode::StatisticalDatasetVersionWithdrawn)
+        || (code == BRegProblemCode::StatisticalDatasetReleaseRefused
+            && !extensions
+                .refusal_code
+                .as_ref()
+                .is_some_and(|value| valid_statistics_refusal_code(value.as_str())))
+        || (code == BRegProblemCode::StatisticalDatasetVersionWithdrawn
+            && !extensions
+                .reason_code
+                .as_ref()
+                .is_some_and(|value| valid_statistics_reason_code(value.as_str())))
     {
         return problem_failure(status, trace_id);
     }
@@ -2565,8 +2701,25 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         status: status.as_u16(),
         code,
         trace_id,
-        refusal_code: extensions.refusal_code,
+        refusal_code: extensions.refusal_code.or(extensions.reason_code),
     }
+}
+
+fn valid_statistics_refusal_code(value: &str) -> bool {
+    matches!(
+        value,
+        "period-not-ended"
+            | "before-first-period"
+            | "provisional-after-final"
+            | "already-withdrawn"
+    )
+}
+
+fn valid_statistics_reason_code(value: &str) -> bool {
+    matches!(
+        value,
+        "computation-error" | "source-data-error" | "disclosure-risk"
+    )
 }
 
 /// The closed forms a Base Registry Engine problem location takes.
@@ -2575,6 +2728,7 @@ enum BRegProblemPath {
     EvidenceAlias,
     ActionInputField,
     ActionRequest,
+    StatisticalDimension,
     /// A record write body member: `/data`, `/data/<apiName>`, a JSON Patch
     /// operation member, or a batch item member.
     RecordRequest,
@@ -2595,6 +2749,9 @@ impl BRegProblemPath {
             Self::ActionRequest | Self::RecordRequest | Self::Header => {
                 code == BRegProblemCode::RequestInvalid
             }
+            Self::StatisticalDimension => {
+                code == BRegProblemCode::StatisticalDatasetDomainViolation
+            }
             Self::QueryParameter => code == BRegProblemCode::QueryInvalid,
         }
     }
@@ -2606,6 +2763,7 @@ struct BRegProblemExtensions {
     declared_field: bool,
     field_path: Option<BRegProblemPath>,
     refusal_code: Option<BRegRefusalCode>,
+    reason_code: Option<BRegRefusalCode>,
 }
 
 /// BReg owns paired field locations, problem locations, and the declared code an
@@ -2640,6 +2798,11 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
         Some(serde_json::Value::String(code)) => Some(BRegRefusalCode::parse(&code).ok_or(())?),
         _ => return Err(()),
     };
+    let reason_code = match object.remove("reasonCode") {
+        None => None,
+        Some(serde_json::Value::String(code)) => Some(BRegRefusalCode::parse(&code).ok_or(())?),
+        _ => return Err(()),
+    };
     let common = serde_json::to_vec(&object).map_err(|_| ())?;
     let document = ProblemDocument::parse_exact(&common, MAXIMUM_PROBLEM_BYTES).map_err(|_| ())?;
     Ok((
@@ -2648,6 +2811,7 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
             declared_field,
             field_path,
             refusal_code,
+            reason_code,
         },
     ))
 }
@@ -2662,6 +2826,9 @@ fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
     if valid_action_request_problem_path(path) {
         return Some(BRegProblemPath::ActionRequest);
     }
+    if valid_statistical_dimension_problem_path(path) {
+        return Some(BRegProblemPath::StatisticalDimension);
+    }
     if path == "Idempotency-Key" || path == "If-Match" {
         return Some(BRegProblemPath::Header);
     }
@@ -2672,7 +2839,7 @@ fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
 }
 
 /// The fixed query parameters a `query.invalid` refusal may name.
-const BREG_QUERY_PARAMETERS: [&str; 12] = [
+const BREG_QUERY_PARAMETERS: [&str; 15] = [
     "$select",
     "$filter",
     "$orderby",
@@ -2685,7 +2852,23 @@ const BREG_QUERY_PARAMETERS: [&str; 12] = [
     "snapshot",
     "validAt",
     "requestHistoryAfterProposalVersion",
+    "from",
+    "to",
+    "status",
 ];
+
+fn valid_statistical_dimension_problem_path(path: &str) -> bool {
+    let Some(path) = path.strip_prefix("statisticalDatasets[id=") else {
+        return false;
+    };
+    let Some((dataset, dimension)) = path.split_once("].dimensions[id=") else {
+        return false;
+    };
+    let Some(dimension) = dimension.strip_suffix(']') else {
+        return false;
+    };
+    valid_breg_identifier(dataset) && valid_breg_identifier(dimension)
+}
 
 /// A record write location: a create body's `/data` member or one of its API
 /// names, a JSON Patch operation or one of its members, or a batch body's

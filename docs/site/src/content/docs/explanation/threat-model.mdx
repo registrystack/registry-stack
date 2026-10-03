@@ -484,7 +484,7 @@ stays in released code until it is resolved.
 
 ## Field encryption draws a boundary inside the database
 
-Base Registry Engine field encryption adds one boundary the other products do not have, drawn inside
+Base Registry Engine (BReg) field encryption adds one boundary the other products do not have, drawn inside
 the database rather than at a service edge. A restricted field the project declares `encrypted`
 stores its values as AES-256-GCM envelopes under a data-encryption key the process wraps and
 unwraps through Vault or OpenBao Transit, so the value is protected against a reader of the

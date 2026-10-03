@@ -123,15 +123,22 @@ pub struct StatisticsVersionReadRequest<'a> {
 pub struct StatisticsReleaseListRequest<'a> {
     pub context: &'a AuthorizedRequestContext,
     pub dataset_id: &'a str,
-    pub offset: u64,
+    pub after: Option<StatisticsReleaseListCursor>,
     pub limit: u16,
     pub deadline: tokio::time::Instant,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatisticsReleaseListCursor {
+    pub period: String,
+    pub version: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatisticsReleasePage {
     pub items: Vec<ReleaseVersionHeader>,
     pub has_more: bool,
+    pub next: Option<StatisticsReleaseListCursor>,
 }
 
 pub struct StatisticsSeriesRequest<'a> {
@@ -155,6 +162,73 @@ pub struct StatisticsMutationOutcome {
     pub response: HeldResponse,
     pub replayed: bool,
     pub header: ReleaseVersionHeader,
+    pub result_count: usize,
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct StatisticsPublishPause {
+    reached: Arc<tokio::sync::Semaphore>,
+    resume: Arc<tokio::sync::Semaphore>,
+}
+
+#[cfg(feature = "postgres-test")]
+impl Default for StatisticsPublishPause {
+    fn default() -> Self {
+        Self {
+            reached: Arc::new(tokio::sync::Semaphore::new(0)),
+            resume: Arc::new(tokio::sync::Semaphore::new(0)),
+        }
+    }
+}
+
+#[cfg(feature = "postgres-test")]
+impl StatisticsPublishPause {
+    pub async fn wait_until_reached(&self) {
+        self.reached
+            .acquire()
+            .await
+            .expect("statistics publish pause remains open")
+            .forget();
+    }
+
+    pub fn resume(&self) {
+        self.resume.add_permits(1);
+    }
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct StatisticsWithdrawalPause {
+    reached: Arc<tokio::sync::Semaphore>,
+    resume: Arc<tokio::sync::Semaphore>,
+}
+
+#[cfg(feature = "postgres-test")]
+impl Default for StatisticsWithdrawalPause {
+    fn default() -> Self {
+        Self {
+            reached: Arc::new(tokio::sync::Semaphore::new(0)),
+            resume: Arc::new(tokio::sync::Semaphore::new(0)),
+        }
+    }
+}
+
+#[cfg(feature = "postgres-test")]
+impl StatisticsWithdrawalPause {
+    pub async fn wait_until_reached(&self) {
+        self.reached
+            .acquire()
+            .await
+            .expect("statistics withdrawal pause remains open")
+            .forget();
+    }
+
+    pub fn resume(&self) {
+        self.resume.add_permits(1);
+    }
 }
 
 impl StatisticsStoredDocument {
@@ -172,6 +246,12 @@ pub struct PostgresStatisticsService {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit: RegistryAudit,
+    #[cfg(feature = "postgres-test")]
+    test_trace: Option<Arc<std::sync::Mutex<Vec<String>>>>,
+    #[cfg(feature = "postgres-test")]
+    publish_pause: Option<StatisticsPublishPause>,
+    #[cfg(feature = "postgres-test")]
+    withdrawal_pause: Option<StatisticsWithdrawalPause>,
 }
 
 impl PostgresStatisticsService {
@@ -231,6 +311,7 @@ impl PostgresStatisticsService {
             stored.response,
             dataset,
             request.period_code,
+            published_cell_count(dataset)?,
         )?))
     }
 
@@ -264,7 +345,7 @@ impl PostgresStatisticsService {
         };
         let resolved = resolve_binding(self.audit.profile(), &binding).map_err(map_idempotency)?;
         let mut client = self.pool.get().await.map_err(unavailable)?;
-        let transaction = begin_record_transaction(
+        let transaction = match begin_record_transaction(
             &mut client,
             self.lock_key,
             self.lock_timeout.min(remaining_budget(request.deadline)?),
@@ -272,7 +353,19 @@ impl PostgresStatisticsService {
             &claims,
         )
         .await
-        .map_err(|_| StatisticsServiceError::VersionConflict)?;
+        {
+            Ok(transaction) => transaction,
+            Err(_) => {
+                if remaining_budget(request.deadline).is_err() {
+                    return Err(StatisticsServiceError::Timeout);
+                }
+                let verification_client = self.pool.get().await.map_err(unavailable)?;
+                return match active_identity_matches(&verification_client, &self.expected).await? {
+                    Some(false) => Err(StatisticsServiceError::VersionConflict),
+                    Some(true) | None => Err(StatisticsServiceError::Unavailable),
+                };
+            }
+        };
         transaction
             .set_statement_budget(remaining_budget(request.deadline)?)
             .await
@@ -291,7 +384,12 @@ impl PostgresStatisticsService {
                     && release_version > 0
             );
             return if matches {
-                replayed_outcome(stored.response, dataset, &period.code)
+                replayed_outcome(
+                    stored.response,
+                    dataset,
+                    &period.code,
+                    published_cell_count(dataset)?,
+                )
             } else {
                 Err(StatisticsServiceError::IdempotencyConflict)
             };
@@ -358,6 +456,8 @@ impl PostgresStatisticsService {
             Some(DisclosureDocument::from(dataset.disclosure)),
         )?;
         let canonical = canonical_document_and_digest(&document).map_err(map_statistics_error)?;
+        let result_count = document.cells.len();
+        self.trace_for_test("publish.canonical");
         let snapshot_uuid = crate::history_reference::SnapshotReference::parse(&snapshot)
             .map_err(|_| StatisticsServiceError::Unavailable)?
             .uuid();
@@ -383,7 +483,11 @@ impl PostgresStatisticsService {
                 ],
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(|error| {
+                self.trace_error_for_test("publish.version-error", &error);
+                unavailable(error)
+            })?;
+        self.trace_for_test("publish.version-inserted");
         let content_inserted = transaction
             .transaction()
             .execute(
@@ -394,9 +498,11 @@ impl PostgresStatisticsService {
             )
             .await
             .map_err(unavailable)?;
+        self.trace_for_test("publish.content-inserted");
         if inserted != 1 || content_inserted != 1 {
             return Err(StatisticsServiceError::Unavailable);
         }
+        self.trace_for_test("publish.release-inserted");
         let header = ReleaseVersionHeader {
             dataset: dataset.id.clone(),
             period: period.code.clone(),
@@ -422,11 +528,14 @@ impl PostgresStatisticsService {
         )
         .await
         .map_err(map_idempotency)?;
+        self.trace_for_test("publish.idempotency-inserted");
         transaction.commit().await.map_err(unavailable)?;
+        self.trace_for_test("publish.committed");
         Ok(StatisticsMutationOutcome {
             response,
             replayed: false,
             header,
+            result_count,
         })
     }
 
@@ -573,6 +682,97 @@ impl PostgresStatisticsService {
             lock_key,
             lock_timeout,
             audit,
+            #[cfg(feature = "postgres-test")]
+            test_trace: None,
+            #[cfg(feature = "postgres-test")]
+            publish_pause: None,
+            #[cfg(feature = "postgres-test")]
+            withdrawal_pause: None,
+        }
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_trace_for_test(mut self, trace: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+        self.test_trace = Some(trace);
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_publish_pause_for_test(mut self, pause: StatisticsPublishPause) -> Self {
+        self.publish_pause = Some(pause);
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_withdrawal_pause_for_test(mut self, pause: StatisticsWithdrawalPause) -> Self {
+        self.withdrawal_pause = Some(pause);
+        self
+    }
+
+    fn trace_for_test(&self, stage: &'static str) {
+        #[cfg(feature = "postgres-test")]
+        if let Some(trace) = &self.test_trace {
+            trace
+                .lock()
+                .expect("statistics test trace lock")
+                .push(stage.to_owned());
+        }
+        #[cfg(not(feature = "postgres-test"))]
+        let _ = stage;
+    }
+
+    fn trace_error_for_test(&self, stage: &'static str, error: &tokio_postgres::Error) {
+        #[cfg(feature = "postgres-test")]
+        if let Some(trace) = &self.test_trace {
+            let detail = error.as_db_error().map_or_else(
+                || error.to_string(),
+                |database| {
+                    format!(
+                        "{} {} constraint={:?}",
+                        database.code().code(),
+                        database.message(),
+                        database.constraint()
+                    )
+                },
+            );
+            trace
+                .lock()
+                .expect("statistics test trace lock")
+                .push(format!("{stage}: {detail}"));
+        }
+        #[cfg(not(feature = "postgres-test"))]
+        let _ = (stage, error);
+    }
+
+    async fn pause_before_persist_for_test(&self) {
+        #[cfg(feature = "postgres-test")]
+        if let Some(pause) = &self.publish_pause {
+            pause.reached.add_permits(1);
+            pause
+                .resume
+                .acquire()
+                .await
+                .expect("statistics publish pause remains open")
+                .forget();
+        }
+    }
+
+    async fn pause_before_withdrawal_persist_for_test(&self) {
+        #[cfg(feature = "postgres-test")]
+        if let Some(pause) = &self.withdrawal_pause {
+            pause.reached.add_permits(1);
+            pause
+                .resume
+                .acquire()
+                .await
+                .expect("statistics withdrawal pause remains open")
+                .forget();
         }
     }
 
@@ -597,6 +797,7 @@ impl PostgresStatisticsService {
     ) -> Result<StatisticsDocument, StatisticsServiceError> {
         let dataset = self.live_dataset(request.dataset_id, request.context)?;
         let periods = requested_periods(dataset, request.from, request.to, request.today)?;
+        enforce_response_cell_limit(dataset, periods.len())?;
         let computation = self
             .compute(
                 dataset,
@@ -648,6 +849,8 @@ impl PostgresStatisticsService {
                 true,
             )
             .await?;
+        self.trace_for_test("publish.computed");
+        self.pause_before_persist_for_test().await;
         self.persist_release(dataset, period, computation, request)
             .await
     }
@@ -665,6 +868,11 @@ impl PostgresStatisticsService {
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
         let dataset = self.publisher_dataset(request.dataset_id, request.context)?;
         let _period = release_period(dataset, request.period_code, NaiveDate::MAX)?;
+        if request.period_code < first_period(dataset).as_str() {
+            return Err(StatisticsServiceError::ReleaseRefused(
+                StatisticsReleaseRefusal::BeforeFirstPeriod,
+            ));
+        }
         if request.version <= 0 {
             return Err(StatisticsServiceError::Concealed);
         }
@@ -715,8 +923,9 @@ impl PostgresStatisticsService {
                 return Err(StatisticsServiceError::IdempotencyConflict);
             }
             transaction.commit().await.map_err(unavailable)?;
-            return replayed_outcome(stored.response, dataset, request.period_code);
+            return replayed_outcome(stored.response, dataset, request.period_code, 0);
         }
+        self.pause_before_withdrawal_persist_for_test().await;
         lock_release_key(transaction.transaction(), dataset, request.period_code).await?;
         let state = transaction
             .transaction()
@@ -807,6 +1016,7 @@ impl PostgresStatisticsService {
             response,
             replayed: false,
             header,
+            result_count: 0,
         })
     }
 
@@ -823,6 +1033,9 @@ impl PostgresStatisticsService {
     ) -> Result<StatisticsStoredDocument, StatisticsServiceError> {
         let dataset = self.reader_dataset(request.dataset_id, request.context)?;
         let _period = release_period(dataset, request.period_code, NaiveDate::MAX)?;
+        if request.period_code < first_period(dataset).as_str() {
+            return Err(StatisticsServiceError::Concealed);
+        }
         if request.version.is_some_and(|version| version <= 0) {
             return Err(StatisticsServiceError::Concealed);
         }
@@ -834,8 +1047,7 @@ impl PostgresStatisticsService {
             &self.expected,
             request.deadline,
         )
-        .await
-        .map_err(unavailable)?;
+        .await?;
         let status = selection_status(request.selection);
         let parameters: [&(dyn ToSql + Sync); 5] = [
             &dataset.id,
@@ -907,9 +1119,18 @@ impl PostgresStatisticsService {
         request: StatisticsReleaseListRequest<'_>,
     ) -> Result<StatisticsReleasePage, StatisticsServiceError> {
         let dataset = self.reader_dataset(request.dataset_id, request.context)?;
-        if request.limit == 0 || request.limit > 100 || request.offset > i64::MAX as u64 {
+        if request.limit == 0 || request.limit > 100 {
             return Err(StatisticsServiceError::QueryInvalid { field_path: "$top" });
         }
+        let (after_period, after_version) = if let Some(after) = &request.after {
+            let version =
+                i64::try_from(after.version).map_err(|_| StatisticsServiceError::QueryInvalid {
+                    field_path: "$skiptoken",
+                })?;
+            (Some(after.period.as_str()), Some(version))
+        } else {
+            (None, None)
+        };
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = begin_release_transaction(
             &mut client,
@@ -918,12 +1139,16 @@ impl PostgresStatisticsService {
             &self.expected,
             request.deadline,
         )
-        .await
-        .map_err(unavailable)?;
-        let offset = request.offset as i64;
+        .await?;
         let fetch = i64::from(request.limit) + 1;
-        let parameters: [&(dyn ToSql + Sync); 4] =
-            [&dataset.id, &dataset.definition_digest, &offset, &fetch];
+        let parameters: [&(dyn ToSql + Sync); 6] = [
+            &dataset.id,
+            &dataset.definition_digest,
+            &after_period,
+            &after_version,
+            &fetch,
+            first_period(dataset),
+        ];
         let rows = transaction
             .query(
                 "SELECT version.period_code, version.release_version, version.release_status,
@@ -935,8 +1160,12 @@ impl PostgresStatisticsService {
               LEFT JOIN registry_internal.registry_statistical_release_withdrawals AS withdrawal
                      USING (dataset_id, period_code, release_version)
                   WHERE version.dataset_id = $1 AND version.definition_digest = $2
+                    AND version.period_code >= $6
+                    AND ($3::text IS NULL OR
+                         (version.period_code, version.release_version)
+                           < ($3::text, $4::bigint))
                ORDER BY version.period_code DESC, version.release_version DESC
-                  OFFSET $3 LIMIT $4",
+                  LIMIT $5",
                 &parameters,
             )
             .await
@@ -960,10 +1189,19 @@ impl PostgresStatisticsService {
                 withdrawal: withdrawal(reason, withdrawn_at)?,
             });
         }
+        let next =
+            has_more
+                .then(|| headers.last())
+                .flatten()
+                .map(|header| StatisticsReleaseListCursor {
+                    period: header.period.clone(),
+                    version: header.version,
+                });
         transaction.commit().await.map_err(unavailable)?;
         Ok(StatisticsReleasePage {
             items: headers,
             has_more,
+            next,
         })
     }
 
@@ -985,7 +1223,7 @@ impl PostgresStatisticsService {
             request.to,
             request.today,
         )
-        .map_err(map_statistics_error)?;
+        .map_err(|error| map_period_range_error(error, request.from, request.to))?;
         enforce_first_period(dataset, &periods)?;
         let period_codes = periods
             .iter()
@@ -1001,11 +1239,14 @@ impl PostgresStatisticsService {
         )
         .await?;
         let status = selection_status(request.selection);
-        let parameters: [&(dyn ToSql + Sync); 4] = [
+        let fetch_limit = i64::try_from(series_release_fetch_limit(dataset)?)
+            .map_err(|_| StatisticsServiceError::Unavailable)?;
+        let parameters: [&(dyn ToSql + Sync); 5] = [
             &dataset.id,
             &dataset.definition_digest,
             &period_codes,
             &status,
+            &fetch_limit,
         ];
         let rows = transaction
             .query(
@@ -1022,7 +1263,8 @@ impl PostgresStatisticsService {
                     AND version.period_code = ANY($3)
                     AND ($4::text IS NULL OR version.release_status = $4)
                     AND withdrawal.dataset_id IS NULL
-               ORDER BY version.period_code, version.release_version DESC",
+               ORDER BY version.period_code, version.release_version DESC
+                  LIMIT $5",
                 &parameters,
             )
             .await
@@ -1123,10 +1365,11 @@ impl PostgresStatisticsService {
     ) -> Result<&CompiledStatisticalDataset, StatisticsServiceError> {
         let dataset = self.dataset(id)?;
         let profile = context.selected_profile();
-        let allowed = dataset.live_profiles.contains(profile)
-            || dataset.releases.as_ref().is_some_and(|release| {
-                release.publisher == profile || release.readers.contains(profile)
-            });
+        let allowed = dataset.releases.as_ref().is_some_and(|release| {
+            release.readers.contains(profile)
+                || release.publisher == profile
+                || dataset.live_profiles.contains(profile)
+        });
         allowed
             .then_some(dataset)
             .ok_or(StatisticsServiceError::Concealed)
@@ -1232,7 +1475,7 @@ async fn begin_release_transaction<'a>(
         )
         .await
         .map_err(unavailable)?
-        .ok_or(StatisticsServiceError::VersionConflict)?;
+        .ok_or(StatisticsServiceError::Unavailable)?;
     let matches = identity.get::<_, String>(0) == expected.package_id
         && identity.get::<_, String>(1) == expected.database_id
         && identity.get::<_, String>(2) == expected.package_digest
@@ -1240,9 +1483,31 @@ async fn begin_release_transaction<'a>(
         && identity.get::<_, String>(4) == expected.schema_fingerprint
         && identity.get::<_, String>(5) == "ready";
     if !matches {
-        return Err(StatisticsServiceError::VersionConflict);
+        return Err(StatisticsServiceError::Unavailable);
     }
     Ok(transaction)
+}
+
+async fn active_identity_matches(
+    client: &deadpool_postgres::Client,
+    expected: &ExpectedRegistryIdentity,
+) -> Result<Option<bool>, StatisticsServiceError> {
+    let row = client
+        .query_opt(
+            "SELECT package_id, database_id, active_package_digest,
+                    active_activation_id::text, schema_fingerprint
+               FROM registry_internal.registry_state WHERE singleton",
+            &[],
+        )
+        .await
+        .map_err(unavailable)?;
+    Ok(row.map(|identity| {
+        identity.get::<_, String>(0) == expected.package_id
+            && identity.get::<_, String>(1) == expected.database_id
+            && identity.get::<_, String>(2) == expected.package_digest
+            && identity.get::<_, String>(3) == expected.activation_id
+            && identity.get::<_, String>(4) == expected.schema_fingerprint
+    }))
 }
 
 async fn lock_release_key(
@@ -1349,14 +1614,26 @@ fn map_idempotency(error: IdempotencyError) -> StatisticsServiceError {
         IdempotencyError::InvalidInput => StatisticsServiceError::QueryInvalid {
             field_path: "Idempotency-Key",
         },
+        IdempotencyError::Timeout => StatisticsServiceError::Timeout,
         IdempotencyError::CachedResponseUnreadable | IdempotencyError::Unavailable => {
             StatisticsServiceError::Unavailable
         }
     }
 }
 
-fn unavailable<T>(_: T) -> StatisticsServiceError {
-    StatisticsServiceError::Unavailable
+fn unavailable<T: std::any::Any>(error: T) -> StatisticsServiceError {
+    (&error as &dyn std::any::Any)
+        .downcast_ref::<tokio_postgres::Error>()
+        .map_or(StatisticsServiceError::Unavailable, |error| {
+            if error
+                .code()
+                .is_some_and(|code| code == &tokio_postgres::error::SqlState::QUERY_CANCELED)
+            {
+                StatisticsServiceError::Timeout
+            } else {
+                StatisticsServiceError::Unavailable
+            }
+        })
 }
 
 fn held_json_response(
@@ -1385,6 +1662,7 @@ fn replayed_outcome(
     response: HeldResponse,
     dataset: &CompiledStatisticalDataset,
     period_code: &str,
+    result_count: usize,
 ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
     let header: ReleaseVersionHeader =
         serde_json::from_slice(response.body()).map_err(|_| StatisticsServiceError::Unavailable)?;
@@ -1399,7 +1677,50 @@ fn replayed_outcome(
         response,
         replayed: true,
         header,
+        result_count,
     })
+}
+
+fn published_cell_count(
+    dataset: &CompiledStatisticalDataset,
+) -> Result<usize, StatisticsServiceError> {
+    dataset
+        .dimensions
+        .iter()
+        .try_fold(1_usize, |count, dimension| {
+            let codes = dimension
+                .codes
+                .len()
+                .checked_add(usize::from(dimension.include_unknown))
+                .and_then(|value| value.checked_add(1))
+                .ok_or(StatisticsServiceError::Unavailable)?;
+            count
+                .checked_mul(codes)
+                .filter(|value| *value <= MAX_CELLS_PER_RESPONSE)
+                .ok_or(StatisticsServiceError::Unavailable)
+        })
+}
+
+fn series_release_fetch_limit(
+    dataset: &CompiledStatisticalDataset,
+) -> Result<usize, StatisticsServiceError> {
+    MAX_CELLS_PER_RESPONSE
+        .checked_div(published_cell_count(dataset)?)
+        .and_then(|within_cap| within_cap.checked_add(1))
+        .ok_or(StatisticsServiceError::Unavailable)
+}
+
+fn enforce_response_cell_limit(
+    dataset: &CompiledStatisticalDataset,
+    period_count: usize,
+) -> Result<(), StatisticsServiceError> {
+    period_count
+        .checked_mul(published_cell_count(dataset)?)
+        .filter(|cells| *cells <= MAX_CELLS_PER_RESPONSE)
+        .map(|_| ())
+        .ok_or(StatisticsServiceError::QueryInvalid {
+            field_path: "period",
+        })
 }
 
 async fn within_deadline<T>(
@@ -1443,8 +1764,8 @@ fn requested_periods(
     let current = current_period(granularity(dataset), today).map_err(map_statistics_error)?;
     let from = from.unwrap_or(current.code.as_str());
     let to = to.unwrap_or(current.code.as_str());
-    let periods =
-        period_range(granularity(dataset), from, to, today).map_err(map_statistics_error)?;
+    let periods = period_range(granularity(dataset), from, to, today)
+        .map_err(|error| map_period_range_error(error, from, to))?;
     enforce_first_period(dataset, &periods)?;
     if periods
         .last()
@@ -1535,6 +1856,24 @@ fn document_for(
         live,
         disclosure,
     })
+}
+
+fn map_period_range_error(error: StatisticsError, from: &str, to: &str) -> StatisticsServiceError {
+    match error {
+        StatisticsError::InvalidPeriodCode { code, .. } => StatisticsServiceError::QueryInvalid {
+            field_path: if code == to && code != from {
+                "to"
+            } else {
+                "from"
+            },
+        },
+        StatisticsError::ReversedPeriodRange
+        | StatisticsError::TooManyPeriods
+        | StatisticsError::TooManyCells => {
+            StatisticsServiceError::QueryInvalid { field_path: "from" }
+        }
+        other => map_statistics_error(other),
+    }
 }
 
 fn map_statistics_error(error: StatisticsError) -> StatisticsServiceError {

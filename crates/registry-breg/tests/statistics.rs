@@ -105,6 +105,7 @@ fn period_codes_are_strict_sdmx_calendar_codes() {
     for (granularity, code) in [
         (PeriodGranularity::Day, "2023-02-29"),
         (PeriodGranularity::Day, "2024-2-01"),
+        (PeriodGranularity::Day, "2024/02/01"),
         (PeriodGranularity::Month, "2024-13"),
         (PeriodGranularity::Quarter, "2024-Q0"),
         (PeriodGranularity::Quarter, "2024-q1"),
@@ -114,6 +115,61 @@ fn period_codes_are_strict_sdmx_calendar_codes() {
             period_for_code(granularity, code, date(2024, 1, 1)),
             Err(StatisticsError::InvalidPeriodCode { .. })
         ));
+    }
+}
+
+#[test]
+fn period_codes_refuse_non_ascii_without_panicking() {
+    for (granularity, code) in [
+        (PeriodGranularity::Quarter, "2025€"),
+        (PeriodGranularity::Quarter, "a😀xx"),
+        (PeriodGranularity::Month, "2025éx"),
+        (PeriodGranularity::Day, "２０25-01"),
+    ] {
+        assert!(matches!(
+            period_for_code(granularity, code, date(2025, 1, 1)),
+            Err(StatisticsError::InvalidPeriodCode { .. })
+        ));
+    }
+}
+
+#[test]
+fn period_codes_require_positive_four_digit_years_for_every_frequency() {
+    for (granularity, code) in [
+        (PeriodGranularity::Day, "0000-01-01"),
+        (PeriodGranularity::Day, "-001-01-01"),
+        (PeriodGranularity::Month, "0000-01"),
+        (PeriodGranularity::Quarter, "0000-Q1"),
+        (PeriodGranularity::Year, "0000"),
+    ] {
+        assert!(matches!(
+            period_for_code(granularity, code, date(2025, 1, 1)),
+            Err(StatisticsError::InvalidPeriodCode { .. })
+        ));
+    }
+}
+
+#[test]
+fn period_codes_keep_the_exclusive_end_in_the_four_digit_date_domain() {
+    for (granularity, code) in [
+        (PeriodGranularity::Day, "9999-12-31"),
+        (PeriodGranularity::Month, "9999-12"),
+        (PeriodGranularity::Quarter, "9999-Q4"),
+        (PeriodGranularity::Year, "9999"),
+    ] {
+        assert!(matches!(
+            period_for_code(granularity, code, date(2025, 1, 1)),
+            Err(StatisticsError::InvalidPeriodCode { .. })
+        ));
+    }
+    for (granularity, code) in [
+        (PeriodGranularity::Day, "9999-12-30"),
+        (PeriodGranularity::Month, "9999-11"),
+        (PeriodGranularity::Quarter, "9999-Q3"),
+        (PeriodGranularity::Year, "9998"),
+    ] {
+        period_for_code(granularity, code, date(2025, 1, 1))
+            .expect("periods whose exclusive end fits the wire date domain remain valid");
     }
 }
 

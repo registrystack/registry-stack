@@ -90,10 +90,25 @@ pub struct PackageEnvelope {
 pub struct PackageManifest {
     pub package_id: String,
     pub compiler: CompilerIdentity,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub engine_features: BTreeSet<PackageEngineFeature>,
     pub schema_fingerprint: String,
     pub sources: CapturedSources,
     pub files: Vec<PackageFile>,
     pub migration_plan: MigrationPlan,
+}
+
+/// Engine-owned catalog capabilities installed by the package's compiler.
+/// The set is hash-covered package identity and defaults empty only for
+/// predecessor packages produced before capability declarations existed.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageEngineFeature {
+    StatisticalReleaseStore,
+}
+
+fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
+    BTreeSet::from([PackageEngineFeature::StatisticalReleaseStore])
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -593,6 +608,7 @@ pub struct VerifiedPredecessorPackage {
     package_digest: String,
     migration_baseline: CompiledRegistryMigrationBaseline,
     history_schema_descriptor: HistorySchemaDescriptor,
+    statistical_release_store_present: bool,
 }
 
 impl VerifiedPredecessorPackage {
@@ -618,6 +634,14 @@ impl VerifiedPredecessorPackage {
     /// runtime access, SQL execution, or successor activation.
     pub fn history_schema_descriptor(&self) -> HistorySchemaDescriptor {
         self.history_schema_descriptor.clone()
+    }
+
+    /// Whether this predecessor's hash-covered manifest declares the complete
+    /// engine-owned statistical release store. Reconciliation uses this closed
+    /// fact to compare an older active catalog without granting partial-store
+    /// compatibility.
+    pub fn statistical_release_store_present(&self) -> bool {
+        self.statistical_release_store_present
     }
 }
 
@@ -2923,6 +2947,7 @@ pub fn prepare_package_with_project_assets(
             source_revision: request.compiler_source_revision,
             profile: PackageCompileProfile::Production,
         },
+        engine_features: current_engine_features(),
         schema_fingerprint: request.schema_fingerprint,
         sources: CapturedSources {
             project: request.project.path,
@@ -3804,6 +3829,9 @@ fn load_predecessor_closure(
     let migration_baseline = governed.migration_baseline(&package_digest);
     validate_migration_baseline(&migration_baseline)?;
     let history_schema_descriptor = governed.history_schema_descriptor(&package_digest)?;
+    let statistical_release_store_present = manifest
+        .engine_features
+        .contains(&PackageEngineFeature::StatisticalReleaseStore);
 
     Ok((
         VerifiedPredecessorPackage {
@@ -3811,6 +3839,7 @@ fn load_predecessor_closure(
             package_digest,
             migration_baseline,
             history_schema_descriptor,
+            statistical_release_store_present,
         },
         loaded,
     ))
@@ -4546,6 +4575,9 @@ fn rederive(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
+    if manifest.engine_features != current_engine_features() {
+        return Err(PackageError::Derivation);
+    }
     let compiled = compile_package_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest

@@ -23,7 +23,8 @@ pub(crate) const WITHDRAWAL_FUNCTION: &str =
     "registry_internal.withdraw_statistical_release(text, text, bigint, text)";
 
 /// The largest canonical release document retained in one version.
-pub(crate) const MAX_RELEASE_CONTENT_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_RELEASE_CONTENT_BYTES: usize =
+    crate::compiler::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES;
 
 /// Install the engine-owned release store with no runtime update or delete authority.
 pub(crate) async fn install(

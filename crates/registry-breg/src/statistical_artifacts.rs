@@ -129,6 +129,7 @@ pub(crate) fn append_statistics_openapi(
     paths: &mut Map<String, Value>,
     component_schemas: &mut Map<String, Value>,
     datasets: &BTreeMap<String, CompiledStatisticalDataset>,
+    admission_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
 ) {
     if datasets.is_empty() {
         return;
@@ -170,20 +171,8 @@ pub(crate) fn append_statistics_openapi(
             "properties":{"reason":{"type":"string","enum":["computation-error","source-data-error","disclosure-risk"]}}
         }),
     );
-    component_schemas.insert(
-        "StatisticalWithdrawalResponse".to_owned(),
-        json!({
-            "type":"object","additionalProperties":false,
-            "required":["dataset","period","version","reasonCode"],
-            "properties":{
-                "dataset":{"type":"string"},"period":{"type":"string"},
-                "version":{"type":"integer","format":"int64","minimum":1},
-                "reasonCode":{"type":"string","enum":["computation-error","source-data-error","disclosure-risk"]}
-            }
-        }),
-    );
-
     for dataset in datasets.values() {
+        let admission_dataset = admission_datasets.get(&dataset.id).unwrap_or(dataset);
         let base = format!("/v1/statistics/{}", dataset.id);
         if !dataset.live_profiles.is_empty() {
             insert_operation(
@@ -194,7 +183,8 @@ pub(crate) fn append_statistics_openapi(
                     dataset,
                     "read_live",
                     &dataset.live_profiles,
-                    read_parameters(RangeParameters::Optional, false, false),
+                    &admission_dataset.live_profiles,
+                    read_parameters(RangeParameters::Optional, false, false, false),
                     success_document_response(),
                     None,
                 ),
@@ -204,6 +194,7 @@ pub(crate) fn append_statistics_openapi(
             continue;
         };
         let readers = release_read_profiles(dataset);
+        let admission_readers = release_read_profiles(admission_dataset);
         if !readers.is_empty() {
             insert_operation(
                 paths,
@@ -213,6 +204,7 @@ pub(crate) fn append_statistics_openapi(
                     dataset,
                     "list_releases",
                     &readers,
+                    &admission_readers,
                     release_list_parameters(),
                     json!({"200": json_response("StatisticalReleasePage"), "400": problem_response(), "401": problem_response(), "404": problem_response(), "503": problem_response(), "504":problem_response()}),
                     None,
@@ -226,7 +218,8 @@ pub(crate) fn append_statistics_openapi(
                     dataset,
                     "read_released_series",
                     &readers,
-                    read_parameters(RangeParameters::Required, true, false),
+                    &admission_readers,
+                    read_parameters(RangeParameters::Required, true, false, false),
                     success_document_response(),
                     None,
                 ),
@@ -239,7 +232,8 @@ pub(crate) fn append_statistics_openapi(
                     dataset,
                     "read_latest_release",
                     &readers,
-                    read_parameters(RangeParameters::None, true, true),
+                    &admission_readers,
+                    read_parameters(RangeParameters::None, true, true, false),
                     success_document_response(),
                     None,
                 ),
@@ -252,7 +246,8 @@ pub(crate) fn append_statistics_openapi(
                     dataset,
                     "read_release_version",
                     &readers,
-                    read_parameters(RangeParameters::None, false, true),
+                    &admission_readers,
+                    read_parameters(RangeParameters::None, false, true, true),
                     success_document_response(),
                     None,
                 ),
@@ -260,6 +255,12 @@ pub(crate) fn append_statistics_openapi(
         }
         if !releases.publisher.is_empty() {
             let publisher = BTreeSet::from([releases.publisher.clone()]);
+            let admission_publisher = admission_dataset
+                .releases
+                .as_ref()
+                .filter(|releases| !releases.publisher.is_empty())
+                .map(|releases| BTreeSet::from([releases.publisher.clone()]))
+                .unwrap_or_default();
             insert_operation(
                 paths,
                 &format!("{base}/releases/{{period}}/versions"),
@@ -268,6 +269,7 @@ pub(crate) fn append_statistics_openapi(
                     dataset,
                     "publish_release",
                     &publisher,
+                    &admission_publisher,
                     publish_parameters(false),
                     json!({"201": json_response("StatisticalReleaseHeader"), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalReleaseRequest"),
@@ -281,8 +283,9 @@ pub(crate) fn append_statistics_openapi(
                     dataset,
                     "withdraw_release",
                     &publisher,
+                    &admission_publisher,
                     publish_parameters(true),
-                    json!({"200": json_response("StatisticalWithdrawalResponse"), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "503":problem_response(), "504":problem_response()}),
+                    json!({"200": json_response("StatisticalReleaseHeader"), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalWithdrawalRequest"),
                 ),
             );
@@ -315,10 +318,33 @@ fn operation(
     dataset: &CompiledStatisticalDataset,
     operation: &str,
     profiles: &BTreeSet<String>,
-    parameters: Vec<Value>,
+    admission_profiles: &BTreeSet<String>,
+    mut parameters: Vec<Value>,
     responses: Value,
     request_schema: Option<&str>,
 ) -> Value {
+    let default_profile = admission_profiles
+        .iter()
+        .find(|id| {
+            dataset
+                .access_profiles
+                .get(*id)
+                .is_some_and(|profile| profile.default)
+        })
+        .or_else(|| {
+            (admission_profiles.len() == 1)
+                .then(|| admission_profiles.first())
+                .flatten()
+        });
+    if let Some(parameter) = parameters
+        .iter_mut()
+        .find(|parameter| parameter["in"] == "query" && parameter["name"] == "accessProfile")
+    {
+        parameter["required"] = json!(default_profile.is_none());
+        if let Some(default_profile) = default_profile {
+            parameter["schema"]["default"] = json!(default_profile);
+        }
+    }
     let mut value = json!({
         "operationId": format!("statistics.{}.{}", dataset.id, operation),
         "security":[{"bearerAuth":[]}],
@@ -327,6 +353,7 @@ fn operation(
         "x-registry-statisticalDataset": dataset.id,
         "x-registry-statisticalOperation": operation,
         "x-registry-accessProfiles": profiles,
+        "x-registry-defaultAccessProfile": default_profile,
     });
     if let Some(schema) = request_schema {
         value["requestBody"] = json!({
@@ -360,10 +387,18 @@ enum RangeParameters {
     Required,
 }
 
-fn read_parameters(range: RangeParameters, status: bool, period: bool) -> Vec<Value> {
+fn read_parameters(
+    range: RangeParameters,
+    status: bool,
+    period: bool,
+    version: bool,
+) -> Vec<Value> {
     let mut parameters = vec![access_profile_parameter(), trace_parameter()];
     if period {
         parameters.push(period_parameter());
+    }
+    if version {
+        parameters.push(version_parameter());
     }
     if !matches!(range, RangeParameters::None) {
         let required = matches!(range, RangeParameters::Required);
@@ -397,7 +432,13 @@ fn publish_parameters(version: bool) -> Vec<Value> {
     if version {
         parameters.push(version_parameter());
     }
-    parameters.push(json!({"in":"header","name":"Idempotency-Key","required":true,"schema":{"type":"string","format":"uuid"}}));
+    parameters.push(json!({
+        "in":"header","name":"Idempotency-Key","required":true,
+        "schema":{
+            "type":"string","minLength":1,"maxLength":256,
+            "pattern":"^[\\x21-\\x2B\\x2D-\\x3A\\x3C-\\x7E]+$"
+        }
+    }));
     parameters
 }
 
@@ -505,7 +546,7 @@ fn document_schema() -> Value {
             },
             "live":{
                 "type":"object","additionalProperties":false,"required":["evaluatedAt","accessProfile"],
-                "properties":{"evaluatedAt":{"type":"string","format":"date-time"},"accessProfile":{"type":"string"}}
+                "properties":{"evaluatedAt":{"type":"string","format":"date"},"accessProfile":{"type":"string"}}
             },
             "disclosure":{
                 "type":"object","additionalProperties":false,

@@ -349,6 +349,7 @@ export interface RawOutcome {
   mediaType: string
   traceId: string
   etag?: string
+  reprDigest?: string
 }
 
 export type StatisticsFormat = 'json' | 'csv'
@@ -994,6 +995,7 @@ export interface BaseRegistryClientFailure extends Error {
   readonly code?: string
   readonly planRefusal?: string
   readonly refusalCode?: string
+  readonly reasonCode?: string
   readonly status?: number
   readonly traceId?: string
   readonly transportKind?: string
@@ -1005,6 +1007,7 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
   readonly code?: string
   readonly planRefusal?: string
   readonly refusalCode?: string
+  readonly reasonCode?: string
   readonly status?: number
   readonly traceId?: string
   readonly transportKind?: string

@@ -6,7 +6,8 @@ clients:
     scopes:
       - registry:facility:operate
     claims:
-      administrative_boundaries: north-district
+      administrative_boundaries:
+        - north-district
       registry_principal: synthetic-facility-operator
       registry_purpose: facility-registry
   - id: facility-south-operator
@@ -15,7 +16,8 @@ clients:
     scopes:
       - registry:facility:operate
     claims:
-      administrative_boundaries: south-district
+      administrative_boundaries:
+        - south-district
       registry_principal: synthetic-facility-operator
       registry_purpose: facility-registry
     testBindings:

@@ -30,7 +30,7 @@ use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl_with_actions;
 use crate::immediate_actions::{compile_immediate_actions, hex_lower, CollectedActionSource};
 use crate::logical_names::{
-    default_api_name, default_sql_name, reserved_logical_name, valid_api_name,
+    canonical_sql_name, default_api_name, reserved_logical_name, valid_api_name,
 };
 use crate::model::{
     leading_field_indexed, leading_field_indexed_for_list_finding, request_query_field_id_for_api,
@@ -86,6 +86,9 @@ pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 /// The longest build identity value, shared by the environment, instance, and
 /// database identifiers a package build request carries.
 pub const MAX_BUILD_ID_BYTES: u32 = 64;
+/// Largest canonical statistical release document admitted by compilation
+/// and retained by the runtime release store.
+pub(crate) const MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum canonical event body accepted by the governed webhook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
@@ -2171,9 +2174,17 @@ fn validate_entities(
     errors: &mut Vec<Diagnostic>,
 ) {
     let mut routes = BTreeSet::new();
+    let mut sql_names = BTreeSet::new();
     let mut event_ids = BTreeSet::new();
     for entity in entities.values() {
         validate_id(&entity.id, "entities[].id", errors);
+        if !sql_names.insert(canonical_sql_name(&entity.id)) {
+            errors.push(Diagnostic::error(
+                "entity.sql_name.duplicate",
+                "entities[].id",
+                "entity SQL names must be unique after PostgreSQL canonicalization",
+            ));
+        }
         nonempty(
             &entity.primary_dataset,
             "entities[].primaryDataset",
@@ -2797,7 +2808,7 @@ fn validate_logical_names(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
                 "field API names must be unique within an entity",
             ));
         }
-        let sql_name = default_sql_name(field.0);
+        let sql_name = canonical_sql_name(field.0);
         if reserved_logical_name(&sql_name) || !sql_names.insert(sql_name) {
             errors.push(Diagnostic::error(
                 "field.sql_name.duplicate",
@@ -5333,10 +5344,10 @@ fn validate_derived_assets(
                     entity
                         .fields
                         .iter()
-                        .map(|field| default_sql_name(&field.id)),
+                        .map(|field| canonical_sql_name(&field.id)),
                 )
                 .collect::<BTreeSet<_>>();
-            (default_sql_name(&entity.id), columns)
+            (canonical_sql_name(&entity.id), columns)
         })
         .collect::<BTreeMap<_, _>>();
     // Encrypted fields leave the registry_source layer, so derived SQL can
@@ -5348,9 +5359,9 @@ fn validate_derived_assets(
                 .fields
                 .iter()
                 .filter(|field| field.encrypted)
-                .map(|field| default_sql_name(&field.id))
+                .map(|field| canonical_sql_name(&field.id))
                 .collect::<BTreeSet<_>>();
-            (default_sql_name(&entity.id), columns)
+            (canonical_sql_name(&entity.id), columns)
         })
         .collect::<BTreeMap<_, _>>();
     let assets = asset_map(assets, errors);
@@ -5597,7 +5608,7 @@ fn compile_entities(
                         .into_iter()
                         .filter_map(|relation| {
                             sources.values().find_map(|candidate| {
-                                (default_sql_name(&candidate.id) == relation)
+                                (canonical_sql_name(&candidate.id) == relation)
                                     .then(|| candidate.id.clone())
                             })
                         })
@@ -5614,7 +5625,7 @@ fn compile_entities(
         );
         let source_relation = CompiledSourceRelation {
             entity_id: source.id.clone(),
-            sql_name: default_sql_name(&source.id),
+            sql_name: canonical_sql_name(&source.id),
             // Encrypted columns never surface through registry_source views:
             // the logical source layer exposes plaintext columns only.
             stored_fields: stored_fields
@@ -6825,7 +6836,7 @@ fn logical_field(
         api_name: api_name
             .map(str::to_owned)
             .unwrap_or_else(|| default_api_name(id)),
-        sql_name: default_sql_name(id),
+        sql_name: canonical_sql_name(id),
         field_type,
         classification,
         // Only stored fields can be encrypted; derived fields and the canonical

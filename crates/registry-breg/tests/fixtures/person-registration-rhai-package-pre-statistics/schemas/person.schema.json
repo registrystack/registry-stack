@@ -1,0 +1,1 @@
+{"$id":"urn:breg:entity:person","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"displayName":{"maxLength":200,"minLength":1,"type":"string"},"identifier":{"maxLength":13,"minLength":0,"type":"string"}},"required":["identifier","displayName"],"type":"object","x-registry-mutationMode":"mutable"}

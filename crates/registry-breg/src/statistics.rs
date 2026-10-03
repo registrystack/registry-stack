@@ -585,9 +585,20 @@ fn parse_period_bounds(
     code: &str,
 ) -> Result<(String, NaiveDate, NaiveDate), StatisticsError> {
     let invalid = || invalid_period(granularity, code);
+    // Query values are untrusted UTF-8. Admit the closed ASCII grammar before
+    // slicing, and keep every period and its exclusive end in the wire's
+    // four-digit calendar-year domain.
+    if code.len() < 4
+        || !code
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'-' | b'Q'))
+        || parse_year(&code[..4]).is_none()
+    {
+        return Err(invalid());
+    }
     let (start, end) = match granularity {
         PeriodGranularity::Day => {
-            if code.len() != 10 {
+            if code.len() != 10 || code.as_bytes()[4] != b'-' || code.as_bytes()[7] != b'-' {
                 return Err(invalid());
             }
             let start = NaiveDate::parse_from_str(code, "%Y-%m-%d").map_err(|_| invalid())?;
@@ -646,6 +657,9 @@ fn parse_period_bounds(
             (start, end)
         }
     };
+    if end.year() > 9999 {
+        return Err(invalid());
+    }
     Ok((code.to_owned(), start, end))
 }
 

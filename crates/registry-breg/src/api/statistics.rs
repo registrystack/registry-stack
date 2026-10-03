@@ -13,9 +13,10 @@ use crate::cursor::{
 };
 use crate::model::{CompiledStatisticalDataset, HttpMethod};
 use crate::postgres::{
-    StatisticsLiveRequest, StatisticsPublishRequest, StatisticsReleaseListRequest,
-    StatisticsReleaseRefusal, StatisticsReleaseSelection, StatisticsSeriesRequest,
-    StatisticsServiceError, StatisticsVersionReadRequest, StatisticsWithdrawalRequest,
+    StatisticsLiveRequest, StatisticsPublishRequest, StatisticsReleaseListCursor,
+    StatisticsReleaseListRequest, StatisticsReleaseRefusal, StatisticsReleaseSelection,
+    StatisticsSeriesRequest, StatisticsServiceError, StatisticsVersionReadRequest,
+    StatisticsWithdrawalRequest,
 };
 use crate::problem::ProblemCode;
 use crate::statistics::{
@@ -117,26 +118,27 @@ fn authorize(
     claims: &VerifiedRequestClaims,
     selected: Option<&str>,
 ) -> Option<AuthorizedRequestContext> {
-    if claims.principal().is_none() {
-        return None;
-    }
+    claims.principal()?;
     let eligible = |id: &str| match kind {
         Kind::Live => dataset.live_profiles.contains(id),
         Kind::Publish | Kind::Withdraw => {
             dataset.releases.as_ref().is_some_and(|r| r.publisher == id)
         }
-        _ => {
-            dataset.live_profiles.contains(id)
-                || dataset
-                    .releases
-                    .as_ref()
-                    .is_some_and(|r| r.publisher == id || r.readers.contains(id))
-        }
+        _ => dataset.releases.as_ref().is_some_and(|r| {
+            r.publisher == id || r.readers.contains(id) || dataset.live_profiles.contains(id)
+        }),
     };
+    let configured_default = dataset
+        .access_profiles
+        .iter()
+        .find(|(id, profile)| eligible(id) && profile.default)
+        .map(|(id, _)| id.as_str());
     let mut profiles = dataset.access_profiles.keys().filter(|id| eligible(id));
     let only = profiles.next();
     let default = only.filter(|_| profiles.next().is_none());
-    let selected = selected.or_else(|| default.map(String::as_str))?;
+    let selected = selected
+        .or(configured_default)
+        .or_else(|| default.map(String::as_str))?;
     if !eligible(selected) {
         return None;
     }
@@ -163,6 +165,19 @@ fn authorize(
         .with_grant_audit(claims)
         .with_recipients(claims),
     )
+}
+
+/// Extract only the selector needed for admission. Full validation follows
+/// authorization, so malformed options cannot reveal an inaccessible dataset.
+fn admission_profile(raw: Option<&str>) -> Option<String> {
+    let raw = raw.filter(|raw| raw.len() <= MAX_RAW_QUERY_BYTES)?;
+    raw.split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find_map(|(name, value)| {
+            (percent_decode(name).ok().as_deref() == Some("accessProfile"))
+                .then(|| percent_decode(value).ok())
+                .flatten()
+        })
 }
 
 #[derive(Default)]
@@ -266,6 +281,7 @@ async fn refusal(
     response
 }
 
+#[allow(clippy::too_many_arguments)] // Axum extractors are the HTTP contract.
 async fn dispatch(
     State(service): State<Arc<HttpService>>,
     Extension(route): Extension<Route>,
@@ -280,6 +296,22 @@ async fn dispatch(
     let claims = claims
         .map(|Extension(c)| c)
         .unwrap_or_else(VerifiedRequestClaims::anonymous);
+    let Some(dataset) = service.registry.statistical_datasets().get(&route.dataset) else {
+        return concealed();
+    };
+    let selected = admission_profile(raw.as_deref());
+    let Some(context) = authorize(&service, dataset, route.kind, &claims, selected.as_deref())
+    else {
+        return refusal(
+            &service,
+            &route,
+            &claims,
+            selected.as_deref(),
+            &correlation,
+            concealed(),
+        )
+        .await;
+    };
     let options = match Options::parse(raw.as_deref(), route.kind) {
         Ok(v) => v,
         Err(field) => {
@@ -287,32 +319,12 @@ async fn dispatch(
                 &service,
                 &route,
                 &claims,
-                None,
+                Some(context.selected_profile()),
                 &correlation,
                 statistics_invalid_query_at(field),
             )
             .await;
         }
-    };
-    let Some(dataset) = service.registry.statistical_datasets().get(&route.dataset) else {
-        return concealed();
-    };
-    let Some(context) = authorize(
-        &service,
-        dataset,
-        route.kind,
-        &claims,
-        options.get("accessProfile"),
-    ) else {
-        return refusal(
-            &service,
-            &route,
-            &claims,
-            options.get("accessProfile"),
-            &correlation,
-            concealed(),
-        )
-        .await;
     };
     let Some(backend) = &service.statistics else {
         return unavailable();
@@ -443,7 +455,7 @@ struct Lifecycle {
     replayed: bool,
 }
 type HttpResult = Result<(Response, usize), Response>;
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::result_large_err)] // HTTP errors carry their complete response.
 async fn execute(
     service: &HttpService,
     route: &Route,
@@ -481,7 +493,9 @@ async fn execute(
             let from = options
                 .get("from")
                 .ok_or_else(|| statistics_invalid_query_at("from"))?;
-            let to = options.get("to").ok_or_else(|| statistics_invalid_query_at("to"))?;
+            let to = options
+                .get("to")
+                .ok_or_else(|| statistics_invalid_query_at("to"))?;
             backend
                 .read_series(StatisticsSeriesRequest {
                     context,
@@ -530,32 +544,37 @@ async fn execute(
             let limit = options.limit().map_err(statistics_invalid_query_at)?;
             let binding =
                 listing_binding(service, route, context, limit).map_err(|_| unavailable())?;
-            let offset =
+            let after =
                 if let Some(token) = options.get("$skiptoken") {
-                    service
+                    let continuation = service
                         .cursors
                         .open_after_authorization(token, now.timestamp() as u64, |_| {
                             Ok(binding.clone())
                         })
                         .map_err(|_| statistics_problem(ProblemCode::QueryCursorInvalid, None))?
-                        .continuation
-                        .last_record_id
-                        .parse::<u64>()
-                        .map_err(|_| statistics_problem(ProblemCode::QueryCursorInvalid, None))?
+                        .continuation;
+                    Some(StatisticsReleaseListCursor {
+                        period: continuation.sort_value.ok_or_else(|| {
+                            statistics_problem(ProblemCode::QueryCursorInvalid, None)
+                        })?,
+                        version: continuation.last_record_id.parse::<u64>().map_err(|_| {
+                            statistics_problem(ProblemCode::QueryCursorInvalid, None)
+                        })?,
+                    })
                 } else {
-                    0
+                    None
                 };
             let page = backend
                 .list_releases(StatisticsReleaseListRequest {
                     context,
                     dataset_id: &route.dataset,
-                    offset,
+                    after,
                     limit,
                     deadline,
                 })
                 .await
                 .map_err(service_problem)?;
-            let token = if page.has_more {
+            let token = if let Some(next) = &page.next {
                 let query = CursorQuery {
                     projection: Vec::new(),
                     filter: None,
@@ -567,11 +586,8 @@ async fn execute(
                     scope: CursorQueryScope::Collection {},
                 };
                 let continuation = CursorContinuation {
-                    last_record_id: offset
-                        .checked_add(u64::from(limit))
-                        .ok_or_else(unavailable)?
-                        .to_string(),
-                    sort_value: None,
+                    last_record_id: next.version.to_string(),
+                    sort_value: Some(next.period.clone()),
                 };
                 let p = service
                     .cursors
@@ -581,7 +597,7 @@ async fn execute(
             } else {
                 None
             };
-            let n = page.items.len();
+            let n = 0; // Release headers disclose no statistical cells.
             let bytes=serde_json::to_vec(&json!({"items":page.items,"pageInfo":{"hasMore":page.has_more,"nextCursor":token}}))
                 .map_err(|_|unavailable())?;
             Ok((bytes_response(bytes, "application/json", false), n))
@@ -645,23 +661,31 @@ async fn execute(
                     .await
             }
             .map_err(service_problem)?;
+            let count = held.result_count;
             *lifecycle = Some(Lifecycle {
                 header: held.header,
                 replayed: held.replayed,
             });
-            Ok((exact_mutation(&held.response, None, "", None), 0))
+            Ok((exact_mutation(&held.response, None, "", None), count))
         }
     };
     result
 }
 
+#[allow(clippy::result_large_err)] // HTTP errors carry their complete response.
 fn document_response(document: &StatisticsDocument, csv: bool) -> HttpResult {
-    let bytes = if csv {
-        document_csv(document)
-    } else {
-        canonical_document(document)
+    let canonical = canonical_document(document).map_err(|_| unavailable())?;
+    if canonical.len() > crate::compiler::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES {
+        return Err(statistics_invalid_query_at("from"));
     }
-    .map_err(|_| unavailable())?;
+    let bytes = if csv {
+        document_csv(document).map_err(|_| unavailable())?
+    } else {
+        canonical
+    };
+    if bytes.len() > crate::compiler::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES {
+        return Err(statistics_invalid_query_at("from"));
+    }
     Ok((
         bytes_response(
             bytes,
@@ -712,12 +736,14 @@ fn negotiate(headers: &HeaderMap) -> Option<bool> {
             best = Some((q, csv));
         }
     }
-    best.map(|(_, csv)| csv)
+    Some(best.is_some_and(|(_, csv)| csv))
 }
 fn service_problem(error: StatisticsServiceError) -> Response {
     match error {
         StatisticsServiceError::Concealed => concealed(),
-        StatisticsServiceError::QueryInvalid { field_path } => statistics_invalid_query_at(field_path),
+        StatisticsServiceError::QueryInvalid { field_path } => {
+            statistics_invalid_query_at(field_path)
+        }
         StatisticsServiceError::ReleaseRefused(reason) => statistics_problem(
             ProblemCode::StatisticalDatasetReleaseRefused,
             Some((
@@ -745,8 +771,18 @@ fn service_problem(error: StatisticsServiceError) -> Response {
                 },
             )),
         ),
-        StatisticsServiceError::DomainViolation { .. } => {
-            statistics_problem(ProblemCode::StatisticalDatasetDomainViolation, None)
+        StatisticsServiceError::DomainViolation {
+            dataset_id,
+            dimension,
+        } => {
+            let code = ProblemCode::StatisticalDatasetDomainViolation;
+            crate::correlation::problem_response_with_field_path(
+                StatusCode::from_u16(code.status()).expect("catalogue status"),
+                code.title(),
+                code.description(),
+                code.code(),
+                format!("statisticalDatasets[id={dataset_id}].dimensions[id={dimension}]"),
+            )
         }
         StatisticsServiceError::Timeout => statistics_problem(ProblemCode::RequestTimeout, None),
         StatisticsServiceError::IdempotencyConflict => {
@@ -852,7 +888,6 @@ pub(super) fn append_openapi(
         };
         let profile = context.selected_profile();
         let mut dataset = dataset.clone();
-        dataset.access_profiles.retain(|id, _| id == profile);
         dataset.live_profiles.retain(|id| id == profile);
         if let Some(releases) = &mut dataset.releases {
             releases.readers.retain(|id| id == profile);
@@ -862,7 +897,12 @@ pub(super) fn append_openapi(
         }
         datasets.insert(dataset.id.clone(), dataset);
     }
-    crate::statistical_artifacts::append_statistics_openapi(paths, schemas, &datasets);
+    crate::statistical_artifacts::append_statistics_openapi(
+        paths,
+        schemas,
+        &datasets,
+        service.registry.statistical_datasets(),
+    );
 }
 
 pub(super) async fn unknown(
@@ -898,24 +938,53 @@ mod tests {
 
     #[test]
     fn statistical_parameters_are_bounded_and_unknown_names_are_not_echoed() {
-        for raw in ["from=2025-01&from=2025-02", "unknown=secret", "$filter=hidden", "from=%GG"] {
-            assert!(Options::parse(Some(raw),Kind::Live).is_err());
+        for raw in [
+            "from=2025-01&from=2025-02",
+            "unknown=secret",
+            "$filter=hidden",
+            "from=%GG",
+        ] {
+            assert!(Options::parse(Some(raw), Kind::Live).is_err());
         }
-        assert_eq!(Options::parse(Some("$top=0"),Kind::List).ok().unwrap().limit(),Err("$top"));
-        assert!(Options::parse(Some("status=final"),Kind::Live).is_err());
-        for parameter in ["from","to","status"] {
-            assert!(crate::problem_location::is_query_parameter_location(parameter));
-            assert_eq!(statistics_invalid_query_at(parameter).status(),StatusCode::BAD_REQUEST);
+        assert_eq!(
+            Options::parse(Some("$top=0"), Kind::List)
+                .ok()
+                .unwrap()
+                .limit(),
+            Err("$top")
+        );
+        assert!(Options::parse(Some("status=final"), Kind::Live).is_err());
+        for parameter in ["from", "to", "status"] {
+            assert!(crate::problem_location::is_query_parameter_location(
+                parameter
+            ));
+            assert_eq!(
+                statistics_invalid_query_at(parameter).status(),
+                StatusCode::BAD_REQUEST
+            );
         }
-        assert_eq!(statistics_invalid_query_at("query").status(),StatusCode::BAD_REQUEST);
+        assert_eq!(
+            statistics_invalid_query_at("query").status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]
     fn statistical_accept_negotiation_respects_quality_and_zero_exclusion() {
-        let headers=|accept:&str|{let mut h=HeaderMap::new();h.insert(ACCEPT,HeaderValue::from_str(accept).unwrap());h};
-        assert_eq!(negotiate(&headers("application/json;q=0.4,text/csv;q=0.8")),Some(true));
-        assert_eq!(negotiate(&headers("text/csv;q=0,application/json")),Some(false));
-        assert_eq!(negotiate(&headers("application/xml")),None);
-        assert_eq!(negotiate(&HeaderMap::new()),Some(false));
+        let headers = |accept: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(ACCEPT, HeaderValue::from_str(accept).unwrap());
+            h
+        };
+        assert_eq!(
+            negotiate(&headers("application/json;q=0.4,text/csv;q=0.8")),
+            Some(true)
+        );
+        assert_eq!(
+            negotiate(&headers("text/csv;q=0,application/json")),
+            Some(false)
+        );
+        assert_eq!(negotiate(&headers("application/xml")), Some(false));
+        assert_eq!(negotiate(&HeaderMap::new()), Some(false));
     }
 }

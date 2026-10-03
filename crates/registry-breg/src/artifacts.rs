@@ -221,16 +221,16 @@ pub(crate) fn generate_artifacts(
             )?;
         }
     }
-    let openapi = openapi_document(
+    let openapi = openapi_document(OpenApiDocumentInput {
         registry_id,
         version,
         entities,
         routes,
         actions,
         query,
-        &schemas,
+        schemas: &schemas,
         statistical_datasets,
-    );
+    });
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
         let projected = project_manifest_artifacts(registry_id, projection, entities)?;
@@ -1889,16 +1889,28 @@ pub(crate) fn decimal_pattern(precision: u8, scale: u8) -> String {
     }
 }
 
-fn openapi_document(
-    registry_id: &str,
-    version: &str,
-    entities: &BTreeMap<String, CompiledEntity>,
-    routes: &CompiledRouteInventory,
-    actions: &CompiledActionInventory,
-    query: &CompiledQueryInventory,
-    schemas: &BTreeMap<String, Value>,
-    statistical_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
-) -> Value {
+struct OpenApiDocumentInput<'a> {
+    registry_id: &'a str,
+    version: &'a str,
+    entities: &'a BTreeMap<String, CompiledEntity>,
+    routes: &'a CompiledRouteInventory,
+    actions: &'a CompiledActionInventory,
+    query: &'a CompiledQueryInventory,
+    schemas: &'a BTreeMap<String, Value>,
+    statistical_datasets: &'a BTreeMap<String, CompiledStatisticalDataset>,
+}
+
+fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
+    let OpenApiDocumentInput {
+        registry_id,
+        version,
+        entities,
+        routes,
+        actions,
+        query,
+        schemas,
+        statistical_datasets,
+    } = input;
     let mut paths = Map::new();
     let mut input_schemas = Map::new();
     let mut has_access_log = false;
@@ -2067,6 +2079,7 @@ fn openapi_document(
     crate::statistical_artifacts::append_statistics_openapi(
         &mut paths,
         &mut component_schemas,
+        statistical_datasets,
         statistical_datasets,
     );
     let has_request_actions = routes
@@ -4417,6 +4430,10 @@ fn problem_schema() -> Value {
             "traceId": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[0-9a-f]{32}$"},
             "fieldPath": {"type": "string", "maxLength": 256},
             "refusalCode": {"type": "string", "minLength": 1, "maxLength": 128},
+            "reasonCode": {
+                "type": "string",
+                "enum": ["computation-error", "source-data-error", "disclosure-risk"]
+            },
             "entityId": {"type": "string", "minLength": 1, "maxLength": 128},
             "fieldId": {"type": "string", "minLength": 1, "maxLength": 128},
             "code": {
@@ -4430,8 +4447,37 @@ fn problem_schema() -> Value {
         "allOf": [
             {
                 "if": {"properties": {"code": {"const": "action.refused"}}},
-                "then": {"required": ["refusalCode"], "properties": {"status": {"const": 422}}},
-                "else": {"not": {"required": ["refusalCode"]}}
+                "then": {"required": ["refusalCode"], "properties": {"status": {"const": 422}}}
+            },
+            {
+                "if": {"properties": {"code": {"const": "statistical_dataset.release_refused"}}},
+                "then": {
+                    "required": ["refusalCode"],
+                    "properties": {
+                        "status": {"const": 422},
+                        "refusalCode": {"enum": [
+                            "period-not-ended",
+                            "before-first-period",
+                            "provisional-after-final",
+                            "already-withdrawn"
+                        ]}
+                    }
+                }
+            },
+            {
+                "if": {"properties": {"code": {"not": {"enum": [
+                    "action.refused",
+                    "statistical_dataset.release_refused"
+                ]}}}},
+                "then": {"not": {"required": ["refusalCode"]}}
+            },
+            {
+                "if": {"properties": {"code": {"const": "statistical_dataset.version_withdrawn"}}},
+                "then": {"required": ["reasonCode"], "properties": {"status": {"const": 410}}}
+            },
+            {
+                "if": {"properties": {"code": {"not": {"const": "statistical_dataset.version_withdrawn"}}}},
+                "then": {"not": {"required": ["reasonCode"]}}
             },
             {
                 "if": {"properties": {"code": {"const": "action.evidence_failed"}}},
@@ -4921,6 +4967,49 @@ mod problem_contract_tests {
             !validator.is_valid(&fault),
             "a package fault is not a caller error"
         );
+    }
+
+    #[test]
+    fn problem_contract_accepts_closed_statistical_release_details() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+
+        let mut refused = problem_example(
+            "422",
+            "statistical_dataset.release_refused",
+            "The statistical release was refused.",
+        );
+        refused["refusalCode"] = json!("period-not-ended");
+        assert!(validator.is_valid(&refused));
+        refused["refusalCode"] = json!("unreviewed-reason");
+        assert!(!validator.is_valid(&refused));
+        refused.as_object_mut().unwrap().remove("refusalCode");
+        assert!(!validator.is_valid(&refused));
+        refused["refusalCode"] = json!("already-withdrawn");
+        refused["status"] = json!(409);
+        assert!(!validator.is_valid(&refused));
+
+        let mut withdrawn = problem_example(
+            "410",
+            "statistical_dataset.version_withdrawn",
+            "The statistical release version was withdrawn.",
+        );
+        withdrawn["reasonCode"] = json!("source-data-error");
+        assert!(validator.is_valid(&withdrawn));
+        withdrawn["reasonCode"] = json!("unreviewed-reason");
+        assert!(!validator.is_valid(&withdrawn));
+        withdrawn.as_object_mut().unwrap().remove("reasonCode");
+        assert!(!validator.is_valid(&withdrawn));
+        withdrawn["reasonCode"] = json!("disclosure-risk");
+        withdrawn["status"] = json!(422);
+        assert!(!validator.is_valid(&withdrawn));
+
+        let mut unrelated = problem_example("404", "resource.not_found", "Not found.");
+        unrelated["reasonCode"] = json!("computation-error");
+        assert!(!validator.is_valid(&unrelated));
     }
 
     #[test]
