@@ -384,8 +384,8 @@ exceed the governed project ceiling. Services, distributions, public-service
 references, entities, fields, and relationship edges are pruned with that
 slice, so a public artifact cannot disclose a protected dataset by reference.
 
-The singular `dataset` and `dataService` keys are no longer accepted. Declare
-the projection with the plural `datasets[]` and `dataServices[]` instead.
+`check` refuses the singular `dataset` and `dataService` keys; declare
+`datasets[]` and `dataServices[]`.
 
 The projection can also declare localized catalogue and resource text, entity
 concept URIs, identifiers, field concepts, relationship roles, and codelist
