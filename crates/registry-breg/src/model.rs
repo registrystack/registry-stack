@@ -722,14 +722,10 @@ pub struct CompiledActionPermission {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledActionTargetPermission {
     pub entity_id: String,
-    /// The action target operation this permission entry governs. Absent only
-    /// when reading a package compiled before discriminated targets existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation: Option<Operation>,
-    /// The effect or input that identifies this action target use. Absent only
-    /// when reading a package compiled before discriminated targets existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<CompiledActionTargetUseSource>,
+    /// The action target operation this permission entry governs.
+    pub operation: Operation,
+    /// The effect or input that identifies this action target use.
+    pub source: CompiledActionTargetUseSource,
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 

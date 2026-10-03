@@ -15,16 +15,17 @@ fn compile_json(
 }
 
 #[test]
-fn predecessor_permission_targets_without_discriminators_remain_readable() {
-    let target: CompiledActionTargetPermission = serde_json::from_value(serde_json::json!({
+fn permission_targets_without_discriminators_are_refused() {
+    let error = serde_json::from_value::<CompiledActionTargetPermission>(serde_json::json!({
         "entityId": "person",
         "rowBoundaries": []
     }))
-    .expect("a predecessor permission target remains readable");
+    .expect_err("a permission target names its operation and source");
 
-    assert_eq!(target.entity_id, "person");
-    assert_eq!(target.operation, None);
-    assert_eq!(target.source, None);
+    assert!(
+        error.to_string().contains("missing field `operation`"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -413,26 +414,26 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
     assert_eq!(grant.operations, [Operation::Invoke].into_iter().collect());
     assert!(grant.targets.iter().any(|target| {
         target.entity_id == "group-membership"
-            && target.operation == Some(Operation::Create)
+            && target.operation == Operation::Create
             && matches!(
-                target.source.as_ref(),
-                Some(CompiledActionTargetUseSource::Effect { effect }) if effect == "membership"
+                &target.source,
+                CompiledActionTargetUseSource::Effect { effect } if effect == "membership"
             )
     }));
     assert!(grant.targets.iter().any(|target| {
         target.entity_id == "household"
-            && target.operation == Some(Operation::Patch)
+            && target.operation == Operation::Patch
             && matches!(
-                target.source.as_ref(),
-                Some(CompiledActionTargetUseSource::Input { input }) if input == "household"
+                &target.source,
+                CompiledActionTargetUseSource::Input { input } if input == "household"
             )
     }));
     assert!(grant.targets.iter().any(|target| {
         target.entity_id == "person"
-            && target.operation == Some(Operation::Create)
+            && target.operation == Operation::Create
             && matches!(
-                target.source.as_ref(),
-                Some(CompiledActionTargetUseSource::Effect { effect }) if effect == "person"
+                &target.source,
+                CompiledActionTargetUseSource::Effect { effect } if effect == "person"
             )
     }));
     assert_eq!(

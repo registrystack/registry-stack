@@ -1733,12 +1733,19 @@ fn validate_action_permission_sources(
     }
 }
 
+/// One authored action target grant before it is discriminated by the
+/// action's target uses.
+struct PermissionTargetLock {
+    entity_id: String,
+    row_boundaries: Vec<RowBoundarySource>,
+}
+
 fn compile_permission_targets(
     entities: &BTreeMap<String, CompiledEntity>,
     profile: &ProjectAccessProfileSource,
     grant: &crate::contract::AccessPermissionSource,
     errors: &mut Vec<Diagnostic>,
-) -> Vec<CompiledActionTargetPermission> {
+) -> Vec<PermissionTargetLock> {
     let mut seen = BTreeSet::new();
     let mut targets = Vec::new();
     for target in &grant.targets {
@@ -1770,10 +1777,8 @@ fn compile_permission_targets(
             "project.accessProfiles[].permissions[].targets",
             errors,
         );
-        targets.push(CompiledActionTargetPermission {
+        targets.push(PermissionTargetLock {
             entity_id: target.entity.clone(),
-            operation: None,
-            source: None,
             row_boundaries: target.row_boundaries.clone(),
         });
     }
@@ -1782,7 +1787,7 @@ fn compile_permission_targets(
 }
 
 fn discriminate_permission_targets(
-    target_locks: &[CompiledActionTargetPermission],
+    target_locks: &[PermissionTargetLock],
     target_uses: &[CompiledActionTargetUse],
     errors: &mut Vec<Diagnostic>,
 ) -> Vec<CompiledActionTargetPermission> {
@@ -1796,8 +1801,8 @@ fn discriminate_permission_targets(
             matched = true;
             targets.push(CompiledActionTargetPermission {
                 entity_id: target_lock.entity_id.clone(),
-                operation: Some(target_use.operation),
-                source: Some(target_use.source.clone()),
+                operation: target_use.operation,
+                source: target_use.source.clone(),
                 row_boundaries: target_lock.row_boundaries.clone(),
             });
         }
@@ -1813,7 +1818,7 @@ fn discriminate_permission_targets(
 }
 
 fn validate_permission_covers_uses(
-    targets: &[CompiledActionTargetPermission],
+    targets: &[PermissionTargetLock],
     target_uses: &[CompiledActionTargetUse],
     errors: &mut Vec<Diagnostic>,
 ) {
