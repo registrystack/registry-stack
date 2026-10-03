@@ -216,8 +216,7 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
             | PostgresKernelError::RegistryUnavailable
-            | PostgresKernelError::HistoryCoverageIncomplete
-            | PostgresKernelError::RetiredAuditRowsPresent => Self::Unavailable,
+            | PostgresKernelError::HistoryCoverageIncomplete => Self::Unavailable,
         }
     }
 }
@@ -240,7 +239,6 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldEncryptionRetainedRequestSnapshots { .. }
             | MigrationError::ActiveRequestProposals
             | MigrationError::BackupEvidence
-            | MigrationError::RetiredAuditRowsPresent
             | MigrationError::ActivationAuditIncomplete
             | MigrationError::ActivationAuditUnavailable
             | MigrationError::UnrecognizedDatabase => Self::Unavailable,

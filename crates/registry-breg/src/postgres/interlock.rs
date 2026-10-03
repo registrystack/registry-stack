@@ -28,7 +28,7 @@ use crate::migration_plan::{
     ValidatedReviewedMigrationStep,
 };
 use crate::model::{CompiledBlindIndex, CompiledEntity, CompiledField, CompiledRegistry};
-use crate::mutation::{install_mutation_schema, MutationError};
+use crate::mutation::install_mutation_schema;
 use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
@@ -1351,7 +1351,6 @@ impl DedicatedApplyConnection {
         statements: &[PackageDdlStatement<'_>],
         runtime_role: &SqlIdentifier,
         statement_timeout: Duration,
-        acknowledge_retired_audit_discard: bool,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         validate_package_ddl(statements, statement_timeout)?;
@@ -1374,16 +1373,9 @@ impl DedicatedApplyConnection {
             runtime_role,
         )
         .await?;
-        install_mutation_schema(
-            &transaction,
-            runtime_role,
-            acknowledge_retired_audit_discard,
-        )
-        .await
-        .map_err(|error| match error {
-            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
-            _ => PostgresKernelError::Connection,
-        })?;
+        install_mutation_schema(&transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
         install_history_schema_store(&transaction, runtime_role)
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
@@ -1535,17 +1527,10 @@ impl DedicatedApplyConnection {
         &mut self,
         registry: &CompiledRegistry,
         runtime_role: &SqlIdentifier,
-        acknowledge_retired_audit_discard: bool,
     ) -> Result<()> {
         validate_runtime_acl_reconciliation_request(self.locked)?;
         let transaction = self.client.transaction().await?;
-        reconcile_runtime_acl_in(
-            &transaction,
-            registry,
-            runtime_role,
-            acknowledge_retired_audit_discard,
-        )
-        .await?;
+        reconcile_runtime_acl_in(&transaction, registry, runtime_role).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1564,7 +1549,6 @@ impl DedicatedApplyConnection {
         target: &ExpectedRegistryIdentity,
         transition: MaintenanceTransition<'_>,
         retired_runtime_role: Option<&SqlIdentifier>,
-        acknowledge_retired_audit_discard: bool,
     ) -> Result<Vec<Value>> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         target.validate()?;
@@ -1583,13 +1567,7 @@ impl DedicatedApplyConnection {
         install_history_schema_store(&transaction, transition.runtime_role)
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
-        reconcile_runtime_acl_in(
-            &transaction,
-            registry,
-            transition.runtime_role,
-            acknowledge_retired_audit_discard,
-        )
-        .await?;
+        reconcile_runtime_acl_in(&transaction, registry, transition.runtime_role).await?;
         if let Some(retired) = retired_runtime_role {
             retire_runtime_role_in(&transaction, retired, transition.migration_role).await?;
         }
@@ -2365,14 +2343,10 @@ async fn reconcile_runtime_acl_in(
     transaction: &tokio_postgres::Transaction<'_>,
     registry: &CompiledRegistry,
     runtime_role: &SqlIdentifier,
-    acknowledge_retired_audit_discard: bool,
 ) -> Result<()> {
-    install_mutation_schema(transaction, runtime_role, acknowledge_retired_audit_discard)
+    install_mutation_schema(transaction, runtime_role)
         .await
-        .map_err(|error| match error {
-            MutationError::RetiredAuditRowsPresent => PostgresKernelError::RetiredAuditRowsPresent,
-            _ => PostgresKernelError::Connection,
-        })?;
+        .map_err(|_| PostgresKernelError::Connection)?;
     reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await
 }
 

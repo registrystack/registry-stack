@@ -103,12 +103,6 @@ pub enum MigrationError {
     ActiveRequestProposals,
     #[error("destructive backup evidence is invalid")]
     BackupEvidence,
-    /// A pre-simplification audit table (`registry_audit` or
-    /// `registry_audit_head`) still carries rows that installing this
-    /// schema would discard, and the caller did not acknowledge discarding
-    /// them.
-    #[error("a retired audit table still carries rows that were not acknowledged for discard")]
-    RetiredAuditRowsPresent,
     /// The activation committed, but the audit refused a record it owed:
     /// the activation stands and its audit trail is incomplete.
     #[error("the activation committed but the audit refused a record it owed")]
@@ -648,7 +642,6 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
     field_encryption: Option<AppliedFieldEncryptionKeySource<'a>>,
     fault_after_committed_chunks: Option<u64>,
-    acknowledge_retired_audit_discard: bool,
     audit: Option<RegistryAudit>,
     operator_reference: Option<&'a str>,
 }
@@ -695,7 +688,6 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             event_destination_compatibility_inventory: None,
             field_encryption: None,
             fault_after_committed_chunks: None,
-            acknowledge_retired_audit_discard: false,
             audit: Some(audit),
             operator_reference: None,
         }
@@ -725,7 +717,6 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             event_destination_compatibility_inventory: None,
             field_encryption: None,
             fault_after_committed_chunks: None,
-            acknowledge_retired_audit_discard: false,
             audit: None,
             operator_reference: None,
         }
@@ -797,16 +788,6 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         key_source: AppliedFieldEncryptionKeySource<'a>,
     ) -> Self {
         self.field_encryption = Some(key_source);
-        self
-    }
-
-    /// Acknowledge discarding rows retained in a pre-simplification
-    /// `registry_audit` or `registry_audit_head` table. Without this, apply
-    /// refuses rather than silently dropping those retained audit entries
-    /// when installing the current schema.
-    #[must_use]
-    pub fn with_acknowledge_retired_audit_discard(mut self, acknowledge: bool) -> Self {
-        self.acknowledge_retired_audit_discard = acknowledge;
         self
     }
 
@@ -1445,7 +1426,6 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     runtime_role: request.roles.runtime,
                 },
                 retired_runtime_role.as_ref(),
-                request.acknowledge_retired_audit_discard,
             )
             .await
         {
@@ -1516,11 +1496,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             }
         }
         if let Err(error) = connection
-            .reconcile_runtime_acl(
-                request.package.registry(),
-                request.roles.runtime,
-                request.acknowledge_retired_audit_discard,
-            )
+            .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
             .await
         {
             return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
@@ -1546,11 +1522,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     }
 
     if connection
-        .reconcile_runtime_acl(
-            request.package.registry(),
-            request.roles.runtime,
-            request.acknowledge_retired_audit_discard,
-        )
+        .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
         .await
         .is_ok()
     {
@@ -1589,7 +1561,6 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                 &statements,
                 request.roles.runtime,
                 request.timeouts.statement,
-                request.acknowledge_retired_audit_discard,
             )
             .await
     };
@@ -1597,11 +1568,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
     }
     let acl_result = connection
-        .reconcile_runtime_acl(
-            request.package.registry(),
-            request.roles.runtime,
-            request.acknowledge_retired_audit_discard,
-        )
+        .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
         .await;
     if let Err(error) = acl_result {
         return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
@@ -1908,9 +1875,6 @@ async fn fail_with_error_and_release<T>(
             entity_id,
             field_id,
         },
-        crate::postgres::PostgresKernelError::RetiredAuditRowsPresent => {
-            MigrationError::RetiredAuditRowsPresent
-        }
         crate::postgres::PostgresKernelError::Statement(failure) => {
             MigrationError::StatementFailed(failure)
         }

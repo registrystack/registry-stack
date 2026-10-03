@@ -1229,7 +1229,7 @@ mod tests {
         let database = TestDatabase::create(1).await;
         let (migration, migration_task) = database.connect_migration().await;
         for _ in 0..2 {
-            install_mutation_schema(&migration, &database.runtime_role, false)
+            install_mutation_schema(&migration, &database.runtime_role)
                 .await
                 .expect("request store schema installs repeatably");
         }

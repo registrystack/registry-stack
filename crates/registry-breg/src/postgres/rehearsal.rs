@@ -324,16 +324,9 @@ async fn rehearse_in_transaction(
         }
     }
 
-    install_mutation_schema(
-        transaction,
-        runtime_role,
-        // The rehearsal database is disposable and was installed from the
-        // prior package by this build, so a retired pre-simplification audit
-        // table can never be present here to discard.
-        false,
-    )
-    .await
-    .map_err(|_| MigrationRehearsalError::Database)?;
+    install_mutation_schema(transaction, runtime_role)
+        .await
+        .map_err(|_| MigrationRehearsalError::Database)?;
     reconcile_compiled_runtime_acl(transaction, candidate, runtime_role)
         .await
         .map_err(|_| MigrationRehearsalError::Database)?;

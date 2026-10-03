@@ -14,7 +14,7 @@ async fn application_receipts_keep_record_results_and_enforce_shape() {
     let database = TestDatabase::create(1).await;
     let (migration, migration_task) = database.connect_migration().await;
     for _ in 0..2 {
-        install_mutation_schema(&migration, &database.runtime_role, false)
+        install_mutation_schema(&migration, &database.runtime_role)
             .await
             .expect("schema installation is repeatable");
     }
@@ -126,7 +126,7 @@ async fn application_receipts_keep_record_results_and_enforce_shape() {
         )
         .await
         .expect("operator can erase bytes while preserving the result identity");
-    install_mutation_schema(&migration, &database.runtime_role, false)
+    install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("schema reinstallation preserves erased receipts");
     migration_task.abort();

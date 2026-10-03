@@ -604,13 +604,6 @@ struct ApplyArgs {
     #[arg(long = "backup", value_name = "BINDING_PATH=BINDING_FILE")]
     backups: Vec<String>,
 
-    /// Acknowledge discarding rows retained in a pre-simplification
-    /// registry_audit or registry_audit_head table. Without this, apply
-    /// refuses rather than silently dropping those retained audit entries
-    /// while installing the current schema.
-    #[arg(long)]
-    acknowledge_retired_audit_discard: bool,
-
     /// Operator change reference, at most 512 bytes, recorded as a keyed hash in the activation ledger and audit.
     #[arg(long, value_name = "REFERENCE")]
     operator_reference: Option<String>,
@@ -1489,7 +1482,6 @@ enum SuggestedAction {
     ReconcileFailedMigration,
     RestorePreActivationBackup,
     ResolveActiveRequestProposals,
-    ArchiveRetiredAuditRows,
     VerifyStartupDependencies,
     CorrectDataBinding,
     CorrectDataInput,
@@ -4693,7 +4685,6 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         package: &args.package,
         initial: args.initial,
         backups: &args.backups,
-        acknowledge_retired_audit_discard: args.acknowledge_retired_audit_discard,
         operator_reference: args.operator_reference.as_deref(),
         expected_digest: args.expected_digest.as_deref(),
     })
@@ -5598,13 +5589,6 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     SuggestedAction::CorrectRuntimeConfiguration,
                 );
             }
-            registry_breg::migration::MigrationError::RetiredAuditRowsPresent => (
-                "apply.audit.retired_rows_present",
-                "database",
-                "a pre-simplification registry_audit or registry_audit_head table still carries rows that installing this schema would discard. The exact target remains pinned in maintenance; archive the retained rows through operator recovery (for example, copy them out with psql or pg_dump --table before they are dropped), then retry the exact pinned target, or retry the same apply with --acknowledge-retired-audit-discard to accept discarding them",
-                DiagnosticArtifact::DatabaseMigration,
-                SuggestedAction::ArchiveRetiredAuditRows,
-            ),
         },
     };
     FailureReport {
