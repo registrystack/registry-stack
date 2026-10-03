@@ -3373,14 +3373,14 @@ fn removed_project_field_diagnostics(value: Option<&Value>) -> Option<CompileFai
             diagnostics.push(Diagnostic::error(
                 "manifest_projection.dataset.removed",
                 "project.manifestProjection.dataset",
-                "manifestProjection.dataset was removed; use manifestProjection.datasets[] or run `bregctl project migrate <PROJECT>`",
+                "manifestProjection.dataset was removed; use manifestProjection.datasets[]",
             ));
         }
         if projection.contains_key("dataService") {
             diagnostics.push(Diagnostic::error(
                 "manifest_projection.data_service.removed",
                 "project.manifestProjection.dataService",
-                "manifestProjection.dataService was removed; use manifestProjection.dataServices[] or run `bregctl project migrate <PROJECT>`",
+                "manifestProjection.dataService was removed; use manifestProjection.dataServices[]",
             ));
         }
     }

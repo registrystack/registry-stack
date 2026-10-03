@@ -251,8 +251,7 @@ server response is bounded at 2 MiB.
 | `--breg-url` is refused | Use `https`, or `http` with a loopback host only. |
 | The token file is refused | It must be an absolute path to a regular file holding one token and nothing else; strip everything but a trailing newline. |
 | The input is refused before any request | Check for an empty file, a symbolic link, more than 256 MiB, more than 1,000,000 lines, or a patch line with more than 128 operations. |
-| An import refuses its checkpoint | The sidecar is missing, or the package, entity, profile, or operation differs from the run that created it. Start a new checkpoint path for a new input. |
-| An import reports `data.import.checkpoint.legacy` | The sidecar predates ingestion runs and names no run to resume; resending its committed items under a new run id would duplicate mutations. Start a new import with a fresh checkpoint path. |
+| An import refuses its checkpoint | The sidecar is missing, was written in a format this release does not write, or the package, entity, profile, or operation differs from the run that created it. Start a new checkpoint path for a new input. |
 | An import reports the run was cancelled | The named run was cancelled and refuses new chunks; its counts and audit are preserved. Start a new import with a fresh checkpoint path. |
 | An export refuses to start | Exactly one of the output and checkpoint files exists, or the existing output no longer matches its checkpoint. Keep both files together and unedited, or start both afresh. |
 | `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
