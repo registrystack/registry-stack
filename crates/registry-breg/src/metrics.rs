@@ -482,7 +482,8 @@ impl Metrics {
 
 /// Read every queue age in one bounded, read-only statement. The due
 /// predicates follow each worker's claim, so work scheduled for a later
-/// retry does not count as waiting.
+/// retry does not count as waiting. A webhook lease that expired is claimable
+/// again, so it has waited since its lease expired.
 async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>, ()> {
     let mut client = pool.get().await.map_err(|_| ())?;
     let transaction = client
@@ -503,10 +504,14 @@ async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>,
             &format!(
                 "SELECT
                     COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
-                                      - MIN(state.next_attempt_at))::float8
+                                      - MIN(CASE WHEN state.state = 'pending'
+                                                 THEN state.next_attempt_at
+                                                 ELSE state.lease_expires_at END))::float8
                                 FROM {schema}.registry_webhook_delivery_state state
-                               WHERE state.state = 'pending'
-                                 AND state.next_attempt_at <= transaction_timestamp()), 0),
+                               WHERE (state.state = 'pending'
+                                      AND state.next_attempt_at <= transaction_timestamp())
+                                  OR (state.state = 'leased'
+                                      AND state.lease_expires_at <= transaction_timestamp())), 0),
                     COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
                                       - MIN(s.next_attempt_at))::float8
                                 FROM registry_internal.registry_request_review_submissions s

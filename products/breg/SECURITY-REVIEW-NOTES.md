@@ -1101,7 +1101,10 @@ scrape exhaust the runtime pool or hold locks the workers need.
   is 5 seconds, and runs one aggregate statement that reads only
   `next_attempt_at`, state, lease, and attempt columns, never a row id,
   payload, or record value. A failed sample omits every queue line and
-  emits the value-free `metrics.queue_sample.failed`.
+  emits the value-free `metrics.queue_sample.failed`. A webhook delivery
+  whose lease expired is claimable again, so the webhook age counts it from
+  `lease_expires_at`, and a process that stopped holding a lease cannot
+  hide its delivery from the queue age.
 - `breg_active_package_info` publishes the `package_digest` startup already
   verified against the activation ledger, a `sha256:` digest of the package
   bytes, and nothing else.
@@ -1120,6 +1123,7 @@ which covers every stop code and the review and metrics events.
 `an_idle_review_worker_iteration_records_its_last_success`,
 `a_scrape_reports_how_long_the_oldest_due_item_in_each_queue_has_waited`,
 `a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_work`,
+`a_scrape_counts_an_expired_webhook_lease_as_waiting_delivery_work`,
 and `an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event`.
 `crates/registry-breg/tests/postgres_webhook_delivery.rs`:
 `real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration`.

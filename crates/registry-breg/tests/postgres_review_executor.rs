@@ -6381,6 +6381,63 @@ async fn a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_w
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_counts_an_expired_webhook_lease_as_waiting_delivery_work() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    // The queue age reads only delivery state, so the rows it would join
+    // are not seeded.
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             SET LOCAL session_replication_role = replica;
+             INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt,
+                  next_attempt_at, attempt_started_at, lease_expires_at, lease_token)
+             VALUES
+                 -- A lease that expired two minutes ago is claimable again.
+                 ('00000000-0000-0000-0000-0000000000c1', 'delivery-a', 1, 'leased', 1,
+                  NULL, transaction_timestamp() - interval '5 minutes',
+                  transaction_timestamp() - interval '120 seconds',
+                  '00000000-0000-0000-0000-0000000000d1'),
+                 -- A live lease is in flight, not waiting, however long ago it started.
+                 ('00000000-0000-0000-0000-0000000000c2', 'delivery-a', 1, 'leased', 1,
+                  NULL, transaction_timestamp() - interval '1 hour',
+                  transaction_timestamp() + interval '10 minutes',
+                  '00000000-0000-0000-0000-0000000000d2'),
+                 -- A retry scheduled for later is not yet waiting.
+                 ('00000000-0000-0000-0000-0000000000c3', 'delivery-a', 1, 'pending', 1,
+                  transaction_timestamp() + interval '1 hour', NULL, NULL, NULL);
+             COMMIT;",
+        )
+        .await
+        .expect("webhook delivery state rows");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let webhook = queue_age(&scrape, "webhook_delivery")
+        .unwrap_or_else(|| panic!("the webhook delivery queue is sampled:\n{scrape}"));
+    assert!(
+        (120.0..3600.0).contains(&webhook),
+        "the expired lease has waited about two minutes since it expired: {webhook}"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event() {
     // No webhook delivery state is installed, so the sample cannot be read.

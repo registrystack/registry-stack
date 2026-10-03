@@ -1235,7 +1235,8 @@ beyond that means the worker is failing on every iteration or is held inside one
 `breg_queue_oldest_pending_age_seconds` gives the seconds the oldest due item in each queue has
 waited to be claimed, and `0` when nothing is due. `queue` is `webhook_delivery`,
 `review_submission`, or `review_application`; work scheduled for a later retry is not yet due and
-does not count. Each scrape reads the three ages at one database instant, with one connection from
+does not count. A webhook delivery whose lease expired, for example because the process that
+claimed it stopped, counts as waiting from the moment its lease expired. Each scrape reads the three ages at one database instant, with one connection from
 the runtime pool, in a read-only transaction bounded to five seconds, and concurrent scrapes wait
 for each other. When that read fails, the scrape omits every `breg_queue_oldest_pending_age_seconds`
 sample rather than reporting an empty queue, and the process writes `metrics.queue_sample.failed`.
