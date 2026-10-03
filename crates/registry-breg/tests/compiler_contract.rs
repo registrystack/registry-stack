@@ -2540,6 +2540,63 @@ fn deployment_identity_keys_in_the_project_are_refused_as_unknown_fields() {
 }
 
 #[test]
+fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
+    // The projection publishes `datasets` and `dataServices`. A singular
+    // `dataset` or `dataService` has no member to land in, so the closed
+    // source shape refuses it like any other unknown key.
+    for (key, value) in [
+        ("dataset", json!({"title":"Dataset"})),
+        (
+            "dataService",
+            json!({"id":"api","title":"API","endpointUrl":"https://registry.example.test"}),
+        ),
+    ] {
+        let mut project = json!({
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "package":{"sourceRevision":"source"},
+          "manifestProjection":{
+            "accessProfile":"reader",
+            "classificationCeiling":"public",
+            "catalog":{"baseUrl":"https://registry.example.test","title":"Registry","publisher":{"id":"authority","name":"Authority"}},
+            "publicService":{"id":"service","title":"Service"},
+            "datasets":[{"id":"neutral","title":"Dataset"}],
+            "dataServices":[{"id":"api","title":"API","endpointUrl":"https://registry.example.test","servesDatasets":["neutral"]}]
+          },
+          "entities":[]
+        });
+        parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
+            .expect("the projection parses without a singular key");
+        project["manifestProjection"][key] = value;
+        let bytes = serde_json::to_vec(&project).expect("project serializes");
+        for (failure, code) in [
+            (
+                parse_project_json(&bytes).expect_err("a singular projection key is refused"),
+                "source.shape.invalid",
+            ),
+            (
+                parse_project_yaml(&bytes)
+                    .expect_err("a singular projection key is refused in YAML"),
+                "source.yaml.invalid",
+            ),
+        ] {
+            let [diagnostic] = failure.diagnostics() else {
+                panic!("{key} is refused by one diagnostic: {failure:?}");
+            };
+            assert_eq!(diagnostic.code, code, "{diagnostic:?}");
+            assert!(
+                diagnostic
+                    .message
+                    .contains(&format!("unknown field `{key}`")),
+                "{}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
+#[test]
 fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts() {
     let compiled = compile_project(
         &parse_project_json(
