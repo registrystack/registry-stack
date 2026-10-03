@@ -9321,8 +9321,8 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "operations": grant.operations.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
                     "targets": grant.targets.iter().map(|target| json!({
                         "entity": target.entity_id,
-                        "operation": target.operation.map(operation_wire_name),
-                        "source": target.source.as_ref().map(|source| action_target_use_source(action, source)),
+                        "operation": operation_wire_name(target.operation),
+                        "source": action_target_use_source(action, &target.source),
                         "rowBoundaries": target.row_boundaries,
                     })).collect::<Vec<_>>(),
                     "results": grant.results,
