@@ -507,7 +507,7 @@ Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../.
 | `check` reports `identifier.invalid`. | An id breaks the closed grammar: start with a lowercase letter and use only lowercase letters, digits, hyphens, and underscores, at most 64 bytes. |
 | A module digest does not match. | Run `project lock` after editing a module, then review the digest change together with the module diff. |
 | `check` refuses a filter, sort, comparison, change request, or projection that uses an encrypted field. | An encrypted field answers equality lookups only. Declare a `lookup` block for exact-value lookups, or move the comparison to a field that is not sealed; [Encrypt restricted fields](#encrypt-restricted-fields) lists what is refused. |
-| `check` refuses the manifest projection's singular `dataset` or `dataService`. | The retired shape is no longer read. Rewrite it as `datasets[]` and `dataServices[]`, each with an `id`, and point every entity's `primaryDataset` at one of them. |
+| `check` refuses the manifest projection's singular `dataset` or `dataService`. | The projection takes only the plural keys. Declare `datasets[]` and `dataServices[]`, each with an `id`, and point every entity's `primaryDataset` at one of them. |
 
 ## Next
 
