@@ -12,8 +12,16 @@ class BaseRegistryClientError extends Error {
     super(envelope.message);
     this.name = 'BaseRegistryClientError';
     this.kind = envelope.kind;
-    for (const field of ['code', 'planRefusal', 'refusalCode', 'fieldPath', 'status', 'traceId', 'transportKind', 'tokenKind']) {
+    for (const field of ['code', 'planRefusal', 'refusalCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
+    }
+    if (envelope.fieldPath !== undefined && envelope.fieldPath !== null) {
+      Object.defineProperty(this, 'fieldPath', {
+        value: envelope.fieldPath,
+        configurable: true,
+        enumerable: false,
+        writable: true,
+      });
     }
   }
 }
