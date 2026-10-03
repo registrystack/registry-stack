@@ -35,7 +35,7 @@ what authorizes an activation, and the database records each one in its activati
 
 Many operator paths are resolved through held directory descriptors rather than by name: data export output and checkpoint, data import state and checkpoint, test receipt
 output and the credentials file `bregctl test` reads, package inputs and outputs, history request
-files, the reviewed migrations tree, project migrate writes, and authoring sources, including each
+files, the reviewed migrations tree, and authoring sources, including each
 module's SQL assets and planner scripts, which are read through the module directory the listing
 opened. `bregctl` resolves each component of these paths against the directory descriptor that
 holds it, then opens, creates, renames, and publishes through those held descriptors, so a

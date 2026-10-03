@@ -619,10 +619,7 @@ fn cleanup_temporary_file(parent: &SafeDir, name: &OsStr) {
 /// the resolved parent directory. Quarantining the name first would rename by
 /// the same name and add a call to the same window, so it would move the gap
 /// rather than remove it.
-pub(crate) fn remove_exact_file(
-    destination: &SafeEntry,
-    expected: &fs::Metadata,
-) -> std::io::Result<()> {
+fn remove_exact_file(destination: &SafeEntry, expected: &fs::Metadata) -> std::io::Result<()> {
     let actual = destination.stat()?;
     if actual.is_symlink() || !actual.is_file() || !actual.is_same_file_as(expected) {
         return Err(std::io::Error::other("output identity changed"));
