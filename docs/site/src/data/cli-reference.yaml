@@ -5,8 +5,8 @@
 # Starlight excludes unreviewed output because the generator emits `draft: true`
 # while this record remains a draft.
 schema_version: registry.cli-reference-review/v3
-status: draft
-last_reviewed: unreviewed
-reviewed_source_version: null
-reviewed_catalog_sha256: null
-reviewed_content_sha256: null
+status: current
+last_reviewed: 2026-10-03
+reviewed_source_version: "0.39.0"
+reviewed_catalog_sha256: 7786b06cb1334a4512ec437bc436dc5d0c9bdb2c1af092ec3461e7a152b45585
+reviewed_content_sha256: c512c000597a5232a4bdbe8204c581a13657c97b389bb367ed4125abe924508d

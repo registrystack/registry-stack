@@ -183,6 +183,18 @@ Encrypted restricted fields carry their own limits, described with the model in
     crates/registry-platform-crypto/src/field_encryption.rs, blind_index_hmac() and
     derive_field_index_key(). */}
 
+## BReg statistical releases
+
+BReg's count datasets use explicit calendar periods in UTC and closed boolean or vocabulary dimensions. They do not reconstruct historical registry contents, accept free SQL, or expose microdata. The native JSON/CSV document does not claim full SDMX conformance.
+
+Minimum-count suppression and deterministic rounding can reveal suppressed values through interval arithmetic. For example, two positive suppressed cells under minimum five are each at most four; a rounded total of ten with base five constrains their sum to at least eight, revealing two fours. Exact zeros reveal absence; overlapping populations and successive versions permit differencing. There is no privacy budget or differential privacy.
+
+The [statistical dataset explanation](../breg-statistical-datasets/) describes these residual risks and the separation between live, publisher, and released-reader profiles.
+
+{/* Evidence: crates/registry-breg/tests/statistics.rs;
+    crates/registry-breg/src/compiler/statistics.rs;
+    products/breg/STATISTICS.md. */}
+
 ## Evidence Gateway limits
 
 Evidence Gateway releases one stateless assertion per request under a frozen Version 1 contract.
@@ -520,15 +532,3 @@ in the repository.
 - What might change: the project roadmap (`ROADMAP.md` in the repository root).
   This page does not track it.
 - How to verify what is signed: release verification lives in `release/VERIFY.md` in the repository.
-
-## BReg statistical releases
-
-BReg's count datasets use explicit calendar periods in UTC and closed boolean or vocabulary dimensions. They do not reconstruct historical registry contents, accept free SQL, or expose microdata. The native JSON/CSV document does not claim full SDMX conformance.
-
-Minimum-count suppression and deterministic rounding can reveal suppressed values through interval arithmetic. For example, two positive suppressed cells under minimum five are each at most four; a rounded total of ten with base five constrains their sum to at least eight, revealing two fours. Exact zeros reveal absence; overlapping populations and successive versions permit differencing. There is no privacy budget or differential privacy.
-
-The [statistical dataset explanation](../breg-statistical-datasets/) describes these residual risks and the separation between live, publisher, and released-reader profiles.
-
-{/* Evidence: crates/registry-breg/tests/statistics.rs;
-    crates/registry-breg/src/compiler/statistics.rs;
-    products/breg/STATISTICS.md. */}

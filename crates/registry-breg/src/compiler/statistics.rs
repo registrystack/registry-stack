@@ -63,7 +63,7 @@ pub(super) fn compile(
                 None
             }
         };
-        let mut referenced_fields =
+        let (mut referenced_fields, population_field_bindings) =
             validate_population(source, unit, parsed_population.as_ref(), &root, &mut errors);
 
         let (period, period_fields) = compile_period(source, unit, &root, &mut errors);
@@ -246,6 +246,7 @@ pub(super) fn compile(
                 entities,
                 entity_ids: &dependency_entities,
                 relation_ids: &used_relations,
+                population_field_bindings: &population_field_bindings,
             },
             releases.as_ref().map(|release| release.publisher.as_str()),
         );
@@ -881,6 +882,7 @@ struct DefinitionDependencies<'a> {
     entities: &'a BTreeMap<String, CompiledEntity>,
     entity_ids: &'a BTreeSet<String>,
     relation_ids: &'a BTreeSet<String>,
+    population_field_bindings: &'a BTreeMap<String, String>,
 }
 
 fn definition_digest(
@@ -956,6 +958,7 @@ fn definition_digest(
     let value = json!({
         "unit": source.unit,
         "population": source.population,
+        "populationFieldBindings": dependencies.population_field_bindings,
         "period": period_definition,
         "dimensions": dimensions,
         "disclosure": disclosure,
@@ -991,13 +994,22 @@ fn validate_population(
     filter: Option<&FilterExpr>,
     root: &str,
     errors: &mut Vec<Diagnostic>,
-) -> BTreeSet<String> {
+) -> (BTreeSet<String>, BTreeMap<String, String>) {
     let Some(filter) = filter else {
-        return BTreeSet::new();
+        return (BTreeSet::new(), BTreeMap::new());
     };
     let mut fields = BTreeSet::new();
-    validate_population_expr(source, entity, filter, root, &mut fields, errors);
-    fields
+    let mut field_bindings = BTreeMap::new();
+    validate_population_expr(
+        source,
+        entity,
+        filter,
+        root,
+        &mut fields,
+        &mut field_bindings,
+        errors,
+    );
+    (fields, field_bindings)
 }
 
 fn validate_population_expr(
@@ -1006,15 +1018,16 @@ fn validate_population_expr(
     filter: &FilterExpr,
     root: &str,
     fields: &mut BTreeSet<String>,
+    field_bindings: &mut BTreeMap<String, String>,
     errors: &mut Vec<Diagnostic>,
 ) {
     match filter {
         FilterExpr::Binary { left, right, .. } => {
-            validate_population_expr(source, entity, left, root, fields, errors);
-            validate_population_expr(source, entity, right, root, fields, errors);
+            validate_population_expr(source, entity, left, root, fields, field_bindings, errors);
+            validate_population_expr(source, entity, right, root, fields, field_bindings, errors);
         }
         FilterExpr::Not(filter) | FilterExpr::Group(filter) => {
-            validate_population_expr(source, entity, filter, root, fields, errors);
+            validate_population_expr(source, entity, filter, root, fields, field_bindings, errors);
         }
         FilterExpr::Predicate(predicate) => {
             let api_field = match predicate {
@@ -1034,6 +1047,7 @@ fn validate_population_expr(
                 return;
             };
             fields.insert(field_id.to_owned());
+            field_bindings.insert(api_field.to_owned(), field_id.to_owned());
             if !population_predicate_valid(predicate, field_type) {
                 errors.push(error(
                     "statistical_dataset.population.invalid",

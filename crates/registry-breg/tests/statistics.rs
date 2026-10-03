@@ -417,6 +417,26 @@ fn csv_is_rfc4180_and_carries_period_bounds_on_every_row() {
 }
 
 #[test]
+fn release_without_history_snapshot_is_canonical_and_csv_readable() {
+    let mut document = release_document();
+    document
+        .release
+        .as_mut()
+        .expect("release document has a release envelope")
+        .snapshot = None;
+
+    let canonical = canonical_document_and_digest(&document).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&canonical.bytes).unwrap();
+    assert_eq!(value["release"]["snapshot"], serde_json::Value::Null);
+    let decoded: StatisticsDocument = serde_json::from_slice(&canonical.bytes).unwrap();
+    assert_eq!(decoded.release.unwrap().snapshot, None);
+
+    let csv = String::from_utf8(document_csv(&document).unwrap()).unwrap();
+    assert!(csv.starts_with("period,periodStart,periodEnd,region,value,status\r\n"));
+    assert!(csv.ends_with(",5,rounded\r\n"));
+}
+
+#[test]
 fn live_document_uses_the_same_wire_shape_without_disclosure() {
     let period = current_period(PeriodGranularity::Month, date(2025, 1, 15)).unwrap();
     let document = StatisticsDocument {
@@ -535,7 +555,7 @@ fn release_document() -> StatisticsDocument {
             period: "2025-01".to_owned(),
             version: 7,
             status: ReleaseStatus::Final,
-            snapshot: "opaque-snapshot".to_owned(),
+            snapshot: Some("opaque-snapshot".to_owned()),
             computed_at: "2025-02-01T00:00:00Z".to_owned(),
             package_digest: "package-sha256".to_owned(),
         }),

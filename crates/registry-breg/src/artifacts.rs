@@ -2081,6 +2081,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         &mut component_schemas,
         statistical_datasets,
         statistical_datasets,
+        false,
     );
     let has_request_actions = routes
         .routes

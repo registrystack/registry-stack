@@ -1094,14 +1094,17 @@ have used it. The statistical invariants are BREG-SEC-146 through BREG-SEC-156.
 The compiler admits a live grant only when the selected profile already has
 list and count authority and can filter every processing field. PostgreSQL
 reuses the ordinary read relations and visibility predicates for the grouped
-count. Source entity dependencies are extracted from the reviewed raw SQL
+count, including the request-owner visibility context. Source entity
+dependencies are extracted from the reviewed raw SQL
 syntax tree and closed transitively. Publisher visibility must be independent
 of its caller on every entity in that closure. Anonymous profiles, encrypted
 processing fields, and consent-gated count grants are refused.
 
 Publication computes one ended period under the current package binding and
-one statement snapshot, retaining its shared history head. Publication and
-withdrawal bind an idempotency receipt to the caller, route, selected profile,
+one statement snapshot, retaining its shared history head for the freshness
+check. History erasure can make the release's snapshot bookmark unavailable;
+the header then carries `snapshot: null` while publication continues. Rebaseline
+restores bookmarks for later releases. Publication and withdrawal bind an idempotency receipt to the caller, route, selected profile,
 package, and canonical request. A per-dataset-period transaction lock serializes
 version allocation and final-status ordering. Only canonical disclosed documents
 are persisted; exact live counts are not stored in release content.
@@ -1120,6 +1123,11 @@ deadline, including lock waits and statement execution. JSON representation
 digests cover exact response bytes; CSV digests cover the CSV representation.
 Both are sent with no-store cache policy.
 
+Anonymous refusals return before authenticated refusal auditing, preventing
+unauthenticated requests from filling that journal or observing sink health.
+Caller-filtered OpenAPI names only the selected profile; its query selector
+still follows the runtime's actual default admission rules.
+
 ### Tests
 
 `compiler_statistics.rs` exercises typed count admission, publisher dependency
@@ -1127,7 +1135,11 @@ closure, period models, generated contracts, definition digests, and grant
 changes. `statistics.rs` verifies calendar periods, zero filling and margins,
 checked arithmetic, suppression, independent rounding, canonical bytes, and
 CSV escaping. The PostgreSQL statistics tests verify exact runtime privileges,
-atomic withdrawal, and the authenticated HTTP release lifecycle. The facility
+atomic withdrawal, unexpected grants and altered withdrawal functions, and the
+authenticated HTTP release lifecycle. They also pin alias remapping in definition
+digests, owner count parity, anonymous refusals under audit failure, stored-byte
+digest equality, real definition successor activation, and publication after
+maintained history erasure and rebaseline. The facility
 workflow executes publication and JSON/CSV series reads through native CLI and
 HTTP clients with separate access profiles.
 

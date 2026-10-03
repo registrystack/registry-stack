@@ -325,10 +325,7 @@ impl PostgresStatisticsService {
         let history_head = computation
             .history_head
             .ok_or(StatisticsServiceError::Unavailable)?;
-        let snapshot = computation
-            .snapshot
-            .take()
-            .ok_or(StatisticsServiceError::Unavailable)?;
+        let snapshot = computation.snapshot.take();
         let claims = strict_claim_context(&self.registry, request.context, &dataset.unit_entity_id)
             .map_err(map_read_error)?;
         let response_fields = BTreeSet::new();
@@ -458,9 +455,12 @@ impl PostgresStatisticsService {
         let canonical = canonical_document_and_digest(&document).map_err(map_statistics_error)?;
         let result_count = document.cells.len();
         self.trace_for_test("publish.canonical");
-        let snapshot_uuid = crate::history_reference::SnapshotReference::parse(&snapshot)
+        let snapshot_uuid = snapshot
+            .as_deref()
+            .map(crate::history_reference::SnapshotReference::parse)
+            .transpose()
             .map_err(|_| StatisticsServiceError::Unavailable)?
-            .uuid();
+            .map(|reference| reference.uuid());
         let inserted = transaction
             .transaction()
             .execute(
@@ -594,6 +594,15 @@ impl PostgresStatisticsService {
             .set_statement_budget(remaining_budget(deadline)?)
             .await
             .map_err(unavailable)?;
+        crate::mutation::install_request_visibility_context(
+            transaction.transaction(),
+            entity,
+            &claims,
+            self.audit.profile(),
+            &self.expected.database_id,
+        )
+        .await
+        .map_err(unavailable)?;
         install_statistics_evaluation_date(transaction.transaction(), &evaluation_date.to_string())
             .await
             .map_err(map_read_error)?;
@@ -621,8 +630,7 @@ impl PostgresStatisticsService {
         for row in rows {
             if capture_history {
                 let position = row.get::<_, i64>(0);
-                let reference = row.get::<_, String>(1);
-                let reference = snapshot_reference(&reference)?;
+                let reference = snapshot_reference(row.get::<_, Option<String>>(1))?;
                 let inconsistent_head = history_head
                     .replace(position)
                     .is_some_and(|prior| prior != position);
@@ -653,7 +661,7 @@ impl PostgresStatisticsService {
                 value: u64::try_from(value).map_err(|_| StatisticsServiceError::Unavailable)?,
             });
         }
-        if capture_history && (history_head.is_none() || snapshot.is_none()) {
+        if capture_history && history_head.is_none() {
             return Err(StatisticsServiceError::Unavailable);
         }
         transaction.commit().await.map_err(unavailable)?;
@@ -662,7 +670,7 @@ impl PostgresStatisticsService {
         Ok(Computation {
             cells,
             history_head,
-            snapshot,
+            snapshot: snapshot.flatten(),
         })
     }
 
@@ -867,15 +875,6 @@ impl PostgresStatisticsService {
         request: StatisticsWithdrawalRequest<'_>,
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
         let dataset = self.publisher_dataset(request.dataset_id, request.context)?;
-        let _period = release_period(dataset, request.period_code, NaiveDate::MAX)?;
-        if request.period_code < first_period(dataset).as_str() {
-            return Err(StatisticsServiceError::ReleaseRefused(
-                StatisticsReleaseRefusal::BeforeFirstPeriod,
-            ));
-        }
-        if request.version <= 0 {
-            return Err(StatisticsServiceError::Concealed);
-        }
         let reason_code = withdrawal_reason(request.reason);
         let claims = strict_claim_context(&self.registry, request.context, &dataset.unit_entity_id)
             .map_err(map_read_error)?;
@@ -924,6 +923,17 @@ impl PostgresStatisticsService {
             }
             transaction.commit().await.map_err(unavailable)?;
             return replayed_outcome(stored.response, dataset, request.period_code, 0);
+        }
+        let _period = release_period(dataset, request.period_code, NaiveDate::MAX)?;
+        if request.period_code < first_period(dataset).as_str() {
+            transaction.rollback().await.map_err(unavailable)?;
+            return Err(StatisticsServiceError::ReleaseRefused(
+                StatisticsReleaseRefusal::BeforeFirstPeriod,
+            ));
+        }
+        if request.version <= 0 {
+            transaction.rollback().await.map_err(unavailable)?;
+            return Err(StatisticsServiceError::Concealed);
         }
         self.pause_before_withdrawal_persist_for_test().await;
         lock_release_key(transaction.transaction(), dataset, request.period_code).await?;
@@ -1181,7 +1191,7 @@ impl PostgresStatisticsService {
                 version: u64::try_from(row.get::<_, i64>(1))
                     .map_err(|_| StatisticsServiceError::Unavailable)?,
                 status: parse_release_status(row.get::<_, String>(2).as_str())?,
-                snapshot: snapshot_reference(row.get::<_, String>(3).as_str())?,
+                snapshot: snapshot_reference(row.get::<_, Option<String>>(3))?,
                 computed_at: row.get::<_, DateTime<Utc>>(4).to_rfc3339(),
                 package_digest: row.get(5),
                 definition_digest: row.get(6),
@@ -1275,7 +1285,7 @@ impl PostgresStatisticsService {
             let period_code = row.get::<_, String>(0);
             let version = row.get::<_, i64>(1);
             let status = parse_release_status(row.get::<_, String>(2).as_str())?;
-            let snapshot = snapshot_reference(row.get::<_, String>(3).as_str())?;
+            let snapshot = snapshot_reference(row.get::<_, Option<String>>(3))?;
             let content_digest = row.get::<_, String>(4);
             let bytes = row.get::<_, Vec<u8>>(5);
             let document: StatisticsDocument =
@@ -1555,9 +1565,14 @@ fn withdrawal_reason(value: WithdrawalReason) -> &'static str {
     }
 }
 
-fn snapshot_reference(value: &str) -> Result<String, StatisticsServiceError> {
-    let uuid = uuid::Uuid::parse_str(value).map_err(|_| StatisticsServiceError::Unavailable)?;
-    Ok(crate::history_reference::SnapshotReference::for_uuid(uuid).as_string())
+fn snapshot_reference(value: Option<String>) -> Result<Option<String>, StatisticsServiceError> {
+    value
+        .map(|value| {
+            let uuid =
+                uuid::Uuid::parse_str(&value).map_err(|_| StatisticsServiceError::Unavailable)?;
+            Ok(crate::history_reference::SnapshotReference::for_uuid(uuid).as_string())
+        })
+        .transpose()
 }
 
 fn header_from_row(
@@ -1572,7 +1587,7 @@ fn header_from_row(
         version: u64::try_from(row.get::<_, i64>(0))
             .map_err(|_| StatisticsServiceError::Unavailable)?,
         status: parse_release_status(row.get::<_, String>(1).as_str())?,
-        snapshot: snapshot_reference(row.get::<_, String>(2).as_str())?,
+        snapshot: snapshot_reference(row.get::<_, Option<String>>(2))?,
         computed_at: row.get::<_, DateTime<Utc>>(3).to_rfc3339(),
         package_digest: row.get(4),
         definition_digest: row.get(5),
@@ -1719,7 +1734,7 @@ fn enforce_response_cell_limit(
         .filter(|cells| *cells <= MAX_CELLS_PER_RESPONSE)
         .map(|_| ())
         .ok_or(StatisticsServiceError::QueryInvalid {
-            field_path: "period",
+            field_path: "response",
         })
 }
 
@@ -2015,13 +2030,18 @@ fn grouped_sql(
         Ok(format!(
             "WITH {grouped},
              marker AS (
-                 SELECT head.latest_position, commit.snapshot_reference::text
+                 SELECT head.latest_position,
+                        CASE
+                            WHEN head.coverage_ready
+                             AND (head.unavailable_after_position IS NULL
+                                  OR head.latest_position <= head.unavailable_after_position)
+                            THEN commit.snapshot_reference::text
+                            ELSE NULL
+                        END AS snapshot_reference
                    FROM registry_internal.registry_commit_head AS head
                    JOIN registry_internal.registry_revision_commits AS commit
                      ON commit.commit_position = head.latest_position
-                  WHERE head.singleton AND head.coverage_ready
-                    AND (head.unavailable_after_position IS NULL
-                         OR head.latest_position <= head.unavailable_after_position)
+                  WHERE head.singleton
              )
              SELECT marker.latest_position, marker.snapshot_reference, {result_columns}
                FROM marker LEFT JOIN grouped ON true

@@ -129,6 +129,20 @@ async fn moving_first_period_forward_hides_old_releases_without_changing_the_def
     .await;
     assert_eq!(original.status(), StatusCode::OK);
     let original = to_bytes(original.into_body(), 1024 * 1024).await.unwrap();
+    let response = call(
+        &mut app,
+        "POST",
+        "/v1/statistics/units-by-category/releases/2025-02/versions?accessProfile=publisher",
+        &claims,
+        Some("withdraw-retry-publish"),
+        Some(r#"{"status":"final"}"#),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let response = call(&mut app, "POST",
+        "/v1/statistics/units-by-category/releases/2025-02/versions/1/withdrawal?accessProfile=publisher",
+        &claims, Some("withdraw-retry-key"), Some(r#"{"reason":"computation-error"}"#)).await;
+    assert_eq!(response.status(), StatusCode::OK);
     // The shared activation lock is held by the administrator to force
     // release-read admission to consume its real statement/request budget.
     database.admin.batch_execute("BEGIN").await.unwrap();
@@ -223,6 +237,13 @@ async fn moving_first_period_forward_hides_old_releases_without_changing_the_def
         Some(r#"{"status":"final"}"#),
     )
     .await;
+    assert_eq!(retry.status(), StatusCode::CONFLICT);
+    let retry: serde_json::Value =
+        serde_json::from_slice(&to_bytes(retry.into_body(), 1024 * 1024).await.unwrap()).unwrap();
+    assert_eq!(retry["code"], "idempotency.conflict");
+    let retry = call(&mut successor_app, "POST",
+        "/v1/statistics/units-by-category/releases/2025-02/versions/1/withdrawal?accessProfile=publisher",
+        &claims, Some("withdraw-retry-key"), Some(r#"{"reason":"computation-error"}"#)).await;
     assert_eq!(retry.status(), StatusCode::CONFLICT);
     let retry: serde_json::Value =
         serde_json::from_slice(&to_bytes(retry.into_body(), 1024 * 1024).await.unwrap()).unwrap();

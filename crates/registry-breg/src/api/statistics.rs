@@ -248,6 +248,9 @@ async fn refusal(
     correlation: &RequestCorrelation,
     response: Response,
 ) -> Response {
+    if claims.principal().is_none() {
+        return anonymous_refusal(response, AnonymousRefusalReason::ReadConcealed);
+    }
     let Some(backend) = &service.statistics else {
         return unavailable();
     };
@@ -386,8 +389,17 @@ async fn dispatch(
     let Ok(principal) = principal else {
         return unavailable();
     };
-    let query_reference=service.cursors.binding_digest(b"breg-statistical-query-v1",
-        &json!({"from":options.get("from"),"to":options.get("to"),"status":options.get("status")})).ok();
+    let query_reference = service
+        .cursors
+        .binding_digest(
+            b"breg-statistical-query-v1",
+            &json!({
+                "from": options.get("from"),
+                "to": options.get("to"),
+                "status": options.get("status"),
+            }),
+        )
+        .ok();
     let row_boundary_reference = service
         .cursors
         .binding_digest(b"breg-statistical-boundary-v1", &boundary_value(&context))
@@ -471,11 +483,8 @@ async fn execute(
 ) -> HttpResult {
     let backend = service.statistics.as_ref().ok_or_else(unavailable)?;
     let selection = options.selection().map_err(statistics_invalid_query_at)?;
-    let csv = negotiate(headers)
-        .ok_or_else(|| statistics_problem(ProblemCode::UnsupportedMediaType, None))?;
-    if csv && matches!(route.kind, Kind::List | Kind::Publish | Kind::Withdraw) {
-        return Err(unsupported_media_type());
-    }
+    let csv =
+        !matches!(route.kind, Kind::List | Kind::Publish | Kind::Withdraw) && negotiate(headers);
     let result = match route.kind {
         Kind::Live => backend
             .live(StatisticsLiveRequest {
@@ -676,7 +685,7 @@ async fn execute(
 fn document_response(document: &StatisticsDocument, csv: bool) -> HttpResult {
     let canonical = canonical_document(document).map_err(|_| unavailable())?;
     if canonical.len() > crate::compiler::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES {
-        return Err(statistics_invalid_query_at("from"));
+        return Err(invalid_query());
     }
     let bytes = if csv {
         document_csv(document).map_err(|_| unavailable())?
@@ -684,7 +693,7 @@ fn document_response(document: &StatisticsDocument, csv: bool) -> HttpResult {
         canonical
     };
     if bytes.len() > crate::compiler::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES {
-        return Err(statistics_invalid_query_at("from"));
+        return Err(invalid_query());
     }
     Ok((
         bytes_response(
@@ -718,25 +727,28 @@ fn bytes_response(bytes: Vec<u8>, media: &'static str, digest: bool) -> Response
         .body(Body::from(bytes))
         .unwrap_or_else(|_| unavailable())
 }
-fn negotiate(headers: &HeaderMap) -> Option<bool> {
-    let Some(raw) = single_header(headers, ACCEPT.as_str()) else {
-        return Some(false);
-    };
-    let mut best = None;
-    for item in raw.split(',') {
-        let mut parts = item.trim().split(';');
-        let media = parts.next()?.trim();
-        let csv = match media {
-            "text/csv" => true,
-            "application/json" | "application/*" | "*/*" => false,
-            _ => continue,
-        };
-        let q = accept_quality(parts);
-        if q > 0 && best.is_none_or(|(score, _)| q > score) {
-            best = Some((q, csv));
+fn negotiate(headers: &HeaderMap) -> bool {
+    let mut json_quality = (0_u16, 0_u8);
+    let mut csv_quality = (0_u16, 0_u8);
+    for value in headers
+        .get_all(ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+    {
+        for item in value.split(',') {
+            let mut parts = item.split(';');
+            let media = parts.next().unwrap_or_default().trim();
+            let quality = accept_quality(parts);
+            if media.eq_ignore_ascii_case("text/csv") {
+                csv_quality = csv_quality.max((quality, 3));
+            } else if media.eq_ignore_ascii_case("application/json") {
+                json_quality = json_quality.max((quality, 3));
+            } else if media == "*/*" || media.eq_ignore_ascii_case("application/*") {
+                json_quality = json_quality.max((quality, 1));
+            }
         }
     }
-    Some(best.is_some_and(|(_, csv)| csv))
+    csv_quality.0 > 0 && csv_quality > json_quality
 }
 fn service_problem(error: StatisticsServiceError) -> Response {
     match error {
@@ -888,6 +900,7 @@ pub(super) fn append_openapi(
         };
         let profile = context.selected_profile();
         let mut dataset = dataset.clone();
+        dataset.access_profiles.retain(|id, _| id == profile);
         dataset.live_profiles.retain(|id| id == profile);
         if let Some(releases) = &mut dataset.releases {
             releases.readers.retain(|id| id == profile);
@@ -902,6 +915,7 @@ pub(super) fn append_openapi(
         schemas,
         &datasets,
         service.registry.statistical_datasets(),
+        true,
     );
 }
 
@@ -976,15 +990,15 @@ mod tests {
             h.insert(ACCEPT, HeaderValue::from_str(accept).unwrap());
             h
         };
-        assert_eq!(
-            negotiate(&headers("application/json;q=0.4,text/csv;q=0.8")),
-            Some(true)
-        );
-        assert_eq!(
-            negotiate(&headers("text/csv;q=0,application/json")),
-            Some(false)
-        );
-        assert_eq!(negotiate(&headers("application/xml")), Some(false));
-        assert_eq!(negotiate(&HeaderMap::new()), Some(false));
+        assert!(negotiate(&headers("application/json;q=0.4,text/csv;q=0.8")));
+        assert!(!negotiate(&headers("text/csv;q=0,application/json")));
+        assert!(negotiate(&headers("TEXT/CSV;q=0.8,Application/JSON;q=0.4")));
+        assert!(!negotiate(&headers("text/csv;q=0,application/json;q=0")));
+        assert!(!negotiate(&headers("text/csv,application/json")));
+        let mut repeated = headers("application/json;q=0.4");
+        repeated.append(ACCEPT, HeaderValue::from_static("text/csv;q=0.8"));
+        assert!(negotiate(&repeated));
+        assert!(!negotiate(&headers("application/xml")));
+        assert!(!negotiate(&HeaderMap::new()));
     }
 }

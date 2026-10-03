@@ -135,7 +135,7 @@ async fn authored_multi_period_response_obeys_the_shared_document_byte_limit() {
             if expected == StatusCode::BAD_REQUEST {
                 let problem: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 assert_eq!(problem["code"], "query.invalid");
-                assert_eq!(problem["fieldPath"], "from");
+                assert!(problem.get("fieldPath").is_none());
             }
         }
     }

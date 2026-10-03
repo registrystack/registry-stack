@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 #[cfg(feature = "runtime")]
-use registry_breg::package::{compiled_registry_change_set, CompiledRegistryChangeCode};
+use registry_breg::package::{
+    compiled_registry_change_set, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use registry_breg::tooling::{classify_registry_diff, DiffClassification};
 use serde_json::{json, Value};
@@ -67,6 +69,33 @@ fn source() -> Value {
         }]
     }))
     .expect("fixture is JSON")
+}
+
+fn source_with_swappable_population_fields() -> Value {
+    let mut value = source();
+    value["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"archived","apiName":"archived","type":"boolean","required":true,
+            "classification":"internal"
+        }));
+    value["entities"][0]["fields"][0]["apiName"] = json!("active");
+    for profile in [0_usize, 1] {
+        for member in ["readableFields", "filterableFields"] {
+            value["accessProfiles"][profile]["permissions"][0][member]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("archived"));
+        }
+    }
+    value["statisticalDatasets"][0]["population"] = json!("active eq true and archived eq false");
+    value
+}
+
+fn swap_population_api_names(value: &mut Value) {
+    value["entities"][0]["fields"][0]["apiName"] = json!("archived");
+    value["entities"][0]["fields"][5]["apiName"] = json!("active");
 }
 
 fn compile(
@@ -665,6 +694,28 @@ fn definition_digest_excludes_grants_and_first_period_but_covers_values() {
 }
 
 #[test]
+fn definition_digest_binds_population_api_names_to_logical_fields() {
+    let baseline_source = source_with_swappable_population_fields();
+    let baseline = compile(&baseline_source).expect("two-field population compiles");
+
+    let mut swapped_source = baseline_source.clone();
+    swap_population_api_names(&mut swapped_source);
+    let swapped = compile(&swapped_source).expect("swapped API names compile");
+
+    let baseline_dataset = &baseline.statistical_datasets()["records-by-category"];
+    let swapped_dataset = &swapped.statistical_datasets()["records-by-category"];
+    assert_eq!(baseline_dataset.population, swapped_dataset.population);
+    assert_eq!(
+        baseline_dataset.referenced_fields,
+        swapped_dataset.referenced_fields
+    );
+    assert_ne!(
+        baseline_dataset.definition_digest, swapped_dataset.definition_digest,
+        "the digest binds each authored API name to the logical field it selects"
+    );
+}
+
+#[test]
 fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
     let mut value = source();
     value["entities"][0]["fields"]
@@ -938,24 +989,39 @@ fn package_diff_classifies_statistical_dataset_add_change_and_removal() {
     let without_dataset = compile(&without).expect("registry without dataset compiles");
 
     let added = compiled_registry_change_set(&without_dataset, &with_dataset, "sha256:before");
-    assert!(added
+    let added = added
         .changes
         .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetAdded));
+        .find(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetAdded)
+        .expect("statistical dataset addition is classified");
+    assert_eq!(
+        added.class,
+        CompiledRegistryChangeClass::AccessOrDisclosureChange
+    );
     let removed = compiled_registry_change_set(&with_dataset, &without_dataset, "sha256:before");
-    assert!(removed
+    let removed = removed
         .changes
         .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetRemoved));
+        .find(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetRemoved)
+        .expect("statistical dataset removal is classified");
+    assert_eq!(
+        removed.class,
+        CompiledRegistryChangeClass::AccessOrDisclosureChange
+    );
 
     let mut changed_source = source();
     changed_source["statisticalDatasets"][0]["population"] = json!("active ne false");
     let changed_registry = compile(&changed_source).expect("changed dataset compiles");
     let changed = compiled_registry_change_set(&with_dataset, &changed_registry, "sha256:before");
-    assert!(changed
+    let changed = changed
         .changes
         .iter()
-        .any(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged));
+        .find(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged)
+        .expect("statistical dataset definition change is classified");
+    assert_eq!(
+        changed.class,
+        CompiledRegistryChangeClass::AccessOrDisclosureChange
+    );
 }
 
 #[test]
@@ -982,6 +1048,22 @@ fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     definition_source["statisticalDatasets"][0]["population"] = json!("active ne false");
     let changed = compile(&definition_source).expect("definition change compiles");
     let diff = classify_registry_diff(&baseline, &changed, "sha256:before");
+    assert!(diff.changes.iter().any(|change| {
+        change.change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged
+            && change.classification == DiffClassification::AccessChange
+    }));
+
+    let alias_baseline_source = source_with_swappable_population_fields();
+    let alias_baseline = compile(&alias_baseline_source).expect("two-field population compiles");
+    let mut swapped_source = alias_baseline_source.clone();
+    swap_population_api_names(&mut swapped_source);
+    let swapped = compile(&swapped_source).expect("swapped API names compile");
+    let changes = compiled_registry_change_set(&alias_baseline, &swapped, "sha256:before");
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged));
+    let diff = classify_registry_diff(&alias_baseline, &swapped, "sha256:before");
     assert!(diff.changes.iter().any(|change| {
         change.change.code == CompiledRegistryChangeCode::StatisticalDatasetChanged
             && change.classification == DiffClassification::AccessChange
@@ -1031,6 +1113,18 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         BTreeSet::from(["lookup".to_owned(), "record".to_owned()])
     );
     assert!(relation.uses_evaluation_date);
+
+    let mut missing_dependency_grant = value.clone();
+    missing_dependency_grant["accessProfiles"][1]["permissions"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let failure = compile_with_sql(&missing_dependency_grant, sql)
+        .expect_err("publisher access to every non-unit dependency is required");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "statistical_dataset.publisher.dependency_grant_missing"
+            && diagnostic.message.contains("dependency entity `lookup`")
+    }));
 
     let changed_sql = sql.replace("THEN 'a'", "THEN 'b'");
     let changed = compile_with_sql(&value, &changed_sql).expect("changed SQL compiles");

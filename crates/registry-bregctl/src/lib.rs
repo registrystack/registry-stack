@@ -4159,11 +4159,7 @@ fn statistics_lifecycle_failure(
             "statistics",
             "the Registry returned an invalid statistical release header",
         ),
-        StatisticsLifecycleError::Client => (
-            "statistics.operation.refused",
-            "statistics",
-            "the authenticated statistical release operation was refused",
-        ),
+        StatisticsLifecycleError::Client(error) => statistics_client_diagnostic(&error),
     };
     FailureReport {
         ok: false,
@@ -4173,6 +4169,73 @@ fn statistics_lifecycle_failure(
             DiagnosticArtifact::StatisticsOperation,
             SuggestedAction::VerifyStatisticsOperation,
         )],
+    }
+}
+
+fn statistics_client_diagnostic(
+    error: &registry_breg_client::BaseRegistryClientError,
+) -> (&'static str, &'static str, &'static str) {
+    use registry_breg_client::{BRegProblemCode, BaseRegistryClientError};
+    match error {
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::StatisticalDatasetReleaseRefused,
+            ..
+        } => {
+            let (code, message) = match error.refusal_code().map(|reason| reason.as_str()) {
+                Some("period-not-ended") => (
+                    "statistics.release.period_not_ended",
+                    "the period has not ended; publish after its end date",
+                ),
+                Some("before-first-period") => (
+                    "statistics.release.before_first_period",
+                    "the period is before the dataset's first period; select an eligible period",
+                ),
+                Some("provisional-after-final") => (
+                    "statistics.release.provisional_after_final",
+                    "a final release already exists; publish a final revision instead",
+                ),
+                Some("already-withdrawn") => (
+                    "statistics.release.already_withdrawn",
+                    "the version has already been withdrawn",
+                ),
+                _ => (
+                    BRegProblemCode::StatisticalDatasetReleaseRefused.code(),
+                    BRegProblemCode::StatisticalDatasetReleaseRefused.detail(),
+                ),
+            };
+            (code, "statistics", message)
+        }
+        BaseRegistryClientError::Problem { code, .. } => (code.code(), "statistics", code.detail()),
+        BaseRegistryClientError::Transport { .. } => (
+            "statistics.transport.failed",
+            "--breg-url",
+            "the exchange did not complete; retry the same request and idempotency key",
+        ),
+        BaseRegistryClientError::Configuration { .. } => (
+            "statistics.url.invalid",
+            "--breg-url",
+            "the Base Registry Engine client configuration was refused",
+        ),
+        BaseRegistryClientError::Token(_) => (
+            "statistics.token.invalid",
+            "--access-token-file",
+            "the bearer token could not be used",
+        ),
+        BaseRegistryClientError::InvalidRequest { .. } => (
+            "statistics.request.invalid",
+            "statistics",
+            "the statistical request does not satisfy the client contract",
+        ),
+        BaseRegistryClientError::Protocol { .. } => (
+            "statistics.response.invalid",
+            "statistics",
+            "the Registry response does not satisfy its wire contract",
+        ),
+        _ => (
+            "statistics.client.failed",
+            "statistics",
+            "the statistical exchange failed",
+        ),
     }
 }
 
@@ -13053,7 +13116,14 @@ fn write_statistics_success(
             ("period", report.release.period.clone()),
             ("version", report.release.version.to_string()),
             ("status", status.to_owned()),
-            ("snapshot", report.release.snapshot.clone()),
+            (
+                "snapshot",
+                report
+                    .release
+                    .snapshot
+                    .clone()
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+            ),
             ("content digest", report.release.content_digest.clone()),
         ];
         if let Some(withdrawal) = &report.release.withdrawal {
@@ -13853,6 +13923,147 @@ mod tests {
         assert!(help.contains("withdraw"));
         assert!(!help.contains("database-url"));
         assert!(!help.contains("database-secret"));
+    }
+
+    #[test]
+    fn statistics_http_failures_preserve_actionable_cli_diagnostics() {
+        use registry_breg_client::BRegProblemCode;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let directory = TestDirectory::create();
+        let token_file = directory.path.join("statistics-token");
+        fs::write(&token_file, "statistics-token-canary").unwrap();
+        let cases = [
+            (
+                Some(BRegProblemCode::StatisticalDatasetReleaseRefused),
+                Some("period-not-ended"),
+                "statistics.release.period_not_ended",
+            ),
+            (
+                Some(BRegProblemCode::StatisticalDatasetVersionConflict),
+                None,
+                "statistical_dataset.version_conflict",
+            ),
+            (
+                Some(BRegProblemCode::IdempotencyConflict),
+                None,
+                "idempotency.conflict",
+            ),
+            (
+                Some(BRegProblemCode::RequestTimeout),
+                None,
+                "request.timeout",
+            ),
+            (
+                Some(BRegProblemCode::ResourceNotFound),
+                None,
+                "resource.not_found",
+            ),
+            (
+                Some(BRegProblemCode::AuthenticationRefused),
+                None,
+                "authentication.refused",
+            ),
+            (None, None, "statistics.response.invalid"),
+        ];
+        for withdraw in [false, true] {
+            for (problem, reason, expected) in cases {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let response = if let Some(code) = problem {
+                    let title = match code.status() {
+                        401 => "Unauthorized",
+                        404 => "Not Found",
+                        409 => "Conflict",
+                        422 => "Unprocessable Entity",
+                        504 => "Gateway Timeout",
+                        _ => unreachable!(),
+                    };
+                    let mut document = json!({
+                        "type":format!("https://id.registrystack.org/problems/registry-breg/{}",code.code().replace('.',"/")),
+                        "title":title,"status":code.status(),"detail":code.detail(),"code":code.code(),
+                        "traceId":"4bf92f3577b34da6a3ce929d0e0e4736"
+                    });
+                    if let Some(reason) = reason {
+                        document["refusalCode"] = json!(reason);
+                    }
+                    let body = serde_json::to_string(&document).unwrap();
+                    format!("HTTP/1.1 {} {}\r\nContent-Type: application/problem+json\r\nCache-Control: no-store\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",code.status(),title,body.len(),body)
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\ninvalid".to_owned()
+                };
+                let server = std::thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut request = vec![0; 8192];
+                    let count = stream.read(&mut request).unwrap();
+                    let request = String::from_utf8_lossy(&request[..count]);
+                    assert!(request
+                        .starts_with("POST /v1/statistics/population/releases/2025-01/versions"));
+                    assert!(request
+                        .to_ascii_lowercase()
+                        .contains("idempotency-key: statistics-retry-key"));
+                    stream.write_all(response.as_bytes()).unwrap();
+                });
+                let error = if withdraw {
+                    statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
+                        breg_url: &url,
+                        access_token_file: &token_file,
+                        dataset: "population",
+                        period: "2025-01",
+                        version: 1,
+                        reason: registry_breg_client::BRegWithdrawalReason::ComputationError,
+                        profile: "publisher",
+                        idempotency_key: "statistics-retry-key",
+                    })
+                    .unwrap_err()
+                } else {
+                    statistics_lifecycle::publish(StatisticsPublishRequest {
+                        breg_url: &url,
+                        access_token_file: &token_file,
+                        dataset: "population",
+                        period: "2025-01",
+                        status: registry_breg_client::BRegReleaseStatus::Final,
+                        profile: "publisher",
+                        idempotency_key: "statistics-retry-key",
+                    })
+                    .unwrap_err()
+                };
+                server.join().unwrap();
+                let report = statistics_lifecycle_failure("statistics", error);
+                let rendered = serde_json::to_value(report).unwrap();
+                assert_eq!(rendered["diagnostics"][0]["code"], expected, "{rendered}");
+                assert!(!rendered.to_string().contains("statistics-token-canary"));
+                if reason.is_some() {
+                    assert!(rendered["diagnostics"][0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("publish after"));
+                }
+            }
+        }
+        // A closed local listener proves transport failures stay distinct from domain refusals.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let error = statistics_lifecycle::publish(StatisticsPublishRequest {
+            breg_url: &url,
+            access_token_file: &token_file,
+            dataset: "population",
+            period: "2025-01",
+            status: registry_breg_client::BRegReleaseStatus::Final,
+            profile: "publisher",
+            idempotency_key: "statistics-retry-key",
+        })
+        .unwrap_err();
+        let report =
+            serde_json::to_value(statistics_lifecycle_failure("statistics", error)).unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "statistics.transport.failed"
+        );
     }
 
     #[test]

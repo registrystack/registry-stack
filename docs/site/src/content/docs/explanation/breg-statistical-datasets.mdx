@@ -12,7 +12,7 @@ standards_referenced:
   - sdmx
 ---
 
-If you need statistics from records held by Base Registry Engine (BReg), you can declare a count dataset with a fixed population, calendar periods, and up to three dimensions. PostgreSQL computes the counts. Separate profiles control operational analysis, publication, and access to released JSON or CSV.
+If you need statistics from records held by Base Registry Engine (BReg), you can declare a count dataset with a fixed population, calendar periods, and closed dimensions. The expanded dimension cells for one period, including totals and null codes, must fit the 10,000-cell cap. PostgreSQL computes the counts. Separate profiles control operational analysis, publication, and access to released JSON or CSV.
 
 ## Choose the population once
 
@@ -38,7 +38,7 @@ A released-data reader needs access to the dataset, without needing access to it
 
 ## Publish a stable version
 
-A release contains the transformed cells and a snapshot reference. Publication computes against one source snapshot, then verifies the active package and freshness before assigning a version. Versions increase per dataset and period. A final release can be corrected by another final release; it prevents a later provisional release for that definition.
+A release contains the transformed cells and a snapshot reference when history coverage is available. After erasure or another coverage invalidation, `snapshot` is `null` and publication continues from current data. History rebaseline can restore bookmarks for subsequent releases, but it is not a publication prerequisite. Publication computes against one source snapshot, then verifies the active package and freshness before assigning a version. Versions increase per dataset and period. A final release can be corrected by another final release; it prevents a later provisional release for that definition.
 
 A definition digest identifies the population, source definitions, publisher visibility, dimensions, and disclosure parameters. Current reads serve only that definition's versions. Changing readers alone preserves the series. Changing the population creates another definition series without reusing version numbers.
 

@@ -7,16 +7,140 @@
 mod postgres_harness;
 
 use postgres_harness::TestDatabase;
-use registry_breg::postgres::install_statistics_store_for_test;
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::parse_project_json;
+use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    install_statistics_store_for_test, verify_catalog_identity_for_catalog, ExpectedManagedCatalog,
+    RegistryStateTestIdentity,
+};
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn statistics_catalog_refuses_extra_grants_and_withdrawal_function_tampering() {
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("compiled schema installs with statistical release storage");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: "statistics-catalog",
+            database_id: "statistics-catalog-database",
+            label: "statistics-catalog-package-1",
+        },
+    )
+    .await
+    .expect("exact statistical catalog identity initializes");
+    let verify = || async {
+        verify_catalog_identity_for_catalog(
+            &migration,
+            &identity,
+            &catalog,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+    };
+    verify()
+        .await
+        .expect("the installed statistical catalog is exact");
+
+    migration
+        .batch_execute(&format!(
+            "GRANT UPDATE ON registry_internal.registry_statistical_release_versions TO {}",
+            quote_identifier(database.runtime_role.as_str())
+        ))
+        .await
+        .expect("fixture adds excess release mutation authority");
+    assert!(
+        verify().await.is_err(),
+        "an extra release-table grant must refuse the active catalog"
+    );
+    migration
+        .batch_execute(&format!(
+            "REVOKE UPDATE ON registry_internal.registry_statistical_release_versions FROM {}",
+            quote_identifier(database.runtime_role.as_str())
+        ))
+        .await
+        .expect("fixture restores the exact release-table ACL");
+    verify()
+        .await
+        .expect("revoking the excess grant restores the active catalog");
+
+    migration
+        .batch_execute(
+            "ALTER FUNCTION registry_internal.withdraw_statistical_release(text, text, bigint, text)
+                 SECURITY INVOKER",
+        )
+        .await
+        .expect("fixture removes the withdrawal security boundary");
+    assert!(
+        verify().await.is_err(),
+        "a withdrawal security-shape change must refuse the active catalog"
+    );
+    migration
+        .batch_execute(
+            "ALTER FUNCTION registry_internal.withdraw_statistical_release(text, text, bigint, text)
+                 SECURITY DEFINER",
+        )
+        .await
+        .expect("fixture restores the withdrawal security boundary");
+    verify()
+        .await
+        .expect("restoring the security shape restores the active catalog");
+
+    migration
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION registry_internal.withdraw_statistical_release(
+                 text, text, bigint, text
+             ) RETURNS boolean LANGUAGE sql VOLATILE SECURITY DEFINER
+                SET search_path = pg_catalog, registry_internal AS 'SELECT false'",
+        )
+        .await
+        .expect("fixture tampers with the withdrawal function body");
+    assert!(
+        verify().await.is_err(),
+        "a withdrawal body change must refuse the active catalog fingerprint"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn statistics_store_has_exact_runtime_acl_and_withdrawal_function_shape() {
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
     install_store(&migration, &database).await;
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_statistical_release_versions
+                 ALTER COLUMN snapshot_reference SET NOT NULL",
+        )
+        .await
+        .expect("fixture recreates the predecessor snapshot constraint");
     install_statistics_store_for_test(&migration, &database.runtime_role)
         .await
         .expect("statistics store installation is idempotent");
+
+    let snapshot_nullable = migration
+        .query_one(
+            "SELECT is_nullable
+               FROM information_schema.columns
+              WHERE table_schema = 'registry_internal'
+                AND table_name = 'registry_statistical_release_versions'
+                AND column_name = 'snapshot_reference'",
+            &[],
+        )
+        .await
+        .expect("snapshot column contract is inspectable")
+        .get::<_, String>(0);
+    assert_eq!(snapshot_nullable, "YES");
 
     let row = migration
         .query_one(
@@ -182,6 +306,40 @@ async fn invalid_withdrawal_reason_leaves_content_and_journal_unchanged() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_header_persists_an_absent_history_snapshot() {
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_store(&migration, &database).await;
+
+    let digest = format!("sha256:{}", "0".repeat(64));
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_statistical_release_versions
+                 (dataset_id, period_code, release_version, release_status,
+                  history_head_position, snapshot_reference, computed_at,
+                  package_digest, definition_digest, content_digest)
+             VALUES ('households', '2026-08', 1, 'final', 7, NULL,
+                     transaction_timestamp(), $1, $1, $1)",
+            &[&digest],
+        )
+        .await
+        .expect("release header accepts an absent snapshot");
+    let row = migration
+        .query_one(
+            "SELECT history_head_position, snapshot_reference
+               FROM registry_internal.registry_statistical_release_versions",
+            &[],
+        )
+        .await
+        .expect("release header remains readable");
+    assert_eq!(row.get::<_, i64>(0), 7);
+    assert_eq!(row.get::<_, Option<uuid::Uuid>>(1), None);
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 async fn insert_release(client: &tokio_postgres::Client, version: i64) {
     client
         .execute(
@@ -238,4 +396,28 @@ async fn reset_role(database: &TestDatabase) {
 
 fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn compiled_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"statistics-catalog","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://statistics.example.test"},
+          "entities":[{
+            "id":"entry","primaryDataset":"statistics-catalog","route":"entries",
+            "mutationMode":"mutable","classification":"internal",
+            "fields":[{"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"}]
+          }],
+          "accessProfiles":[{
+            "id":"reader","default":true,"principalClaim":"registry_principal",
+            "permissions":[{
+              "entity":"entry","operations":["get"],"readableFields":["code"],"rowBoundaries":[]
+            }]
+          }]
+        }"#,
+    )
+    .expect("statistics catalog fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("statistics catalog fixture compiles")
 }

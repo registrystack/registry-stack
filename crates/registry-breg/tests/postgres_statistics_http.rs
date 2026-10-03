@@ -177,6 +177,29 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         None,
     );
 
+    // Anonymous concealment must not depend on the authenticated refusal journal.
+    let before_anonymous = database.audit_records().len();
+    for faulted in [false, true] {
+        if faulted {
+            database
+                .audit_capture()
+                .fail_on(registry_breg::audit::AUDIT_SCHEMA, "refusal");
+        }
+        for path in [
+            "/v1/statistics/records-by-category:live",
+            "/v1/statistics/unknown/route/garbage",
+        ] {
+            let anonymous = send(&app, Method::GET, path, None, &[], Vec::new()).await;
+            assert_eq!(anonymous.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        assert_eq!(database.audit_records().len(), before_anonymous);
+        assert!(
+            trace.lock().unwrap().is_empty(),
+            "anonymous refusal performs no database work"
+        );
+    }
+    database.audit_capture().restore();
+
     let analyst = claims("analyst", true);
     let count = send(
         &app,
@@ -409,6 +432,49 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     let first_header: Value = serde_json::from_slice(&first_bytes).expect("header is JSON");
     assert_eq!(first_header["version"], 1);
     assert_eq!(first_header["status"], "provisional");
+    let listing = send(
+        &app,
+        Method::GET,
+        "/v1/statistics/records-by-category/releases?accessProfile=reader",
+        Some(reader.clone()),
+        &[("accept", "text/csv;q=1,application/json;q=0.5")],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(listing.status(), StatusCode::OK);
+    assert_eq!(listing.headers()["content-type"], "application/json");
+    assert!(body_json(listing).await["items"].is_array());
+    let stored = database.admin.query_one(
+        "SELECT h.content_digest, c.document FROM registry_internal.registry_statistical_release_versions h JOIN registry_internal.registry_statistical_release_contents c USING (dataset_id, period_code, release_version) WHERE h.dataset_id = 'records-by-category' AND h.period_code = $1 AND h.release_version = 1",
+        &[&prior_period],
+    ).await.expect("published canonical bytes are stored");
+    let stored_digest: String = stored.get(0);
+    let stored_bytes: Vec<u8> = stored.get(1);
+    use sha2::{Digest, Sha256};
+    assert_eq!(
+        stored_digest,
+        format!(
+            "sha256:{}",
+            Sha256::digest(&stored_bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )
+    );
+    assert_eq!(first_header["contentDigest"], stored_digest);
+    let exact = send(&app, Method::GET,
+        &format!("/v1/statistics/records-by-category/releases/{prior_period}/versions/1?accessProfile=reader"),
+        Some(reader.clone()), &[], Vec::new()).await;
+    assert_eq!(exact.status(), StatusCode::OK);
+    use base64::Engine as _;
+    assert_eq!(
+        exact.headers()["repr-digest"],
+        format!(
+            "sha-256=:{}:",
+            base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&stored_bytes))
+        )
+    );
+    assert_eq!(body_bytes(exact).await, stored_bytes);
 
     let replay = publish(
         &app,
@@ -441,7 +507,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
                 "/v1/statistics/records-by-category/releases/{prior_period}/versions/1"
             ),
         ] {
-            let concealed = send(
+            let visible = send(
                 &app,
                 Method::GET,
                 &format!("{uri}{}accessProfile={profile}", if uri.contains('?') { "&" } else { "?" }),
@@ -450,7 +516,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
                 Vec::new(),
             )
             .await;
-            assert_eq!(concealed.status(), StatusCode::OK, "{profile} {uri}");
+            assert_eq!(visible.status(), StatusCode::OK, "{profile} {uri}");
         }
     }
 
@@ -958,6 +1024,43 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
                     && record.get("cells").is_none()
             }),
             "missing value-free terminal audit count for {operation}"
+        );
+    }
+    let allowed_summary_keys = BTreeSet::from([
+        "phase",
+        "outcome",
+        "method",
+        "operationId",
+        "requestId",
+        "traceId",
+        "packageRevision",
+        "purposePresent",
+        "selectedAccessProfile",
+        "authorization",
+        "entityId",
+        "principalReference",
+        "resultCount",
+        "statisticalDatasetReference",
+        "periodReference",
+        "version",
+        "status",
+        "contentDigest",
+        "queryReference",
+        "rowBoundaryReference",
+    ]);
+    for record in terminal_records.iter().filter(|record| {
+        record["phase"] == "terminal"
+            && record["operationId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("statistics."))
+    }) {
+        assert!(
+            record
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|key| allowed_summary_keys.contains(key.as_str())),
+            "statistical audit summaries contain only references and lifecycle metadata: {record}"
         );
     }
     let audit_text = serde_json::to_string(&audit_entries).expect("audit serializes");
@@ -2006,7 +2109,9 @@ async fn live_and_series_refuse_period_and_response_cell_caps() {
     for (uri, claims) in cases {
         let response = send(&app, Method::GET, &uri, Some(claims), &[], Vec::new()).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
-        assert_eq!(body_json(response).await["code"], "query.invalid");
+        let problem = body_json(response).await;
+        assert_eq!(problem["code"], "query.invalid");
+        assert_ne!(problem["fieldPath"], "period");
     }
 
     let release_day = today
@@ -2108,7 +2213,12 @@ async fn live_and_series_refuse_period_and_response_cell_caps() {
     )
     .await;
     assert_eq!(series_cell_cap.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(series_cell_cap).await["code"], "query.invalid");
+    let problem = body_json(series_cell_cap).await;
+    assert_eq!(problem["code"], "query.invalid");
+    assert!(
+        problem.get("fieldPath").is_none(),
+        "cell caps describe the whole response"
+    );
     database
         .admin
         .execute(
@@ -2227,7 +2337,7 @@ async fn generated_openapi_validates_the_actual_statistical_http_wire_contract()
         &[
             ("query", "$skiptoken", false),
             ("query", "$top", false),
-            ("query", "accessProfile", false),
+            ("query", "accessProfile", true),
             ("header", "traceparent", false),
         ],
     );
@@ -2236,7 +2346,7 @@ async fn generated_openapi_validates_the_actual_statistical_http_wire_contract()
         series_path,
         "get",
         &[
-            ("query", "accessProfile", false),
+            ("query", "accessProfile", true),
             ("query", "from", true),
             ("query", "status", false),
             ("query", "to", true),
@@ -2250,7 +2360,7 @@ async fn generated_openapi_validates_the_actual_statistical_http_wire_contract()
         "get",
         &[
             ("path", "period", true),
-            ("query", "accessProfile", false),
+            ("query", "accessProfile", true),
             ("query", "status", false),
             ("header", "Accept", false),
             ("header", "traceparent", false),
@@ -2263,7 +2373,7 @@ async fn generated_openapi_validates_the_actual_statistical_http_wire_contract()
         &[
             ("path", "period", true),
             ("path", "version", true),
-            ("query", "accessProfile", false),
+            ("query", "accessProfile", true),
             ("header", "Accept", false),
             ("header", "traceparent", false),
         ],
@@ -2553,10 +2663,12 @@ async fn generated_openapi_validates_the_actual_statistical_http_wire_contract()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn generated_openapi_requires_an_ambiguous_statistical_access_profile() {
+async fn caller_filtered_openapi_hides_an_inaccessible_statistical_default() {
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
-    let compiled = Arc::new(ambiguous_live_profile_registry());
+    let mut source = statistics_registry_source();
+    source["accessProfiles"][0]["requiredScopes"] = json!(["statistics.narrow"]);
+    let compiled = Arc::new(compile_statistics_registry(source));
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("compiled schema installs");
@@ -2590,6 +2702,14 @@ async fn generated_openapi_requires_an_ambiguous_statistical_access_profile() {
     let profile = operation_parameter(&openapi, path, "get", "query", "accessProfile");
     assert_eq!(profile["required"], true);
     assert!(profile["schema"].get("default").is_none());
+    assert_eq!(profile["schema"]["const"], "analyst-wide");
+    let operation = &openapi["paths"][path]["get"];
+    assert_eq!(operation["x-registry-accessProfile"], "analyst-wide");
+    assert!(operation.get("x-registry-accessProfiles").is_none());
+    assert!(operation.get("x-registry-defaultAccessProfile").is_none());
+    assert!(!serde_json::to_string(operation)
+        .unwrap()
+        .contains("\"analyst\""));
     let period = month_code(Utc::now().date_naive());
 
     let omitted = send(
@@ -2898,6 +3018,14 @@ async fn validate_openapi_json_response(
         schema.is_object(),
         "{method} {path} response {status} documents wire media {media}"
     );
+    if method == "post" && expected_status < 300 {
+        assert!(response.headers().contains_key("repr-digest"));
+        assert!(
+            openapi["paths"][path][method]["responses"][&status]["headers"]
+                .get("Repr-Digest")
+                .is_some()
+        );
+    }
     let document = body_json(response).await;
     assert_openapi_schema_accepts(
         openapi,
@@ -3229,18 +3357,211 @@ async fn insert_other_definition_release(
         .expect("fixture inserts inaccessible older-definition content");
 }
 
-fn compiled_registry() -> registry_breg::CompiledRegistry {
-    compile_statistics_registry(statistics_registry_source())
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_population_through_package_apply_starts_a_new_release_series() {
+    use registry_breg::migration::{
+        apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
+        ApplyVerifiedPackageRequest,
+    };
+    use registry_breg::package::{
+        load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+        PackageMigrationPlanInput, PackageSourceFile,
+    };
+    use registry_breg::postgres::managed_schema_fingerprint;
+    let database = TestDatabase::create(4).await;
+    let mut source = statistics_registry_source();
+    source["package"] = json!({"sourceRevision":"statistics-definition-test"});
+    let prior = compile_statistics_registry(source.clone());
+    let (mut migration, task) = database.connect_migration().await;
+    let transaction = migration.transaction().await.unwrap();
+    install_compiled_schema(&transaction, &prior, &database.runtime_role)
+        .await
+        .unwrap();
+    let fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&prior),
+    )
+    .await
+    .unwrap();
+    transaction.rollback().await.unwrap();
+    task.abort();
+    let make_package = |source: &Value, from: Option<&str>, plan| {
+        let prepared = prepare_package(PackageBuildRequest {
+            from_package_digest: from.map(str::to_owned),
+            compiler_source_revision: "statistics-definition-test".to_owned(),
+            schema_fingerprint: fingerprint.clone(),
+            project: PackageSourceFile {
+                path: "source/registry.yaml".to_owned(),
+                bytes: serde_json::to_vec(source).unwrap(),
+            },
+            modules: Vec::new(),
+            fixture_journeys: PackageSourceFile {
+                path: "tests/journeys.yaml".to_owned(),
+                bytes: br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: population
+    steps:
+      - id: empty
+        entity: record
+        accessProfile: publisher
+        claims: {principal: package-publisher}
+        request: {operation: list}
+        expect: {outcome: success, status: 200, count: 0}
+"#
+                .to_vec(),
+            },
+            migration_plan: plan,
+        })
+        .expect("statistical package prepares");
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("package");
+        prepared.publish_to_directory(&path).unwrap();
+        load_package(
+            &path,
+            &PackageLoadContext {
+                database_initialization_environment: "local",
+            },
+        )
+        .unwrap()
+    };
+    let initial = make_package(&source, None, PackageMigrationPlanInput::InitialCompiledDdl);
+    let audit = database.activation_audit();
+    let request = |package, precondition| {
+        ApplyVerifiedPackageRequest::new(
+            &database.migration_config,
+            package,
+            ActivationDeployment::new("local", "statistics-definition-test", DATABASE_ID),
+            precondition,
+            ApplyRoles::new(&database.migration_role, &database.runtime_role),
+            ApplyTimeouts::new(Duration::from_secs(5), Duration::from_secs(5)).unwrap(),
+            audit.clone(),
+        )
+    };
+    let active = apply_verified_package(request(&initial, ApplyPrecondition::InitialActivation))
+        .await
+        .expect("initial statistical package applies");
+    let pool = database.runtime_config.build_pool().unwrap();
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).unwrap();
+    let today = Utc::now().date_naive();
+    let prior_date = today
+        .with_day(1)
+        .unwrap()
+        .checked_sub_days(Days::new(1))
+        .unwrap();
+    let period = month_code(prior_date);
+    seed_records(&pool, lock_key, &active, &prior, today, prior_date).await;
+    let make_app = |registry: Arc<registry_breg::CompiledRegistry>, identity| {
+        statistics_router(
+            pool.clone(),
+            registry,
+            identity,
+            lock_key,
+            database
+                .audit(AuditProfile::production_from_secret_bytes(vec![0x79; 32].into()).unwrap()),
+            Arc::new(std::sync::Mutex::new(Vec::new())),
+            None,
+        )
+    };
+    let app = make_app(Arc::new(prior.clone()), active.clone());
+    let old = publish(
+        &app,
+        &period,
+        "definition-old",
+        "final",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(old.status(), StatusCode::CREATED);
+    let old = body_json(old).await;
+    let old_bytes: Vec<u8> = database
+        .admin
+        .query_one(
+            "SELECT document FROM registry_internal.registry_statistical_release_contents",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    source["statisticalDatasets"][0]["population"] = json!("active eq false");
+    let candidate = compile_statistics_registry(source.clone());
+    assert_ne!(
+        prior.statistical_datasets()["records-by-category"].definition_digest,
+        candidate.statistical_datasets()["records-by-category"].definition_digest
+    );
+    let successor = make_package(
+        &source,
+        Some(&active.package_digest),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(prior),
+        },
+    );
+    let next = apply_verified_package(request(
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+    ))
+    .await
+    .expect("definition-only successor applies through the maintained coordinator");
+    assert_ne!(next.activation_id, active.activation_id);
+    let app = make_app(Arc::new(candidate), next);
+    let hidden = send(
+        &app,
+        Method::GET,
+        &format!(
+            "/v1/statistics/records-by-category/releases/{period}/versions/1?accessProfile=reader"
+        ),
+        Some(claims("reader", false)),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    let latest = send(
+        &app,
+        Method::GET,
+        &format!("/v1/statistics/records-by-category/releases/{period}?accessProfile=reader"),
+        Some(claims("reader", false)),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(latest.status(), StatusCode::NOT_FOUND);
+    let new = publish(
+        &app,
+        &period,
+        "definition-new",
+        "provisional",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(new.status(), StatusCode::CREATED);
+    let new = body_json(new).await;
+    assert_eq!(new["status"], "provisional");
+    // Stored version keys remain monotonic across definitions; series visibility is definition-specific.
+    assert_eq!(new["version"], 2);
+    assert_ne!(old["definitionDigest"], new["definitionDigest"]);
+    let listing = send(
+        &app,
+        Method::GET,
+        "/v1/statistics/records-by-category/releases?accessProfile=reader",
+        Some(claims("reader", false)),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(listing.status(), StatusCode::OK);
+    let listing = body_json(listing).await;
+    assert_eq!(listing["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listing["items"][0]["version"], 2);
+    let retained:Vec<u8> = database.admin.query_one("SELECT document FROM registry_internal.registry_statistical_release_contents WHERE release_version = 1",&[]).await.unwrap().get(0);
+    assert_eq!(retained, old_bytes);
+    drop(app);
+    drop(pool);
+    database.cleanup().await;
 }
 
-fn ambiguous_live_profile_registry() -> registry_breg::CompiledRegistry {
-    let mut source = statistics_registry_source();
-    source["accessProfiles"][0]
-        .as_object_mut()
-        .expect("analyst profile is an object")
-        .remove("default");
-    source["accessProfiles"][3]["default"] = json!(true);
-    compile_statistics_registry(source)
+fn compiled_registry() -> registry_breg::CompiledRegistry {
+    compile_statistics_registry(statistics_registry_source())
 }
 
 fn quarterly_registry() -> registry_breg::CompiledRegistry {
@@ -3386,6 +3707,7 @@ async fn publish(
         ),
         Some(claims),
         &[
+            ("accept", "text/csv;q=1,application/json;q=0.5"),
             ("content-type", "application/json"),
             ("idempotency-key", key),
         ],
@@ -3408,7 +3730,7 @@ async fn withdraw(
             "/v1/statistics/records-by-category/releases/{period}/versions/{version}/withdrawal?accessProfile=publisher"
         ),
         Some(claims),
-        &[("content-type", "application/json"), ("idempotency-key", key)],
+        &[("accept", "text/csv;q=1,application/json;q=0.5"), ("content-type", "application/json"), ("idempotency-key", key)],
         serde_json::to_vec(&json!({"reason":"source-data-error"}))
             .expect("withdrawal body serializes"),
     )

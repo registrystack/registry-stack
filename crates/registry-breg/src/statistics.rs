@@ -117,7 +117,7 @@ pub struct PeriodVersionHeader {
     pub version: u64,
     pub status: ReleaseStatus,
     pub content_digest: String,
-    pub snapshot: String,
+    pub snapshot: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,7 +135,7 @@ pub struct ReleaseVersionHeader {
     pub period: String,
     pub version: u64,
     pub status: ReleaseStatus,
-    pub snapshot: String,
+    pub snapshot: Option<String>,
     pub computed_at: String,
     pub package_digest: String,
     pub definition_digest: String,
@@ -209,7 +209,7 @@ pub struct ReleaseDocument {
     pub period: String,
     pub version: u64,
     pub status: ReleaseStatus,
-    pub snapshot: String,
+    pub snapshot: Option<String>,
     pub computed_at: String,
     pub package_digest: String,
 }

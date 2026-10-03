@@ -130,6 +130,7 @@ pub(crate) fn append_statistics_openapi(
     component_schemas: &mut Map<String, Value>,
     datasets: &BTreeMap<String, CompiledStatisticalDataset>,
     admission_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
+    selected: bool,
 ) {
     if datasets.is_empty() {
         return;
@@ -181,6 +182,7 @@ pub(crate) fn append_statistics_openapi(
                 "get",
                 operation(
                     dataset,
+                    selected,
                     "read_live",
                     &dataset.live_profiles,
                     &admission_dataset.live_profiles,
@@ -202,11 +204,12 @@ pub(crate) fn append_statistics_openapi(
                 "get",
                 operation(
                     dataset,
+                    selected,
                     "list_releases",
                     &readers,
                     &admission_readers,
                     release_list_parameters(),
-                    json!({"200": json_response("StatisticalReleasePage"), "400": problem_response(), "401": problem_response(), "404": problem_response(), "503": problem_response(), "504":problem_response()}),
+                    json!({"200": json_response("StatisticalReleasePage", false), "400": problem_response(), "401": problem_response(), "404": problem_response(), "503": problem_response(), "504":problem_response()}),
                     None,
                 ),
             );
@@ -216,6 +219,7 @@ pub(crate) fn append_statistics_openapi(
                 "get",
                 operation(
                     dataset,
+                    selected,
                     "read_released_series",
                     &readers,
                     &admission_readers,
@@ -230,6 +234,7 @@ pub(crate) fn append_statistics_openapi(
                 "get",
                 operation(
                     dataset,
+                    selected,
                     "read_latest_release",
                     &readers,
                     &admission_readers,
@@ -244,6 +249,7 @@ pub(crate) fn append_statistics_openapi(
                 "get",
                 operation(
                     dataset,
+                    selected,
                     "read_release_version",
                     &readers,
                     &admission_readers,
@@ -267,11 +273,12 @@ pub(crate) fn append_statistics_openapi(
                 "post",
                 operation(
                     dataset,
+                    selected,
                     "publish_release",
                     &publisher,
                     &admission_publisher,
                     publish_parameters(false),
-                    json!({"201": json_response("StatisticalReleaseHeader"), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
+                    json!({"201": json_response("StatisticalReleaseHeader", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalReleaseRequest"),
                 ),
             );
@@ -281,11 +288,12 @@ pub(crate) fn append_statistics_openapi(
                 "post",
                 operation(
                     dataset,
+                    selected,
                     "withdraw_release",
                     &publisher,
                     &admission_publisher,
                     publish_parameters(true),
-                    json!({"200": json_response("StatisticalReleaseHeader"), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "503":problem_response(), "504":problem_response()}),
+                    json!({"200": json_response("StatisticalReleaseHeader", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalWithdrawalRequest"),
                 ),
             );
@@ -314,8 +322,10 @@ fn insert_operation(paths: &mut Map<String, Value>, path: &str, method: &str, op
     paths.entry(path.to_owned()).or_insert_with(|| json!({}))[method] = operation;
 }
 
+#[allow(clippy::too_many_arguments)] // Each route supplies its generated request and response contract.
 fn operation(
     dataset: &CompiledStatisticalDataset,
+    selected: bool,
     operation: &str,
     profiles: &BTreeSet<String>,
     admission_profiles: &BTreeSet<String>,
@@ -352,9 +362,24 @@ fn operation(
         "responses": responses,
         "x-registry-statisticalDataset": dataset.id,
         "x-registry-statisticalOperation": operation,
-        "x-registry-accessProfiles": profiles,
-        "x-registry-defaultAccessProfile": default_profile,
     });
+    if selected {
+        let profile = profiles
+            .first()
+            .expect("selected statistical operation has a profile");
+        value["x-registry-accessProfile"] = json!(profile);
+        if let Some(parameter) = value["parameters"].as_array_mut().and_then(|parameters| {
+            parameters.iter_mut().find(|parameter| {
+                parameter["in"] == "query" && parameter["name"] == "accessProfile"
+            })
+        }) {
+            parameter["schema"]["const"] = json!(profile);
+            parameter["description"] = json!("Select this caller-visible access profile explicitly unless it is the configured default.");
+        }
+    } else {
+        value["x-registry-accessProfiles"] = json!(profiles);
+        value["x-registry-defaultAccessProfile"] = json!(default_profile);
+    }
     if let Some(schema) = request_schema {
         value["requestBody"] = json!({
             "required":true,
@@ -457,10 +482,10 @@ fn success_document_response() -> Value {
     })
 }
 
-fn json_response(schema: &str) -> Value {
+fn json_response(schema: &str, digest: bool) -> Value {
     json!({
         "description":"Request completed.",
-        "headers":read_headers(false),
+        "headers":read_headers(digest),
         "content":{"application/json":{"schema":{"$ref":format!("#/components/schemas/{schema}")}}}
     })
 }
@@ -526,7 +551,7 @@ fn document_schema() -> Value {
                                 "version":{"type":"integer","format":"int64","minimum":1},
                                 "status":{"type":"string","enum":["provisional","final"]},
                                 "contentDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
-                                "snapshot":{"type":"string"}
+                                "snapshot":{"type":["string","null"]}
                             }
                         }
                     }
@@ -539,7 +564,7 @@ fn document_schema() -> Value {
                 "required":["period","version","status","snapshot","computedAt","packageDigest"],
                 "properties":{
                     "period":{"type":"string"},"version":{"type":"integer","format":"int64","minimum":1},
-                    "status":{"type":"string","enum":["provisional","final"]},"snapshot":{"type":"string"},
+                    "status":{"type":"string","enum":["provisional","final"]},"snapshot":{"type":["string","null"]},
                     "computedAt":{"type":"string","format":"date-time"},
                     "packageDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}
                 }
@@ -572,7 +597,7 @@ fn release_header_schema() -> Value {
             "status":{"type":"string","enum":["provisional","final"]},
             "definitionDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
             "contentDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
-            "snapshot":{"type":"string"},"computedAt":{"type":"string","format":"date-time"},
+            "snapshot":{"type":["string","null"]},"computedAt":{"type":"string","format":"date-time"},
             "packageDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
             "withdrawal":{
                 "type":"object","additionalProperties":false,"required":["withdrawnAt","reason"],

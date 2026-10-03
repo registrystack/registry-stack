@@ -21,7 +21,7 @@ pub(crate) enum StatisticsLifecycleError {
     IdempotencyKey,
     Runtime,
     Response,
-    Client,
+    Client(BaseRegistryClientError),
 }
 
 pub(crate) struct StatisticsPublishRequest<'a> {
@@ -59,7 +59,7 @@ pub(crate) fn publish(
             request.profile,
             &key,
         ))
-        .map_err(|_: BaseRegistryClientError| StatisticsLifecycleError::Client)?;
+        .map_err(StatisticsLifecycleError::Client)?;
     decode_header(response.value.as_bytes())
 }
 
@@ -78,7 +78,7 @@ pub(crate) fn withdraw(
             request.profile,
             &key,
         ))
-        .map_err(|_: BaseRegistryClientError| StatisticsLifecycleError::Client)?;
+        .map_err(StatisticsLifecycleError::Client)?;
     decode_header(response.value.as_bytes())
 }
 

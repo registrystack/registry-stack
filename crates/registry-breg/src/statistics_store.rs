@@ -48,7 +48,7 @@ pub(crate) async fn install(
                      release_status IN ('provisional', 'final')
                  ),
                  history_head_position bigint NOT NULL CHECK (history_head_position >= 0),
-                 snapshot_reference uuid NOT NULL,
+                 snapshot_reference uuid,
                  computed_at timestamptz NOT NULL,
                  package_digest text NOT NULL CHECK (
                      package_digest ~ '^sha256:[0-9a-f]{{64}}$'
@@ -62,6 +62,8 @@ pub(crate) async fn install(
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  PRIMARY KEY (dataset_id, period_code, release_version)
              );
+             ALTER TABLE registry_internal.registry_statistical_release_versions
+                 ALTER COLUMN snapshot_reference DROP NOT NULL;
              CREATE TABLE IF NOT EXISTS registry_internal.registry_statistical_release_contents (
                  dataset_id text NOT NULL,
                  period_code text NOT NULL,

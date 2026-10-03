@@ -111,6 +111,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_statistics_stock \
     --test postgres_statistics_byte_limits \
     --test postgres_statistics_first_period \
+    --test postgres_statistics_history \
     --test postgres_logical_sql_names \
     --test schema_fingerprint_rehearsal
   # The citizen review page against the real registry: the page crate links

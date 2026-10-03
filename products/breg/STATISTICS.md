@@ -41,12 +41,13 @@ statisticalDatasets:
 ```
 
 The unit is a mutable entity. Population expressions use the typed read-filter
-grammar and API field names. Dimensions name logical field IDs, with at most
-three boolean or closed vocabulary dimensions. Boolean codes are `true` and
-`false`. Vocabulary codes beginning with `_` are reserved. `_T` denotes a
-total; `_U` denotes a null value when the field can be null. Derived fields are
-nullable for this purpose. A non-null value outside the declared vocabulary
-refuses the whole computation without disclosing that value.
+grammar and API field names. Dimensions name logical field IDs and must be
+boolean or closed vocabulary fields. Their expanded cells for one period,
+including totals and null codes, must fit the 10,000-cell cap. Boolean codes are
+`true` and `false`. Vocabulary codes beginning with `_` are reserved. `_T`
+denotes a total; `_U` denotes a null value when the field can be null. Derived
+fields are nullable for this purpose. A non-null value outside the declared
+vocabulary refuses the whole computation without disclosing that value.
 
 The column names `period`, `periodStart`, `periodEnd`, `value`, and `status`
 are reserved for the document and CSV representation. A dimension cannot use
@@ -151,7 +152,11 @@ is outside the implemented release path.
 ## Release lifecycle
 
 Publication computes under one source snapshot and records the shared history
-head and snapshot reference with that computation. Persistence then verifies
+head with that computation. The release's `snapshot` is an opaque bookmark
+when history coverage is available, or `null` after erasure or other coverage
+invalidation. Publication continues from current data without requiring
+history rebaseline; rebaseline can restore bookmarks for subsequent releases.
+Persistence then verifies
 the same package activation, takes the caller's idempotency-key lock followed
 by the dataset-period lock, rechecks eligibility and freshness, and allocates
 the next version. A computation superseded by a newer committed computation
