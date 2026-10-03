@@ -1635,10 +1635,11 @@ validation. The CLI binds mutation success to the requested dataset and period:
 publication also matches status and a positive version without withdrawal
 metadata, while withdrawal matches the version and reason. Nullable snapshot
 bookmarks remain valid.
-Version selectors must fit a positive signed 64-bit integer before credentials
-or I/O. Period selectors must be canonical year, quarter, month, or day codes
-with valid Gregorian dates and an exclusive end in the four-digit year domain.
-Invalid period selectors also fail before credentials or I/O. Release listing
+The Rust client and its Node and Python bindings require positive signed
+64-bit version selectors and canonical year, quarter, month, or day codes with
+valid Gregorian dates and an exclusive end in the four-digit year domain.
+Invalid selectors fail before token-provider acquisition or HTTP I/O. The CLI
+reads its operator-supplied token file before calling the Rust client. Release listing
 clients accept the complete envelope the server's
 cursor codec can issue, while retaining a fixed size bound.
 
