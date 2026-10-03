@@ -35,7 +35,7 @@ test('statistics methods preserve route, representation, status and caller key',
         ['/statistics/release-refused/', 422, 'statistical_dataset.release_refused', 'The statistical dataset release operation is not eligible.', { refusalCode: 'period-not-ended' }],
         ['/statistics/version-conflict/', 409, 'statistical_dataset.version_conflict', 'The statistical dataset computation was superseded or its package changed.', {}],
         ['/statistics/version-withdrawn/', 410, 'statistical_dataset.version_withdrawn', 'The statistical dataset version was withdrawn.', { reasonCode: 'source-data-error' }],
-        ['/statistics/domain-violation:live', 500, 'statistical_dataset.domain_violation', 'A statistical dataset contains a code outside its declared domain.', {}],
+        ['/statistics/domain-violation:live', 500, 'statistical_dataset.domain_violation', 'A statistical dataset contains a code outside its declared domain.', { fieldPath: 'statisticalDatasets[id=domain-violation].dimensions[id=category]' }],
       ];
       const failure = failures.find(([path]) => request.url.includes(path));
       if (failure) {
@@ -102,7 +102,11 @@ test('statistics methods preserve route, representation, status and caller key',
     );
     await assert.rejects(
       client.statisticsLive('domain-violation', null, null, 'reader'),
-      error => error.code === 'statistical_dataset.domain_violation',
+      error => error.code === 'statistical_dataset.domain_violation'
+        && error.fieldPath === 'statisticalDatasets[id=domain-violation].dimensions[id=category]'
+        && Object.prototype.propertyIsEnumerable.call(error, 'fieldPath') === false
+        && String(error).includes('domain-violation') === false
+        && JSON.stringify(error).includes('domain-violation') === false,
     );
   } finally {
     await new Promise(resolve => server.close(resolve));

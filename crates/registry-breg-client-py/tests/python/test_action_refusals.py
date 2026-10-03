@@ -95,6 +95,7 @@ class ActionRefusalTests(unittest.TestCase):
                 self.assertEqual(error.status, 422)
                 self.assertEqual(error.code, "action.refused")
                 self.assertEqual(error.refusal_code, document["refusalCode"])
+                self.assertEqual(error.field_path, document.get("fieldPath"))
                 self.assertEqual(error.trace_id, TRACE_ID)
                 self.assertIsNone(error.plan_refusal)
 
@@ -124,6 +125,7 @@ class ActionRefusalTests(unittest.TestCase):
                 self.assertEqual(error.kind, "protocol")
                 self.assertEqual(error.code, "problem")
                 self.assertIsNone(error.refusal_code)
+                self.assertIsNone(error.field_path)
 
 
 if __name__ == "__main__":

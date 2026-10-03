@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { after, before, test } = require('node:test');
+const { format, inspect } = require('node:util');
 
 const { BaseRegistryClient } = require('..');
 
@@ -68,8 +69,40 @@ test('a declared refusal reaches the caller with its reason', async () => {
     assert.equal(error.status, 422);
     assert.equal(error.code, 'action.refused');
     assert.equal(error.refusalCode, problem.refusalCode);
+    assert.equal(error.fieldPath, problem.fieldPath);
     assert.equal(error.traceId, TRACE_ID);
     assert.equal(error.planRefusal, undefined);
+  }
+});
+
+test('located problems keep field paths out of default Node rendering', async () => {
+  for (const problem of [
+    refusal({ fieldPath: '/input/givenName' }),
+    {
+      type: 'https://id.registrystack.org/problems/registry-breg/request/invalid',
+      title: 'Bad Request',
+      status: 400,
+      detail: 'The request is invalid.',
+      code: 'request.invalid',
+      traceId: TRACE_ID,
+      fieldPath: '/data/legalName',
+    },
+    {
+      type: 'https://id.registrystack.org/problems/registry-breg/query/invalid',
+      title: 'Bad Request',
+      status: 400,
+      detail: 'The query request is invalid.',
+      code: 'query.invalid',
+      traceId: TRACE_ID,
+      fieldPath: '$select',
+    },
+  ]) {
+    const error = await answer(problem);
+    assert.equal(error.fieldPath, problem.fieldPath);
+    assert.equal(Object.prototype.propertyIsEnumerable.call(error, 'fieldPath'), false);
+    assert.equal(inspect(error).includes(problem.fieldPath), false);
+    assert.equal(format(error).includes(problem.fieldPath), false);
+    assert.equal(JSON.stringify(error).includes(problem.fieldPath), false);
   }
 });
 
@@ -98,5 +131,6 @@ test('a refusal outside the published bounds fails closed with no reason', async
     assert.equal(error.kind, 'protocol');
     assert.equal(error.code, 'problem');
     assert.equal(error.refusalCode, undefined);
+    assert.equal(error.fieldPath, undefined);
   }
 });

@@ -51,7 +51,7 @@ class StatisticsTests(unittest.TestCase):
                     ("/statistics/release-refused/", 422, "statistical_dataset.release_refused", "The statistical dataset release operation is not eligible.", {"refusalCode": "period-not-ended"}),
                     ("/statistics/version-conflict/", 409, "statistical_dataset.version_conflict", "The statistical dataset computation was superseded or its package changed.", {}),
                     ("/statistics/version-withdrawn/", 410, "statistical_dataset.version_withdrawn", "The statistical dataset version was withdrawn.", {"reasonCode": "source-data-error"}),
-                    ("/statistics/domain-violation:live", 500, "statistical_dataset.domain_violation", "A statistical dataset contains a code outside its declared domain.", {}),
+                    ("/statistics/domain-violation:live", 500, "statistical_dataset.domain_violation", "A statistical dataset contains a code outside its declared domain.", {"fieldPath": "statisticalDatasets[id=domain-violation].dimensions[id=category]"}),
                 )
                 failure = next((item for item in failures if item[0] in self.path), None)
                 if failure is not None:
@@ -151,6 +151,11 @@ class StatisticsTests(unittest.TestCase):
         with self.assertRaises(BaseRegistryClientError) as domain:
             self.client.statistics_live("domain-violation", access_profile="reader")
         self.assertEqual(domain.exception.code, "statistical_dataset.domain_violation")
+        self.assertEqual(
+            domain.exception.field_path,
+            "statisticalDatasets[id=domain-violation].dimensions[id=category]",
+        )
+        self.assertNotIn("domain-violation", str(domain.exception))
 
 
 if __name__ == "__main__":

@@ -109,6 +109,33 @@ impl std::fmt::Debug for BRegRefusalCode {
     }
 }
 
+/// One validated location named by a Base Registry Engine Problem.
+///
+/// The service supplies this value from a closed product grammar. The client
+/// validates that grammar and the shared 256-character bound before retaining
+/// the location. Read it explicitly through [`Self::as_str`]; it is not
+/// rendered into an error message or debug output.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BRegProblemFieldPath(String);
+
+impl BRegProblemFieldPath {
+    pub(crate) fn from_validated(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+
+    /// Borrow the validated problem location.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::fmt::Debug for BRegProblemFieldPath {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BRegProblemFieldPath(<undisclosed>)")
+    }
+}
+
 /// One closed Base Registry Engine Problem code accepted by the client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -400,9 +427,11 @@ impl std::fmt::Display for BRegProtocolFailure {
 /// Coarse failures from one Base Registry Engine exchange.
 ///
 /// Values controlled by the caller or service are deliberately absent from
-/// every variant and from `Debug`/`Display` output. The one exception is the
-/// bounded detail code carried by immediate-action and statistical refusals.
-/// Callers read it through `refusal_code` or `reason_code`; it is not rendered.
+/// every variant and from `Debug`/`Display` output. The bounded declared
+/// detail code and validated problem field path are retained because they are
+/// machine-readable outcomes. Callers read immediate-action and statistical
+/// detail codes through `refusal_code` or `reason_code`, and paths through
+/// `field_path`; none are rendered.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BaseRegistryClientError {
@@ -419,6 +448,7 @@ pub enum BaseRegistryClientError {
         status: u16,
         code: BRegProblemCode,
         trace_id: TraceId,
+        field_path: Option<BRegProblemFieldPath>,
         refusal_code: Option<BRegRefusalCode>,
     },
     #[error("the Base Registry Engine response did not satisfy its wire contract: status {status}, {failure}")]
@@ -551,6 +581,15 @@ impl BaseRegistryClientError {
                 refusal_code: Some(reason_code),
                 ..
             } => Some(reason_code.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The validated location named by the accepted Problem, when present.
+    #[must_use]
+    pub fn field_path(&self) -> Option<&BRegProblemFieldPath> {
+        match self {
+            Self::Problem { field_path, .. } => field_path.as_ref(),
             _ => None,
         }
     }
@@ -693,6 +732,7 @@ mod tests {
                 status: code.status(),
                 code,
                 trace_id: trace_id.clone(),
+                field_path: None,
                 refusal_code: None,
             };
             let expected = if code == BRegProblemCode::ResourceNotFound {

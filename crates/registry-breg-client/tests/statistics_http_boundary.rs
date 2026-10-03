@@ -7,9 +7,9 @@ use axum::routing::any;
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_breg_client::{
-    BRegIdempotencyKey, BRegProblemCode, BRegProtocolFailure, BRegReleaseSelection,
-    BRegReleaseStatus, BRegStatisticsFormat, BRegWithdrawalReason, BaseRegistryClient,
-    BaseRegistryClientConfig, BaseRegistryClientError, StaticToken,
+    BRegIdempotencyKey, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure,
+    BRegReleaseSelection, BRegReleaseStatus, BRegStatisticsFormat, BRegWithdrawalReason,
+    BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, StaticToken,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -391,6 +391,13 @@ async fn statistics_problems_keep_concealment_and_closed_domain_details() {
         domain.problem_code(),
         Some(BRegProblemCode::StatisticalDatasetDomainViolation)
     );
+    assert_eq!(
+        domain.field_path().map(BRegProblemFieldPath::as_str),
+        Some("statisticalDatasets[id=domain-violation].dimensions[id=category]")
+    );
+    let rendered = format!("{domain:?}: {domain}");
+    assert!(!rendered.contains("domain-violation"));
+    assert!(!rendered.contains("category"));
 
     for error in [
         client
