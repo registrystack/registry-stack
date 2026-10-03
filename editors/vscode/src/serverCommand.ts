@@ -14,9 +14,8 @@ export interface ServerCommand {
 // halves of the integration ask a candidate the same question.
 const HOSTED_SERVER_ARGUMENTS = ['tooling', 'language-server'];
 
-// The adopter CLIs that may host the server, in product order. A matching
-// relayctl must remain reachable when an older evidencectl is also on PATH.
-const HOSTING_CLI_NAMES = ['evidencectl', 'relayctl'];
+// Evidence tooling hosts the shared server for every supported product.
+const HOSTING_CLI_NAMES = ['evidencectl'];
 
 const PROBE_TIMEOUT_MILLISECONDS = 5000;
 

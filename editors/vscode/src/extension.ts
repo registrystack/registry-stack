@@ -226,7 +226,7 @@ function resolveServerCommand(
     return onPath;
   }
   throw new Error(
-    `No Registry Stack ${context.extension.packageJSON.version} language server was found. Reinstall the integration with a matching evidencectl or relayctl; set registryStack.languageServer.path to a standalone executable for source development; or add a matching adopter CLI to PATH so it can run "<cli> tooling language-server".`,
+    `No Registry Stack ${context.extension.packageJSON.version} language server was found. Reinstall the integration with a matching evidencectl; set registryStack.languageServer.path to a standalone executable for source development; or add a matching adopter CLI to PATH so it can run "<cli> tooling language-server".`,
   );
 }
 

@@ -18,10 +18,10 @@ test('a legacy registry-stack.yaml does not declare a project root', () => {
   assert.strictEqual(isProjectRoot(directory), false);
 });
 
-test('a plain registry.yaml declares a Relay V2 project root', () => {
+test('a plain registry.yaml does not declare a retired Relay project root', () => {
   const directory = tempDirectory();
   fs.writeFileSync(path.join(directory, 'registry.yaml'), 'kind: RegistryContract\n');
-  assert.strictEqual(isProjectRoot(directory), true);
+  assert.strictEqual(isProjectRoot(directory), false);
 });
 
 // registry.yaml is also what the Base Registry Engine calls its project
@@ -36,22 +36,22 @@ test('a Base Registry Engine registry.yaml declares a project root', () => {
   assert.strictEqual(isProjectRoot(directory), true);
 });
 
-test('a Relay V2 apiVersion alone declares a project root', () => {
+test('a Relay V2 apiVersion alone does not declare a supported project root', () => {
   const directory = tempDirectory();
   fs.writeFileSync(
     path.join(directory, 'registry.yaml'),
     'apiVersion: relay.registrystack.org/v2alpha1\nresources: []\n',
   );
-  assert.strictEqual(isProjectRoot(directory), true);
+  assert.strictEqual(isProjectRoot(directory), false);
 });
 
-test('a quoted Relay V2 discriminator declares a project root', () => {
+test('a quoted Relay V2 discriminator does not declare a supported project root', () => {
   const directory = tempDirectory();
   fs.writeFileSync(
     path.join(directory, 'registry.yaml'),
     "kind: 'RegistryContract'  # the governed contract\n",
   );
-  assert.strictEqual(isProjectRoot(directory), true);
+  assert.strictEqual(isProjectRoot(directory), false);
 });
 
 test('a nested kind does not declare a Relay V2 project root', () => {

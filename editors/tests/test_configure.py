@@ -174,16 +174,16 @@ class ConfigureTests(unittest.TestCase):
         casework = self.project("casework", "casework.yaml")
         settings_path = self.workspace / ".vscode/settings.json"
         settings_path.parent.mkdir()
-        relay_uri = (self.workspace / "relay/.relay-v2-editor/schemas/registry.schema.json").as_uri()
+        unrelated_uri = (self.workspace / "unrelated/.editor/schemas/registry.schema.json").as_uri()
         settings_path.write_text(
-            json.dumps({"yaml.schemas": {relay_uri: [str(self.workspace / "relay/registry.yaml")]}})
+            json.dumps({"yaml.schemas": {unrelated_uri: [str(self.workspace / "unrelated/registry.yaml")]}})
         )
         configure.configure("breg", breg, self.workspace, None)
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
         self.assertEqual(len(settings["yaml.schemas"]), 5)
-        self.assertEqual(settings["yaml.schemas"][relay_uri], [str(self.workspace / "relay/registry.yaml")])
+        self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(len(tasks), 2)
         self.assertEqual({task["command"] for task in tasks}, {"bregctl", "caseworkctl"})
@@ -200,7 +200,6 @@ class ConfigureTests(unittest.TestCase):
             "manifest": ["validate", str(document)],
             "render": ["check", "--bundle", str(project)],
             "evidence": ["check", str(project)],
-            "relay": ["check", str(project)],
         }
         for product, args in expected.items():
             with self.subTest(product=product):
@@ -227,7 +226,7 @@ class ConfigureTests(unittest.TestCase):
                 with self.assertRaisesRegex(configure.SetupError, "must report Registry Stack"):
                     configure.matching_cli("evidencectl")
 
-    def test_evidence_forwards_workspace_and_relay_refuses_parent_workspace(self):
+    def test_evidence_forwards_workspace(self):
         evidence = self.project("evidence", "evidence-project.yaml")
         with patch.object(configure, "matching_cli", return_value="/bin/evidencectl"):
             with patch.object(configure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
@@ -243,10 +242,6 @@ class ConfigureTests(unittest.TestCase):
             ],
             check=False,
         )
-        relay = self.project("relay", "registry.yaml")
-        with self.assertRaisesRegex(configure.SetupError, "cannot write a parent workspace"):
-            configure.configure("relay", relay, self.workspace, None)
-        self.assertFalse((relay / ".registry-stack-editor").exists())
 
     def test_command_line_configures_real_scheduling_example_in_shared_workspace(self):
         source = ROOT / "products/scheduling/examples/standalone-exact-time"
