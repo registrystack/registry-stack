@@ -538,6 +538,71 @@ cp "$source" "$destination"
         with patch.dict(os.environ, {"PATH": environment["PATH"]}):
             nightly.smoke(output)
 
+    def test_pinned_installers_follow_the_arm64_platform_rosters(self):
+        output = self.assembled()
+        names = {path.name for path in output.iterdir()}
+        for os_name, arch, platform in (
+            ("Linux", "aarch64", "linux-arm64"),
+            ("Darwin", "arm64", "macos-arm64"),
+        ):
+            commands = self.root / f"commands-{platform}"
+            commands.mkdir()
+            scripts = {
+                "uname": f'#!/bin/sh\ncase "$1" in -s) echo {os_name};; -m) echo {arch};; *) exit 1;; esac\n',
+                "getconf": '#!/bin/sh\necho "glibc 2.35"\n',
+                "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.35"\n',
+                # Emulate GNU mv's atomic replacement on macOS as well as Linux.
+                "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+            }
+            for name, script in scripts.items():
+                (commands / name).write_text(script)
+                (commands / name).chmod(0o755)
+            for product, (crate, prefix, _) in nightly.INSTALLERS.items():
+                source = (nightly.ROOT / "crates" / crate / "install.sh").read_text()
+                binaries = re.search(r"^binaries=\(([^)]*)\)$", source, re.MULTILINE)[
+                    1
+                ].split()
+                complete = all(
+                    {f"{binary}-{TAG}-{platform}", f"{binary}-{TAG}-{platform}.tar.gz"}
+                    & names
+                    for binary in binaries
+                )
+                if complete and os_name == "Darwin":
+                    # test_macos_installers.py covers real macOS bundles.
+                    continue
+                with self.subTest(product=product, platform=platform):
+                    destination = self.root / f"installed-{product}-{platform}"
+                    environment = os.environ | {
+                        "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                        f"{prefix}_ASSET_DIR": str(output),
+                        f"{prefix}_INSTALL_DIR": str(destination),
+                    }
+                    environment.pop(f"{prefix}_VERSION", None)
+                    result = subprocess.run(
+                        ["bash", str(output / f"{product}-{TAG}-install.sh")],
+                        env=environment,
+                        text=True,
+                        capture_output=True,
+                    )
+                    if complete:
+                        self.assertEqual(
+                            result.returncode, 0, result.stdout + result.stderr
+                        )
+                        for binary in binaries:
+                            self.assertEqual(
+                                subprocess.check_output(
+                                    [str(destination / binary), "--version"],
+                                    text=True,
+                                ).strip(),
+                                f"{binary} {TAG[1:]}",
+                            )
+                    else:
+                        # A toolset the platform roster lacks is refused before
+                        # any asset is read or the install directory is touched.
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        self.assertIn("No prebuilt", result.stderr)
+                        self.assertFalse(destination.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

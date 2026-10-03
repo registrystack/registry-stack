@@ -298,22 +298,16 @@ fi
 os="$(uname -s)"
 arch="$(uname -m)"
 
+# The Scheduling runtime is published for Linux amd64 only. Other platforms
+# carry schedulingctl alone, so this two-binary toolset cannot install there.
 case "$os/$arch" in
 Linux/x86_64 | Linux/amd64)
 	os_label="linux"
 	arch_label="amd64"
 	;;
-Linux/arm64 | Linux/aarch64)
-	os_label="linux"
-	arch_label="arm64"
-	;;
-Darwin/arm64 | Darwin/aarch64)
-	os_label="macos"
-	arch_label="arm64"
-	;;
 *)
 	printf 'No prebuilt Registry Scheduling asset is published for %s/%s.\n' "$os" "$arch" >&2
-	printf 'Supported platforms: Linux amd64, Linux arm64, and macOS arm64.\n' >&2
+	printf 'Supported platform: Linux amd64.\n' >&2
 	printf 'Check the published assets at https://github.com/%s/releases/tag/%s\n' \
 		"$repo" "$version" >&2
 	exit 1
