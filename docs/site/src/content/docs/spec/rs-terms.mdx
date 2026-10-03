@@ -97,17 +97,20 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 
 ## 3. Metadata and standards terms
 
-**compiled Registry**: The canonical model derived from a governed contract together with the reviewed source schema observations recorded beside it. Every generated artifact derives from the compiled Registry, and the runtime re-derives both at startup rather than trusting the packaged copy. Registry Stack product term.
+**compiled registry**: The canonical Base Registry Engine (BReg) model produced from a registry
+project. The active package uses that model to define its entities, fields, relationships,
+operations, access profiles, changes, and generated API artifacts. Registry Stack product term.
 
-**resource**: A named domain collection a governed contract declares, bound to exactly one reviewed view in one declared source. Table names, SQL text, and hidden source columns never reach the public surface. Registry Stack product term.
+**operation**: A named BReg capability compiled from a registry project. Operations include
+governed reads, writes, change requests, and lifecycle actions. An access profile states which
+operations a caller may use. Registry Stack product term.
 
-**operation**: One reachable read on a resource: a record list, a single record read, an exact lookup by declared match values, or a declared bounded search. An operation carries one or more access profiles and its own page-size bounds. Registry Stack product term.
+**access profile**: A named BReg grant stating which scopes, purposes, claims, operations, fields,
+and rows a caller may reach. Registry Stack product term.
 
-**access profile**: The compiled unit that pairs an access rule with a disclosure profile, so the authorization decision and the disclosure decision are one artifact rather than two independent runtime lookups. An access rule is either `Public`, requiring no credential, or `Protected`, requiring an OpenID Connect (OIDC) bearer access token carrying the rule's scope and optionally a declared purpose and a row binding. A caller MAY select a profile with the `accessProfile` query parameter; selection narrows what a request can reach and never widens it. Registry Stack product term.
-
-**disclosure profile**: The enumerated set of properties a response may carry, together with the maximum handling classification those properties permit. It bounds the response before any caller preference applies: the `fields` parameter narrows within the selected profile and can never reach a property the profile does not disclose. A transform the profile declares is applied before the value leaves the process and is recorded in the request's audit record. Registry Stack product term.
-
-**row binding**: The restriction that limits an operation's rows to those the authenticated caller is entitled to. The binding authority comes from the verified token, either from the principal itself or from one named verified claim; a caller-supplied request value never satisfies it. Registry Stack product term.
+**row boundary**: A BReg access-profile rule that binds a record field to a verified token claim,
+so a request reaches only matching rows. A caller-supplied request value does not satisfy the
+boundary. Registry Stack product term.
 
 **standards-shaped metadata**: Machine-readable metadata emitted through formats such as Data Catalog Vocabulary (DCAT), Core Public Service Vocabulary Application Profile (CPSV-AP), Core Criterion and Core Evidence Vocabulary (CCCEV), Shapes Constraint Language (SHACL), JSON Schema, Open Digital Rights Language (ODRL), OpenAPI, OGC API Records, and SKOS-shaped codelist metadata. Registry Stack product term.
 
@@ -154,9 +157,15 @@ manifest key and field inventory used by the terms below.
 
 **source freshness**: The declared PDP gate that compares trusted source metadata or trusted source-observation context against a maximum age. Registry Stack product term.
 
-**safeguards**: Commitment that every exchange the stack mediates is authorized, scoped, and audited. Concretely: caller verification against exactly one configured OIDC issuer; scope-checked operations; disclosure limited to what an access profile, a disclosure profile, or a requirement declares in advance; no source-registry data mutation through any runtime; audit envelopes for every request that touches person-level data, written before the response is released. Registry Stack product term.
+**safeguards**: Product-owned controls that bind an operation to verified authority, reviewed
+configuration, bounded input and output, and the product's audit contract. BReg admits mutations
+only through compiled operations and authorized access profiles. Evidence Gateway releases only
+the concepts and value forms declared by the matched requirement and grant. Registry Stack product
+term.
 
-**executable safeguards**: Runtime-enforced safeguards: scoped operations, compiled disclosure profiles, fail-closed audit events, machine-readable metadata, and other enforcement behavior that can be checked by software rather than taken on trust. Registry Stack product term.
+**executable safeguards**: Runtime-enforced safeguards such as BReg access profiles and row
+boundaries, Evidence Gateway's fixed requirements and disclosure guards, fail-closed audit events,
+and closed machine-readable contracts. Registry Stack product term.
 
 **distributed custody**: The architectural premise that each authority retains control of its own registry data. The registry stack provides the API surface for lawful exchange between authorities; it does not aggregate data into a central system. Equivalent terms include data sovereignty (Gaia-X, IDS, EU dataspaces vocabulary), subsidiarity (governance literature), and federated custody. Registry Stack product term.
 
@@ -170,6 +179,9 @@ manifest key and field inventory used by the terms below.
 
 Registry Relay and `relayctl` name the product and adopter tool retired after Registry Stack 0.38.0.
 Their identifiers remain reserved for historical resolution and are not reusable by another product.
+
+Relay's **resource**, **disclosure profile**, and **row binding** terms described its compiled
+read-only publication contract. They do not name current BReg or Evidence Gateway contract types.
 
 ## 5. Abbreviations
 
