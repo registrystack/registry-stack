@@ -5289,8 +5289,6 @@ dependencies = [
  "registry-evidencectl",
  "registry-messaging",
  "registry-messagingctl",
- "registry-relay-v2",
- "registry-relayctl",
  "registry-render",
  "registry-scheduling",
  "registry-schedulingctl",
@@ -5350,9 +5348,6 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-crypto",
  "registry-platform-httputil",
- "registry-platform-sqlite",
- "registry-relay-client",
- "registry-relay-v2",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -5689,7 +5684,6 @@ dependencies = [
  "anyhow",
  "futures",
  "registry-evidence-authoring",
- "registry-relay-v2",
  "rustix 1.1.5",
  "serde_json",
  "serde_norway",
@@ -6192,136 +6186,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "registry-relay-client"
-version = "0.39.0"
-dependencies = [
- "async-trait",
- "axum",
- "registry-platform-httpsec",
- "registry-platform-httputil",
- "registry-record",
- "registry-relay-http-contract",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "registry-relay-client-node"
-version = "0.39.0"
-dependencies = [
- "axum",
- "napi",
- "napi-build",
- "napi-derive",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-relay-client",
- "serde",
- "serde_json",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "registry-relay-client-py"
-version = "0.39.0"
-dependencies = [
- "pyo3",
- "pyo3-build-config",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-relay-client",
- "serde",
- "serde_json",
- "tokio",
- "url",
- "wiremock",
-]
-
-[[package]]
-name = "registry-relay-http-contract"
-version = "0.39.0"
-
-[[package]]
-name = "registry-relay-v2"
-version = "0.39.0"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "bytes",
- "chacha20poly1305",
- "chrono",
- "clap",
- "csv",
- "futures",
- "getrandom 0.4.3",
- "hex",
- "hmac 0.13.0",
- "http",
- "jsonschema",
- "jsonwebtoken",
- "oxjsonld",
- "p256",
- "regex",
- "registry-discovery-profile",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-buildinfo",
- "registry-platform-canonical-json",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-httpsec",
- "registry-platform-httputil",
- "registry-platform-oidc",
- "registry-platform-sqlite",
- "registry-platform-testing",
- "registry-relay-client",
- "registry-relay-http-contract",
- "registry-thunderid-tooling",
- "reqwest 0.12.28",
- "rustix 1.1.5",
- "schemars",
- "serde",
- "serde_json",
- "serde_norway",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tower",
- "tower-http 0.7.1",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "url",
- "utoipa",
- "zeroize",
-]
-
-[[package]]
-name = "registry-relayctl"
-version = "0.39.0"
-dependencies = [
- "clap",
- "hex",
- "registry-language-server",
- "registry-platform-buildinfo",
- "registry-relay-v2",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
 name = "registry-render"
 version = "0.39.0"
 dependencies = [
@@ -6505,7 +6369,6 @@ dependencies = [
  "registry-messaging-client",
  "registry-platform-httputil",
  "registry-record",
- "registry-relay-client",
 ]
 
 [[package]]

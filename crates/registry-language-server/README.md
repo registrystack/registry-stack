@@ -16,7 +16,6 @@ holding several products can be read without guessing which tool is talking.
 
 | Family | A directory is a root when it holds | Diagnostic source |
 |---|---|---|
-| Relay V2 | `registry.yaml` with a Relay V2 discriminator | `relay-v2` |
 | Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
 | BReg | `registry.yaml`: `RegistryProject` or BReg `apiVersion` | `breg` |
 | Casework | `casework.yaml`: `CaseworkProject` or Casework `apiVersion` | `casework` |
@@ -87,16 +86,6 @@ Beyond those edges, the server deserializes each question with the same reader t
 runs `registry-evidence-authoring`'s own validation, placing each finding at the field it names. A
 question the reader cannot parse at all is reported once, carrying the reader's message.
 
-### Relay V2
-
-Relay V2 indexes the governed Registry, sources, Record resources, statistical
-datasets, properties and components, disclosure and access profiles,
-operations, runtime source bindings, and governed-file references. It runs
-`registry-relay-v2::authoring` over the current in-memory `registry.yaml`,
-optional `runtime.yaml`, and exact governed closure. Those are the same strict
-types and compiler checks `relayctl check` uses. The editor never opens SQLite
-or observes source rows.
-
 ### Current product authoring
 
 The additional products use explicit contract-derived declarations and references over the same
@@ -134,7 +123,7 @@ module directory, including modules awaiting a lock entry; `bregctl check` owns 
 
 ## Diagnostics
 
-Every diagnostic this server publishes has severity `Error`. Relay and Evidence semantic diagnostics carry what their authoring readers or compilers refuse.
+Every diagnostic this server publishes has severity `Error`. Evidence semantic diagnostics carry what its authoring reader or compiler refuses.
 The additional products diagnose their explicitly modeled local authoring relationships. The separately named indexing-ceiling diagnostics explain when the editor cannot
 safely build an index and do not claim that the compiler applies the same operational budget.
 
@@ -155,12 +144,12 @@ resolve on this filesystem accepts nothing.
 Only regular files admitted by a family's authoring layout or declared file references are indexed.
 Symbolic links, files outside the project root, and unrelated documents are excluded. Evidence
 retains its authoring form's per-role byte ceilings and 128-document limits for `questions/` and
-`access/policies/`. Relay and the additional products use a 1 MiB editor ceiling per indexed
+`access/policies/`. The additional products use a 1 MiB editor ceiling per indexed
 document. Every root also applies an editor-only aggregate budget of 1,024 indexed documents or 16
 MiB across the YAML and JSON documents it parses. A project past either aggregate limit gets one
 project-ceiling diagnostic and no partial index, so the editor does not invent unresolved-reference
 errors for documents it deliberately left out. Evidence names that rule
-`evidence/project-ceiling`; Relay follows its existing unnumbered diagnostic convention. Reduce the
+`evidence/project-ceiling`. Reduce the
 project and save or close a document to retry the complete index. Each document is read and closed
 as the scan reaches it, so a session keeps the same handful of descriptors open whatever the size
 of the project.
@@ -181,7 +170,6 @@ The same server is also hosted by these adopter CLIs from the same source versio
 
 ```console
 evidencectl tooling language-server
-relayctl tooling language-server
 ```
 
 The server communicates over standard input and output and expects the opened workspace (or a

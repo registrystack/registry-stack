@@ -2,7 +2,7 @@
 
 Private, non-published tooling support for adopter CLIs and integration tests
 that need a pinned, unmodified upstream ThunderID issuer. It is not a runtime
-product: it opens no listener, ships no binary, and no BREG, Evidence, Relay,
+product: it opens no listener, ships no binary, and no BReg, Evidence,
 or OID4VCI runtime crate may depend on it.
 
 ## What it does

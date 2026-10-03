@@ -27,8 +27,6 @@ pub fn catalog() -> Catalog {
             Some(SYMBOLIC_LINK_REFUSAL),
         ),
         command_reference(registry_render::command(), None, None),
-        command_reference(registry_relay_v2::command(), None, None),
-        command_reference(registry_relayctl::command(), None, None),
     ];
     binaries.sort_by(|left, right| left.name.cmp(&right.name));
     Catalog {
@@ -99,8 +97,6 @@ mod tests {
                 "messaging",
                 "messagingctl",
                 "registry-render",
-                "relay",
-                "relayctl",
                 "scheduling",
                 "schedulingctl",
             ]
@@ -226,7 +222,7 @@ mod tests {
     #[test]
     fn a_command_line_that_does_not_apply_the_rule_never_states_it() {
         let catalog = catalog();
-        for name in ["breg", "evidencectl", "relayctl"] {
+        for name in ["breg", "evidencectl"] {
             let rendered = serde_json::to_string(find_command(&catalog.binaries, name))
                 .expect("render command");
             assert!(
@@ -637,29 +633,6 @@ mod tests {
                 && constraint.arguments == ["--last-operation"]
         }));
 
-        let inspect = find_command(&catalog.binaries, "relayctl inspect");
-        let statistical_view = inspect
-            .constraints
-            .iter()
-            .find(|constraint| {
-                constraint.kind == ConstraintKind::RequiresAll
-                    && constraint.when.as_deref() == Some("--statistical-view <VIEW>")
-            })
-            .expect("statistical view constraint");
-        for required in [
-            "--starters <DIRECTORY>",
-            "--time-column <COLUMN>",
-            "--measure-column <COLUMN>",
-        ] {
-            assert!(
-                statistical_view
-                    .arguments
-                    .iter()
-                    .any(|argument| argument == required),
-                "statistical view did not require {required}"
-            );
-        }
-
         let evidencectl_new = find_command(&catalog.binaries, "evidencectl new");
         assert!(evidencectl_new.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
@@ -733,22 +706,11 @@ mod tests {
             .iter()
             .any(|argument| { argument.display == "--detach" && !argument.always_required }));
 
-        let inspect = find_command(&catalog.binaries, "relayctl inspect");
-        assert!(inspect.options.iter().any(|argument| {
-            argument.display == "--attribute-column <COLUMN>" && argument.repeatable
-        }));
-
         assert!(find_command(&catalog.binaries, "evidence-oid4vci check")
             .options
             .iter()
             .any(|argument| argument.display == "--config <CONFIG>"
                 && argument.environment.is_some()
                 && !argument.always_required));
-        assert!(find_command(&catalog.binaries, "relay serve")
-            .options
-            .iter()
-            .any(|argument| argument.display == "--runtime-config <FILE>"
-                && argument.environment.is_none()
-                && argument.always_required));
     }
 }

@@ -1,7 +1,7 @@
 'use strict';
 
 const PACKAGE_VERSION = '0.39.0';
-const PRODUCTS = new Set(['discovery', 'evidence', 'relay', 'breg', 'casework', 'messaging']);
+const PRODUCTS = new Set(['discovery', 'evidence', 'breg', 'casework', 'messaging']);
 
 function target() {
   if (process.platform === 'darwin' && process.arch === 'arm64') return 'darwin-arm64';

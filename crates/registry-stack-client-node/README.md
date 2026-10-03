@@ -1,6 +1,6 @@
 # @registrystack/client
 
-One versioned Node.js package for the Discovery, Evidence, Relay, Base Registry
+One versioned Node.js package for the Discovery, Evidence, Base Registry
 Engine, Casework, and Messaging client APIs in Registry Stack.
 
 ## Install
@@ -11,13 +11,13 @@ npm install "@registrystack/client@<version>"
 
 Requires Node.js 22.12 or newer. Supported targets are macOS arm64, Linux
 arm64 with glibc, and Linux x64 with glibc; installing the package pulls in
-one platform-specific optional dependency containing all six native
+one platform-specific optional dependency containing all five native
 bindings.
 
 ## Usage
 
 ```js
-const { discovery, evidence, relay, breg, casework, messaging } = require('@registrystack/client');
+const { discovery, evidence, breg, casework, messaging } = require('@registrystack/client');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
@@ -36,7 +36,6 @@ const messages = new messaging.MessagingClient({
   curated index.
 - `evidence`: Evidence Gateway, request and verify signed minimum-disclosure
   assertions.
-- `relay`: Registry Relay, scoped read-only APIs over existing sources.
 - `breg`: Base Registry Engine, records, contracts, writes, lifecycle, and typed
   applied-request result navigation.
 - `casework`: Registry Casework, staff inbox, claims, drafts, decisions,

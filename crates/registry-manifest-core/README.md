@@ -5,8 +5,8 @@ catalogs. This crate is the commons contract/schema kernel used by Registry
 Stack metadata workflows and external adopter fixtures such as Solmara Lab.
 
 This crate is the source of truth for metadata manifests. It stays independent
-of Registry Relay runtime concerns so static publishers, CLIs, and services can
-share the same metadata model.
+of runtime concerns so static publishers, CLIs, and services can share the same
+metadata model.
 
 ## What It Provides
 
@@ -33,8 +33,8 @@ fn render(manifest: &MetadataManifest) -> Result<serde_json::Value, registry_man
 
 ## Boundary
 
-This crate must remain portable. It must not depend on Registry Relay, Axum,
-DataFusion, Postgres, auth, audit, observability, runtime row access, secret
+This crate must remain portable. It must not depend on Axum, DataFusion,
+Postgres, auth, audit, observability, runtime row access, secret
 handling, `utoipa`, or `clap`.
 
 Runtime source access, authentication, authorization, audit, and secret handling
