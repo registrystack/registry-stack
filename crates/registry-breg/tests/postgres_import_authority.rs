@@ -1554,7 +1554,7 @@ async fn reinstalling_the_schema_beside_committed_history_leaves_an_unclaimed_da
         )
         .await
         .expect("the owning role can remove the claim");
-    install_mutation_schema(&migration, &harness.database.runtime_role, false)
+    install_mutation_schema(&migration, &harness.database.runtime_role)
         .await
         .expect("the mutation schema installs again");
     let claims = harness.claims();
@@ -1569,7 +1569,7 @@ async fn reinstalling_the_schema_beside_committed_history_leaves_an_unclaimed_da
         .expect("the operator claims the database");
     assert_eq!(adoption.previous, None);
     assert_eq!(adoption.current.epoch, 1);
-    install_mutation_schema(&migration, &harness.database.runtime_role, false)
+    install_mutation_schema(&migration, &harness.database.runtime_role)
         .await
         .expect("the mutation schema installs again");
     assert_eq!(

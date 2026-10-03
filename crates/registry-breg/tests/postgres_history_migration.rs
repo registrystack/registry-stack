@@ -433,69 +433,6 @@ async fn unrecorded_coverage_gap_still_freezes_the_next_package() {
     database.cleanup().await;
 }
 
-/// A database activated before audit left PostgreSQL still carries the
-/// retired journal and head tables. The next package apply removes them, so
-/// no audit state survives in the registry database.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn successor_apply_drops_the_retired_postgres_audit_tables() {
-    let database = TestDatabase::create(1).await;
-    let (candidate, activated) = activate_reviewed_successor(&database).await;
-    let (migration, migration_task) = database.connect_migration().await;
-    migration
-        .batch_execute(
-            "CREATE TABLE registry_internal.registry_audit (
-                 sequence bigint PRIMARY KEY,
-                 envelope jsonb NOT NULL
-             );
-             CREATE TABLE registry_internal.registry_audit_head (
-                 singleton boolean PRIMARY KEY,
-                 sequence bigint NOT NULL
-             );",
-        )
-        .await
-        .expect("migration role recreates the retired audit tables it once owned");
-    migration_task.abort();
-    assert_eq!(retired_audit_tables(&database).await, 2);
-
-    let successor = compiled_successor(&activated, &candidate);
-    let upgraded = apply_verified_package(request(
-        &database,
-        &successor,
-        ApplyPrecondition::Successor {
-            current: &activated,
-        },
-    ))
-    .await
-    .expect("the next package applies over a database that still has them");
-    assert_eq!(
-        ledger_apply_order(&database, &upgraded.activation_id).await,
-        3
-    );
-    assert_eq!(
-        retired_audit_tables(&database).await,
-        0,
-        "the apply drops the retired audit journal and its head"
-    );
-    database.cleanup().await;
-}
-
-async fn retired_audit_tables(database: &TestDatabase) -> i64 {
-    database
-        .admin
-        .query_one(
-            "SELECT count(*)
-               FROM pg_catalog.pg_class class
-               JOIN pg_catalog.pg_namespace namespace
-                 ON namespace.oid = class.relnamespace
-              WHERE namespace.nspname = 'registry_internal'
-                AND class.relname IN ('registry_audit', 'registry_audit_head')",
-            &[],
-        )
-        .await
-        .expect("administrator reads the catalog")
-        .get(0)
-}
-
 async fn activate_reviewed_successor(
     database: &TestDatabase,
 ) -> (CompiledRegistry, ExpectedRegistryIdentity) {

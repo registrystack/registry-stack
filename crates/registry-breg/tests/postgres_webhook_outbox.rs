@@ -434,7 +434,7 @@ async fn real_postgres_internal_schema_reinstall_is_idempotent() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
 
-    install_mutation_schema(&migration, &database.runtime_role, false)
+    install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("the internal schema installs");
     let answer_constraint_oid = migration
@@ -459,7 +459,7 @@ async fn real_postgres_internal_schema_reinstall_is_idempotent() {
         .await
         .expect("the delivery answer constraint is installed")
         .get::<_, i64>(0);
-    install_mutation_schema(&migration, &database.runtime_role, false)
+    install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("the internal schema reinstalls over itself");
     let reinstalled_answer_constraint_oid = migration
@@ -569,7 +569,7 @@ async fn real_postgres_internal_schema_reinstall_is_idempotent() {
 async fn real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_answer_bytes() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
-    install_mutation_schema(&migration, &database.runtime_role, false)
+    install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("the internal schema installs");
     let event_id = Uuid::new_v4();

@@ -2141,7 +2141,7 @@ async fn install_ready_history_registry(
     retain_descriptor(migration, registry, CURRENT_PACKAGE)
         .await
         .expect("current descriptor is retained");
-    install_mutation_schema(migration, &database.runtime_role, false)
+    install_mutation_schema(migration, &database.runtime_role)
         .await
         .expect("mutation and history commit schema are installed");
     let transaction = migration

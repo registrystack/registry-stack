@@ -5629,15 +5629,12 @@ fn mutation_problem(error: MutationError) -> Response {
         MutationError::Conflict => fixed_problem(ProblemCode::MutationConflict),
         MutationError::IdempotencyConflict => fixed_problem(ProblemCode::IdempotencyConflict),
         MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),
-        // Only a schema install still carrying retired audit rows can produce
-        // `RetiredAuditRowsPresent`, and only operator maintenance can
-        // produce `MigrationLockHeld` and `PackagePinMismatch`; request
-        // handling never reaches those three, but the match stays exhaustive
-        // over the whole closed vocabulary.
+        // Only operator maintenance can produce `MigrationLockHeld` and
+        // `PackagePinMismatch`; request handling never reaches those two, but
+        // the match stays exhaustive over the whole closed vocabulary.
         MutationError::Unavailable
         | MutationError::RetryableConflict
         | MutationError::CommitUnresolved
-        | MutationError::RetiredAuditRowsPresent
         | MutationError::MigrationLockHeld
         | MutationError::PackagePinMismatch(_) => fixed_problem(ProblemCode::ServiceUnavailable),
         MutationError::ActionRefusal(refusal) => {

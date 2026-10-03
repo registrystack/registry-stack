@@ -56,7 +56,6 @@ pub(crate) struct ApplyLifecycleRequest<'a> {
     pub package: &'a Path,
     pub initial: bool,
     pub backups: &'a [String],
-    pub acknowledge_retired_audit_discard: bool,
     pub operator_reference: Option<&'a str>,
     pub expected_digest: Option<&'a str>,
 }
@@ -116,7 +115,6 @@ pub(crate) fn plan(
             package: request.package,
             initial: false,
             backups: request.backups,
-            acknowledge_retired_audit_discard: false,
             operator_reference: None,
             expected_digest: request.expected_digest,
         },
@@ -381,8 +379,7 @@ fn execute(
         ),
     }
     .with_destructive_backup_evidence(&backup_evidence)
-    .with_event_destination_compatibility_inventory(&event_destination_compatibility)
-    .with_acknowledge_retired_audit_discard(request.acknowledge_retired_audit_discard);
+    .with_event_destination_compatibility_inventory(&event_destination_compatibility);
     if let Some(reference) = request.operator_reference {
         apply = apply.with_operator_reference(reference);
     }
