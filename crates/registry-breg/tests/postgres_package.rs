@@ -1411,6 +1411,40 @@ fn assert_policy_only_snapshot_grant_delta_prepares_and_loads(
     load_package(root.path(), &local_context()).expect("policy-only successor strict-loads");
 }
 
+/// The control for the refusals below: rewriting the temporal metadata with
+/// no change leaves a package the predecessor loader still accepts, so each
+/// refusal is caused by the change it names and not by the rewrite.
+#[test]
+fn predecessor_package_loads_after_an_unchanged_temporal_rewrite() {
+    let older = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
+    rewrite_temporal_metadata(older.root.path(), false, |_| {});
+    load_predecessor_package(older.root.path(), &local_context())
+        .expect("an unchanged temporal package loads as a predecessor");
+}
+
+#[test]
+fn predecessor_package_refuses_a_temporal_value_kind_its_fields_do_not_have() {
+    let older = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
+    rewrite_temporal_metadata(older.root.path(), false, |temporal| {
+        let temporal = temporal
+            .as_object_mut()
+            .expect("temporal binding is an object");
+        let other = match temporal["valueKind"]
+            .as_str()
+            .expect("temporal binding names a value kind")
+        {
+            "date" => "timestamp",
+            "timestamp" => "date",
+            kind => panic!("unexpected temporal value kind {kind}"),
+        };
+        temporal.insert("valueKind".to_owned(), Value::String(other.to_owned()));
+    });
+    assert_eq!(
+        predecessor_load_error(older.root.path(), &local_context()),
+        PackageError::Derivation
+    );
+}
+
 #[test]
 fn predecessor_package_refuses_temporal_bindings_without_a_value_kind() {
     let older = PackageFixture::build(None, fingerprint(1), PlanChoice::TemporalSchema);
