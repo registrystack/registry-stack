@@ -42,8 +42,12 @@ type Result<T> = std::result::Result<T, VerificationWorkerError>;
 /// What one pass did with the work it found.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Iteration {
-    /// No job was due.
+    /// No job was due, and no job an earlier attempt failed waits for its
+    /// retry.
     Idle,
+    /// No job was due, but a job an earlier attempt failed waits for its
+    /// retry.
+    RetryWaiting,
     /// The verifier answered, and its verdict committed or was discarded as
     /// stale.
     Verdict,
@@ -75,8 +79,8 @@ impl AttachmentVerificationWorker {
         }
     }
 
-    /// The handle this worker notes each iteration that found no due job or
-    /// reached a verdict on.
+    /// The handle this worker notes each iteration that reached a verdict, or
+    /// found no due job while no failed job waits for its retry.
     #[must_use]
     pub fn last_success(&self) -> Arc<LastSuccess> {
         Arc::clone(&self.last_success)
@@ -121,8 +125,9 @@ impl AttachmentVerificationWorker {
     /// A refused attempt entry, a failed verdict commit, or a cancellation
     /// before that commit leaves a lease which another worker can retry.
     /// Returns whether a job was claimed, and notes a success only for a pass
-    /// that found no due job or reached a verdict, never for one that left
-    /// its job pending for a retry.
+    /// that reached a verdict, or that found no due job while no failed job
+    /// waits for its retry. A pass that left its job pending for a retry, or
+    /// found nothing due while a failed job waits, is never a success.
     pub async fn run_once(&self) -> Result<bool> {
         // The durable lease is four minutes. A whole iteration, including
         // database waits and both external services, gets at most three, so a
@@ -130,10 +135,13 @@ impl AttachmentVerificationWorker {
         let iteration = tokio::time::timeout(Duration::from_secs(180), self.run_once_inner())
             .await
             .map_err(unavailable)??;
-        if iteration != Iteration::RetryPending {
+        if matches!(iteration, Iteration::Idle | Iteration::Verdict) {
             self.last_success.record();
         }
-        Ok(iteration != Iteration::Idle)
+        Ok(matches!(
+            iteration,
+            Iteration::Verdict | Iteration::RetryPending
+        ))
     }
 
     async fn run_once_inner(&self) -> Result<Iteration> {
@@ -147,8 +155,18 @@ impl AttachmentVerificationWorker {
                 .await
                 .map_err(unavailable)?
         else {
+            let waiting = attachment_store::verification_retry_waiting(
+                &transaction,
+                &self.verification.binding_digest(),
+            )
+            .await
+            .map_err(unavailable)?;
             transaction.commit().await.map_err(unavailable)?;
-            return Ok(Iteration::Idle);
+            return Ok(if waiting {
+                Iteration::RetryWaiting
+            } else {
+                Iteration::Idle
+            });
         };
         transaction.commit().await.map_err(unavailable)?;
         drop(client);

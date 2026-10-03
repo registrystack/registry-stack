@@ -2711,15 +2711,30 @@ async fn real_postgres_attachment_verification_worker_records_no_success_while_t
         "a pass whose verifier failed is not a success"
     );
 
-    // The retried job is not yet due, so the next pass finds no work, and a
-    // pass that finds no work is a success.
+    // The retried job is not yet due, so the next pass finds no work. A
+    // failed job still waits for its retry, so that idle pass is not a
+    // success either.
     assert!(
         !worker.run_once().await.unwrap(),
         "the retried job is not yet due"
     );
     assert!(
+        last_success.age().is_none(),
+        "an idle pass while a failed job waits for its retry is not a success"
+    );
+
+    // Once no failed job waits, an idle pass is a success again.
+    database
+        .admin
+        .batch_execute(
+            "UPDATE registry_internal.registry_attachment_verification SET verdict='approved' WHERE verdict='pending'",
+        )
+        .await
+        .unwrap();
+    assert!(!worker.run_once().await.unwrap(), "no job remains");
+    assert!(
         last_success.age().is_some(),
-        "a pass that finds no work is a success"
+        "an idle pass with no failed job waiting is a success"
     );
 
     server.abort();
