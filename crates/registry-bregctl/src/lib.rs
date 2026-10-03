@@ -14077,6 +14077,17 @@ mod tests {
     }
 
     #[test]
+    fn dev_start_takes_no_mint_issuer_flags() {
+        for arguments in [
+            vec!["bregctl", "dev", "start", ".", "--mint-port", "8091"],
+            vec!["bregctl", "dev", "start", ".", "--mint-bin", "/mint"],
+        ] {
+            let error = Cli::try_parse_from(&arguments).expect_err("unknown flag");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+    }
+
+    #[test]
     fn dev_names_its_project_the_way_every_other_command_does() {
         // `check`, `test`, `generate` and the rest take the project as their
         // positional argument, so `dev` does too, defaulting to the current

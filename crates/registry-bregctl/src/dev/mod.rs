@@ -166,14 +166,6 @@ struct StartArgs {
     /// Immutable local candidate issuer image ID on first start; retained for restarts.
     #[arg(long, value_parser = candidate_issuer_image)]
     issuer_image: Option<String>,
-    /// Retained spelling from earlier Mint-based dev sessions; refused with
-    /// legacy-session guidance rather than silently ignored.
-    #[arg(long)]
-    mint_port: Option<u16>,
-    /// Retained spelling from earlier Mint-based dev sessions; refused with
-    /// legacy-session guidance rather than silently ignored.
-    #[arg(long)]
-    mint_bin: Option<PathBuf>,
     /// PostgreSQL loopback port on first start (default 55432; retained for restarts).
     #[arg(long)]
     database_port: Option<u16>,
@@ -505,22 +497,7 @@ fn clients_file(
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
     let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct VersionProbe {
-        version: u8,
-        mint_port: Option<u16>,
-    }
     let invalid = || anyhow::anyhow!("retained dev state is invalid; preserve it for inspection");
-    let version: VersionProbe = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if version.version == 1 && version.mint_port.is_some() {
-        bail!(
-            "this retained dev session still records its Mint-based issuer (state v1). \
-            This build does not implement retained issuer migration; keep the \
-            matching Mint-era bregctl and issuer for this session until a \
-            verified migration is available. Nothing was changed"
-        );
-    }
     let state: State = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
     if state.version != 2
         || state.sequence == 0
@@ -957,14 +934,6 @@ fn start(args: StartArgs) -> Result<Value> {
     } else {
         None
     };
-    if args.mint_port.is_some() || args.mint_bin.is_some() {
-        bail!(
-            "--mint-port and --mint-bin named the Mint-based issuer used by earlier dev sessions. \
-            Use --issuer-port for a new owned dev issuer. A retained Mint session \
-            must stay with its matching Mint-era tools until a verified migration \
-            is available"
-        );
-    }
     let clients_file = clients_file(args.clients_file.as_deref(), existing.as_ref(), &project)?;
     let client_bytes =
         crate::read_bounded_source_file(&clients_file, "dev.clients", "clients", MAX_BYTES)

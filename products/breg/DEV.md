@@ -4,9 +4,7 @@
 installed `breg` binary, a source-pinned ThunderID image, and Docker PostgreSQL.
 It needs no checkout, Python launcher, shell script or OpenSSL installation.
 ThunderID is a local issuer chosen by this development tool; an operated BReg
-runtime remains an independent OAuth resource server. This candidate cannot
-start a retained Mint-backed v1 dev session. Keep its matching Mint-era tools
-and data until a verified migration is available.
+runtime remains an independent OAuth resource server.
 
 Prepare the project with `bregctl init ./registry`. The generated
 `dev-clients.yaml` binds three distinct local clients to `operator`,
@@ -53,8 +51,7 @@ belongs to no release of this stack and is never compared, and a prerequisite
 that reports no version at all still serves the session. No flag skips the
 comparison: install `breg` and `bregctl` from the same release, or put the
 matching build first on `PATH`. `--breg-bin` chooses which file is resolved,
-and that file is compared. `--mint-bin` and `--mint-port` are refused by this
-candidate; they belong to the earlier Mint-based dev interface.
+and that file is compared.
 
 `dev stop` keeps everything it created: the owned container, its named data
 volume, records, the audit files under `.breg/dev/audit`, keys, credentials and
@@ -606,7 +603,7 @@ identifiable and reclaimable once the container is gone.
 | Start after `--remove` | At sequence 1, create an empty container and volume, activate the initial package, and replay authored seeds. A retained successor refuses before Docker because its predecessor records were removed; use a fresh project at sequence 1 for an empty experiment. |
 | Seed request committed before checkpoint | Replay the same permanent BReg idempotency reservation. The original create result is returned without creating or overwriting a record. |
 | `breg` from another release | Refuse before the owned container is inspected and before the supervisor launches, naming the file that answered, the version it reported and the version `bregctl` reports. Nothing is created, changed or removed. |
-| Retained Mint-based v1 state | Refuse before v2 parsing or state mutation. Keep the matching Mint-era tools and data; this candidate has no retained issuer migration command. |
+| Retained state this release cannot read | Refuse as invalid retained dev state before any mutation, and preserve it for inspection. |
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
 | Missing or mismatched owned container | Refuse. Never silently initialize an empty replacement or stop another container. |
 | Unreachable supervisor with an occupied service port | Refuse. Never signal a stored PID that could belong to another process. Inspect the process owning the port before recovery. |
