@@ -32,6 +32,24 @@ const removedSurfaces = [
     pattern: /\b(?:run|runs|execute|executes|invoke|invokes)[ \t]+`?registryctl[ \t]+[a-z][\w-]*/giu,
   },
   {
+    id: 'retired Relay adopter command',
+    within: 'fenced-code',
+    pattern: /(?:^|[|&;][ \t]*)[ \t]*(?:[$%#>][ \t]*)?(?:sudo[ \t]+)?relayctl\b/gmu,
+  },
+  {
+    id: 'retired Relay runtime command',
+    within: 'fenced-code',
+    pattern: /(?:^|[|&;][ \t]*)[ \t]*(?:[$%#>][ \t]*)?(?:sudo[ \t]+)?relay\b/gmu,
+  },
+  {
+    id: 'retired Relay command guidance',
+    pattern: /\b(?:run|runs|execute|executes|invoke|invokes|install|installs|start|starts|use|uses)[ \t]+`?(?:relayctl\b|relay[ \t]+[a-z-][\w-]*)/giu,
+  },
+  {
+    id: 'retired Relay adoption guidance',
+    pattern: /\b(?:use|adopt|deploy|install|run|start)[ \t]+Registry Relay\b/giu,
+  },
+  {
     id: 'removed initializer',
     pattern: /\bregistry-relay[ \t]+init\b/gu,
   },

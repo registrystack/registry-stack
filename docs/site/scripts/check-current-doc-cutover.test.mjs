@@ -144,25 +144,68 @@ test('allows removed names in draft, historical, and sealed history pages', asyn
   });
 });
 
-test('accepts the Relay V2 command surface', async () => {
+test('rejects prescriptive Relay V2 commands and adoption guidance', async () => {
   await withSite(async (root) => {
     await writePage(
       root,
       'current.mdx',
       'status: current',
       [
-        '`relayctl init`',
-        '`relayctl inspect`',
-        '`relayctl check`',
-        '`relayctl generate`',
-        '`relayctl test`',
-        '`relayctl diff`',
-        '`relayctl package`',
-        '`relay serve --runtime-config /etc/relay/runtime.yaml`',
-        '`relay healthcheck --url http://127.0.0.1:8080/health`',
+        '```sh',
+        'relayctl check ./project',
+        'relay serve --runtime-config /etc/relay/runtime.yaml',
+        '```',
+        '',
+        'Run `relayctl package ./project` before deployment.',
+        'Start `relay healthcheck --url http://127.0.0.1:8080/health`.',
+        'Use Registry Relay for protected reads.',
+      ].join('\n'),
+    );
+
+    assert.deepEqual(
+      (await findRemovedSurfaces(root)).map(({ line, surface, match }) => ({
+        line,
+        surface,
+        match,
+      })),
+      [
+        { line: 6, surface: 'retired Relay adopter command', match: 'relayctl' },
+        { line: 7, surface: 'retired Relay runtime command', match: 'relay' },
+        {
+          line: 10,
+          surface: 'retired Relay command guidance',
+          match: 'Run `relayctl',
+        },
+        {
+          line: 11,
+          surface: 'retired Relay command guidance',
+          match: 'Start `relay healthcheck',
+        },
+        {
+          line: 12,
+          surface: 'retired Relay adoption guidance',
+          match: 'Use Registry Relay',
+        },
+      ],
+    );
+    await assert.rejects(checkCurrentDocCutover(root), /retired Relay adopter command/);
+  });
+});
+
+test('allows Relay V2 names in current historical citations', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'decision.mdx',
+      'status: current',
+      [
+        '`relayctl check` was the retired authoring command.',
+        '`relay serve` existed through Registry Stack 0.38.0.',
+        'Registry Relay is retired; see the retirement decision.',
       ].join('\n'),
     );
 
     assert.deepEqual(await findRemovedSurfaces(root), []);
+    await assert.doesNotReject(checkCurrentDocCutover(root));
   });
 });
