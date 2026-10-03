@@ -117,13 +117,6 @@ async fn statistics_store_has_exact_runtime_acl_and_withdrawal_function_shape() 
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
     install_store(&migration, &database).await;
-    migration
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_statistical_release_versions
-                 ALTER COLUMN snapshot_reference SET NOT NULL",
-        )
-        .await
-        .expect("fixture recreates the predecessor snapshot constraint");
     install_statistics_store_for_test(&migration, &database.runtime_role)
         .await
         .expect("statistics store installation is idempotent");

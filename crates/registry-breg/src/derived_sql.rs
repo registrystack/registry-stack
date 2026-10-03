@@ -21,15 +21,14 @@ pub(crate) struct DerivedSqlDependencies {
 }
 
 /// Extract dependency metadata from SQL which has already passed
-/// [`validate_derived_sql`]. A parse failure remains defensive and produces an
-/// empty inventory; compilation only calls this after validation succeeds.
+/// [`validate_derived_sql`]. Compilation only calls this after validation
+/// succeeds, so unparseable SQL panics rather than yield an empty inventory
+/// that would silently drop source entities from the statistical dependency
+/// closure.
 pub(crate) fn derived_sql_dependencies(sql: &[u8]) -> DerivedSqlDependencies {
-    let Ok(text) = std::str::from_utf8(sql) else {
-        return DerivedSqlDependencies::default();
-    };
-    let Ok(parsed) = pg_query::parse(text) else {
-        return DerivedSqlDependencies::default();
-    };
+    const VALIDATED: &str = "derived SQL was validated before its dependency inventory";
+    let text = std::str::from_utf8(sql).expect(VALIDATED);
+    let parsed = pg_query::parse(text).expect(VALIDATED);
     let mut dependencies = DerivedSqlDependencies::default();
     for node in raw_nodes(&parsed) {
         match node {
@@ -1082,6 +1081,18 @@ mod tests {
             BTreeSet::from(["household".to_owned(), "member".to_owned()])
         );
         assert!(dependencies.uses_evaluation_date);
+    }
+
+    #[test]
+    #[should_panic(expected = "derived SQL was validated before its dependency inventory")]
+    fn dependency_inventory_refuses_sql_that_skipped_validation() {
+        derived_sql_dependencies(b"SELECT FROM WHERE");
+    }
+
+    #[test]
+    #[should_panic(expected = "derived SQL was validated before its dependency inventory")]
+    fn dependency_inventory_refuses_non_utf8_sql() {
+        derived_sql_dependencies(&[0xff, 0xfe]);
     }
 
     fn accepts(sql: &str) -> bool {
