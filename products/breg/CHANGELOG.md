@@ -17,8 +17,10 @@
     backfills `payload_expires_at`, `handler_kind`, `data_schema`, or the
     proposal columns, no longer replaces the legacy answer constraint, and no
     longer refuses pre-Version 1 webhook history with `pre-V1 webhook history
-    requires explicit operator migration`. Registry Scheduling installs the
-    same tables and is affected the same way.
+    requires explicit operator migration`. It still adds the dead-letter
+    reason column and its constraint to a delivery-state table created without
+    them. Registry Scheduling installs these tables once, on an empty schema,
+    and is not affected.
   - Schema install no longer refuses or drops legacy review data
     (`registry_request_decisions`, and the request states `approved`,
     `needs_changes`, `rejected`, `canceled`). A database still holding such a

@@ -6,6 +6,14 @@
   iteration that completed without failure, idle or not, through the defaulted
   `iteration_succeeded` method, so the product can report how recently its
   delivery worker made progress. The default notes nothing.
+- BREAKING: `registry-platform-hooks` `delivery_schema::install` no longer
+  upgrades delivery tables created by builds older than v0.38.0. It no longer
+  backfills `payload_expires_at`, `handler_kind`, `data_schema`, or the
+  proposal columns, no longer replaces the legacy answer constraint, and no
+  longer refuses pre-Version 1 webhook history. It still adds the dead-letter
+  reason column and its constraint to a delivery-state table created without
+  them. A product that installs once on an empty schema, as Registry
+  Scheduling does, is not affected.
 
 ## v0.38.0 - 2026-10-01
 

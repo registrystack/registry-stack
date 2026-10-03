@@ -1570,15 +1570,21 @@ release image and the upgrade rehearsal).
   `registry_webhook_delivery_state_answer_digest_required` constraint is
   part of the table definition, so every insert and update that keeps raw
   answer bytes on a row is refused by PostgreSQL. Terminal settlement still
-  writes the answer digest only. v0.38.0 created the table with the same
-  constraint, so no row it wrote can carry the bytes.
+  writes the answer digest only. Schema install runs only inside an apply, and
+  v0.38.0 can serve a database last applied under an earlier release, so the
+  table need not have been created by v0.38.0. v0.36.0 refused to serve a
+  database until a rebuilt package was applied to it, and its install already
+  erased kept answer bytes and added this constraint, so every database
+  v0.38.0 can serve carries the constraint and no row in it carries the bytes.
 - `RequestState::from_storage` accepts only the current vocabulary. Any other
   stored value is `WorkflowError::InvalidRestoredState`, which the API
   reports as the generic service-unavailable problem. No row is read past the
   refusal and the response names no stored value.
-- Schema install is `CREATE ... IF NOT EXISTS` plus the constraint steps a
-  v0.38.0 database or a fresh install still needs. Installing over an
-  installed schema changes nothing.
+- Schema install is `CREATE ... IF NOT EXISTS` plus the steps a database
+  v0.38.0 can serve still needs. One of them is the dead-letter reason: v0.38.0
+  introduced the column and its constraint and tolerates a delivery-state
+  table without them, so install still adds both to such a table. Installing
+  over an installed schema changes nothing.
 - The retired package flags are no longer defined, so the argument parser
   refuses them as unknown arguments with exit status 2 before any file or
   database is read. Dev state is read strictly: a version other than the
@@ -1598,19 +1604,25 @@ release image and the upgrade rehearsal).
    (BREG-NEG-69),
    `real_postgres_internal_schema_reinstall_is_idempotent`.
    `crates/registry-platform-hooks/src/delivery_schema.rs`:
-   `a_recorded_answer_belongs_to_a_delivered_row`,
-   `installing_over_an_installed_schema_changes_nothing`.
+   `a_recorded_answer_belongs_to_a_delivered_row`, and two tests that need
+   PostgreSQL and run only where `HOOKS_TEST_DATABASE_URL` is set, which no
+   CI job does:
+   `installing_over_an_installed_schema_changes_nothing`,
+   `installing_over_a_table_without_dead_letter_reasons_adds_them`.
 2. `crates/registry-breg/src/request_workflow.rs`:
    `unknown_stored_request_states_are_invalid`.
 3. `crates/registry-bregctl/tests/cli.rs`:
-   `retired_package_flags_are_refused_as_unknown_arguments`,
+   `retired_package_flags_are_refused_as_unknown_arguments`.
+   `crates/registry-bregctl/src/lib.rs`:
    `dev_start_takes_no_mint_issuer_flags`,
    `keygen_names_its_destination_only_with_output`.
    `crates/registry-bregctl/src/dev/tests.rs`:
    `a_retained_v1_state_is_invalid_without_mutation`,
+   `a_retained_state_of_another_version_is_invalid_without_mutation`,
    `retained_state_missing_a_recorded_field_is_invalid`.
    `crates/registry-bregctl/src/data_lifecycle.rs`:
-   `an_unknown_sidecar_version_is_refused_without_a_request_and_without_rendering_values`.
+   `an_unknown_sidecar_version_is_refused_without_a_request_and_without_rendering_values`,
+   `a_sidecar_of_another_version_in_the_current_shape_is_refused_without_a_request`.
 4. `release/scripts/test_rehearse_upgrade.py`:
    `test_refuses_a_start_before_the_immediate_predecessor`,
    `test_main_refuses_an_earlier_start_before_any_download_or_container`.
@@ -1624,12 +1636,15 @@ release image and the upgrade rehearsal).
   old columns and constraints in place, and any failure surfaces later as a
   generic database error. The supported path is one release at a time, finishing
   each release's upgrade steps before starting the next.
-- **Legacy answer bytes in a database that skipped v0.38.0.** A delivery
-  state table created before the answer constraint, and never upgraded by
-  v0.38.0, keeps whatever raw answer bytes it held, because
-  `CREATE TABLE IF NOT EXISTS` does not add the constraint to an existing
-  table. That database is outside the upgrade promise.
+- **Legacy answer bytes in a database never applied under v0.36.0 or
+  later.** A delivery state table created before the answer constraint keeps
+  whatever raw answer bytes it held, because `CREATE TABLE IF NOT EXISTS`
+  does not add the constraint to an existing table. v0.36.0 through v0.38.0
+  refuse to serve such a database until an apply, and each of their installs
+  erases the bytes and adds the constraint, so that database is outside the
+  upgrade promise.
 - **Legacy review data is no longer named.** A request row in a retired
   approval state fails reads with the generic unavailable problem instead of
-  a refusal at install that names the cause. v0.38.0 already refused to
-  install over such data, so a database it served holds none.
+  a refusal at install that names the cause. Install has refused such data
+  and rebuilt the four-state check since v0.36.0, whose apply every database
+  v0.38.0 can serve has been through, so such a database holds none.
