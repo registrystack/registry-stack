@@ -206,7 +206,7 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
 
     def test_reuses_compiler_paths_for_all_products_in_one_job(self) -> None:
         compilers = []
-        for client in ("discovery", "evidence", "relay", "breg", "casework", "messaging"):
+        for client in ("discovery", "evidence", "breg", "casework", "messaging"):
             self.make_client(client, "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
             result = self.run_build(client=client)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -227,8 +227,12 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
         record()
         other_runner = self.root / "other-runner"
         record(env={**self.env, "RUNNER_TEMP": str(other_runner)})
-        self.make_client("relay", "x86_64-unknown-linux-gnu", "linux-x64-gnu")
-        record(client="relay", target="x86_64-unknown-linux-gnu", platform="linux-x64-gnu")
+        self.make_client("discovery", "x86_64-unknown-linux-gnu", "linux-x64-gnu")
+        record(
+            client="discovery",
+            target="x86_64-unknown-linux-gnu",
+            platform="linux-x64-gnu",
+        )
         other_python = self.python.with_name("other-python")
         shutil.copy2(self.python, other_python)
         self.python = other_python
@@ -237,6 +241,16 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
         compiler.write_text(compiler.read_text() + "\n# Changed compiler recipe\n")
         record()
         self.assertEqual(len(set(compilers)), len(compilers))
+
+    def test_rejects_retired_relay_before_build(self) -> None:
+        self.make_client("relay", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
+        result = self.run_build(client="relay")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "client must be discovery, evidence, breg, casework, or messaging",
+            result.stderr,
+        )
+        self.assertFalse(self.napi_log.exists())
 
     def test_refuses_an_unexpected_existing_wrapper(self) -> None:
         self.make_client("evidence", "aarch64-unknown-linux-gnu", "linux-arm64-gnu")

@@ -51,6 +51,13 @@ class ReleaseRosterTest(TestCase):
             ):
                 self.assertFalse(helper((1, 0, 0)))
 
+    def test_relay_is_retired_from_v0_39(self) -> None:
+        self.assertEqual((0, 39, 0), release_roster.RELAY_RETIREMENT_RELEASE)
+        self.assertTrue(release_roster.relay_in_release((0, 38, 0)))
+        self.assertTrue(release_roster.relay_in_release((0, 38, 99)))
+        self.assertFalse(release_roster.relay_in_release((0, 39, 0)))
+        self.assertFalse(release_roster.relay_in_release((1, 0, 0)))
+
     def test_cli_reports_the_version_selected_roster(self) -> None:
         for command in (
             "breg-services-in-release",
@@ -67,6 +74,14 @@ class ReleaseRosterTest(TestCase):
                         result = release_roster.main([command, version])
                     self.assertEqual(0, result)
                     self.assertEqual(expected, stdout.getvalue())
+
+        for version, expected in (("0.38.99", "true\n"), ("v0.39.0", "false\n")):
+            with self.subTest(command="relay-in-release", version=version):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                    result = release_roster.main(["relay-in-release", version])
+                self.assertEqual(0, result)
+                self.assertEqual(expected, stdout.getvalue())
 
 
 if __name__ == "__main__":

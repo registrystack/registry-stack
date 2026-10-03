@@ -273,6 +273,9 @@ jobs:
           if version >= UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION:
               clients = ["stack"]
           else:
+              # Standalone Relay packages exist only in the immutable
+              # pre-unified release range. Current and future releases take
+              # the stack branch above and cannot select Relay.
               clients = ["evidence", "relay"]
               if version >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
                   clients.insert(0, "discovery")

@@ -259,19 +259,6 @@ build_payload() {
     test "$("dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64" --version)" = \
       "registry-manifest ${RELEASE_TAG#v}"
 
-    # Build and stage the production Relay before relayctl enables the separate
-    # authoring-only tooling feature on the Relay library dependency.
-    cargo build --release --locked \
-      -p registry-relay-v2 \
-      --bin relay \
-      --no-default-features
-    cp target/release/relay "dist/bin/relay-${RELEASE_TAG}-linux-amd64"
-    cp target/release/relay dist/image-bin/relay
-
-    cargo build --release --locked \
-      -p registry-relayctl
-    cp target/release/relayctl "dist/bin/relayctl-${RELEASE_TAG}-linux-amd64"
-
     cargo build --release --locked \
       -p registry-evidence \
       -p registry-evidencectl \
@@ -608,10 +595,8 @@ if [[ "${group}" == all || "${group}" == core ]]; then
     "evidencectl-${tag}-linux-amd64"
     "evidence-oid4vci-${tag}-linux-amd64"
     "registry-manifest-${tag}-linux-amd64"
-    "relay-${tag}-linux-amd64"
-    "relayctl-${tag}-linux-amd64"
   )
-  image_bin_binaries+=(evidence relay)
+  image_bin_binaries+=(evidence)
   if [[ "${include_evidence_oid4vci_image}" -eq 1 ]]; then
     image_bin_binaries+=(evidence-oid4vci)
   fi

@@ -33,6 +33,15 @@ The channel publishes:
   commit only after the release assets and container images pass publication
   verification.
 
+Current manifests use `registry-stack.nightly.v2` with the frozen
+`registry-stack.nightly-roster.v2.0` profile. That profile names the complete
+image, installer, and binary payload roster; a source change cannot redefine an
+older manifest by recomputing its inventory. An incompatible inventory requires
+a new schema and profile. The reader still accepts frozen
+`registry-stack.nightly.v1` manifests, including historical v0.39.0 nightlies
+that carried Relay, so an existing channel head can be reconciled and advanced
+without rewriting published bytes.
+
 The channel does not publish npm packages, PyPI packages, or a documentation
 site. Use the source documentation at the nightly commit when behavior differs
 from the latest numbered release. The `nightly-channel` branch contains
@@ -51,13 +60,12 @@ when its operating system or architecture has no asset in that build.
 ## Install the latest successful nightly
 
 Use an installer from source when selecting a channel. With no channel or build
-argument, a source installer resolves the latest numbered release. The five
+argument, a source installer resolves the latest numbered release. The four
 nightly-aware installers are:
 
 | Toolset | Source installer | Install directory variable | Verified asset directory variable |
 | --- | --- | --- | --- |
 | Base Registry Engine | `crates/registry-breg/install.sh` | `BREG_INSTALL_DIR` | `BREG_ASSET_DIR` |
-| Registry Relay | `crates/registry-relay-v2/install.sh` | `RELAY_INSTALL_DIR` | `RELAY_ASSET_DIR` |
 | Evidence authoring | `crates/registry-evidencectl/install.sh` | `EVIDENCECTL_INSTALL_DIR` | `EVIDENCECTL_ASSET_DIR` |
 | Registry Casework | `crates/registry-casework/install.sh` | `CASEWORK_INSTALL_DIR` | `CASEWORK_ASSET_DIR` |
 | Registry Scheduling | `crates/registry-scheduling/install.sh` | `SCHEDULING_INSTALL_DIR` | `SCHEDULING_ASSET_DIR` |
@@ -68,10 +76,10 @@ nightly-aware installers are:
 `https://github.com/registrystack/registry-stack/releases/download/<tag>/nightly.json`
 instead.
 
-For example, install the latest successful Registry Relay nightly:
+For example, install the latest successful Evidence nightly:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-relay-v2/install.sh | bash -s -- --channel nightly
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-evidencectl/install.sh | bash -s -- --channel nightly
 ```
 
 Replace the installer path with another row from the table to install that
@@ -96,7 +104,7 @@ Pass the full nightly tag to reproduce a known build without following the
 channel pointer:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-relay-v2/install.sh | bash -s -- --build '<tag>'
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-evidencectl/install.sh | bash -s -- --build '<tag>'
 ```
 
 The installer downloads that prerelease's checksum-covered `nightly.json`
@@ -158,10 +166,10 @@ mismatched bytes. The attested `nightly.json` also records every published
 container digest, binding the image inventory to the same workflow and source.
 
 Install from the verified directory so the installer does not download another
-copy. For Registry Relay, run the downloaded immutable installer:
+copy. For Evidence, run the downloaded immutable installer:
 
 ```sh
-RELAY_ASSET_DIR="$PWD" bash "./relay-${tag}-install.sh"
+EVIDENCECTL_ASSET_DIR="$PWD" bash "./evidence-${tag}-install.sh"
 ```
 
 Use the asset-directory variable from the installer table for another toolset.

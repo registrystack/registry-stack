@@ -50,7 +50,6 @@ def security_evidence_members(
         "breg",
         "breg-mcp",
         "breg-review",
-        "relay",
         "scheduling",
         "messaging",
         "evidence-oid4vci",
@@ -169,13 +168,9 @@ class ReleaseCandidateTest(TestCase):
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",
         ]
-        for image_name in self.module._candidate_image_names("0.31.0"):
+        for image_name in self.module._candidate_image_names("0.39.0"):
             paths.append(f"release/docker/Dockerfile.{image_name}")
-            paths.append(
-                "products/relay-v2/security/advisory-baseline.json"
-                if image_name == "relay"
-                else f"release/security/{image_name}-advisory-baseline.json"
-            )
+            paths.append(f"release/security/{image_name}-advisory-baseline.json")
         for relative_path in paths:
             source = ROOT / relative_path
             destination = root / relative_path
@@ -399,22 +394,10 @@ class ReleaseCandidateTest(TestCase):
 
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
         bundle_root = self.root / "v2-bundle"
-        image_names = (
-            "discovery",
-            "evidence",
-            "breg",
-            "breg-mcp",
-            "breg-review",
-            "casework",
-            "relay",
-            "scheduling",
-            "messaging",
-            "evidence-oid4vci",
-            "registry-render",
-        )
+        image_names = tuple(sorted(self.module._candidate_image_names("1.2.3")))
         evidence_members = security_evidence_members(image_names)
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
-        payload_inventory = self.module._relay_v2_payload_inventory("1.2.3")
+        payload_inventory = self.module._release_payload_inventory("1.2.3")
         files = {
             name: f"candidate payload: {name}\n".encode()
             for name in payload_inventory
@@ -607,22 +590,22 @@ class ReleaseCandidateTest(TestCase):
     ) -> None:
         candidate, _, _, _ = self.make_v2_candidate()
         retired = copy.deepcopy(candidate)
-        relay = next(
+        replaced = next(
             record
             for record in retired["payloads"]
-            if record["name"] == "relay-v1.2.3-linux-amd64"
+            if record["name"] == "evidence-v1.2.3-linux-amd64"
         )
-        retired["payloads"].remove(relay)
+        retired["payloads"].remove(replaced)
         retired["payloads"].append(
             {
-                **relay,
+                **replaced,
                 "name": "registryctl-v1.2.3-linux-amd64",
             }
         )
 
         with self.assertRaisesRegex(
             self.module.CandidateError,
-            "payload inventory.*missing.*relay-v1.2.3-linux-amd64.*"
+            "payload inventory.*missing.*evidence-v1.2.3-linux-amd64.*"
             "unexpected.*registryctl-v1.2.3-linux-amd64",
         ):
             self.module.validate_candidate_manifest(retired, now=self.now)
@@ -649,8 +632,8 @@ class ReleaseCandidateTest(TestCase):
             self.module.validate_candidate_manifest(docs_payload, now=self.now)
 
     def test_relay_installer_payloads_begin_after_v0_19_0(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.19.0")
-        current = self.module._relay_v2_payload_inventory("0.19.1")
+        historical = self.module._release_payload_inventory("0.19.0")
+        current = self.module._release_payload_inventory("0.19.1")
 
         self.assertNotIn("relay-v0.19.0-install.sh", historical)
         self.assertNotIn("relay-install.sh", historical)
@@ -660,8 +643,8 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual("docs", current["registry-docs-v0.19.1.tar.gz"])
 
     def test_relay_client_payloads_begin_after_v0_19_0(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.19.0")
-        current = self.module._relay_v2_payload_inventory("0.19.1")
+        historical = self.module._release_payload_inventory("0.19.0")
+        current = self.module._release_payload_inventory("0.19.1")
 
         self.assertNotIn(
             "relay-client-node-v0.19.0-linux-amd64-glibc.tgz", historical
@@ -680,8 +663,8 @@ class ReleaseCandidateTest(TestCase):
         )
 
     def test_client_registry_payloads_begin_with_v0_21_1(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.21.0")
-        current = self.module._relay_v2_payload_inventory("0.21.1")
+        historical = self.module._release_payload_inventory("0.21.0")
+        current = self.module._release_payload_inventory("0.21.1")
 
         self.assertNotIn("registrystack-relay-client-0.21.0.tgz", historical)
         self.assertIn(
@@ -726,8 +709,8 @@ class ReleaseCandidateTest(TestCase):
         )
 
     def test_discovery_client_payloads_begin_with_v0_23_0(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.22.0")
-        current = self.module._relay_v2_payload_inventory("0.23.0")
+        historical = self.module._release_payload_inventory("0.22.0")
+        current = self.module._release_payload_inventory("0.23.0")
 
         self.assertNotIn(
             "discovery-client-node-v0.22.0-linux-amd64-glibc.tgz", historical
@@ -756,17 +739,17 @@ class ReleaseCandidateTest(TestCase):
         )
 
     def test_discovery_runtime_payload_begins_with_v0_24_0(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.23.0")
-        current = self.module._relay_v2_payload_inventory("0.24.0")
+        historical = self.module._release_payload_inventory("0.23.0")
+        current = self.module._release_payload_inventory("0.24.0")
 
         self.assertNotIn("discovery-v0.23.0-linux-amd64", historical)
         self.assertEqual("binary", current["discovery-v0.24.0-linux-amd64"])
 
     def test_macos_fips_binary_bundles_begin_with_v0_33_0(self) -> None:
-        binaries = ("relayctl", "evidence", "evidencectl", "evidence-oid4vci",
+        binaries = ("evidence", "evidencectl", "evidence-oid4vci",
                     "breg", "bregctl", "casework", "caseworkctl")
         for version in ("0.32.0", "0.33.0", "1.0.0"):
-            inventory = self.module._relay_v2_payload_inventory(version)
+            inventory = self.module._release_payload_inventory(version)
             for binary in binaries:
                 stem = f"{binary}-v{version}-macos-arm64"
                 if version == "0.32.0":
@@ -777,9 +760,18 @@ class ReleaseCandidateTest(TestCase):
                     self.assertEqual("binary", inventory[f"{stem}.tar.gz"])
                 self.assertEqual("binary", inventory[f"{binary}-v{version}-linux-amd64"])
 
+        historical = self.module._release_payload_inventory("0.38.0")
+        self.assertEqual(
+            "binary", historical["relayctl-v0.38.0-macos-arm64.tar.gz"]
+        )
+        self.assertNotIn(
+            "relayctl-v1.0.0-linux-amd64",
+            self.module._release_payload_inventory("1.0.0"),
+        )
+
     def test_breg_payloads_begin_with_v0_26_0(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.25.0")
-        current = self.module._relay_v2_payload_inventory("0.26.0")
+        historical = self.module._release_payload_inventory("0.25.0")
+        current = self.module._release_payload_inventory("0.26.0")
 
         self.assertNotIn("breg-v0.25.0-linux-amd64", historical)
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
@@ -797,8 +789,8 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual("installer", current["breg-install.sh"])
 
     def test_unified_client_replaces_individual_packages_after_v0_26_0(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.26.0")
-        current = self.module._relay_v2_payload_inventory("0.26.1")
+        historical = self.module._release_payload_inventory("0.26.0")
+        current = self.module._release_payload_inventory("0.26.1")
 
         self.assertIn("registrystack-relay-client-0.26.0.tgz", historical)
         self.assertNotIn("registrystack-relay-client-0.26.1.tgz", current)
@@ -887,8 +879,8 @@ class ReleaseCandidateTest(TestCase):
             {"breg", "casework", "discovery", "evidence", "mint", "relay"},
             self.module._candidate_image_names("0.30.0"),
         )
-        historical = self.module._relay_v2_payload_inventory("0.29.0")
-        future = self.module._relay_v2_payload_inventory("0.30.0")
+        historical = self.module._release_payload_inventory("0.29.0")
+        future = self.module._release_payload_inventory("0.30.0")
         self.assertNotIn("casework-v0.29.0-linux-amd64", historical)
         for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
             self.assertEqual("binary", future[f"casework-v0.30.0-{platform}"])
@@ -897,8 +889,8 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual("installer", future["casework-install.sh"])
 
     def test_third_party_notices_join_only_the_v0_33_roster(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.32.0")
-        current = self.module._relay_v2_payload_inventory("0.33.0")
+        historical = self.module._release_payload_inventory("0.32.0")
+        current = self.module._release_payload_inventory("0.33.0")
 
         self.assertNotIn("THIRD_PARTY_NOTICES", historical)
         self.assertEqual("notice", current["THIRD_PARTY_NOTICES"])
@@ -918,12 +910,12 @@ class ReleaseCandidateTest(TestCase):
         )
         self.assertNotIn(
             "scheduling-v0.33.0-linux-amd64",
-            self.module._relay_v2_payload_inventory("0.33.0"),
+            self.module._release_payload_inventory("0.33.0"),
         )
 
     def test_schedulingctl_joins_only_the_v0_36_roster(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.35.0")
-        current = self.module._relay_v2_payload_inventory("0.36.0")
+        historical = self.module._release_payload_inventory("0.35.0")
+        current = self.module._release_payload_inventory("0.36.0")
 
         self.assertFalse(
             [name for name in historical if name.startswith("schedulingctl-")]
@@ -962,8 +954,8 @@ class ReleaseCandidateTest(TestCase):
             current_images,
         )
 
-        historical_payloads = self.module._relay_v2_payload_inventory("0.37.99")
-        current_payloads = self.module._relay_v2_payload_inventory("0.38.0")
+        historical_payloads = self.module._release_payload_inventory("0.37.99")
+        current_payloads = self.module._release_payload_inventory("0.38.0")
         self.assertNotIn(
             "registry-render-v0.37.99-linux-amd64", historical_payloads
         )
@@ -1064,9 +1056,9 @@ class ReleaseCandidateTest(TestCase):
             self.module._candidate_image_names("0.37.99") | {"messaging"},
             self.module._candidate_image_names("0.38.0"),
         )
-        historical = self.module._relay_v2_payload_inventory("0.37.99")
+        historical = self.module._release_payload_inventory("0.37.99")
         self.assertFalse(any(name.startswith("messaging") for name in historical))
-        current = self.module._relay_v2_payload_inventory("0.38.0")
+        current = self.module._release_payload_inventory("0.38.0")
         self.assertEqual(
             {
                 "messaging-v0.38.0-linux-amd64": "binary",
@@ -1090,6 +1082,8 @@ class ReleaseCandidateTest(TestCase):
                 with self.subTest(version=version):
                     parsed = tuple(int(part) for part in version.split("."))
                     expected_images = set(self.module.SCHEDULING_RUNTIME_IMAGE_NAMES)
+                    if not self.module.release_roster.relay_in_release(parsed):
+                        expected_images.discard("relay")
                     if self.module.release_roster.render_in_release(parsed):
                         expected_images |= self.module.RENDER_RUNTIME_IMAGE_NAMES
                     if self.module.release_roster.evidence_oid4vci_image_in_release(
@@ -1105,7 +1099,7 @@ class ReleaseCandidateTest(TestCase):
                     self.assertFalse(
                         any(
                             name.startswith("messaging")
-                            for name in self.module._relay_v2_payload_inventory(
+                            for name in self.module._release_payload_inventory(
                                 version
                             )
                         )
@@ -1137,7 +1131,7 @@ class ReleaseCandidateTest(TestCase):
                 names = self.module._candidate_image_names(version)
                 self.assertNotIn("breg-mcp", names)
                 self.assertNotIn("breg-review", names)
-                inventory = self.module._relay_v2_payload_inventory(version)
+                inventory = self.module._release_payload_inventory(version)
                 self.assertFalse(
                     any(name.startswith(("breg-mcp-", "breg-review-")) for name in inventory)
                 )
@@ -1156,7 +1150,7 @@ class ReleaseCandidateTest(TestCase):
             },
             self.module._candidate_image_names("0.38.0"),
         )
-        inventory = self.module._relay_v2_payload_inventory("0.38.0")
+        inventory = self.module._release_payload_inventory("0.38.0")
         for service in ("breg-mcp", "breg-review"):
             for asset in (
                 f"{service}-v0.38.0-linux-amd64",
@@ -1179,6 +1173,8 @@ class ReleaseCandidateTest(TestCase):
                 with self.subTest(version=version):
                     parsed = tuple(int(part) for part in version.split("."))
                     expected_images = set(self.module.SCHEDULING_RUNTIME_IMAGE_NAMES)
+                    if not self.module.release_roster.relay_in_release(parsed):
+                        expected_images.discard("relay")
                     if self.module.release_roster.render_in_release(parsed):
                         expected_images |= self.module.RENDER_RUNTIME_IMAGE_NAMES
                     if self.module.release_roster.evidence_oid4vci_image_in_release(
@@ -1194,7 +1190,7 @@ class ReleaseCandidateTest(TestCase):
                     self.assertFalse(
                         any(
                             name.startswith(("breg-mcp", "breg-review"))
-                            for name in self.module._relay_v2_payload_inventory(
+                            for name in self.module._release_payload_inventory(
                                 version
                             )
                         )
@@ -1208,11 +1204,8 @@ class ReleaseCandidateTest(TestCase):
                     names = stdout.getvalue().split()
                     self.assertNotIn("breg-mcp", names)
                     self.assertNotIn("breg-review", names)
-                    if parsed < (0, 38, 0):
-                        self.assertEqual(
-                            self.module._candidate_image_names(version),
-                            self.module.check_image_onboarding(ROOT, version),
-                        )
+                    # Historical rosters remain parseable, but current source no
+                    # longer carries retired product Dockerfiles.
 
     def test_retirement_preserves_every_v0_30_release(self) -> None:
         for version, expected in (
@@ -1222,7 +1215,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             with self.subTest(version=version):
                 self.assertEqual(expected, "mint" in self.module._candidate_image_names(version))
-                inventory = self.module._relay_v2_payload_inventory(version)
+                inventory = self.module._release_payload_inventory(version)
                 self.assertEqual(expected, f"mint-v{version}-linux-amd64" in inventory)
 
     def test_image_names_cli_emits_the_version_appropriate_roster(self) -> None:
@@ -1249,6 +1242,11 @@ class ReleaseCandidateTest(TestCase):
                 "breg breg-mcp breg-review casework discovery evidence "
                 "evidence-oid4vci messaging registry-render relay scheduling\n",
             ),
+            (
+                "0.39.0",
+                "breg breg-mcp breg-review casework discovery evidence "
+                "evidence-oid4vci messaging registry-render scheduling\n",
+            ),
         )
         for version, expected in cases:
             with self.subTest(version=version):
@@ -1260,8 +1258,24 @@ class ReleaseCandidateTest(TestCase):
                 self.assertEqual(0, result)
                 self.assertEqual(expected, stdout.getvalue())
 
+    def test_relay_payloads_end_after_v0_38_0(self) -> None:
+        historical = self.module._release_payload_inventory("0.38.0")
+        current = self.module._release_payload_inventory("0.39.0")
+
+        self.assertIn("relay-v0.38.0-linux-amd64", historical)
+        self.assertIn("relayctl-v0.38.0-linux-amd64", historical)
+        self.assertIn("relay-v0.38.0-install.sh", historical)
+        self.assertFalse(
+            any(
+                name.startswith(("relay-", "relayctl-", "registry-relay"))
+                or "relay_client" in name
+                or "relay-client" in name
+                for name in current
+            )
+        )
+
     def test_image_onboarding_accepts_every_current_version_roster(self) -> None:
-        for version in ("0.31.0",):
+        for version in ("0.39.0",):
             with self.subTest(version=version):
                 self.assertEqual(
                     self.module._candidate_image_names(version),
@@ -1275,23 +1289,24 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "casework advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.31.0")
+            self.module.check_image_onboarding(root, "0.39.0")
         self.assertEqual(
-            self.module._candidate_image_names("0.31.0"),
+            self.module._candidate_image_names("0.39.0"),
             self.module.check_image_onboarding(
-                root, "0.31.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             ),
         )
         (root / "release/security/casework-advisory-baseline.json").write_text(
             json.dumps({"version": 4, "service": "casework"}), encoding="utf-8"
         )
         self.assertEqual(
-            self.module._candidate_image_names("0.31.0"),
-            self.module.check_image_onboarding(root, "0.31.0"),
+            self.module._candidate_image_names("0.39.0"),
+            self.module.check_image_onboarding(root, "0.39.0"),
         )
 
     def test_v0_33_scheduling_onboarding_requires_baseline_and_cleanup_entry(self) -> None:
         root = self.onboarding_repository()
+        (root / "release/security/scheduling-advisory-baseline.json").unlink()
         shutil.copy2(
             ROOT / "release/docker/Dockerfile.scheduling",
             root / "release/docker/Dockerfile.scheduling",
@@ -1300,11 +1315,11 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "scheduling advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.33.0")
+            self.module.check_image_onboarding(root, "0.39.0")
         self.assertEqual(
-            self.module._candidate_image_names("0.33.0"),
+            self.module._candidate_image_names("0.39.0"),
             self.module.check_image_onboarding(
-                root, "0.33.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             ),
         )
         cleanup = root / "release/scripts/cleanup-release-candidates.py"
@@ -1319,7 +1334,7 @@ class ReleaseCandidateTest(TestCase):
             "CANDIDATE_PACKAGES must contain scheduling-candidate",
         ):
             self.module.check_image_onboarding(
-                root, "0.33.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             )
 
     def test_v0_36_onboarding_requires_each_operator_tool_staged_in_its_image(
@@ -1331,9 +1346,9 @@ class ReleaseCandidateTest(TestCase):
             root / "release/docker/Dockerfile.scheduling",
         )
         self.assertEqual(
-            self.module._candidate_image_names("0.36.0"),
+            self.module._candidate_image_names("0.39.0"),
             self.module.check_image_onboarding(
-                root, "0.36.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             ),
         )
         recipe = root / "release/scripts/build-release-binaries.sh"
@@ -1352,14 +1367,8 @@ class ReleaseCandidateTest(TestCase):
                     f"canonical binary recipe must stage dist/image-bin/{tool}",
                 ):
                     self.module.check_image_onboarding(
-                        root, "0.36.0", allow_missing_baseline=True
+                        root, "0.39.0", allow_missing_baseline=True
                     )
-                self.assertEqual(
-                    self.module._candidate_image_names("0.35.0"),
-                    self.module.check_image_onboarding(
-                        root, "0.35.0", allow_missing_baseline=True
-                    ),
-                )
 
     def test_messaging_onboarding_stays_closed_until_external_setup(self) -> None:
         self.hold_out("BREG_SERVICES_FIRST_RELEASE")
@@ -1367,6 +1376,7 @@ class ReleaseCandidateTest(TestCase):
         self.hold_out("EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE")
         root = self.onboarding_repository()
         self.without_candidate_packages(root, "messaging")
+        (root / "release/security/messaging-advisory-baseline.json").unlink()
         for image_name in ("scheduling", "messaging"):
             shutil.copy2(
                 ROOT / f"release/docker/Dockerfile.{image_name}",
@@ -1380,13 +1390,13 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "messaging advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.38.0")
+            self.module.check_image_onboarding(root, "0.39.0")
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "CANDIDATE_PACKAGES must contain messaging-candidate",
         ):
             self.module.check_image_onboarding(
-                root, "0.38.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             )
         cleanup = root / "release/scripts/cleanup-release-candidates.py"
         cleanup.write_text(
@@ -1397,9 +1407,9 @@ class ReleaseCandidateTest(TestCase):
             encoding="utf-8",
         )
         self.assertEqual(
-            self.module._candidate_image_names("0.38.0"),
+            self.module._candidate_image_names("0.39.0"),
             self.module.check_image_onboarding(
-                root, "0.38.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             ),
         )
 
@@ -1408,6 +1418,7 @@ class ReleaseCandidateTest(TestCase):
         self.hold_out("MESSAGING_FIRST_RELEASE")
         root = self.onboarding_repository()
         self.without_candidate_packages(root, "evidence-oid4vci", "registry-render")
+        (root / "release/security/evidence-oid4vci-advisory-baseline.json").unlink()
         for relative_path in (
             "release/docker/Dockerfile.scheduling",
             "release/security/scheduling-advisory-baseline.json",
@@ -1420,13 +1431,13 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "evidence-oid4vci advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.38.0")
+            self.module.check_image_onboarding(root, "0.39.0")
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "CANDIDATE_PACKAGES must contain evidence-oid4vci-candidate",
         ):
             self.module.check_image_onboarding(
-                root, "0.38.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             )
 
         cleanup = root / "release/scripts/cleanup-release-candidates.py"
@@ -1440,9 +1451,9 @@ class ReleaseCandidateTest(TestCase):
             encoding="utf-8",
         )
         self.assertEqual(
-            self.module._candidate_image_names("0.38.0"),
+            self.module._candidate_image_names("0.39.0"),
             self.module.check_image_onboarding(
-                root, "0.38.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             ),
         )
 
@@ -1454,6 +1465,7 @@ class ReleaseCandidateTest(TestCase):
         self.hold_out("EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE")
         root = self.onboarding_repository()
         self.without_candidate_packages(root, "breg-mcp", "breg-review")
+        (root / "release/security/breg-mcp-advisory-baseline.json").unlink()
         for relative_path in (
             "release/docker/Dockerfile.scheduling",
             "release/security/scheduling-advisory-baseline.json",
@@ -1465,17 +1477,29 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "breg-mcp advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.38.0")
+            self.module.check_image_onboarding(root, "0.39.0")
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "CANDIDATE_PACKAGES must contain breg-mcp-candidate",
         ):
             self.module.check_image_onboarding(
-                root, "0.38.0", allow_missing_baseline=True
+                root, "0.39.0", allow_missing_baseline=True
             )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "breg-candidate",\n',
+                '    "breg-candidate",\n'
+                '    "breg-mcp-candidate",\n'
+                '    "breg-review-candidate",\n',
+            ),
+            encoding="utf-8",
+        )
         self.assertEqual(
-            self.module._candidate_image_names("0.36.0"),
-            self.module.check_image_onboarding(root, "0.36.0"),
+            self.module._candidate_image_names("0.39.0"),
+            self.module.check_image_onboarding(
+                root, "0.39.0", allow_missing_baseline=True
+            ),
         )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
@@ -1494,7 +1518,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.31.0",
+                "0.39.0",
                 allow_missing_baseline=True,
             )
 
@@ -1517,7 +1541,7 @@ class ReleaseCandidateTest(TestCase):
                 with self.assertRaisesRegex(self.module.CandidateError, error):
                     self.module.check_image_onboarding(
                         root,
-                        "0.31.0",
+                        "0.39.0",
                         allow_missing_baseline=True,
                     )
                 shutil.rmtree(root)
@@ -1528,8 +1552,8 @@ class ReleaseCandidateTest(TestCase):
         recipe.write_text(
             recipe.read_text(encoding="utf-8").replace(
                 "discovery|evidence|evidence-oid4vci|registry-render|breg|"
-                "breg-mcp|breg-review|casework|scheduling|messaging|relay",
-                "discovery|evidence|mint|relay",
+                "breg-mcp|breg-review|casework|scheduling|messaging",
+                "discovery|evidence",
             ),
             encoding="utf-8",
         )
@@ -1539,7 +1563,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.31.0",
+                "0.39.0",
                 allow_missing_baseline=True,
             )
 
@@ -1559,7 +1583,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.31.0",
+                "0.39.0",
                 allow_missing_baseline=True,
             )
 
@@ -1571,10 +1595,10 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "breg advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.31.0")
+            self.module.check_image_onboarding(root, "0.39.0")
         self.module.check_image_onboarding(
             root,
-            "0.31.0",
+            "0.39.0",
             allow_missing_baseline=True,
         )
         cleanup = root / "release/scripts/cleanup-release-candidates.py"
@@ -1591,7 +1615,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.31.0",
+                "0.39.0",
                 allow_missing_baseline=True,
             )
 
@@ -1606,7 +1630,7 @@ class ReleaseCandidateTest(TestCase):
                 [
                     "check-image-onboarding",
                     "--version",
-                    "0.31.0",
+                    "0.39.0",
                     "--root",
                     str(root),
                 ]
@@ -1619,7 +1643,7 @@ class ReleaseCandidateTest(TestCase):
                 [
                     "check-image-onboarding",
                     "--version",
-                    "0.31.0",
+                    "0.39.0",
                     "--root",
                     str(root),
                     "--allow-missing-baseline",
@@ -1627,7 +1651,9 @@ class ReleaseCandidateTest(TestCase):
             )
         self.assertEqual(0, result)
         self.assertEqual(
-            "checked image onboarding for breg casework discovery evidence relay\n",
+            "checked image onboarding for "
+            + " ".join(sorted(self.module._candidate_image_names("0.39.0")))
+            + "\n",
             stdout.getvalue(),
         )
 
@@ -1641,7 +1667,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.31.0",
+                "0.39.0",
                 allow_missing_baseline=True,
             )
 
@@ -1657,7 +1683,7 @@ class ReleaseCandidateTest(TestCase):
                 with self.assertRaisesRegex(self.module.CandidateError, error):
                     self.module.check_image_onboarding(
                         root,
-                        "0.31.0",
+                        "0.39.0",
                         allow_missing_baseline=True,
                     )
                 shutil.rmtree(root)
@@ -1685,7 +1711,7 @@ class ReleaseCandidateTest(TestCase):
                 with self.assertRaisesRegex(self.module.CandidateError, error):
                     self.module.check_image_onboarding(
                         root,
-                        "0.31.0",
+                        "0.39.0",
                         allow_missing_baseline=True,
                     )
                 shutil.rmtree(root)
@@ -1853,10 +1879,7 @@ class ReleaseCandidateTest(TestCase):
         candidate, _, bundle_root, _ = self.make_v2_candidate()
         members = security_evidence_members()
         required = self.module._security_evidence_required_files(
-            self.module.MESSAGING_RUNTIME_IMAGE_NAMES
-            | self.module.BREG_SERVICES_RUNTIME_IMAGE_NAMES
-            | self.module.RENDER_RUNTIME_IMAGE_NAMES
-            | self.module.EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
+            self.module._candidate_image_names("1.2.3")
         )
         for missing in sorted(required):
             with self.subTest(missing=missing):
@@ -1952,25 +1975,25 @@ class ReleaseCandidateTest(TestCase):
         )
 
         unbound_syft = dict(base)
-        syft = json.loads(unbound_syft["syft/relay.syft.json"])
+        syft = json.loads(unbound_syft["syft/evidence.syft.json"])
         syft["source"]["metadata"]["userInput"] = (
-            "ghcr.io/registrystack/relay-candidate@sha256:"
+            "ghcr.io/registrystack/evidence-candidate@sha256:"
             + "9" * 64
         )
-        unbound_syft["syft/relay.syft.json"] = json_bytes(syft)
+        unbound_syft["syft/evidence.syft.json"] = json_bytes(syft)
 
         incomplete_verdict = dict(base)
         verdict = json.loads(incomplete_verdict["advisory-verdict.json"])
-        verdict["subjects"].remove("relay-image")
+        verdict["subjects"].remove("evidence-image")
         incomplete_verdict["advisory-verdict.json"] = json_bytes(verdict)
 
         substituted_scan = dict(base)
-        scan = json.loads(substituted_scan["grype/relay.grype.json"])
+        scan = json.loads(substituted_scan["grype/evidence.grype.json"])
         scan["substituted"] = True
-        substituted_scan["grype/relay.grype.json"] = json_bytes(scan)
+        substituted_scan["grype/evidence.grype.json"] = json_bytes(scan)
 
         for members, message in (
-            (unbound_syft, "relay.syft.json.*is not bound"),
+            (unbound_syft, "evidence.syft.json.*is not bound"),
             (incomplete_verdict, "does not cover every runtime"),
             (substituted_scan, "does not match its scan payload"),
         ):
