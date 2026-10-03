@@ -106,12 +106,6 @@ The fixtures for all four are in `products/evidence/fixtures/acceptance/`.
 
 ## Evidence Gateway is not a consumer decision
 
-Registry Relay source-access and adaptation policy controls how an authoritative source is read
-and normalized. Evidence Gateway authorization and requirement policy control which requirement is
-evaluated, who can request it, for what purpose, and exactly which values leave the service. The
-evidence consumer determines how the evidence is used, while the decision owner remains accountable
-for requirements, decisions, and actions.
-
 A derivation script can compute an evidence value, such as whether a threshold is met or which
 reviewed bucket applies. It is not a general-purpose consumer eligibility or decision engine, and
 Version 1 has no general policy engine (`products/evidence/contracts/README.md`). An environmental

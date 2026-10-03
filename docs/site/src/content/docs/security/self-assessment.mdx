@@ -28,11 +28,6 @@ against that public guide.
 
 ## Overview
 
-Registry Stack helps operators publish governed registry-facing services over
-data they already hold. The two main runtime patterns are protected registry
-APIs through Registry Relay and signed minimum-disclosure assertions through
-Evidence Gateway.
-
 The public architecture, boundary model, and product roles are documented in
 [Architecture](../../explanation/architecture/) and
 [Boundaries and map](../../map/boundaries-and-map/). The cross-cutting security
@@ -117,15 +112,3 @@ publication by the security reviewer.
 ## Appendix
 
 Primary public evidence:
-
-- [RS-SEC-G](../../spec/rs-sec-g/)
-- [Contracts](../../reference/contracts/)
-- [OpenSSF evidence](../openssf-evidence/)
-- [Evidence Gateway API reference](../../reference/apis/registry-evidence/)
-- [RS-PR-RELAY](../../spec/rs-pr-relay/), the normative Relay protocol
-  specification. Relay generates its own OpenAPI description per deployment
-  from that deployment's registry contract, so the site publishes no
-  product-level Relay API reference.
-- GitHub Release assets, with signed checksums, consolidated SPDX SBOM,
-  security evidence, release manifest, and candidate attestations
-- [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Replay a tutorial page the way a reader follows it.
 //
-//   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|relay|none] <page.mdx>...
-//   node scripts/run-tutorial.mjs [--dry-run] --gate breg|casework|evidence|relay
+//   node scripts/run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...
+//   node scripts/run-tutorial.mjs [--dry-run] --gate breg|casework|evidence
 //
 // The page is the specification (see tutorial-runner/page.mjs): its sh fences
 // run in document order in one bash shell, from an empty reader directory
@@ -57,7 +57,7 @@ import { readJourney } from './tutorial-runner/page.mjs';
 import { TOOLSETS, ToolsetError } from './tutorial-runner/toolsets.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|relay|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework|evidence|relay';
+const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--toolset breg|casework|evidence|none] <page.mdx>...\n       run-tutorial.mjs [--dry-run] --gate breg|casework|evidence';
 const DOCS_ROOT = process.env.TUTORIAL_DOCS_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../src/content/docs');
 const APPLY_EDIT = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/apply-edit.mjs');
 const BACKGROUND = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/background.mjs');

@@ -32,21 +32,6 @@ over another.
 - [Back up, restore, and drill recovery](back-up-and-restore/)
 - [Upgrade and retire a deployment](upgrade-and-retire/)
 
-## Where Relay changes happen instead
-
-Registry Relay serves one Registry per process from one sealed package.
-There is no second serving lane, no partial activation, and no runtime switch
-that changes what a package means.
-A change to resources, operations, access profiles, classifications, or
-disclosure is a new complete revision: the publisher reseals, the operator
-starts a candidate on a private listener, waits for readiness, shifts traffic,
-and drains the previous process.
-[Operate Registry Relay](../relay/) carries that procedure and its rollback
-condition.
-
-{/* Evidence: crates/registry-relay-v2/src/startup.rs serve(): "Configuration and
-    package state never reload in place." One package per process. */}
-
 ## Next
 
 - [Validate your project](../../verify/)

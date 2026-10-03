@@ -1,366 +1,72 @@
 ---
-title: Registry Discovery is an index
-description: Registry Discovery curates provider advertisements and origin provenance without becoming a provider trust or invocation layer.
-status: draft
+title: Discovery as an index
+description: How Registry Discovery publishes an inert, curated index of Evidence Gateway providers.
+status: current
 owner: registry-docs
 source_repos:
-  - registry-stack
-last_reviewed: "2026-08-14"
+  - registry-discovery
+  - registry-evidence
+last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
 standards_referenced:
   - dcat
   - bregdcat-ap
-  - json-ld
-  - shacl
 ---
 
-Registry Discovery is a curated index of public Evidence Gateway and Registry Relay advertisements.
-It resembles a Yahoo-style directory: the catalog operator decides which public descriptions to
-index, and an application decides whether to trust and directly use a selected provider.
+Registry Discovery is a curated, read-only index of public Evidence Gateway descriptions. A catalog
+operator chooses which descriptions to publish. Applications can search those descriptions and make
+their own explicit selection.
 
-{/* Evidence: `products/discovery/README.md` defines Discovery as a curated, read-only index;
-    `products/discovery/DECISIONS.md`, ADR-001, defines advertisements with origin provenance and
-    assigns native trust and invocation to the adopting application. */}
+## What the index does
 
-## A small role between providers and applications
+The index publishes inert public metadata:
 
-A provider publishes one closed JSON-LD description containing its public service advertisement.
-The catalog operator keeps an explicit allowlist of those description URLs and performs a bounded,
-one-shot package operation. That operation records each origin URL, fetched-byte digest, and fetch
-time beside every indexed service record.
+- provider and service identifiers;
+- operator and jurisdiction identifiers;
+- Evidence Type mappings and capability identifiers;
+- provider base URLs; and
+- catalog revision and origin provenance.
 
-{/* Evidence: `crates/registry-discovery-profile/src/lib.rs`, `DiscoveryDescription` and
-    `ServiceDescription`, define the closed provider publication. `crates/registry-discoveryctl/src/project.rs`,
-    `ApprovedOrigin`, defines the explicit origin list. `crates/registry-discoveryctl/src/build.rs`,
-    `fetch_origins()`, populates `OriginSummary` and `ServiceRecord` provenance. */}
+Discovery does not authenticate a provider, authorize a caller, proxy a native request, carry a
+credential, issue an assertion, or rank providers.
 
-The deployable result is a directory containing the canonical index and `SHA256SUMS`, plus an
-optional operator revision. `package.root` always names that directory. At startup the runtime
-verifies every listed file, checks the optional `package.expectedDigest` pin, and retains the exact
-verified index bytes for its query directory before it opens the listener.
+## Selection and trust
 
-{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `write_index_package()` writes the shared
-    package; `crates/registry-discovery/src/startup.rs`, `prepare()` and `load_verified_index()`
-    bind the runtime consumer to the verified package bytes. */}
+An application resolves a requirement and jurisdiction to Evidence Type alternatives. Each
+alternative is an AND-list, so the application searches and selects one provider for every required
+type. The client validates the closed selection structure and capability binding before an
+application-supplied local policy accepts it.
 
-The profile uses a selected set of Data Catalog Vocabulary (DCAT) 3, DCAT-AP 3.0.1, and
-BRegDCAT-AP terms. Registry Discovery does not claim full DCAT-AP or BRegDCAT-AP conformance.
-Its offline tooling transforms only this pinned context and evaluates a selected Shapes Constraint
-Language (SHACL) subset; the service runtime does not perform RDF or SHACL processing.
+Acceptance is synchronous and local. Successful acceptance creates an ephemeral object exposing the
+advertised base URL. The application supplies credentials and invokes Evidence Gateway only after
+that decision. Persisted selections can be revalidated, but a selection never becomes a trust
+anchor.
 
-{/* Evidence: `products/discovery/contracts/standards-profile.yaml` records the pinned standards,
-    selected terms, and no-conformance claim. `products/discovery/DECISIONS.md`, ADR-002, assigns
-    offline RDF and SHACL work to product tooling and excludes it from runtime behavior. */}
+## Published profile and current subset
 
-## What the catalog indexes
+The published `registry-discovery-v1alpha1` profile resources are immutable and continue to
+validate historical provider descriptions, including capabilities no longer maintained by the
+current stack. Current publication, index, query, and client contracts support Evidence Gateway
+only.
 
-An index record preserves a service's public title, description, endpoint URL, roles, jurisdictions,
-profile identifiers, and product-specific capability identifiers. Evidence Gateway advertisements
-carry evidence type IDs. Registry Relay advertisements carry semantic class IDs or operation family
-IDs. A protected-only Relay may intentionally expose neither public capability collection.
+An operator upgrading a mixed pre-retirement index must remove retired-provider origins and rebuild
+the package. Existing wire hashes and published profile resources do not change.
 
-{/* Evidence: `crates/registry-discovery/src/model.rs`, `ServiceRecord`, defines the indexed fields.
-    `crates/registry-discovery-profile/src/lib.rs`, `ServiceDescription::validate()`, enforces
-    product-kind capability combinations. `products/discovery/ACCEPTANCE-JOURNEYS.md` specifies the
-    protected-only Relay advertisement case. */}
+{/* Evidence: products/discovery/README.md; products/discovery/profile/;
+    products/discovery/contracts/standards-profile.yaml;
+    crates/registry-discovery/src/query.rs;
+    crates/registry-discovery-client/src/selection.rs. */}
 
-The origin fields answer a narrower question than provider trust: which approved URL supplied these
-bytes for this index revision? They let an application retain provenance during selection. They do
-not attest that the provider, its endpoint, or its claims are trustworthy.
+## Operational model
 
-{/* Evidence: `crates/registry-discovery/src/model.rs`, `OriginSummary` and `ServiceRecord` origin
-    fields; `crates/registry-discovery-client/src/selection.rs`, `ServiceSelection`, retains the
-    origin fields while `discovery_metadata_has_no_trust_or_native_io_capability` excludes trust
-    material. */}
+`discoveryctl check` validates the authored project, and `discoveryctl package` creates an
+immutable package. The runtime verifies `SHA256SUMS` and an optional expected digest before serving
+the package. Updating the index means building and reviewing a new package, then restarting the
+runtime.
 
-## What the catalog does not do
-
-Registry Discovery is neither a provider federation nor an application gateway. It has no provider
-registration flow, trust store, authorization decision, credentials, request proxy, procedure model,
-ranking rule, writable catalog, or mutation route. Its fixed service surface is health, readiness,
-OpenAPI, service search, and evidence-type resolution.
-
-{/* Evidence: `products/discovery/DECISIONS.md`, ADR-001 and ADR-005;
-    `crates/registry-discovery/src/server.rs`, route constants and
-    `real_router_exposes_only_the_fixed_read_only_surface`; `crates/registry-discovery/src/startup.rs`,
-    `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`. */}
-
-That boundary keeps responsibility in the native products. Evidence Gateway remains the product that
-answers a fixed requirement and issues its signed, minimum-disclosure assertion. Registry Relay
-remains the product that exposes its governed protected read surface. Discovery only helps an
-application find their public advertisements.
-
-{/* Evidence: `products/discovery/ACCEPTANCE-JOURNEYS.md` separates the Evidence and Relay journeys
-    and calls for direct native invocation after selection. `products/discovery/README.md` excludes
-    credential issuance, proxying, trust, and authorization from Discovery. */}
-
-## What an application does with a result
-
-For Evidence Gateway, an application resolves a requirement and jurisdiction to Evidence Type
-alternatives. Each alternative is an AND-list. The application searches and selects one provider for
-every required type. For Registry Relay, the application searches the public semantic class and
-operation family as one correlated tuple, then explicitly selects one record. Discovery preserves the
-complete Evidence resolution context, Relay tuple, catalog revision, and origin provenance.
-
-{/* Evidence: `crates/registry-discovery/src/query.rs`, the `query::Directory` type with
-    `Directory::resolve_evidence_types()` and `Directory::search_services()`; `crates/registry-discovery-client/src/selection.rs`,
-    `EvidenceTypeResolveSelectionExt`, `ServiceSearchSelectionExt::select_evidence()`,
-    `ServiceSearchSelectionExt::select_relay()`, and the typed selection fields. */}
-
-After selection, the application validates the selection's closed structure and capability binding,
-then applies a synchronous local acceptance policy. Structural validation does not authenticate the
-origin, establish currentness, or trust the selected service. Successful local acceptance creates an
-ephemeral accepted service that exposes the native endpoint. The application creates credentials and
-performs native input and output only after that acceptance.
-
-{/* Evidence: `crates/registry-discovery-client/src/selection.rs`,
-    `validate_service_selection_structure()`, `accept_service_selection()`, and
-    `AcceptedServiceSelection`; test `discovery_metadata_has_no_trust_or_native_io_capability`;
-    `crates/registry-discovery-client/tests/native_journey.rs`, test
-    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`;
-    `products/discovery/DECISIONS.md`, ADR-001. */}
-
-## The same client workflow in Rust, Node.js, and Python
-
-The maintained clients expose the same boundary in each language: resolve an Evidence requirement
-when needed, search with exact filters, convert one exact record into a serializable selection,
-validate its structure, then apply synchronous adopter-owned acceptance.
-Node.js applications take the `discovery` namespace of `@registrystack/client`; Python
-applications take the `discovery` namespace of `registry-stack-client`, which imports as
-`registry_client`; Rust applications take the `registry-discovery-client` crate.
-
-```js
-const {
-  DiscoveryClient,
-  acceptSelection,
-  renewUnchangedSelection,
-  selectEvidenceAlternative,
-  selectEvidenceService,
-  validateSelectionStructure,
-} = require('@registrystack/client').discovery;
-
-const expectedEvidence = {
-  serviceKind: 'evidence',
-  serviceId: 'urn:example:service:evidence',
-  endpointUrl: 'https://evidence.example/',
-  legalIssuerId: 'urn:example:issuer',
-  technicalProviderId: 'urn:example:provider',
-  jurisdictions: ['urn:example:jurisdiction'],
-  conformsTo: ['urn:example:evidence-profile'],
-  evidenceTypeIds: ['urn:example:evidence-type'],
-  matchedCapability: { kind: 'evidence-type', id: 'urn:example:evidence-type' },
-  evidenceResolution: {
-    requirementId: 'urn:example:requirement',
-    jurisdiction: 'urn:example:jurisdiction',
-    mappingRevision: `sha256:${'a'.repeat(64)}`,
-    evidenceTypeListId: 'urn:example:evidence-type-list',
-    evidenceTypeIds: ['urn:example:evidence-type'],
-    mappingId: 'urn:example:mapping',
-    mappingAuthorityId: 'urn:example:mapping-authority',
-  },
-};
-
-function sameOrderedStrings(actual, expected) {
-  return Array.isArray(actual)
-    && actual.length === expected.length
-    && actual.every((value, index) => value === expected[index]);
-}
-
-function acceptsExpectedEvidence(candidate) {
-  const actualResolution = candidate.evidenceResolution;
-  const expectedResolution = expectedEvidence.evidenceResolution;
-  return candidate.serviceKind === expectedEvidence.serviceKind
-    && candidate.serviceId === expectedEvidence.serviceId
-    && candidate.endpointUrl === expectedEvidence.endpointUrl
-    && candidate.legalIssuerId === expectedEvidence.legalIssuerId
-    && candidate.technicalProviderId === expectedEvidence.technicalProviderId
-    && sameOrderedStrings(candidate.jurisdictions, expectedEvidence.jurisdictions)
-    && sameOrderedStrings(candidate.conformsTo, expectedEvidence.conformsTo)
-    && sameOrderedStrings(candidate.evidenceTypeIds, expectedEvidence.evidenceTypeIds)
-    && candidate.matchedCapability.kind === expectedEvidence.matchedCapability.kind
-    && candidate.matchedCapability.id === expectedEvidence.matchedCapability.id
-    && actualResolution !== undefined
-    && actualResolution.requirementId === expectedResolution.requirementId
-    && actualResolution.jurisdiction === expectedResolution.jurisdiction
-    && actualResolution.mappingRevision === expectedResolution.mappingRevision
-    && actualResolution.evidenceTypeListId === expectedResolution.evidenceTypeListId
-    && sameOrderedStrings(actualResolution.evidenceTypeIds, expectedResolution.evidenceTypeIds)
-    && actualResolution.mappingId === expectedResolution.mappingId
-    && actualResolution.mappingAuthorityId === expectedResolution.mappingAuthorityId;
-}
-
-function acceptFreshEvidence(previous, fresh) {
-  const checkedFresh = validateSelectionStructure(fresh);
-  const candidate = previous === undefined
-    ? checkedFresh
-    : renewUnchangedSelection(validateSelectionStructure(previous), checkedFresh);
-  return acceptSelection(candidate, acceptsExpectedEvidence);
-}
-
-const discovery = new DiscoveryClient('https://discovery.example/');
-const resolved = await discovery.resolveEvidenceTypes({
-  requirementId: 'urn:example:requirement',
-  jurisdiction: 'urn:example:jurisdiction',
-});
-const context = selectEvidenceAlternative(resolved, 'urn:example:evidence-type-list');
-
-for (const evidenceTypeId of context.evidenceTypeIds) {
-  const results = await discovery.searchEvidenceServices({
-    evidenceTypeId,
-    ...(context.jurisdiction ? { jurisdiction: context.jurisdiction } : {}),
-  });
-  if (results.items.length !== 1) {
-    throw new Error('select one reviewed provider explicitly');
-  }
-  const selection = selectEvidenceService(results, {
-    recordId: results.items[0].recordId,
-    evidenceTypeId,
-    resolution: context,
-  });
-  const accepted = acceptFreshEvidence(undefined, selection);
-
-  // Construct the native Evidence client, credentials, and request only now,
-  // using accepted.endpointUrl and adopter-owned native configuration.
-  console.log(accepted.selection.matchedCapability.id, accepted.endpointUrl);
-}
-```
-
-```python
-from registry_client.discovery import (
-    DiscoveryClient,
-    accept_selection,
-    renew_unchanged_selection,
-    select_relay_service,
-    validate_selection_structure,
-)
-from registry_client.relay import RelayClient
-
-EXPECTED_RELAY = {
-    "serviceKind": "relay",
-    "serviceId": "urn:example:service:relay",
-    "endpointUrl": "https://relay.example/",
-    "operatorId": "urn:example:operator",
-    "registryAuthorityId": "urn:example:registry-authority",
-    "jurisdictions": ["urn:example:jurisdiction"],
-    "conformsTo": ["urn:example:relay-profile"],
-    "semanticClassIds": ["urn:example:registered-business"],
-    "operationFamilyIds": ["urn:example:consultation-list"],
-    "relayCapabilityMatch": {
-        "semanticClassId": "urn:example:registered-business",
-        "operationFamilyId": "urn:example:consultation-list",
-    },
-}
-
-def relay_acceptance_subject(candidate):
-    return {key: candidate.get(key) for key in EXPECTED_RELAY}
-
-def accepts_expected_relay(candidate):
-    return relay_acceptance_subject(candidate) == EXPECTED_RELAY
-
-def accept_fresh_relay(previous, fresh):
-    checked_fresh = validate_selection_structure(fresh)
-    candidate = (
-        checked_fresh
-        if previous is None
-        else renew_unchanged_selection(
-            validate_selection_structure(previous), checked_fresh
-        )
-    )
-    return accept_selection(candidate, accepts_expected_relay)
-
-discovery = DiscoveryClient("https://discovery.example/")
-results = discovery.search_relay_services({
-    "semanticClassId": "urn:example:registered-business",
-    "operationFamilyId": "urn:example:consultation-list",
-})
-if len(results["items"]) != 1:
-    raise RuntimeError("select one reviewed provider explicitly")
-selection = select_relay_service(results, {
-    "recordId": results["items"][0]["recordId"],
-    "capabilityMatch": {
-        "semanticClassId": "urn:example:registered-business",
-        "operationFamilyId": "urn:example:consultation-list",
-    },
-})
-accepted = accept_fresh_relay(None, selection)
-
-# For a protected surface, add native authorization only after acceptance.
-relay = RelayClient(base_url=accepted.endpoint_url)
-page = relay.list_records("businesses", page_size=1)
-if page["kind"] != "complete" or not page["value"]["items"]:
-    raise RuntimeError("Relay returned no records")
-record = page["value"]["items"][0]
-print(record["recordIdentifier"], record["domainData"])
-```
-
-The application owns the choice because Discovery does not rank results. The structural validator
-checks the closed response, complete Evidence alternative or Relay tuple, and capability binding.
-It does not decide whether the selected origin, issuer, operator, endpoint, or capability is trusted
-or current. The acceptance callback is synchronous, supplied by the application, and receives no
-credential or native client. A successful callback creates the ephemeral accepted service used by
-native client configuration. Native definitions and local policy still supply Evidence purpose,
-audience, issuer and provider identity, configuration revision, selectors, expected outputs, and
-Relay resource and operation identifiers.
-
-{/* Evidence: `crates/registry-discovery-client-node/src/lib.rs` and
-    `crates/registry-discovery-client-py/src/lib.rs` are thin bindings over
-    `registry-discovery-client`. `crates/registry-discovery-client-node/client.js`,
-    `acceptSelection()` and `renewUnchangedSelection()`, and
-    `crates/registry-discovery-client-py/src/lib.rs`, `accept_selection()` and
-    `renew_unchanged_selection()`, expose the same acceptance and renewal boundary.
-    Their language-level tests exercise typed search, complete resolution context, correlated Relay
-    selection, structural validation, synchronous local acceptance, and unchanged renewal.
-    `crates/registry-discovery-client/src/selection.rs`,
-    test `discovery_metadata_has_no_trust_or_native_io_capability`, binds the shared trust boundary.
-    `crates/registry-relay-client-py/src/lib.rs`, `RelayClient::list_records`, performs the bounded
-    native exchange and returns the decoded record collection. */}
-
-## A saved selection is not current trust
-
-Persist the plain selection when an application needs an offline handoff. The accepted wrapper is
-ephemeral and is not a persistence format. Loading a selection and passing structural validation
-proves only that the saved data still has the closed shape and capability binding. The saved data
-remains inert until the application applies its current local acceptance policy. Neither loading nor
-local acceptance establishes that the provider still advertises the service.
-
-Currentness requires an online renewal. For Evidence Gateway, the application re-resolves the
-requirement and jurisdiction, explicitly chooses an alternative, re-searches every Evidence Type,
-and explicitly reselects each provider. For Registry Relay, it re-searches the correlated semantic
-class and operation family, then explicitly reselects the provider. Node.js then compares the old
-and freshly selected values with `renewUnchangedSelection`; Python uses
-`renew_unchanged_selection`; Rust uses `renew_unchanged_service_selection`. The comparison allows
-new fetch provenance and a new global catalog revision for an otherwise unchanged service. It
-refuses a changed identity, endpoint, role, jurisdiction, profile, capability, origin, mapping, or
-resolution context. A refusal requires a new explicit local decision rather than automatic
-acceptance. An unchanged renewal still passes through local acceptance before credentials or native
-input and output.
-
-{/* Tier-C evidence: `crates/registry-discovery-client/src/selection.rs`,
-    `renew_unchanged_service_selection()` and `same_acceptance_subject()`, define the unchanged
-    comparison; tests `unchanged_renewal_refreshes_provenance_but_requires_new_acceptance_for_semantic_change`
-    and `structural_validation_does_not_turn_descriptive_metadata_into_binding_authority` cover the
-    comparison and local acceptance. `crates/registry-discovery-client-node/__test__/surface.test.js`,
-    tests `adopter acceptance is explicit and precedes credentials or native traffic` and
-    `renewal refreshes provenance but never silently accepts semantic drift`, cover the Node.js
-    surface. `crates/registry-discovery-client-py/tests/python/test_client.py`, test
-    `test_exact_local_acceptance_precedes_credentials_and_native_io`, covers the Python surface. */}
-
-## Why the split reduces maintenance
-
-The provider maintains one public description URL. The catalog operator maintains a small explicit
-origins file, any evidence-type mappings, and an intentional package-and-restart loop. The application
-maintains native provider trust where it already belongs. No component must synchronize a central
-provider registration database, shared credentials, or a proxy policy.
-
-{/* Evidence: `products/discovery/README.md` describes the normal operator flow;
-    `crates/registry-discoveryctl/src/project.rs` defines the two authoring inputs;
-    `products/discovery/DECISIONS.md`, ADR-001, excludes registration, credentials, proxying, and
-    trust-store concerns. */}
-
-## Related
+## Next
 
 - [Publish and consume a Registry Discovery index](../../tutorials/publish-and-consume-discovery-index/)
 - [Package and run a Registry Discovery index](../../configure/discovery/)
-- [Records stay home](../records-stay-home/)
-- [Architecture](../architecture/)
+- [Registry Stack client API reference](../../reference/client-api/)

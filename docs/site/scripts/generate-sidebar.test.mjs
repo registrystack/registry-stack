@@ -168,7 +168,7 @@ test('product group labels drop the shared "Registry" prefix', () => {
     `no group label should start with "Registry": ${labels.join(', ')}`,
   );
   assert.ok(
-    labels.includes('Relay') && labels.includes('Evidence Gateway') && !labels.includes('Notary'),
+    labels.includes('Manifest') && labels.includes('Evidence Gateway') && !labels.includes('Notary'),
     labels.join(', '),
   );
 });

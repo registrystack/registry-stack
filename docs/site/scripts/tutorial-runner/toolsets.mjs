@@ -208,22 +208,6 @@ const casework = productToolset({
   ],
 });
 
-// Registry Relay V2: relay and relayctl. A page serves Relay from a
-// background fence, which the runner stops itself, so there is no local
-// development session to stop here.
-const relay = productToolset({
-  label: 'relay and relayctl',
-  commands: /(^|[^\w./=-])(relayctl|relay)([^\w./-]|$)/mu,
-  binaries: [
-    ['relay', 'RELAY_BIN'],
-    ['relayctl', 'RELAYCTL_BIN'],
-  ],
-  cargoArgs: ['-p', 'registry-relay-v2', '--features', 'tooling', '-p', 'registry-relayctl'],
-  profileVariable: 'RELAY_TUTORIAL_CARGO_PROFILE',
-  targetName: 'relay-tutorial-source',
-  sessions: [],
-});
-
 // Registry Discovery: discovery and discoveryctl. A page serves the index
 // from a background fence, which the runner stops itself, so there is no
 // local development session to stop here.
@@ -355,4 +339,4 @@ const none = {
   },
 };
 
-export const TOOLSETS = { breg, casework, discovery, evidence, relay, none };
+export const TOOLSETS = { breg, casework, discovery, evidence, none };

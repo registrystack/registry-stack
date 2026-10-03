@@ -1,23 +1,17 @@
 ---
 title: Automate registry workflows with OpenFn
-description: How the Registry Stack adaptors for OpenFn expose Evidence Gateway, Base Registry Engine, and Registry Relay to Lightning workflows, and what the synthetic agriculture pilot proves.
+description: How the Registry Stack adaptors expose Evidence Gateway and Base Registry Engine to Lightning workflows.
 status: draft
 owner: registry-docs
 source_repos: [registry-stack, openfn-language-registry-stack]
-last_reviewed: "2026-09-09"
+last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
 standards_referenced: [govstack-digital-registries]
 ---
 
-You run [OpenFn](https://www.openfn.org/) Lightning to move data between government systems, and
-you want its workflows to read from and write to Evidence Gateway, Base Registry Engine (BReg), and
-Registry Relay without hand-writing HTTP calls or minting tokens in job code. The
-[Registry Stack adaptors for OpenFn](https://github.com/registrystack/openfn-language-registry-stack)
-give you that through three adaptor packages that wrap the maintained clients. The separate v0.1.0
-repository also preserves a self-hosted synthetic pilot, but its authorization service predates the
-current Registry Stack and the pilot is not a runnable current-source example. This page explains
-what each adaptor does, how you configure it, how it fails, and what the pilot recorded.
+The Registry Stack adaptors for OpenFn wrap maintained Evidence Gateway and Base Registry Engine
+clients for use in Lightning workflows.
 
 {/* TODO[evidence]: adaptor behaviour, operation lists, result branches, and pilot topology live in
 the separate registrystack/openfn-language-registry-stack repository and cannot be anchored from
@@ -25,21 +19,11 @@ this one. The statements below were checked against that repository's README, th
 READMEs, deployment/README.md, pilot/agriculture/README.md, the two service READMEs, and
 CHANGELOG.md at that repository's v0.1.0 tag. Re-verify them when that repository changes. */}
 
-## Three adaptors, one client underneath
+## Maintained adaptors, one client underneath
 
 OpenFn adaptors are Node packages whose exported operations become the vocabulary of a job
-expression. The Registry Stack adaptors add three:
-
-| Adaptor | Talks to | Built on |
-|---|---|---|
-| `@openfn/language-registry-evidence` | Evidence Gateway | `evidence` namespace of `@registrystack/client` |
-| `@openfn/language-registry-breg` | BReg | `breg` namespace of `@registrystack/client` |
-| `@openfn/language-registry-relay` | Registry Relay V1 | Plain HTTP over the protected Relay API |
-
-A fourth package, `@openfn/language-registry-notary`, keeps an earlier name for the surface Evidence
-Gateway carries now. The 0.1.0 beta checks and packages the Evidence and BReg adaptors alone and
-places both Relay and that older package outside its scope, so use the Evidence adaptor when a
-workflow needs a trust decision.
+expression. The maintained Registry Stack packages cover Evidence Gateway and Base Registry
+Engine (BReg).
 
 The Evidence and BReg adaptors pin `@registrystack/client` at version 0.27.0 and delegate every
 security-relevant step to it. The native client owns request preparation, nonce generation, HTTP
@@ -54,7 +38,7 @@ unsupported, which is why the pilot repackages the upstream worker on a glibc ba
 
 {/* Evidence: crates/registry-stack-client-node/package.json and
 crates/registry-stack-client-node/index.js define the @registrystack/client facade and its
-discovery, evidence, relay, and breg namespaces that the adaptors import. */}
+discovery, evidence, and breg namespaces that the adaptors import. */}
 
 ## Configuring credentials
 
@@ -75,9 +59,6 @@ event data or job source. The shape differs per adaptor.
 **BReg adaptor.** Use `configuration.breg` with the registry base URL and an `authorization` block
 that is either `{ static }` or `{ privateKeyJwt }` with the same fields as above. Token and registry
 TLS trust roots and timeouts are independent settings.
-
-**Relay adaptor.** Create a credential with `relay_base_url` and `token`. The adaptor sends the
-token as a bearer credential and requires an explicit `purpose` on every read.
 
 Configuration stays available between operations inside one job so that `execute`, `each`, and
 successive requests can authenticate. The OpenFn runtime removes it from the final output by
@@ -130,34 +111,6 @@ the same rules a careful direct client would:
 
 Patch members are written as field operations such as replace on a named field. The native client
 builds and validates the HTTP patch document, so job authors never touch JSON Pointer paths.
-
-### Relay: protected reads
-
-The Relay adaptor is for workflows already authorized to read registry rows, metadata,
-relationships, or aggregates directly. It offers single-record reads, filtered and bounded lists,
-aggregate queries, dataset discovery, and entity schemas. Collection reads require an explicit
-limit and at least one filter unless you opt out. Use it when the workflow needs the data itself,
-and the Evidence adaptor when the workflow needs a trust decision.
-
-:::caution[The Relay adaptor speaks the V1 route surface]
-Its requests go to `/v1/datasets/{dataset}/entities/{entity}/records` and `/metadata/...`, the
-surface the V1 runtime published and the public lab still serves. Relay V2 answers under
-`/v2/resources/{resource}` instead, so every one of these operations misses on a V2 deployment.
-Upstream places Relay outside the 0.1.0 beta, and the pilot's worker image omits the adaptor.
-:::
-
-The adaptor's evidence-offering listing belongs to that same V1 surface, and it has no V2
-successor. A V2 capability inventory reports `evidence` among the families the runtime does not
-support, and evidence offerings are published by Registry Manifest instead.
-
-{/* Evidence: crates/registry-relay-v2/src/server.rs routes V2 requests through routes::RESOURCES,
-routes::RECORDS, and routes::LOOKUP under a v2/resources prefix, and nothing in
-crates/registry-relay-v2 serves the V1 dataset or metadata paths.
-crates/registry-relay-v2/src/artifacts.rs builds unsupported_families with evidence among its
-entries, so every V2 capability inventory reports that family as unsupported.
-docs/site/src/lib/relay-v2-retirement-redirects.mjs lists list_metadata_evidence_offerings among the
-V1 operation slugs the V2 cutover retired. crates/registry-manifest-core/src/lib.rs holds the
-EvidenceOfferingManifest that Registry Manifest compiles and renders. */}
 
 ## How operations fail
 
@@ -227,20 +180,11 @@ is the starter the pilot adapts. */}
 
 ## What the pilot does not establish
 
-- **It is synthetic and local.** Every person, holding, identifier, and credential is generated for
-  an isolated pilot. Only the Lightning UI and the two pilot service ports are published, all on host
-  loopback.
-- **It runs on linux/amd64 only.** The released Lightning and worker images provide that platform
-  alone. Apple Silicon runs it under emulation. The adaptor layer loads natively on arm64, but that
-  does not establish arm64 worker support without an upstream arm64 image.
-- **The Relay adaptor is not in the worker image.** The pilot packages the Evidence and BReg
-  adaptors with the upstream `common` and `http` adaptors. Relay reads are outside its journeys.
-- **Setup is not acceptance.** Setup builds images, generates private inputs, initializes the
-  registry, and provisions the operator. The smoke run, not setup, is what proves the three
-  workflows, the reviewer path, the event-driven Evidence request, and the destination effect.
-- **Inherited learning profiles are wide.** The starter's reader, editor, and reviewer grants keep
-  registry-wide collection and history access. A production deployment reviews its population scope
-  before reusing them.
+- It is a synthetic, local example rather than a production deployment.
+- Its retired authorization service means the preserved topology does not run against current
+  Registry Stack source.
+- The setup does not establish acceptance. The smoke journey establishes the workflow behavior.
+- The inherited learning profiles require a deployment-specific population-scope review.
 
 ## Using the adaptors in your own OpenFn
 

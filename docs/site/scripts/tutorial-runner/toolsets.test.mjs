@@ -26,10 +26,6 @@ const CASES = {
     runs: ['evidencectl init .', 'evidence --version', 'evidence-oid4vci --help', 'products/evidence/scripts/check-contracts.sh'],
     names: ['cd ~/work/evidence', 'ls .evidence/clients', 'cat evidence.yaml', 'ls evidence/', "curl --get --data-urlencode 'serviceKind=evidence' $url"],
   },
-  relay: {
-    runs: ['relayctl init business-registry', 'relay serve --runtime runtime.yaml', 'relayctl check . && echo ok'],
-    names: ['cd work/relay', 'ls .relay', 'cat relay.yaml', 'ls relay/', "curl --get --data-urlencode 'serviceKind=relay' $url"],
-  },
   discovery: {
     runs: ['discoveryctl check --project discovery-project --allow-loopback', 'discovery --runtime runtime.yaml', 'discoveryctl build --project . && echo ok'],
     names: ['cp -R products/discovery/tutorial/project discovery-project', 'rm -rf discovery-project', 'cat discovery.yaml', 'ls discovery/'],

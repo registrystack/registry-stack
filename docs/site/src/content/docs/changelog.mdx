@@ -887,12 +887,6 @@ relevant product pages on this site rather than duplicating release notes.
   is refused as `contract.environment_expression`. See
   [operate Registry Relay](../operate/relay/#bind-deployment-inputs-without-editing-the-package).
 
-{/* Evidence: crates/registry-relay-v2/src/contract.rs, RELAY_REMOVED_RUNTIME_KEYS and
-    removed_runtime_keys_are_refused_with_their_replacement;
-    crates/registry-relay-v2/src/cli.rs, the_runtime_configuration_is_named_explicitly_on_every_command;
-    crates/registry-relay-v2/src/contract.rs, an_authored_contract_carrying_an_environment_expression_is_refused;
-    release/docker/Dockerfile.relay. */}
-
 - BREAKING: Registry Discovery reads `runtime.yaml` through the shared
   runtime configuration loader. The file now opens with
   `apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1` and
@@ -1248,7 +1242,7 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-scheduling/src/service.rs;
     crates/registry-scheduling/src/auth.rs;
-    release/scripts/release_candidate.py, _candidate_image_names() and _relay_v2_payload_inventory(). */}
+    release/scripts/release_candidate.py, _candidate_image_names(). */}
 
 - BREAKING: Registry Casework replaces hosted decisions with source-neutral
   review requests, tasks, kinds, results, and accountability. Base Registry

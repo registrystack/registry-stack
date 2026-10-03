@@ -1,146 +1,79 @@
 ---
 title: Registry Stack documentation
-description: Answer bounded questions with Evidence Gateway, publish existing records with Registry Relay, build a writable registry with Base Registry Engine, or give a team a coordinated inbox with Registry Casework.
+description: Choose a focused Registry Stack component for governed records, bounded evidence, casework, scheduling, rendering, or discovery.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack helps institutions manage controlled access to authoritative data.
-Evidence Gateway signs the answer to a [bounded question](reference/glossary/#bounded-question),
-Registry Relay publishes selected
-records from an existing source, and Base Registry Engine (BReg) provides a
-configuration-defined writable registry backed by PostgreSQL.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject;
-    crates/registry-breg/src/api/mod.rs; crates/registry-breg/src/postgres/mutation.rs. */}
+Registry Stack provides focused components for institutions that manage authoritative data and the
+services around it.
 
 ## Answer a bounded question with Evidence Gateway
 
-Use Evidence Gateway when the caller needs to learn only a fact, not to read a record.
-It answers one bounded question about one subject and signs the answer,
-releasing the answer rather than the row behind it. For example, a licensing authority can
-answer whether a professional licence is active. Requirements and their permitted outputs
-come from reviewed configuration.
-
-[Evidence Gateway overview](start/evidence-quickstart/) explains the source, assertion,
-verification, and audit boundaries. Continue with
-[your first Evidence Gateway assertion](tutorials/first-evidence-assertion/) to see the
-boundary in one verified request. When local authoring is complete,
-[build and deploy an Evidence Gateway project](tutorials/build-and-deploy-evidence-project/) creates a
-reviewed candidate without promoting local development state. Deployments provide a compatible
-OAuth issuer for protected service access.
-
-## Publish selected records with Registry Relay
-
-Use Relay when the caller needs to read specific records or fields. The
-institution exposes a reviewed read-only SQLite view, a data publisher writes
-one contract naming the resources, operations, access profiles, and disclosure
-rules, and `relayctl` compiles, tests, and seals that contract into a package
-the `relay` service verifies before it opens a listener. Database tables and
-columns never become routes by convention.
-
-[Publish a governed SQLite registry](tutorials/publish-governed-sqlite-registry/)
-runs the supplied synthetic business Registry end to end in about 20 minutes.
-Continue with [author a Registry Relay project](configure/relay/) to bind an
-institution-owned view, then [operate Registry Relay](operate/relay/) for
-sources, token issuers, audit retention, and revision replacement.
+Use Evidence Gateway when a caller needs a signed, minimum-disclosure answer rather than a record.
+Start with the [Evidence Gateway overview](start/evidence-quickstart/) and
+[your first assertion](tutorials/first-evidence-assertion/).
 
 ## Build a writable registry with Base Registry Engine
 
-Use Base Registry Engine when the institution needs a system of record it does not hold yet,
-with create and update operations. A registry project declares the entities, relationships,
-constraints, access profiles, and events; the compiler turns it into a PostgreSQL schema, a REST
-API, per-profile permissions, revision history, and an audit journal. Holdings, plots,
-businesses, and assets are configured models, not built-in types.
-[Base Registry Engine overview](start/breg-quickstart/) explains what runs where and which path
-fits your role. Continue with [create and query your first registry](tutorials/first-breg/) to
-make a verified request against a local registry. When the model is ready,
-[build a production candidate](tutorials/build-a-breg-production-candidate/) tests, packages,
-and signs it, and [query a registry from Python and Node](tutorials/query-breg-client/) calls it
-from an application.
+Use Base Registry Engine (BReg) when an institution needs a governed system of record backed by
+PostgreSQL. Start with the [BReg overview](start/breg-quickstart/) and
+[create and query your first registry](tutorials/first-breg/). Continue by
+[building a production candidate](tutorials/build-a-breg-production-candidate/) and
+[querying it from an application](tutorials/query-breg-client/).
 
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;
-    crates/registry-breg/src/compiler.rs; crates/registry-breg/src/api/mod.rs;
-    products/breg/README.md. */}
+## Coordinate review with Registry Casework
 
-## Give a team a coordinated inbox with Registry Casework
-
-Use Registry Casework when authorized people must claim, draft, and decide work that a source
-system owns, or bounded decisions a calling service submits. A policy declares access profiles,
-queues, review kinds, producer admission, routing, and clocks; the runtime keeps assignment, private drafts,
-accountable attempts, and recovery, while eligibility, visibility, and the registry mutation stay
-with the source. Staff, Supervisors, and Administrators are human roles the token issuer asserts;
-a Requester is a service.
-[Registry Casework overview](start/casework/) explains what runs where and which path fits your
-role. Continue with [decide your first work item](tutorials/first-casework/) to run a local
-Casework with its database and token issuer, then [author a Casework policy](configure/casework/)
-and [deploy Registry Casework](operate/casework/).
-
-{/* Evidence: crates/registry-casework-core/src/model.rs; crates/registry-casework/src/http.rs, router;
-    crates/registry-caseworkctl/src/dev/mod.rs; products/casework/README.md. */}
+Use Registry Casework when authorized people must claim, draft, and decide work owned by another
+system. Start with the [Casework overview](start/casework/) and
+[decide your first work item](tutorials/first-casework/).
 
 <DocsetProduct product="registry-messaging">
 
 ## Send operational messages with Registry Messaging
 
-Use Registry Messaging when a service must send one email or SMS to one recipient, rendered from a
-reviewed template through a provider the operator connected, and learn what became of it. Why and
-when to send, who the recipient is, and whether they consented stay with the caller's source of
-record; the access profile Messaging resolves for the caller decides whether it may send.
-[Registry Messaging overview](start/messaging/) explains that split. Continue with
-[send your first message](tutorials/first-messaging/) to run one locally, then
-[author a Messaging package](configure/messaging/) and
-[deploy Registry Messaging](operate/messaging/).
-
-{/* Evidence: crates/registry-messaging-core/src/access.rs, AccessProfile;
-    crates/registry-messaging/src/http.rs, router(); products/messaging/README.md. */}
+Use Registry Messaging to send one reviewed email or SMS through an operator-connected provider.
+See the [Registry Messaging overview](start/messaging/).
 
 </DocsetProduct>
 
+## Publish portable metadata with Registry Manifest
+
+Use Registry Manifest to validate metadata and render static, standards-shaped publication
+artifacts. It does not serve records or authorize callers.
+
+## Retired Registry Relay
+
+Registry Relay was retired in Registry Stack 0.39.0. Read the
+[retirement decision](decisions/registry-relay-retirement-2026-10-03/) for the scope, rationale,
+archive policy, and bounded alternatives.
+
 ## Keep the product boundaries clear
 
-Registry Relay owns source access and protected record surfaces.
-Evidence Gateway owns bounded question answering, signing, and minimum disclosure, and
-runs independently of Relay against its own configured authoritative sources.
-The caller receives only the output authorized for that service.
+BReg owns its PostgreSQL records and API. Evidence Gateway owns bounded question answering, signing,
+and minimum disclosure against its configured sources. Manifest publishes static metadata. These
+components do not configure or deploy one another.
 
-The products have separate adopter tooling and deployment contracts, while reusing shared
-Registry Platform primitives. Relay responses are not signed: portable signed minimum disclosure
-is what Evidence Gateway is for. BReg owns its PostgreSQL records; it does not publish them
-through Relay or configure Evidence Gateway on your behalf.
-
-Registry Stack is not an eligibility, ranking, or automatic-decision engine. Registry Casework
-coordinates the people who decide; it does not decide for them, and the source system keeps the
-mutation. Registry Stack does not
-decide legal authority, data ownership, or institutional approval, and it is not a publisher of
-unrestricted open data. It makes those boundaries visible; the responsible institutions still make
-the decisions.
-
-{/* Evidence: crates/registry-breg/Cargo.toml; crates/registry-bregctl/src/lib.rs;
-    crates/registry-relayctl/src/lib.rs; crates/registry-evidencectl/src/lib.rs. */}
+Registry Stack does not decide legal authority, data ownership, eligibility, or institutional
+approval. The responsible institutions still make those decisions.
 
 ## Who does what
 
-- The assertion provider is the institution that answers requests with signed facts through
-  Evidence Gateway.
-- The data publisher is the institution that exposes records through Registry Relay,
-  maintains a registry through Base Registry Engine, or decides work through Registry Casework.
-- The consumer or verifier is the relying service that calls a product's API and verifies the
-  answers it receives.
+- The assertion provider is the institution that answers requests with signed facts through Evidence Gateway.
+- The data publisher is the institution that maintains records through BReg or publishes static metadata through Manifest.
+- The consumer or verifier is the relying service that calls a product API and verifies the answers it receives.
 - The operator is whoever runs the deployment.
 
-One institution can hold several of these roles, and each tutorial names the role it is written
-for.
+One institution can hold several roles.
 
 ## Move beyond the first run
 
-- [Connect an existing registry](configure/)
 - [Prepare an operator handoff](operate/)
 - [Review the architecture](explanation/architecture/)
 - [Review security boundaries](security/)

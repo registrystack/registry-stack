@@ -1,33 +1,3 @@
-- id: registry-relay.registry-contract
-  name: Relay Registry Contract Grammar
-  owner: registry-relay
-  status: current-source
-  surface: "Closed YAML grammars for the two documents an adopter authors: `registry.yaml` (`apiVersion: relay.registrystack.org/v2alpha1`, `kind: RegistryContract`), declaring registry identity, resources, operations, access profiles, disclosure, and the closed public discovery publication; and `runtime.yaml` (`apiVersion: registry.registrystack.org/relay-runtime/v1alpha1`, `kind: RelayRuntimeConfig`), binding one deployment's package, SQLite source, authentication, audit, secret providers, and listener."
-  source_of_truth:
-    label: Registry Stack contract reference
-    url: /reference/contracts/
-  consumer_note: >-
-    Both documents are closed shapes: an unrecognized key is a parse failure,
-    not an ignored field. Compatibility for recognized keys follows the release
-    policy. The grammar is pre-1.0 and can change with a documented migration in
-    a release note. A deployment's HTTP surface is compiled from its own
-    `registry.yaml`, so no product-level OpenAPI document describes Relay; fetch
-    `GET /openapi.json` from the deployment.
-- id: registry-relay.package
-  name: Relay Sealed Package Format
-  owner: registry-relay
-  status: current-source
-  surface: "Sealed directory in the shared Registry Stack package format: a `SHA256SUMS` file listing the digest of every other file, alongside the authored registry, the governed inputs, the compiled registry, and the generated artifacts a Relay process verifies and re-derives before it activates."
-  source_of_truth:
-    label: Relay adopter tooling specification
-    url: /spec/rs-pr-relayctl/
-  consumer_note: >-
-    `relayctl package` produces the directory and Relay verifies it before it
-    opens the database, audit file, token issuer, or listener. Its package
-    digest, the `sha256:` digest of `SHA256SUMS`, is an integrity digest, not
-    an authenticity proof: packages are unsigned, so the operator's own
-    transport and storage are what bind a package to its author.
-
 - id: registry-manifest.metadata-yaml
   name: Metadata Manifest
   owner: registry-manifest
@@ -54,4 +24,4 @@
   source_of_truth:
     label: Registry Manifest data model specification
     url: /spec/rs-dm-manifest/
-  consumer_note: The bundle can be hosted as static files without running Registry Relay.
+  consumer_note: The bundle can be hosted as static files without running a Registry Stack service.
