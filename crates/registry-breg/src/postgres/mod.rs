@@ -228,8 +228,8 @@ pub enum PostgresKernelError {
     #[error("Registry is unavailable for record operations")]
     RegistryUnavailable,
     /// Another session held the registry's exclusive migration lock until
-    /// this session's wait for it timed out: an apply or a reconciliation is
-    /// in progress.
+    /// this session's wait for it timed out: an apply, an instance claim
+    /// adoption, or a reconciliation is in progress.
     #[error("another session holds the registry migration lock")]
     MigrationLockHeld,
     /// Retained history coverage does not admit a successor package.

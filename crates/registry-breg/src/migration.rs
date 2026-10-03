@@ -80,9 +80,9 @@ pub enum MigrationError {
     #[error("the migration database was unavailable before maintenance began")]
     DatabaseUnavailable,
     /// Refused before maintenance began: another session held the exclusive
-    /// migration lock past the lock timeout, so an apply or a reconciliation
-    /// is in progress. Nothing was changed, so the same apply
-    /// may be retried once that session releases the lock.
+    /// migration lock past the lock timeout, so an apply, an instance claim
+    /// adoption, or a reconciliation is in progress. Nothing was changed, so
+    /// the same apply may be retried once that session releases the lock.
     #[error("another session held the migration lock before maintenance began")]
     MigrationLockHeld,
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
