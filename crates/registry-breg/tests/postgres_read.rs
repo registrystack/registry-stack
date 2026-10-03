@@ -466,6 +466,63 @@ async fn real_postgres_read_is_authorized_bounded_minimized_and_audit_gated() {
     assert_eq!(prefix_items[0]["recordIdentifier"], WILDCARD_RECORD);
     assert_eq!(prefix_items[0]["domainData"]["label"], "literal%_\\value");
 
+    for (filter, expected) in [
+        ("startswith(label,'ALPHA-')", ALPHA_RECORD),
+        ("contains(label,'ALPHA')", ALPHA_RECORD),
+        ("contains(label,'H')", ALPHA_RECORD),
+        ("startswith(label,'LITERAL%25_%5C')", WILDCARD_RECORD),
+        ("contains(label,'LITERAL%25_%5C')", WILDCARD_RECORD),
+    ] {
+        let response = send(
+            &app,
+            &format!("/v1/records/widgets?$select=label&$filter={filter}&$count=true"),
+            Some(read_claims(["zone-a"])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{filter}");
+        let body = body_json(response).await;
+        assert_ids(body.clone(), &[expected]);
+        assert_eq!(body["count"], 1);
+    }
+    let vocabulary_search = send(
+        &app,
+        "/v1/records/widgets?$select=jurisdiction&$filter=contains(jurisdiction,'ONE-A')&$top=1",
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(vocabulary_search.status(), StatusCode::OK);
+    let vocabulary_search = body_json(vocabulary_search).await;
+    assert_eq!(
+        vocabulary_search["items"][0]["domainData"]["jurisdiction"],
+        "zone-a"
+    );
+    for invalid_filter in [
+        "contains(label,1)",
+        "label%20eq%20'H'",
+        "jurisdiction%20eq%20'ONE-A'",
+        "jurisdiction%20in%20('zone-a','ONE-A')",
+    ] {
+        let response = send(
+            &app,
+            &format!("/v1/records/widgets?$select=label&$filter={invalid_filter}"),
+            Some(read_claims(["zone-a"])),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{invalid_filter}"
+        );
+    }
+    let exact_case = send(
+        &app,
+        "/v1/records/widgets?$select=label&$filter=label%20eq%20'ALPHA-LABEL'",
+        Some(read_claims(["zone-a"])),
+    )
+    .await;
+    assert_eq!(exact_case.status(), StatusCode::OK);
+    assert_ids(body_json(exact_case).await, &[]);
+
     let continuation = send(
         &app,
         &format!("/v1/records/widgets?$skiptoken={next_cursor}"),
@@ -1696,6 +1753,24 @@ fn assert_read_audit_is_ordered_paired_and_minimized(
             ("terminal", Some("returned")),
             ("attempt", None),
             ("terminal", Some("returned")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
+            ("refusal", None),
+            ("refusal", None),
+            ("refusal", None),
+            ("refusal", None),
+            ("attempt", None),
+            ("terminal", Some("empty")),
+            ("attempt", None),
+            ("terminal", Some("returned")),
             ("refusal", None),
             ("attempt", None),
             ("terminal", Some("empty")),
@@ -1719,9 +1794,13 @@ fn assert_read_audit_is_ordered_paired_and_minimized(
     assert_eq!(records[15]["resultCount"], 100);
     assert_eq!(records[17]["resultCount"], 2);
     assert_eq!(records[19]["resultCount"], 1);
-    assert_eq!(records[21]["resultCount"], 3);
-    assert_eq!(records[24]["resultCount"], 0);
-    assert_eq!(records[26]["resultCount"], 0);
+    for index in [21, 23, 25, 27, 29, 31] {
+        assert_eq!(records[index]["resultCount"], 1);
+    }
+    assert_eq!(records[37]["resultCount"], 0);
+    assert_eq!(records[39]["resultCount"], 3);
+    assert_eq!(records[42]["resultCount"], 0);
+    assert_eq!(records[44]["resultCount"], 0);
     assert!(records[1].get("fieldSetReference").is_some());
     assert!(records[3].get("fieldSetReference").is_some());
     assert!(records[5].get("fieldSetReference").is_some());
@@ -1829,8 +1908,8 @@ fn registry_source() -> String {
             "classification":"restricted",
             "selectorProfiles":[{"id":"by-amount","fields":["amount"]}],
             "fields":[
-              {"id":"jurisdiction","type":"string","required":true,"maxLength":32,"classification":"internal"},
-              {"id":"label","type":"string","required":true,"maxLength":100,"classification":"internal"},
+              {"id":"jurisdiction","type":"vocabulary-code","vocabulary":"jurisdiction","values":["zone-a","zone-b"],"required":true,"classification":"internal"},
+              {"id":"label","type":"string","required":true,"minLength":2,"maxLength":100,"classification":"internal"},
               {"id":"secret","type":"string","required":true,"maxLength":100,"classification":"restricted"},
               {"id":"amount","type":"decimal","required":true,"precision":8,"scale":2,"classification":"internal"},
               {"id":"ordinal","type":"int64","required":true,"classification":"internal"},

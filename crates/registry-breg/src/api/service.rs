@@ -661,6 +661,25 @@ impl ReadFilterOperator {
     }
 }
 
+/// Validate one caller-supplied operand for the partial text operators.
+///
+/// Search terms share the query grammar's byte bound and the stored field's
+/// maximum character bound, but they are not complete stored values. They may
+/// therefore be shorter than a string's `minLength` or name only part of a
+/// vocabulary code. Empty terms remain admitted by the existing query grammar.
+pub(crate) fn valid_text_search_term(value: &str, field_type: &FieldTypeSource) -> bool {
+    if value.len() > crate::query::MAX_LITERAL_BYTES || value.chars().any(char::is_control) {
+        return false;
+    }
+    match field_type {
+        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
+            value.chars().count() <= *max_length as usize
+        }
+        FieldTypeSource::VocabularyCode { .. } => true,
+        _ => false,
+    }
+}
+
 #[derive(Clone)]
 pub struct RecordReadRefusal {
     pub method: HttpMethod,
@@ -1029,5 +1048,35 @@ mod attachment_response_tests {
                 "invalid content type accepted"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod filter_operand_tests {
+    use super::valid_text_search_term;
+    use crate::contract::FieldTypeSource;
+
+    #[test]
+    fn text_search_terms_use_query_and_maximum_bounds_without_stored_value_constraints() {
+        let bounded = FieldTypeSource::String {
+            min_length: 8,
+            max_length: 12,
+        };
+        assert!(valid_text_search_term("a", &bounded));
+        assert!(valid_text_search_term("", &bounded));
+        assert!(!valid_text_search_term(&"a".repeat(13), &bounded));
+
+        let vocabulary = FieldTypeSource::VocabularyCode {
+            vocabulary: "status".to_owned(),
+            values: vec!["active".to_owned()],
+        };
+        assert!(valid_text_search_term("ACT", &vocabulary));
+        assert!(valid_text_search_term("", &vocabulary));
+        assert!(!valid_text_search_term(
+            &"a".repeat(crate::query::MAX_LITERAL_BYTES + 1),
+            &vocabulary
+        ));
+        assert!(!valid_text_search_term("line\nbreak", &vocabulary));
+        assert!(!valid_text_search_term("1", &FieldTypeSource::Int64));
     }
 }
