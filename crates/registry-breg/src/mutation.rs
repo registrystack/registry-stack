@@ -2539,7 +2539,7 @@ pub enum MutationError {
     RetiredAuditRowsPresent,
     /// Another session held the exclusive migration lock past the lock
     /// timeout when an operator maintenance transaction took it, so an
-    /// apply, an adoption, or other registry maintenance is in progress.
+    /// apply or other registry maintenance is in progress.
     /// Only operator maintenance, such as action Evidence retention, takes
     /// that lock and can produce this cause.
     #[error("another session held the exclusive migration lock past the lock timeout")]

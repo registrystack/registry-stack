@@ -65,12 +65,13 @@ pub enum StartupError {
          --initial` to activate the first package"
     )]
     DatabaseUninitialized,
-    /// A release before the activation ledger applied this database.
+    /// The database holds registry state this release does not recognise,
+    /// such as the state a release before the activation ledger installed.
     #[error(
-        "the Registry database predates the activation ledger; run `bregctl apply --package DIR` \
-         once to adopt this database into the ledger"
+        "the Registry database holds registry state this release does not recognise; a release \
+         reads only the state its predecessor wrote, so upgrade the database one release at a time"
     )]
-    PreLedgerDatabase,
+    UnrecognizedDatabase,
     /// The database records a database id other than the runtime file's
     /// `identity.databaseId`.
     #[error(
@@ -570,8 +571,8 @@ impl StartupError {
             Self::DatabaseUninitialized => {
                 "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
             }
-            Self::PreLedgerDatabase => {
-                "the Registry database predates the activation ledger; run `bregctl apply --package DIR` once to adopt this database into the ledger"
+            Self::UnrecognizedDatabase => {
+                "the Registry database holds registry state this release does not recognise; a release reads only the state its predecessor wrote, so upgrade the database one release at a time"
             }
             Self::DatabaseIdentityMismatch => {
                 "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
@@ -2171,9 +2172,9 @@ async fn verify_opened_startup(
         )
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
-    // A database no package was applied to, or one a release before the
-    // activation ledger applied, is named before any check that reads the
-    // state it lacks.
+    // A database no package was applied to, or one holding registry state
+    // this release does not recognise, is named before any check that reads
+    // the state it lacks.
     match crate::postgres::registry_state_shape(&transaction)
         .await
         .map_err(|_| StartupError::DatabaseUnready)?
@@ -2181,8 +2182,8 @@ async fn verify_opened_startup(
         crate::postgres::RegistryStateShape::Absent => {
             return Err(StartupError::DatabaseUninitialized)
         }
-        crate::postgres::RegistryStateShape::PreLedger => {
-            return Err(StartupError::PreLedgerDatabase)
+        crate::postgres::RegistryStateShape::Unrecognized => {
+            return Err(StartupError::UnrecognizedDatabase)
         }
         crate::postgres::RegistryStateShape::Ledger => {}
     }

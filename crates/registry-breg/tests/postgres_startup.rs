@@ -1265,18 +1265,19 @@ async fn startup_refuses_an_unapplied_database_naming_the_initial_apply_and_writ
     database.cleanup().await;
 }
 
-/// A database a release before the activation ledger applied refuses to
-/// serve through the real startup path, names the apply that adopts it,
+/// A database holding registry state this release does not recognise, here
+/// the kernel state table a release before the activation ledger created,
+/// refuses to serve through the real startup path with the generic refusal,
 /// binds no listener, and writes nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn startup_refuses_a_pre_ledger_database_naming_the_adopting_apply_and_writes_nothing() {
+async fn startup_refuses_an_unrecognised_registry_state_and_writes_nothing() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
     let package = PackageFixture::build(&fixture.root, fingerprint(1));
     let verified = load_package(&package.root, &package.context()).expect("package verifies");
-    install_pre_ledger_registry_state(
+    install_unrecognised_registry_state(
         &migration,
         &verified.manifest().package_id,
         verified.package_digest(),
@@ -1298,10 +1299,10 @@ async fn startup_refuses_a_pre_ledger_database_naming_the_adopting_apply_and_wri
             .await
             .err();
 
-    assert_eq!(refusal, Some(StartupError::PreLedgerDatabase));
-    assert!(StartupError::PreLedgerDatabase
+    assert_eq!(refusal, Some(StartupError::UnrecognizedDatabase));
+    assert!(StartupError::UnrecognizedDatabase
         .to_string()
-        .contains("run `bregctl apply --package DIR` once to adopt this database into the ledger"));
+        .contains("upgrade the database one release at a time"));
     assert_eq!(
         managed_database_snapshot(&database.admin).await,
         before,
@@ -1585,9 +1586,10 @@ fn write_single_role_config(
     config_path
 }
 
-/// The kernel state table as the release before the activation ledger
-/// created it, with the singleton row it recorded for one activation.
-async fn install_pre_ledger_registry_state(
+/// Registry state this release does not recognise: the kernel state table as
+/// a release before the activation ledger created it, with the singleton row it
+/// recorded for one activation.
+async fn install_unrecognised_registry_state(
     migration: &impl GenericClient,
     package_id: &str,
     package_digest: &str,

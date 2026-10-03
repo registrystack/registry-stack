@@ -2978,174 +2978,15 @@ async fn real_postgres_an_activation_keeps_a_claim_that_names_another_database()
     );
 }
 
-/// The first apply on a database a release before the activation ledger
-/// kept adopts it as it stands: one ledger row, no model DDL, the claim
-/// carried over, and every open import authority superseded.
+/// A field an earlier release encrypted before it adopted a pre-ledger
+/// database keeps its erase-history lifecycle: the flip boundary and the
+/// originating package of a pre-flip proposal name revisions only the order
+/// that adoption kept, and erasure still orders them and scrubs the plaintext
+/// the proposal holds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_adoption_records_a_pre_ledger_database_as_its_first_activation() {
+async fn real_postgres_erasure_orders_the_revisions_an_adoption_kept() {
     let (database, package) = initial_package_database().await;
-    let installed = apply(&database, &package, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the package the deployed release installed activates");
-    let authority_id = open_raw_import_authority(&database, &installed.activation_id).await;
-    downgrade_to_pre_ledger_kernel(&database, "ready").await;
-    let model_tables = model_table_oids(&database).await;
-
-    let adopted = apply(&database, &package, ApplyPrecondition::Adoption)
-        .await
-        .expect("the pre-ledger database is adopted");
-
-    assert_eq!(adopted.package_digest, package.package_digest());
-    assert_eq!(
-        adopted.schema_fingerprint,
-        package.manifest().schema_fingerprint
-    );
-    assert_ne!(adopted.activation_id, installed.activation_id);
-    assert_eq!(
-        ledger_roles(&database).await,
-        vec![(
-            adopted.activation_id.clone(),
-            "adopted".to_owned(),
-            "metadata_only".to_owned(),
-            None,
-            "split".to_owned(),
-            database.runtime_role.as_str().to_owned(),
-        )],
-        "the old ledger history is dropped and adoption is the first activation"
-    );
-    assert_eq!(activation_at(&database, 1).await, adopted.activation_id);
-    assert_ready_target(&database, &adopted).await;
-    assert_eq!(
-        recorded_claim(&database).await,
-        (Some(live_database_oid(&database).await), 2),
-        "the claim the pre-ledger table held is carried over"
-    );
-    assert_eq!(
-        import_authority_status(&database, authority_id).await,
-        ("superseded".to_owned(), true)
-    );
-    let records = import_authority_records(&database, authority_id);
-    assert_eq!(records.len(), 1, "{records:?}");
-    assert_eq!(records[0]["transition"], "superseded");
-    assert_eq!(records[0]["activationId"], adopted.activation_id);
-    let adoption_audit = activation_audit_records(&database, &adopted.activation_id);
-    assert_eq!(adoption_audit.len(), 2, "{adoption_audit:?}");
-    assert_eq!(adoption_audit[0].1["planKind"], "adopted");
-    assert_eq!(
-        adoption_audit[0].1["priorActivationId"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        adoption_audit[1].1,
-        with_outcome(&adoption_audit[0].1, "terminal", "applied")
-    );
-    assert_eq!(
-        model_table_oids(&database).await,
-        model_tables,
-        "adoption runs no model DDL"
-    );
-    let retained: i64 = database
-        .admin
-        .query_one(
-            "SELECT count(*) FROM registry_internal.registry_history_schemas
-              WHERE package_revision = $1",
-            &[&adopted.activation_id],
-        )
-        .await
-        .expect("the history descriptors read")
-        .get(0);
-    assert_eq!(retained, 1, "the runtime's history descriptor is retained");
-    let state = recorded_state(&database, &package)
-        .await
-        .expect("the adopted state reads")
-        .expect("the adopted database is activated");
-    assert_eq!(state.identity, adopted);
-    database.cleanup().await;
-}
-
-/// An ingestion run a pre-ledger release opened is bound to the revision that
-/// release recorded as active. Adoption re-identifies that same active package
-/// by its digest, so the run stays bound to it and writable; a run bound to
-/// any other revision stays retired.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_adoption_keeps_an_ingestion_run_bound_to_the_adopted_revision() {
-    let (database, package) = initial_package_database().await;
-    apply(&database, &package, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the package the deployed release installed activates");
-    downgrade_to_pre_ledger_kernel(&database, "ready").await;
-    let digest = "a".repeat(64);
-    for (run_id, revision) in [
-        (
-            "00000000-0000-4000-8000-000000000001",
-            "pre-ledger-revision",
-        ),
-        (
-            "00000000-0000-4000-8000-000000000002",
-            "older-pre-ledger-revision",
-        ),
-    ] {
-        database
-            .admin
-            .execute(
-                "INSERT INTO registry_internal.registry_ingestion_runs (
-                     run_id, created_principal_reference, package_revision,
-                     schema_fingerprint, entity_id, operation, profile_id,
-                     bound_context_reference, input_digest, input_length, item_count,
-                     chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
-                     status, next_chunk_index, committed_items, committed_prefix_digest
-                 )
-                 SELECT $1::text::uuid, 'principal', $2, schema_fingerprint, 'asset',
-                        'create', 'importer', 'context', $3, 1, 1, 1, 'v1', 1, 1,
-                        'open', 0, 0, $3
-                   FROM registry_internal.registry_state
-                  WHERE singleton",
-                &[&run_id, &revision, &digest],
-            )
-            .await
-            .expect("the pre-ledger release opened an ingestion run");
-    }
-
-    let adopted = apply(&database, &package, ApplyPrecondition::Adoption)
-        .await
-        .expect("the pre-ledger database is adopted");
-
-    let runs = database
-        .admin
-        .query(
-            "SELECT package_revision, schema_fingerprint
-               FROM registry_internal.registry_ingestion_runs
-              ORDER BY run_id",
-            &[],
-        )
-        .await
-        .expect("the ingestion runs read")
-        .into_iter()
-        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        runs[0],
-        (
-            adopted.package_digest.clone(),
-            adopted.schema_fingerprint.clone()
-        ),
-        "the run bound to the adopted revision is bound to the adopted package"
-    );
-    assert_eq!(
-        runs[1].0, "older-pre-ledger-revision",
-        "a run bound to another revision stays retired"
-    );
-    database.cleanup().await;
-}
-
-/// A field encrypted before adoption keeps its erase-history lifecycle: the
-/// flip boundary and the originating package of a pre-flip proposal name
-/// revisions only the pre-ledger ledger ordered, and erasure after adoption
-/// still orders them and scrubs the plaintext the proposal holds.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_erasure_after_adoption_orders_the_revisions_the_pre_ledger_ledger_named() {
-    let (database, package) = initial_package_database().await;
-    apply(&database, &package, ApplyPrecondition::InitialActivation)
+    let current = apply(&database, &package, ApplyPrecondition::InitialActivation)
         .await
         .expect("the package the deployed release installed activates");
     let request_id = Uuid::from_u128(0xAD01);
@@ -3206,31 +3047,27 @@ async fn real_postgres_erasure_after_adoption_orders_the_revisions_the_pre_ledge
         )
         .await
         .expect("the pre-adoption flip inserts");
-    downgrade_to_pre_ledger_kernel(&database, "ready").await;
-    // The deployed release activated the flip's boundary from the revision
-    // the proposal originated under, which it ordered only as that source.
+    // The adoption ordered the flip's boundary after the revision the
+    // proposal originated under, both before the ledger's first activation.
     database
         .admin
         .execute(
-            "UPDATE registry_internal.registry_migrations
-                SET source_package_revision = 'pre-ledger-origin', package_sequence = 2
-              WHERE target_package_revision = 'pre-ledger-revision'",
+            "INSERT INTO registry_internal.registry_pre_ledger_package_positions
+                 (package_revision, package_sequence)
+             VALUES ('pre-ledger-origin', -1), ('pre-ledger-revision', 0)",
             &[],
         )
         .await
-        .expect("the pre-ledger ledger names the origin as the boundary's source");
-    let adopted = apply(&database, &package, ApplyPrecondition::Adoption)
-        .await
-        .expect("the pre-ledger database is adopted");
+        .expect("the order the adoption kept inserts");
 
     let (mut migration, migration_task) = database.connect_migration().await;
     let registry = compile_variant(Variant::Base);
     let outcome = registry_breg::field_encryption_backfill::erase_field_encryption_history(
         &mut migration,
         registry_breg::field_encryption_backfill::FieldEncryptionHistoryErasureRequest {
-            expected: &adopted,
+            expected: &current,
             migration_role: &database.migration_role,
-            lock_key: registry_breg::postgres::RegistryLockKey::derive(&adopted.package_id)
+            lock_key: registry_breg::postgres::RegistryLockKey::derive(&current.package_id)
                 .expect("lock key derives"),
             timeouts: registry_breg::history_erasure::HistoryErasureTimeouts::new(
                 Duration::from_secs(5),
@@ -3247,7 +3084,7 @@ async fn real_postgres_erasure_after_adoption_orders_the_revisions_the_pre_ledge
         },
     )
     .await
-    .expect("erasure after adoption orders the pre-ledger revisions");
+    .expect("erasure orders the revisions the adoption kept");
 
     assert_eq!(outcome.scrubbed_request_proposal_count, 1);
     let erased: bool = database
@@ -3266,121 +3103,65 @@ async fn real_postgres_erasure_after_adoption_orders_the_revisions_the_pre_ledge
     database.cleanup().await;
 }
 
-/// A package whose schema fingerprint is not the live catalog's is refused
-/// and the reshape rolls back, so the database is still the one the deployed
-/// release kept.
+/// Threat: a database whose registry state this release does not recognise,
+/// such as one a release before the activation ledger installed, could be
+/// served, applied over, planned, or read as though the ledger recorded it.
+/// Enforcement: the kernel state-shape check refuses it before any read,
+/// plan, or apply touches it, with one generic refusal, and nothing changes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_adoption_refuses_a_package_whose_fingerprint_differs_and_changes_nothing() {
+async fn real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing() {
     let (database, package) = initial_package_database().await;
-    let candidate = compile_variant(Variant::BatchAddedRequired);
-    let candidate_fingerprint = initial_fingerprint(&database, &candidate).await;
-    let other = prepare_and_load_initial_variant(
-        Variant::BatchAddedRequired,
-        &candidate,
-        &candidate_fingerprint,
-    );
-    let installed = apply(&database, &package, ApplyPrecondition::InitialActivation)
+    let current = apply(&database, &package, ApplyPrecondition::InitialActivation)
         .await
-        .expect("the package the deployed release installed activates");
-    let authority_id = open_raw_import_authority(&database, &installed.activation_id).await;
-    downgrade_to_pre_ledger_kernel(&database, "ready").await;
-
-    let refused = apply(&database, &other, ApplyPrecondition::Adoption)
-        .await
-        .expect_err("a package of another catalog is refused");
-
-    assert_eq!(
-        refused,
-        MigrationError::AdoptionFingerprintMismatch {
-            live: package.manifest().schema_fingerprint.clone(),
-            package: candidate_fingerprint,
-        }
-    );
-    assert_pre_ledger_kernel(&database).await;
-    assert_eq!(
-        import_authority_status(&database, authority_id).await,
-        ("open".to_owned(), false)
-    );
-    let adoption_audit = database
-        .activation_audit_entries()
-        .into_iter()
-        .filter(|entry| {
-            entry["schema"] == "breg-activation-audit/v1"
-                && entry["record"]["planKind"] == "adopted"
-        })
-        .map(|entry| (entry["phase"].clone(), entry["record"]["outcome"].clone()))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        adoption_audit,
-        vec![
-            ("request".into(), "started".into()),
-            ("response".into(), "failed".into()),
-        ]
-    );
-    database.cleanup().await;
-}
-
-/// Adoption needs the deployed release to have left maintenance ready: a
-/// failed or unfinished apply is that release's to finish.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_adoption_refuses_a_database_left_in_maintenance() {
-    let (database, package) = initial_package_database().await;
-    apply(&database, &package, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the package the deployed release installed activates");
-    downgrade_to_pre_ledger_kernel(&database, "failed").await;
-
-    let refused = apply(&database, &package, ApplyPrecondition::Adoption)
-        .await
-        .expect_err("a database left in maintenance is refused");
-
-    assert_eq!(refused, MigrationError::AdoptionNotReady);
-    assert_pre_ledger_kernel(&database).await;
-    database.cleanup().await;
-}
-
-/// A pre-ledger database is refused by every read and apply that is not an
-/// adoption, naming adoption as the next step, and nothing is changed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_a_pre_ledger_database_is_refused_until_it_is_adopted() {
-    let (database, package) = initial_package_database().await;
-    apply(&database, &package, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the package the deployed release installed activates");
-    downgrade_to_pre_ledger_kernel(&database, "ready").await;
+        .expect("the initial package activates");
+    downgrade_to_pre_ledger_kernel(&database).await;
+    let tables = model_table_oids(&database).await;
+    let audit = database.activation_audit_entries().len();
 
     assert_eq!(
         recorded_state(&database, &package)
             .await
             .expect_err("the recorded state is refused"),
-        MigrationError::PreLedgerDatabase
+        MigrationError::UnrecognizedDatabase
+    );
+    assert_eq!(
+        read_activation_status(
+            &database.migration_config,
+            &database.migration_role,
+            timeouts()
+        )
+        .await
+        .expect_err("status is refused"),
+        MigrationError::UnrecognizedDatabase
+    );
+    assert_eq!(
+        plan(
+            &database,
+            &package,
+            ApplyPrecondition::InitialActivation,
+            false
+        )
+        .await
+        .expect_err("a plan is refused"),
+        MigrationError::UnrecognizedDatabase
     );
     assert_eq!(
         apply(&database, &package, ApplyPrecondition::InitialActivation)
             .await
             .expect_err("an initial activation is refused"),
-        MigrationError::PreLedgerDatabase
+        MigrationError::UnrecognizedDatabase
     );
-    assert_pre_ledger_kernel(&database).await;
-    database.cleanup().await;
-}
-
-/// Adoption applies only to a pre-ledger database: one the ledger already
-/// records is refused before anything changes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_adoption_refuses_a_database_the_ledger_already_records() {
-    let (database, package) = initial_package_database().await;
-    apply(&database, &package, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the initial package activates");
-
+    let role_change = ApplyPrecondition::RoleChange { current: &current };
     assert_eq!(
-        apply(&database, &package, ApplyPrecondition::Adoption)
+        plan(&database, &package, role_change, true)
             .await
-            .expect_err("a ledger database is not adopted"),
-        MigrationError::PackageBinding
+            .expect_err("a role change is refused"),
+        MigrationError::UnrecognizedDatabase
     );
-    assert_eq!(ledger_roles(&database).await.len(), 1);
+
+    assert_pre_ledger_kernel(&database).await;
+    assert_eq!(model_table_oids(&database).await, tables);
+    assert_eq!(database.activation_audit_entries().len(), audit);
     database.cleanup().await;
 }
 
@@ -3523,39 +3304,6 @@ async fn real_postgres_a_plan_refuses_what_apply_refuses_and_changes_nothing() {
         "{refusal:?}"
     );
     assert_eq!(plan_durable_state(&database).await, before);
-    database.cleanup().await;
-}
-
-/// A plan over a database a release before the activation ledger installed
-/// reports the adoption apply would record, and leaves the pre-ledger kernel
-/// in place.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_a_plan_reports_an_adoption_and_leaves_the_pre_ledger_kernel() {
-    let (database, package) = initial_package_database().await;
-    apply(&database, &package, ApplyPrecondition::InitialActivation)
-        .await
-        .expect("the package the deployed release installed activates");
-    downgrade_to_pre_ledger_kernel(&database, "ready").await;
-    let audit = database.activation_audit_entries().len();
-
-    let planned = plan(&database, &package, ApplyPrecondition::Adoption, false)
-        .await
-        .expect("the pre-ledger database plans an adoption");
-    assert_eq!(planned.activation, PlannedActivation::Adoption);
-    assert!(planned.checks.contains(&"adoptionFingerprint"));
-    assert_pre_ledger_kernel(&database).await;
-    assert_eq!(database.activation_audit_entries().len(), audit);
-
-    assert_eq!(
-        read_activation_status(
-            &database.migration_config,
-            &database.migration_role,
-            timeouts()
-        )
-        .await
-        .expect_err("status refuses a pre-ledger database"),
-        MigrationError::PreLedgerDatabase
-    );
     database.cleanup().await;
 }
 
@@ -3747,9 +3495,7 @@ async fn plan_durable_state(
 /// them: the state row names a package revision, the claim lives in its own
 /// table, the ledger is keyed by revision, and import authorities name the
 /// revision they were opened under.
-async fn downgrade_to_pre_ledger_kernel(database: &TestDatabase, maintenance: &str) {
-    let target = (maintenance != "ready").then_some("pre-ledger-target-revision");
-    let target = target.map_or_else(|| "NULL".to_owned(), |revision| format!("'{revision}'"));
+async fn downgrade_to_pre_ledger_kernel(database: &TestDatabase) {
     let migration = format!("\"{}\"", database.migration_role.as_str());
     let runtime = format!("\"{}\"", database.runtime_role.as_str());
     database
@@ -3819,7 +3565,7 @@ async fn downgrade_to_pre_ledger_kernel(database: &TestDatabase, maintenance: &s
                  maintenance_status, maintenance_target_revision
              )
              SELECT true, '{ENVIRONMENT}', package_id, '{INSTANCE}', database_id,
-                    'pre-ledger-revision', schema_fingerprint, 1, '{maintenance}', {target}
+                    'pre-ledger-revision', schema_fingerprint, 1, 'ready', NULL
                FROM registry_internal.registry_state_ledger;
              DROP TABLE registry_internal.registry_state_ledger;
              UPDATE registry_internal.registry_history_schemas

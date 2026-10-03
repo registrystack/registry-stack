@@ -66,7 +66,6 @@ pub(crate) enum ApplyLifecycleActivation {
     Initial,
     Successor,
     RoleChange,
-    Adopted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -183,15 +182,13 @@ impl DatabaseAccess {
 
 /// Whether a plan reports the package as the database's first activation:
 /// the database was never activated, or its initial activation is
-/// unfinished, which the next `apply --initial` resumes. A database a
-/// release before the activation ledger installed is adopted instead.
+/// unfinished, which the next `apply --initial` resumes.
 fn plans_initial_activation(
     recorded: Result<Option<RecordedRegistryState>, MigrationError>,
 ) -> Result<bool, ApplyLifecycleError> {
     match recorded {
         Ok(None) => Ok(true),
         Ok(Some(recorded)) => Ok(!recorded.activation_applied),
-        Err(MigrationError::PreLedgerDatabase) => Ok(false),
         Err(error) => Err(ApplyLifecycleError::Apply(error)),
     }
 }
@@ -312,37 +309,26 @@ fn execute(
     // A package carries no place in the apply order, so a successor is bound
     // to what the database records: the active package digest, and the
     // configured active package that must be that exact package.
-    //
-    // A database a release before the activation ledger installed records
-    // neither, so the configured active package adopts it as it stands.
-    let mut adoption = false;
     let current_identity = match current_package.as_ref() {
         None => None,
-        Some(current_package) => match runtime.block_on(read_recorded_registry_state(
-            &connection,
-            &target.manifest().package_id,
-            config.database().roles().migration(),
-            timeouts,
-        )) {
-            Err(MigrationError::PreLedgerDatabase)
-                if current_package.package_digest() == target.package_digest() =>
-            {
-                adoption = true;
-                None
-            }
-            recorded => {
-                let recorded = recorded
-                    .map_err(ApplyLifecycleError::Apply)?
-                    .ok_or(ApplyLifecycleError::Uninitialized)?;
-                bind_active_package(
-                    &recorded.identity,
-                    current_package.package_digest(),
-                    deployment,
-                )
-                .map_err(ApplyLifecycleError::Apply)?;
-                Some(recorded.identity)
-            }
-        },
+        Some(current_package) => {
+            let recorded = runtime
+                .block_on(read_recorded_registry_state(
+                    &connection,
+                    &target.manifest().package_id,
+                    config.database().roles().migration(),
+                    timeouts,
+                ))
+                .map_err(ApplyLifecycleError::Apply)?
+                .ok_or(ApplyLifecycleError::Uninitialized)?;
+            bind_active_package(
+                &recorded.identity,
+                current_package.package_digest(),
+                deployment,
+            )
+            .map_err(ApplyLifecycleError::Apply)?;
+            Some(recorded.identity)
+        }
     };
 
     // A plan appends no audit entry, so it never opens the audit destination.
@@ -367,7 +353,6 @@ fn execute(
         .as_ref()
         .is_some_and(|current| current.package_digest == target.package_digest());
     let precondition = match current_identity.as_ref() {
-        None if adoption => ApplyPrecondition::Adoption,
         None => ApplyPrecondition::InitialActivation,
         Some(current) if role_change => ApplyPrecondition::RoleChange { current },
         Some(current) => ApplyPrecondition::Successor { current },
@@ -401,10 +386,10 @@ fn execute(
     if let Some(reference) = request.operator_reference {
         apply = apply.with_operator_reference(reference);
     }
-    if let Some(package) = current_package.as_ref().filter(|_| !adoption) {
+    if let Some(package) = current_package.as_ref() {
         apply = apply.with_predecessor_migration_baseline(package.migration_baseline());
     }
-    if let Some(descriptor) = current_history_descriptor.as_ref().filter(|_| !adoption) {
+    if let Some(descriptor) = current_history_descriptor.as_ref() {
         apply = apply.with_predecessor_history_descriptor(descriptor);
     }
     if let (Some(provider), Some(secrets)) =
@@ -438,8 +423,6 @@ fn execute(
         activation_id: activated.activation_id,
         activation: if initial {
             ApplyLifecycleActivation::Initial
-        } else if adoption {
-            ApplyLifecycleActivation::Adopted
         } else if role_change {
             ApplyLifecycleActivation::RoleChange
         } else {
@@ -536,10 +519,12 @@ mod tests {
         assert!(plans_initial_activation(Ok(None)).expect("never activated"));
         assert!(plans_initial_activation(recorded(false)).expect("unfinished initial"));
         assert!(!plans_initial_activation(recorded(true)).expect("activated"));
-        assert!(
-            !plans_initial_activation(Err(MigrationError::PreLedgerDatabase))
-                .expect("a pre-ledger database is adopted")
-        );
+        assert!(matches!(
+            plans_initial_activation(Err(MigrationError::UnrecognizedDatabase)),
+            Err(ApplyLifecycleError::Apply(
+                MigrationError::UnrecognizedDatabase
+            ))
+        ));
         assert!(matches!(
             plans_initial_activation(Err(MigrationError::ApplyFailed)),
             Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed))

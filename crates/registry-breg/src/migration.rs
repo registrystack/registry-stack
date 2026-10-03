@@ -32,7 +32,7 @@ use crate::postgres::{
     MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry, MigrationLedgerStep,
     MigrationLedgerStepKind, PackageDdlStatement, PostgresFailure, RegistryLockKey,
     ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedPackageExecutionRequest,
-    RoleMode, SqlIdentifier, TransactionEnd, VerifiedPackageApplyConnection,
+    RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -80,8 +80,8 @@ pub enum MigrationError {
     #[error("the migration database was unavailable before maintenance began")]
     DatabaseUnavailable,
     /// Refused before maintenance began: another session held the exclusive
-    /// migration lock past the lock timeout, so an apply, an adoption, or a
-    /// reconciliation is in progress. Nothing was changed, so the same apply
+    /// migration lock past the lock timeout, so an apply or a reconciliation
+    /// is in progress. Nothing was changed, so the same apply
     /// may be retried once that session releases the lock.
     #[error("another session held the migration lock before maintenance began")]
     MigrationLockHeld,
@@ -122,20 +122,12 @@ pub enum MigrationError {
     /// record it under.
     #[error("the operator reference is refused")]
     OperatorReference,
-    /// The database was installed by a release before the activation ledger
-    /// and has not been adopted into it.
-    #[error("the database predates the activation ledger and has not been adopted")]
-    PreLedgerDatabase,
-    /// Adoption refused: the release that installed the database left an
-    /// activation in maintenance.
-    #[error("the database was left in maintenance and cannot be adopted")]
-    AdoptionNotReady,
-    /// Adoption refused: the live managed catalog is not the catalog the
-    /// adopting package declares.
-    #[error(
-        "the live managed schema fingerprint `{live}` differs from the package's `{package}`; rebuild the package from the project that is deployed, with this release's `bregctl package`"
-    )]
-    AdoptionFingerprintMismatch { live: String, package: String },
+    /// The database holds registry state this release does not recognise,
+    /// such as the state a release before the activation ledger installed.
+    /// A release reads only the state its predecessor wrote. Nothing was
+    /// changed.
+    #[error("the database holds registry state this release does not recognise")]
+    UnrecognizedDatabase,
     /// The split-role runtime role could write the activation ledger or the
     /// registry state; the finding names the statement that removes it.
     #[error("{0}")]
@@ -378,10 +370,6 @@ pub enum ApplyPrecondition<'a> {
     RoleChange {
         current: &'a ExpectedRegistryIdentity,
     },
-    /// Adopt a database a release before the activation ledger installed, as
-    /// it stands: the package must declare the live managed catalog, no model
-    /// DDL runs, and the adoption is the first activation the ledger records.
-    Adoption,
 }
 
 /// The configured least-privilege database roles used by one apply.
@@ -482,12 +470,12 @@ pub async fn read_recorded_registry_state(
     .await
     .map_err(refusal_before_maintenance)?;
     let shape = connection.registry_state_shape().await;
-    if matches!(shape, Ok(crate::postgres::RegistryStateShape::PreLedger)) {
+    if matches!(shape, Ok(crate::postgres::RegistryStateShape::Unrecognized)) {
         connection
             .release()
             .await
             .map_err(refusal_before_maintenance)?;
-        return Err(MigrationError::PreLedgerDatabase);
+        return Err(MigrationError::UnrecognizedDatabase);
     }
     let snapshot = match shape {
         Ok(_) => match connection.maintenance_snapshot().await {
@@ -546,7 +534,8 @@ pub struct ActivationLedgerEntry {
     pub package_digest: String,
     pub predecessor_package_digest: Option<String>,
     pub registry_revision: String,
-    /// `initial`, `successor`, or `adopted`.
+    /// `initial` or `successor`, or `adopted` for the first activation of a
+    /// database an earlier release adopted from before the activation ledger.
     pub plan_kind: String,
     /// `compiled_additive`, `metadata_only`, or `reviewed`.
     pub migration_kind: String,
@@ -562,8 +551,8 @@ pub struct ActivationLedgerEntry {
 /// Reads the activation state the database records, as the migration role,
 /// in one read-only transaction, and writes nothing. It takes no apply lock,
 /// so it answers while an apply runs. `None` means the database has never
-/// been activated; a database a release before the activation ledger
-/// installed is refused as [`MigrationError::PreLedgerDatabase`].
+/// been activated; a database holding registry state this release does not
+/// recognise is refused as [`MigrationError::UnrecognizedDatabase`].
 pub async fn read_activation_status(
     config: &ConnectionConfig,
     migration_role: &SqlIdentifier,
@@ -574,8 +563,8 @@ pub async fn read_activation_status(
         .map_err(refusal_before_maintenance)?;
     let recorded = match read {
         crate::postgres::ActivationStatusRead::Uninitialized => return Ok(None),
-        crate::postgres::ActivationStatusRead::PreLedger => {
-            return Err(MigrationError::PreLedgerDatabase)
+        crate::postgres::ActivationStatusRead::Unrecognized => {
+            return Err(MigrationError::UnrecognizedDatabase)
         }
         crate::postgres::ActivationStatusRead::Recorded(recorded) => recorded,
     };
@@ -854,7 +843,7 @@ pub async fn apply_verified_package(
 /// Run every check [`apply_verified_package`] runs before it writes, under
 /// the same apply lock and migration credential, and report the activation
 /// the package would make. Nothing is written: the checks apply makes inside
-/// its begin or adoption transaction run in one this plan rolls back, and no
+/// its begin transaction run in one this plan rolls back, and no
 /// audit entry is appended.
 ///
 /// Threat: a plan that checks less than apply reports a package as ready
@@ -914,7 +903,6 @@ pub enum PlannedActivation {
     Initial,
     Successor,
     RoleChange,
-    Adoption,
     /// The package is active with the roles its activation serves with.
     AlreadyActive,
 }
@@ -956,13 +944,6 @@ impl PlannedActivation {
                 "webhookBindings",
                 "activeState",
             ],
-            Self::Adoption => &[
-                "migrationRole",
-                "runtimeWriteAuthority",
-                "prerequisites",
-                "preLedgerState",
-                "adoptionFingerprint",
-            ],
             Self::AlreadyActive => &[
                 "activeBinding",
                 "migrationRole",
@@ -975,13 +956,10 @@ impl PlannedActivation {
 }
 
 async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> Result<Activated> {
-    if matches!(request.precondition, ApplyPrecondition::Adoption) {
-        return adopt_verified_package(request, mode).await;
-    }
     let manifest = request.package.manifest();
     let role_change = matches!(request.precondition, ApplyPrecondition::RoleChange { .. });
     let current = match request.precondition {
-        ApplyPrecondition::InitialActivation | ApplyPrecondition::Adoption => None,
+        ApplyPrecondition::InitialActivation => None,
         ApplyPrecondition::Successor { current } => {
             verify_successor_package_binding(
                 request.package,
@@ -1134,12 +1112,12 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     )
     .await
     .map_err(refusal_before_maintenance)?;
-    // A database a release before the activation ledger installed is
-    // adopted into the ledger first; no other activation reshapes it.
+    // Registry state this release does not recognise is refused before any
+    // check reads it as the ledger's.
     match connection.registry_state_shape().await {
-        Ok(crate::postgres::RegistryStateShape::PreLedger) => {
+        Ok(crate::postgres::RegistryStateShape::Unrecognized) => {
             let _ = connection.release().await;
-            return Err(MigrationError::PreLedgerDatabase);
+            return Err(MigrationError::UnrecognizedDatabase);
         }
         Ok(_) => {}
         Err(error) => {
@@ -1732,211 +1710,6 @@ async fn refuse_runtime_write_authority(
         Ok(Some(finding)) => Err(MigrationError::RuntimeWriteAuthority(finding)),
         Err(error) => Err(refusal_before_maintenance(error)),
     }
-}
-
-/// Adopts a database a release before the activation ledger installed into
-/// the ledger, as it stands.
-///
-/// Threat: an operator adopts with a package whose catalog is not the one the
-/// database runs, adopts a database the release left mid-activation, or
-/// adopts a database of another registry or deployment. Enforcement: under
-/// the apply lock the recorded package id and database id must be the
-/// package's and the deployment's and maintenance must be ready, and inside
-/// the one adoption transaction the live managed catalog must verify as the
-/// package's exact catalog; any refusal rolls the whole reshape back.
-async fn adopt_verified_package(
-    request: ApplyVerifiedPackageRequest<'_>,
-    mode: ApplyMode,
-) -> Result<Activated> {
-    let manifest = request.package.manifest();
-    let declares_encrypted_fields = request
-        .package
-        .registry()
-        .entities()
-        .values()
-        .any(|entity| {
-            entity
-                .fields
-                .values()
-                .any(|field| field.encryption.is_some())
-        });
-    if declares_encrypted_fields && request.field_encryption.is_none() {
-        return Err(MigrationError::PackageBinding);
-    }
-    if let Some(reference) = request.operator_reference {
-        if !operator_reference_is_well_formed(reference)
-            || !request
-                .audit
-                .as_ref()
-                .is_some_and(|audit| crate::audit::profile_is_keyed(audit.profile()))
-        {
-            return Err(MigrationError::OperatorReference);
-        }
-    }
-    let mut ledger = MigrationLedgerEntry {
-        activation_id: uuid::Uuid::new_v4(),
-        package_digest: request.package.package_digest().to_owned(),
-        predecessor_package_digest: None,
-        registry_revision: request.package.registry().revision().to_owned(),
-        plan_kind: ActivationPlanKind::Adopted,
-        migration_kind: MigrationKind::MetadataOnly,
-        role_mode: RoleMode::from_roles(request.roles.migration, request.roles.runtime),
-        runtime_role: request.roles.runtime.as_str().to_owned(),
-        operator_reference_hash: None,
-        statement_checksums: Vec::new(),
-        artifact_bindings: Vec::new(),
-        backup_references: Vec::new(),
-        steps: Vec::new(),
-    };
-    ledger
-        .validate_plan()
-        .map_err(|_| MigrationError::PackageBinding)?;
-    if let Some(reference) = request.operator_reference {
-        let audit = request
-            .audit
-            .as_ref()
-            .ok_or(MigrationError::OperatorReference)?;
-        ledger.operator_reference_hash = Some(operator_reference_hash(
-            audit,
-            ledger.activation_id,
-            reference,
-        )?);
-    }
-
-    let lock_key =
-        RegistryLockKey::derive(&manifest.package_id).map_err(|_| MigrationError::ApplyFailed)?;
-    let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
-        request.config,
-        lock_key,
-        request.roles.migration,
-        request.timeouts.lock,
-        request.timeouts.statement,
-    )
-    .await
-    .map_err(refusal_before_maintenance)?;
-    if let Err(error) = refuse_runtime_write_authority(&mut connection, request.roles).await {
-        let _ = connection.release().await;
-        return Err(error);
-    }
-    if connection
-        .verify_compiled_prerequisites(request.package.registry(), request.roles.runtime)
-        .await
-        .is_err()
-    {
-        let _ = connection.release().await;
-        return Err(MigrationError::ApplyFailed);
-    }
-    let recorded = match connection.pre_ledger_state().await {
-        Ok(Some(recorded)) => recorded,
-        Ok(None) => {
-            let _ = connection.release().await;
-            return Err(MigrationError::PackageBinding);
-        }
-        Err(error) => {
-            let _ = connection.release().await;
-            return Err(refusal_before_maintenance(error));
-        }
-    };
-    let refused = if recorded.package_id != manifest.package_id {
-        Some(MigrationError::PackageBinding)
-    } else if recorded.database_id != request.deployment.database_id() {
-        Some(MigrationError::DatabaseMismatch)
-    } else if !recorded.ready {
-        Some(MigrationError::AdoptionNotReady)
-    } else {
-        None
-    };
-    if let Some(refused) = refused {
-        let _ = connection.release().await;
-        return Err(refused);
-    }
-    let target = target_package_identity(
-        request.package,
-        request.deployment.database_id(),
-        ledger.activation_id,
-    );
-    let expected_catalog = ExpectedManagedCatalog::compiled(request.package.registry());
-    let transition = MaintenanceTransition {
-        ledger: &ledger,
-        expected_catalog: &expected_catalog,
-        migration_role: request.roles.migration,
-        runtime_role: request.roles.runtime,
-    };
-    // A plan runs the adoption transaction to its last check, the catalog
-    // fingerprint comparison included, and rolls it back.
-    let (attempt, end) = match (mode, request.audit.as_ref()) {
-        (ApplyMode::Plan, _) => (None, TransactionEnd::RollBack),
-        (ApplyMode::Activate, Some(audit)) => {
-            match ActivationAttempt::begin(audit, request.deployment, None, &target, &ledger).await
-            {
-                Ok(attempt) => (Some((audit, attempt)), TransactionEnd::Commit),
-                Err(error) => {
-                    let _ = connection.release().await;
-                    return Err(error);
-                }
-            }
-        }
-        (ApplyMode::Activate, None) => {
-            let _ = connection.release().await;
-            return Err(MigrationError::ActivationAuditUnavailable);
-        }
-    };
-    let adopted = connection
-        .adopt_pre_ledger_database(
-            request.package.registry(),
-            &target,
-            transition,
-            request.acknowledge_retired_audit_discard,
-            end,
-        )
-        .await;
-    let superseded = match adopted {
-        Ok(superseded) => superseded,
-        Err(error) => {
-            // Adoption is one transaction: a database that still has the
-            // pre-ledger shape was not adopted.
-            if let Some((_, attempt)) = attempt {
-                if matches!(
-                    connection.registry_state_shape().await,
-                    Ok(crate::postgres::RegistryStateShape::PreLedger)
-                ) {
-                    attempt.respond_failed().await;
-                }
-            }
-            let _ = connection.release().await;
-            return Err(match error {
-                crate::postgres::PostgresKernelError::AdoptionFingerprintMismatch { live } => {
-                    MigrationError::AdoptionFingerprintMismatch {
-                        live,
-                        package: manifest.schema_fingerprint.clone(),
-                    }
-                }
-                crate::postgres::PostgresKernelError::RetiredAuditRowsPresent => {
-                    MigrationError::RetiredAuditRowsPresent
-                }
-                crate::postgres::PostgresKernelError::Statement(failure) => {
-                    MigrationError::StatementFailed(failure)
-                }
-                _ => MigrationError::ApplyFailed,
-            });
-        }
-    };
-    let Some((audit, attempt)) = attempt else {
-        connection
-            .release()
-            .await
-            .map_err(|_| MigrationError::ApplyFailed)?;
-        return Ok(Activated::Planned(ActivationPlan {
-            activation: PlannedActivation::Adoption,
-            role_mode: ledger.role_mode.as_str(),
-            resumes_activation_id: None,
-            required_backups: Vec::new(),
-            checks: PlannedActivation::Adoption.checks(),
-        }));
-    };
-    finish_activation(connection, audit, attempt, superseded, target)
-        .await
-        .map(Activated::Applied)
 }
 
 /// Answer the activation's audit request with its applied outcome and append

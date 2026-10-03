@@ -796,9 +796,10 @@ pub async fn install_kernel_schema(
 pub(crate) enum RegistryStateShape {
     /// No registry state table: no package was ever applied.
     Absent,
-    /// The state table a release before the activation ledger created: it
-    /// names its active package by revision and records no activation id.
-    PreLedger,
+    /// A state table this release does not recognise: it records no
+    /// activation id, as the one a release before the activation ledger
+    /// created does.
+    Unrecognized,
     /// The state table the activation ledger keeps.
     Ledger,
 }
@@ -828,7 +829,7 @@ pub(crate) async fn registry_state_shape(
     Ok(
         match (row.try_get::<_, bool>(0)?, row.try_get::<_, bool>(1)?) {
             (false, _) => RegistryStateShape::Absent,
-            (true, false) => RegistryStateShape::PreLedger,
+            (true, false) => RegistryStateShape::Unrecognized,
             (true, true) => RegistryStateShape::Ledger,
         },
     )
@@ -1810,21 +1811,6 @@ pub async fn managed_schema_fingerprint(
     .await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog, runtime_role).await?;
-    fingerprint_catalog(
-        client,
-        runtime_role,
-        CatalogFingerprintVersion::NamedTableColumns,
-    )
-    .await
-}
-
-/// The fingerprint of the live managed catalog, with no check of it against
-/// an expected catalog: what a refusal names when the catalog is not the one
-/// a package declares.
-pub(crate) async fn live_schema_fingerprint(
-    client: &impl GenericClient,
-    runtime_role: &SqlIdentifier,
-) -> Result<String> {
     fingerprint_catalog(
         client,
         runtime_role,

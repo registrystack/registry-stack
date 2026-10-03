@@ -24,7 +24,8 @@ byte-identical under one package digest, is promoted through every
 environment. The ledger is `registry_internal.registry_migrations`: one row
 per activation, keyed by an activation id, in apply order, recording the
 package digest, its predecessor's digest, the registry revision, the plan
-kind (`initial`, `successor`, or `adopted`), the role mode, the runtime role,
+kind (`initial` or `successor`, or `adopted` on a database an earlier release
+adopted from before the ledger), the role mode, the runtime role,
 and the operator reference only as a keyed hash. `registry_state` records the
 active package digest and activation id, the database id, the maintenance
 state, and the instance claim.
@@ -44,8 +45,9 @@ state, and the instance claim.
 5. An activation commits with no audit trace (BREG-SEC-120), or an
    operator's reference leaks through the ledger, the audit stream, or
    command output (BREG-SEC-121).
-6. A database a release before the ledger activated is adopted onto a package
-   whose schema it does not have (BREG-SEC-122).
+6. A database holding registry state this release does not recognise, such
+   as one a release before the ledger activated, is served, planned, applied
+   over, or read as though the ledger recorded it (BREG-SEC-122).
 
 ### Enforcement and defaults
 
@@ -185,8 +187,10 @@ state, and the instance claim.
    `SHA256SUMS` verification, the `package.expectedDigest` pin, and the
    package closure with every artifact rederived. Then, under a shared
    advisory lock: a database with no registry state (naming `bregctl apply
-   --package DIR --initial`) or with the pre-ledger shape (naming `bregctl
-   apply --package DIR`, which adopts it); under split roles, a runtime role
+   --package DIR --initial`) or with registry state this release does not
+   recognise, such as the pre-ledger kernel (`UnrecognizedDatabase`, one
+   generic refusal that names no recorded value and says a release reads only
+   the state its immediate predecessor wrote); under split roles, a runtime role
    that can write the ledger or state, and missing runtime grants; the
    instance claim, against the live database's system identifier and oid;
    `identity.databaseId` against the database id the ledger recorded
@@ -198,7 +202,7 @@ state, and the instance claim.
    signature and no trust anchor. Tests:
    `crates/registry-breg/tests/postgres_startup.rs`:
    `startup_refuses_an_unapplied_database_naming_the_initial_apply_and_writes_nothing`,
-   `startup_refuses_a_pre_ledger_database_naming_the_adopting_apply_and_writes_nothing`,
+   `startup_refuses_an_unrecognised_registry_state_and_writes_nothing`,
    `split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing`,
    `a_restored_copy_refuses_to_serve_until_adopted`.
    `crates/registry-breg/tests/postgres_package.rs`:
@@ -207,7 +211,7 @@ state, and the instance claim.
    `crates/registry-breg/tests/postgres_package/fingerprint.rs`:
    `legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes`.
    `crates/registry-breg/tests/postgres_migration.rs`:
-   `real_postgres_a_pre_ledger_database_is_refused_until_it_is_adopted`.
+   `real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing`.
 
 ### Design invariant replaced
 
@@ -279,33 +283,30 @@ attempted.
   apply cannot interleave and a plan never reports a pass apply would refuse.
   `bregctl status` takes no apply lock.
 - `bregctl plan` has no `--initial`: the plan kind (initial, successor, role
-  change, adoption, or already active) is detected from the database.
+  change, or already active) is detected from the database.
 - Model-table columns and settings keep the name `active_package_revision`;
   their value is the activation id. Renaming them would change the live
-  catalog and break adoption without model DDL.
+  catalog, so every registry would need model DDL to follow.
 
-### Adoption of a pre-ledger database
+### An unrecognised registry state
 
-The first `bregctl apply --package DIR` on a database a release before the
-ledger activated adopts it. It requires the recorded package id to equal the
-package's, the recorded database id to equal `identity.databaseId`, and
-maintenance `ready` with no pinned target; otherwise it refuses and changes
-nothing. Under the exclusive apply lock and in one transaction it reshapes
-the kernel tables, compares the live managed catalog fingerprint with the
-package's `schemaFingerprint` and refuses and rolls back on a difference,
-runs no model DDL, drops the pre-ledger migration history, carries any
-instance claim into the state row, supersedes every open import authority,
-and records one ledger row with plan kind `adopted`. `bregctl plan` runs the
-same transaction and rolls it back. Adoption applies only to a pre-ledger
-database: one the ledger already records is refused before anything
-changes. Tests:
+A release reads only the registry state its immediate predecessor wrote. The
+kernel's state shape is read from the PostgreSQL catalog before startup,
+`bregctl status`, `bregctl plan`, or `bregctl apply` reads or writes registry
+state. A database holding registry tables in a shape this release does not
+recognise, such as the kernel a release before the activation ledger
+installed, is refused with one generic refusal (`UnrecognizedDatabase`) that
+names no recorded value: startup binds no listener, and status, plan, and
+apply change nothing. The release does not adopt such a database; the
+operator upgrades it one release at a time. A database an earlier release
+adopted keeps its `adopted` ledger row and the package order that adoption
+kept in `registry_pre_ledger_package_positions`, which field-encryption
+history erasure still reads (BREG-SEC-122). Tests:
 `crates/registry-breg/tests/postgres_migration.rs`:
-`real_postgres_adoption_records_a_pre_ledger_database_as_its_first_activation`,
-`real_postgres_adoption_refuses_a_package_whose_fingerprint_differs_and_changes_nothing`,
-`real_postgres_adoption_refuses_a_database_left_in_maintenance`,
-`real_postgres_adoption_refuses_a_database_the_ledger_already_records`,
-`real_postgres_a_pre_ledger_database_is_refused_until_it_is_adopted`,
-`real_postgres_a_plan_reports_an_adoption_and_leaves_the_pre_ledger_kernel`.
+`real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing`,
+`real_postgres_erasure_orders_the_revisions_an_adoption_kept`.
+`crates/registry-breg/tests/postgres_startup.rs`:
+`startup_refuses_an_unrecognised_registry_state_and_writes_nothing`.
 
 ### Accepted residuals
 
@@ -326,9 +327,6 @@ changes. Tests:
 - **A database superuser can edit the ledger.** As with any data in the
   database, this is not prevented; the activation audit stream, shipped to
   append-only storage, is the independent trace.
-- **Adoption drops the pre-ledger migration history.** The dropped rows are
-  not carried into the ledger, so they survive only in a backup taken before
-  the adopting apply and in the audit stream the earlier release wrote.
 
 ## Import authorities
 
@@ -438,8 +436,7 @@ as the claim on its next apply (BREG-SEC-117).
   carries none, as for a registry upgraded from a release before the claim,
   so an in-place upgrade starts without an operator adopting the database. A
   recorded claim is kept by every activation, so a restored copy keeps its
-  original's claim and refuses to serve until adopted. Adopting a pre-ledger
-  database carries its claim into the state row. Reinstalling the schema
+  original's claim and refuses to serve until adopted. Reinstalling the schema
   beside committed history records no claim, so a database never claims
   itself outside an activation.
 - `adopt --acknowledge-original-retired` moves the claim under the migration
@@ -459,8 +456,7 @@ as the claim on its next apply (BREG-SEC-117).
 `reinstalling_the_schema_beside_committed_history_leaves_an_unclaimed_database_to_adopt`.
 `crates/registry-breg/tests/postgres_migration.rs`:
 `real_postgres_an_activation_records_the_claim_a_database_has_never_recorded`,
-`real_postgres_an_activation_keeps_a_claim_that_names_another_database`,
-`real_postgres_adoption_records_a_pre_ledger_database_as_its_first_activation`.
+`real_postgres_an_activation_keeps_a_claim_that_names_another_database`.
 
 ### Accepted residuals
 

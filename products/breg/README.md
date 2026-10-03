@@ -167,9 +167,10 @@ Each database records its activations in the activation ledger,
 `registry_internal.registry_migrations`: one row per activation, the initial
 one included, keyed by a UUID activation id and ordered by apply order. A row
 names the package digest, the predecessor package digest, the
-`registryRevision`, the plan kind (`initial`, `successor`, or `adopted`), the
-role mode, any backups a destructive migration was bound to, and the keyed
-hash of `--operator-reference`. `apply` accepts a successor only when its
+`registryRevision`, the plan kind (`initial` or `successor`, or `adopted` on a
+database an earlier release adopted from before the ledger), the role mode,
+any backups a destructive migration was bound to, and the keyed hash of
+`--operator-reference`. `apply` accepts a successor only when its
 predecessor digest is the active package, and refuses the active package again
 and any older package. The migration credential authorizes an activation, and
 every activation is audited as `breg-activation-audit/v1`. With separate
