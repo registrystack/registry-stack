@@ -7,9 +7,8 @@ use discovery_client_sdk::{
     renew_unchanged_service_selection, validate_service_selection_structure,
     DiscoveryClient as CoreClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
     EvidenceSelectionRequest, EvidenceServiceQuery, EvidenceTypeResolveRequest,
-    EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt, RelaySelectionRequest,
-    RelayServiceQuery, SelectionRequest, ServiceFilters, ServiceSearchResponse,
-    ServiceSearchSelectionExt, ServiceSelection,
+    EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt, SelectionRequest, ServiceFilters,
+    ServiceSearchResponse, ServiceSearchSelectionExt, ServiceSelection,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -398,21 +397,6 @@ fn select_evidence_service<'py>(
 }
 
 #[pyfunction]
-fn select_relay_service<'py>(
-    py: Python<'py>,
-    response: &Bound<'_, PyAny>,
-    request: &Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let response: ServiceSearchResponse =
-        python_response_to_rust(response).map_err(|_| query_error(py))?;
-    let request: RelaySelectionRequest = python_to_rust(request).map_err(|_| query_error(py))?;
-    let selection = response
-        .select_relay(request)
-        .map_err(|error| client_error(py, error))?;
-    rust_to_python(py, &selection)
-}
-
-#[pyfunction]
 fn validate_selection_structure<'py>(
     py: Python<'py>,
     selection: &Bound<'_, PyAny>,
@@ -605,21 +589,6 @@ impl DiscoveryClient {
         rust_to_python(py, &response)
     }
 
-    fn search_relay_services<'py>(
-        &self,
-        py: Python<'py>,
-        query: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query: RelayServiceQuery = python_to_rust(query).map_err(|_| query_error(py))?;
-        let response = py
-            .detach(|| {
-                self.runtime
-                    .block_on(self.inner.search_relay_services(query))
-            })
-            .map_err(|error| client_error(py, error))?;
-        rust_to_python(py, &response)
-    }
-
     fn select_exact<'py>(
         &self,
         py: Python<'py>,
@@ -647,15 +616,6 @@ impl DiscoveryClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         select_evidence_service(py, response, request)
     }
-
-    fn select_relay_service<'py>(
-        &self,
-        py: Python<'py>,
-        response: &Bound<'_, PyAny>,
-        request: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        select_relay_service(py, response, request)
-    }
 }
 
 #[pymodule]
@@ -665,7 +625,6 @@ pub fn registry_discovery_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(select_exact, module)?)?;
     module.add_function(wrap_pyfunction!(select_evidence_alternative, module)?)?;
     module.add_function(wrap_pyfunction!(select_evidence_service, module)?)?;
-    module.add_function(wrap_pyfunction!(select_relay_service, module)?)?;
     module.add_function(wrap_pyfunction!(validate_selection_structure, module)?)?;
     module.add_function(wrap_pyfunction!(validate_selection, module)?)?;
     module.add_function(wrap_pyfunction!(renew_unchanged_selection, module)?)?;

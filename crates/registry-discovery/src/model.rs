@@ -24,8 +24,8 @@ pub const MAXIMUM_IDENTIFIER_CHARACTERS: usize = 4_096;
 pub const MAXIMUM_TEXT_CHARACTERS: usize = 16 * 1024;
 pub const MAXIMUM_FILTER_VALUES: usize = 100;
 pub const MAXIMUM_QUERY_BYTES: usize = 64 * 1024;
-const MAXIMUM_QUERY_PARAMETERS: usize = (7 * MAXIMUM_FILTER_VALUES) + 2;
-const MAXIMUM_QUERY_PARAMETER_NAME_BYTES: usize = "operationFamily".len();
+const MAXIMUM_QUERY_PARAMETERS: usize = (5 * MAXIMUM_FILTER_VALUES) + 1;
+const MAXIMUM_QUERY_PARAMETER_NAME_BYTES: usize = "evidenceType".len();
 const MAXIMUM_PERCENT_ENCODED_SCALAR_BYTES: usize = 12;
 const MAXIMUM_QUERY_PARAMETER_OVERHEAD_BYTES: usize =
     MAXIMUM_QUERY_PARAMETERS * (MAXIMUM_QUERY_PARAMETER_NAME_BYTES + 2);
@@ -154,8 +154,6 @@ pub struct ServiceFilters {
     pub jurisdiction: Vec<String>,
     pub conforms_to: Vec<String>,
     pub evidence_type: Vec<String>,
-    pub semantic_class: Vec<String>,
-    pub operation_family: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,6 +172,10 @@ pub enum IndexError {
     BoundExceeded,
     #[error("the Discovery index is not canonical")]
     NotCanonical,
+    #[error(
+        "the Discovery index contains a retired service kind; remove Relay origins and rebuild it with `discoveryctl package`"
+    )]
+    RetiredServiceKind,
 }
 
 pub fn parse_index(bytes: &[u8]) -> Result<DiscoveryIndex, IndexError> {
@@ -182,6 +184,9 @@ pub fn parse_index(bytes: &[u8]) -> Result<DiscoveryIndex, IndexError> {
         return Err(IndexError::BoundExceeded);
     }
     let value = parse_json_strict(bytes).map_err(|_| IndexError::Invalid)?;
+    if contains_retired_service_kind(&value) {
+        return Err(IndexError::RetiredServiceKind);
+    }
     let index: DiscoveryIndex = serde_json::from_value(value).map_err(|_| IndexError::Invalid)?;
     validate_index(&index)?;
     let canonical = canonical_index_bytes(&index)?;
@@ -189,6 +194,20 @@ pub fn parse_index(bytes: &[u8]) -> Result<DiscoveryIndex, IndexError> {
         return Err(IndexError::NotCanonical);
     }
     Ok(index)
+}
+
+fn contains_retired_service_kind(value: &serde_json::Value) -> bool {
+    value
+        .get("services")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|services| {
+            services.iter().any(|service| {
+                service
+                    .get("serviceKind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("relay")
+            })
+        })
 }
 
 pub fn canonical_index_bytes(index: &DiscoveryIndex) -> Result<Vec<u8>, IndexError> {
@@ -399,16 +418,13 @@ pub fn validate_service(service: &ServiceRecord) -> Result<(), IndexError> {
     {
         return Err(IndexError::Invalid);
     }
-    match service.service_kind {
-        ServiceKind::Evidence
-            if service.evidence_type_ids.is_empty()
-                || !service.semantic_class_ids.is_empty()
-                || !service.operation_family_ids.is_empty() =>
-        {
-            Err(IndexError::Invalid)
-        }
-        ServiceKind::Relay if !service.evidence_type_ids.is_empty() => Err(IndexError::Invalid),
-        _ => Ok(()),
+    if service.evidence_type_ids.is_empty()
+        || !service.semantic_class_ids.is_empty()
+        || !service.operation_family_ids.is_empty()
+    {
+        Err(IndexError::Invalid)
+    } else {
+        Ok(())
     }
 }
 
@@ -655,11 +671,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn protected_only_relay_records_are_valid_without_public_capabilities() {
-        let mut service = example_index().services.remove(0);
-        service.service_kind = ServiceKind::Relay;
-        service.evidence_type_ids.clear();
-        assert_eq!(validate_service(&service), Ok(()));
+    fn pre_retirement_mixed_index_is_refused_as_a_whole() {
+        let bytes = include_bytes!(
+            "../../../products/discovery/fixtures/compatibility/pre-retirement-mixed-index.json"
+        );
+        let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+        assert_eq!(parse_index(bytes), Err(IndexError::RetiredServiceKind));
     }
 
     #[test]

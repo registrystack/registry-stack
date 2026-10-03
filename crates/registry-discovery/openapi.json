@@ -319,7 +319,7 @@
               "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
               "type": "string"
             },
-            "maxItems": 256,
+            "maxItems": 0,
             "minItems": 0,
             "type": "array",
             "uniqueItems": true
@@ -383,7 +383,7 @@
               "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
               "type": "string"
             },
-            "maxItems": 256,
+            "maxItems": 0,
             "minItems": 0,
             "type": "array",
             "uniqueItems": true
@@ -397,8 +397,7 @@
           },
           "serviceKind": {
             "enum": [
-              "evidence",
-              "relay"
+              "evidence"
             ],
             "type": "string"
           },
@@ -551,10 +550,10 @@
     },
     "/v1/services": {
       "get": {
-        "description": "Exact unranked search. The encoded query is limited to 65536 bytes and all decoded values share one aggregate limit of 4466 Unicode scalar values. Individual field maxima do not imply that their aggregate is accepted.",
+        "description": "Exact unranked search. The encoded query is limited to 65536 bytes and all decoded values share one aggregate limit of 4876 Unicode scalar values. Individual field maxima do not imply that their aggregate is accepted.",
         "parameters": [
           {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4876 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "recordId",
@@ -573,7 +572,7 @@
             "style": "form"
           },
           {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4876 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "serviceId",
@@ -593,19 +592,18 @@
             "style": "form"
           },
           {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4876 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "serviceKind",
             "schema": {
               "items": {
                 "enum": [
-                  "evidence",
-                  "relay"
+                  "evidence"
                 ],
                 "type": "string"
               },
-              "maxItems": 2,
+              "maxItems": 1,
               "minItems": 1,
               "type": "array",
               "uniqueItems": true
@@ -613,7 +611,7 @@
             "style": "form"
           },
           {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4876 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "jurisdiction",
@@ -633,7 +631,7 @@
             "style": "form"
           },
           {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4876 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "conformsTo",
@@ -653,50 +651,10 @@
             "style": "form"
           },
           {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4876 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "evidenceType",
-            "schema": {
-              "items": {
-                "format": "uri",
-                "maxLength": 4096,
-                "minLength": 1,
-                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
-                "type": "string"
-              },
-              "maxItems": 100,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": false
-            },
-            "style": "form"
-          },
-          {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
-            "explode": true,
-            "in": "query",
-            "name": "semanticClass",
-            "schema": {
-              "items": {
-                "format": "uri",
-                "maxLength": 4096,
-                "minLength": 1,
-                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
-                "type": "string"
-              },
-              "maxItems": 100,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": false
-            },
-            "style": "form"
-          },
-          {
-            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
-            "explode": true,
-            "in": "query",
-            "name": "operationFamily",
             "schema": {
               "items": {
                 "format": "uri",
@@ -734,7 +692,7 @@
             "$ref": "#/components/responses/Unavailable"
           }
         },
-        "x-registry-maximum-decoded-query-value-characters": 4466,
+        "x-registry-maximum-decoded-query-value-characters": 4876,
         "x-registry-maximum-query-bytes": 65536
       }
     }

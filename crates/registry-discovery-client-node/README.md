@@ -3,8 +3,7 @@
 Thin napi-rs binding for the bounded Rust `registry-discovery-client` SDK.
 It performs exact service search, Evidence Type resolution, and ambiguity-safe
 selection. A returned selection is inert public metadata. The application must
-apply its own trust policy before calling the selected Evidence or Relay
-endpoint.
+apply its own trust policy before calling the selected Evidence endpoint.
 
 This crate publishes through the unified `@registrystack/client` package.
 Install the exact client version that matches the Discovery deployment, and use
@@ -148,16 +147,6 @@ the native definition and local policy still supply purpose, audience,
 issuer/provider identity, configuration revision, selectors, and expected
 outputs.
 
-Relay follows the same boundary with `searchRelayServices` and
-`selectRelayService`. The selection retains both `semanticClassId` and
-`operationFamilyId`. Its adopter callback should exact-pin `serviceKind`,
-`serviceId`, `endpointUrl`, `operatorId`, `registryAuthorityId`, `conformsTo`,
-`jurisdictions`, `matchedCapability`, and `relayCapabilityMatch`. Pass
-`acceptSelection(selection, acceptsExpectedRelay).endpointUrl` to
-`new RelayClient({ baseUrl, authorization })`, constructing `authorization`
-only after acceptance. Use Relay's native metadata to choose the concrete
-resource and operation. Discovery never invents Relay route arguments.
-
 ## Persisting and renewing a selection
 
 Persist only the plain selection object. `AcceptedServiceSelection` is an
@@ -213,4 +202,4 @@ them.
 This boundary preserves
 [ADR-001](../../products/discovery/DECISIONS.md#adr-001-discovery-is-an-index-not-a-trust-or-invocation-layer):
 Discovery remains an index and neither defines adopter trust policy nor proxies
-native Evidence or Relay invocation.
+native Evidence invocation.

@@ -40,7 +40,6 @@ def main() -> None:
 
     PublicationHandler.descriptions = {
         "/evidence.jsonld": (args.descriptions / "evidence.jsonld").read_bytes(),
-        "/relay.jsonld": (args.descriptions / "relay.jsonld").read_bytes(),
     }
     server = ThreadingHTTPServer((args.address, args.port), PublicationHandler)
     server.serve_forever()
