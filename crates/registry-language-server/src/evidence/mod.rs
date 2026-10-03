@@ -71,7 +71,7 @@ pub(crate) fn is_read_by_a_build(root: &Path, path: &Path) -> bool {
 
 /// Whether a path is a file the server may open under this root.
 ///
-/// Containment alone is not the whole answer here, as it is for Relay. A project holds key
+/// Containment alone does not establish membership in the authored project. A project holds key
 /// material and generated state inside its own root, both of them contained and neither of them
 /// authored input, so the layout has to agree before the file is opened.
 pub(crate) fn is_safe_authored_file(root: &Path, path: &Path) -> bool {
@@ -139,7 +139,7 @@ fn role_ceiling(role: DocumentRole) -> DocumentCeiling {
 
 /// Reads the documents of one Evidence authoring project.
 ///
-/// A missing marker is not a failure, unlike Relay's missing manifest. A project that predates the
+/// A missing marker is not a failure. A project that predates the
 /// marker is still an authoring project, and it is discovered from the description and questions
 /// every project carries, so the loader has nothing to refuse: the documents it finds are the
 /// documents there are.

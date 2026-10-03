@@ -7810,25 +7810,25 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
     }
 }
 
-/// Threat: a Relay-style policy-hidden or ambiguous lookup must not be
+/// Threat: a source-owned policy-hidden or ambiguous lookup must not be
 /// misreported as a source outage, and its Problem Details body must not reach
 /// scripts, assertions, public errors, or audit. Enforcement: the source
 /// declares only the exact neutral tuple; the HTTP transport recognizes the
 /// closed response and the singular acquisition maps its data-free outcome to
 /// Evidence unavailable.
 #[tokio::test]
-async fn sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable() {
+async fn sec_exact_registry_lookup_declared_unresolved_maps_to_evidence_unavailable() {
     let server = MockServer::start().await;
     let prepared = prepare_fixture_with_mutation(
         "subject-binding-secret-canary-32-bytes-minimum",
         &server.uri(),
         &FixtureCeilings::deployment_defaults(),
-        configure_exact_relay_lookup_source,
+        configure_exact_registry_lookup_source,
     );
     let runtime =
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
             .await
-            .expect("exact Relay lookup composition initializes");
+            .expect("exact registry lookup composition initializes");
     let expected_body = json!({
         "selectors": {"recordReference": "synthetic-residence-record-001"}
     });
@@ -7848,14 +7848,14 @@ async fn sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable
         .await;
     runtime
         .evaluate(
-            "operation-relay-lookup-success",
+            "operation-registry-lookup-success",
             &access_token(None),
             &residence_request(),
         )
         .await
-        .expect("Relay lookup data.domainData produces Evidence");
+        .expect("Registry lookup data.domainData produces Evidence");
 
-    const TRACE_CANARY: &str = "relay-upstream-trace-secret-canary";
+    const TRACE_CANARY: &str = "registry-upstream-trace-secret-canary";
     Mock::given(method("POST"))
         .and(path(
             "/v2/resources/residence-record/lookups/by-record-reference",
@@ -7866,7 +7866,7 @@ async fn sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable
                 .insert_header("Content-Type", "application/problem+json")
                 .set_body_raw(
                     format!(
-                        r#"{{"type":"https://id.registrystack.org/problems/registry-relay/consultation/unresolved","title":"Requested record was not resolved","status":404,"detail":"the requested record was not resolved","code":"consultation.unresolved","traceId":"{TRACE_CANARY}"}}"#
+                        r#"{{"type":"https://fixture.example/problems/record-unresolved","title":"Requested record was not resolved","status":404,"detail":"the requested record was not resolved","code":"consultation.unresolved","traceId":"{TRACE_CANARY}"}}"#
                     ),
                     "application/problem+json",
                 ),
@@ -7877,17 +7877,17 @@ async fn sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable
         .await;
     let error = runtime
         .evaluate(
-            "operation-relay-lookup-unresolved",
+            "operation-registry-lookup-unresolved",
             &access_token(None),
             &residence_request(),
         )
         .await
-        .expect_err("declared Relay unresolved releases no Evidence");
+        .expect_err("declared source unresolved releases no Evidence");
     assert_eq!(error.problem(), ProblemCode::EvidenceNotAvailable);
     let batch = request_batch_from_request(&residence_request(), 1);
     let batch_response = runtime
         .evaluate_request_batch(
-            "operation-relay-lookup-unresolved-batch",
+            "operation-registry-lookup-unresolved-batch",
             &access_token(None),
             &batch,
         )
@@ -7903,7 +7903,7 @@ async fn sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable
     assert!(audit.contains("\"decision\":\"unresolved\""));
     for forbidden in [
         "consultation.unresolved",
-        "registry-relay/consultation/unresolved",
+        "fixture.example/problems/record-unresolved",
         TRACE_CANARY,
     ] {
         assert!(!audit.contains(forbidden), "audit leaked {forbidden}");
@@ -10038,7 +10038,7 @@ fn prepare_fixture_with_mutation(
     )
 }
 
-fn configure_exact_relay_lookup_source(bundle_root: &Path) {
+fn configure_exact_registry_lookup_source(bundle_root: &Path) {
     let config_path = bundle_root.join("evidence.yaml");
     let mut config = fs::read_to_string(&config_path).expect("bundle config is readable");
     let source_b_start = config.find("  source-b:\n").expect("source-b exists");
@@ -10050,7 +10050,7 @@ fn configure_exact_relay_lookup_source(bundle_root: &Path) {
     replace_exact(
         &mut source_b,
         "  source-b:\n    transport: http-json\n    baseUrl:",
-        "  source-b:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://id.registrystack.org/problems/registry-relay/consultation/unresolved, code: consultation.unresolved}\n    baseUrl:",
+        "  source-b:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://fixture.example/problems/record-unresolved, code: consultation.unresolved}\n    baseUrl:",
         1,
     );
     replace_exact(
@@ -10066,7 +10066,7 @@ fn configure_exact_relay_lookup_source(bundle_root: &Path) {
         1,
     );
     config.replace_range(source_b_start..source_b_end, &source_b);
-    fs::write(config_path, config).expect("Relay lookup source config is written");
+    fs::write(config_path, config).expect("Registry lookup source config is written");
     fs::write(
         bundle_root.join("adapters/residence-region-prepare.rhai"),
         r#"fn prepare(selectors, context) {
@@ -10074,7 +10074,7 @@ fn configure_exact_relay_lookup_source(bundle_root: &Path) {
 }
 "#,
     )
-    .expect("Relay lookup preparation adapter is written");
+    .expect("Registry lookup preparation adapter is written");
     fs::write(
         bundle_root.join("adapters/residence-region-source.rhai"),
         r#"fn extract(source_response, context) {
@@ -10082,7 +10082,7 @@ fn configure_exact_relay_lookup_source(bundle_root: &Path) {
 }
 "#,
     )
-    .expect("Relay lookup extraction adapter is written");
+    .expect("Registry lookup extraction adapter is written");
     fs::write(
         bundle_root.join("schemas/residence-region-response.schema.yaml"),
         r#"type: object
@@ -10102,7 +10102,7 @@ properties:
           official_residence_code: {type: string, minLength: 1, maxLength: 32}
 "#,
     )
-    .expect("Relay lookup response schema is written");
+    .expect("Registry lookup response schema is written");
 }
 
 /// The same preparation, from a named acceptance bundle rather than the

@@ -1,4 +1,4 @@
-import { breg, casework, discovery, evidence, messaging, relay } from '..'
+import { breg, casework, discovery, evidence, messaging } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
 const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
@@ -8,7 +8,6 @@ const evidenceClient = new evidence.EvidenceClient({
   revokedKeyIds: [],
   token: { static: 'placeholder-token' },
 })
-const relayClient = new relay.RelayClient({ baseUrl: 'https://relay.example.invalid/' })
 const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
 const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/' })
 
@@ -20,7 +19,6 @@ breg.verifyWebhookDelivery({
   body: Buffer.from('{}'),
   key: Buffer.alloc(32),
 }).deliveryTime.toUpperCase()
-relayClient.listRecords('people', { pageSize: 25 })
 void discoveryClient
 void caseworkClient.description('header.payload.signature', 'staff')
 const reviewer = { issuer: 'https://idp.example.invalid/', subject: 'reviewer' }
@@ -65,12 +63,9 @@ type HasNoLoaderTarget<T> = '__napiBindingTarget' extends keyof T ? false : true
 type Assert<T extends true> = T
 type DiscoveryHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof discovery>>
 type EvidenceHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof evidence>>
-type RelayHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof relay>>
 type BregHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof breg>>
 type CaseworkHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof casework>>
 type MessagingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof messaging>>
 
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })
-// @ts-expect-error Product query vocabularies remain distinct.
-relayClient.listRecords('people', { top: 25 })

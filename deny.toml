@@ -16,7 +16,7 @@ ignore = [
     # behavior (bodil/smartstring#49), also reproduced through Rhai's
     # `ImmutableString` (rhaiscript/rhai#816). Rhai 1.26.1 pulls it into
     # Evidence, its authoring tools, and the shared language server exposed
-    # through `relayctl`, where the affected owned-string conversion is
+    # through `evidencectl`, where the affected owned-string conversion is
     # reachable. Evidence accepts governed, hash-covered scripts only and
     # bounds adapter strings, arrays, and maps before converting them for Rhai;
     # these controls limit exposure but do not remove the reported unsoundness.

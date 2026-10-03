@@ -41,7 +41,7 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
         JwksFetcherConfig::defaults(),
     ));
 
-    let config = TokenVerifierConfig::registry_relay_access_profile(
+    let config = TokenVerifierConfig::access_token_profile(
         "https://issuer.example",
         vec!["registry-api".to_string()],
         vec![Algorithm::EdDSA],
@@ -61,7 +61,7 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
   development.
 - Discovery, returned JWKS URI validation, and JWKS refreshes are bound by the
   configured timeout, including DNS validation.
-- Use the named profiles for standard Relay flows so related ID token and
+- Use the named profiles for access-token flows so related ID token and
   UserInfo JWT `typ` checks stay aligned. Allowed access-token algorithms and
   token types remain explicit inputs; keep `allowed_algorithms` as narrow as the
   provider allows.

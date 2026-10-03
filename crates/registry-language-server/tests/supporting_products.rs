@@ -232,7 +232,7 @@ fn discovery_indexes_mapping_symbols_without_claiming_remote_evidence_types() {
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
     assert_eq!(
         index.document_symbols(&project.path("origins.yaml")).len(),
-        2
+        1
     );
     assert!(index
         .document_symbols(&project.path("mappings/adult.yaml"))

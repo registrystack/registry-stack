@@ -28,7 +28,6 @@ use tower_lsp_server::{
 use crate::{
     evidence::layout::watched_globs as evidence_watched_globs,
     refs::{CompletionCandidate, IndexedLocation, IndexedSymbol},
-    relay_v2,
     workspace::Workspace,
 };
 
@@ -248,12 +247,10 @@ impl LanguageServer for Backend {
     async fn initialized(&self, _params: InitializedParams) {
         if self.supports_dynamic_file_watching.load(Ordering::Relaxed) {
             // Evidence registers its authored extensions and source-artifact
-            // directories. Relay V2 accepts governed files at any safe
-            // relative path, so its recursive glob covers the rest of that
-            // compiler closure before registry.yaml has been parsed.
+            // directories; generic product roots refresh their declared inputs.
             let watchers = evidence_watched_globs()
                 .into_iter()
-                .chain(relay_v2::watched_globs())
+                .chain(crate::products::watched_globs())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .map(|glob| FileSystemWatcher {
@@ -298,7 +295,7 @@ impl LanguageServer for Backend {
             } else {
                 (
                     MessageType::INFO,
-                    "No Relay or Evidence project found in the workspace".to_owned(),
+                    "No supported Registry Stack project found in the workspace".to_owned(),
                 )
             }
         };

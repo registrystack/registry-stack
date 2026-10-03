@@ -42,7 +42,7 @@ const INFRASTRUCTURE_MEMBERS: &[&str] = &[
 ///
 /// The distinction between the two JSON-LD variants keeps an exact shared
 /// context response, as emitted by Base Registry Engine, separate from a product
-/// composition, as emitted by Registry Relay.
+/// composition in a source-owned read API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegistryRecordRepresentation {
     /// `application/json`, which must not contain `@context`.

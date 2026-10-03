@@ -1,9 +1,8 @@
 //! Canonical, bounded client for Base Registry Engine discovery and record reads.
 //!
-//! Base Registry Engine and Relay share Registry Record semantics, but not routes,
-//! queries, Problems, entity tags, or credential eligibility. This client keeps
-//! those product contracts explicit while reusing only private transport
-//! machinery.
+//! Registry Record decoding is shared, while BReg owns its routes, queries,
+//! Problems, entity tags, and credential eligibility. This client keeps those
+//! product contracts explicit while reusing private transport machinery.
 
 use std::fmt;
 

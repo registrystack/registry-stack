@@ -15,7 +15,6 @@ use crate::{
         document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedProject,
         ProjectIndex, DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE,
     },
-    relay_v2,
     safety::{secure_regular_file, SecureFileRead},
     yaml::ParsedDocument,
 };
@@ -94,7 +93,6 @@ impl DocumentCeiling {
 /// own diagnostics, and never for another family's.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProjectFamily {
-    RelayV2,
     Evidence,
     Product(crate::products::ProductKind),
 }
@@ -104,7 +102,6 @@ impl ProjectFamily {
     /// somehow answers for two families, so it is fixed here rather than left to whichever test
     /// runs first.
     const ALL: &'static [Self] = &[
-        Self::RelayV2,
         Self::Evidence,
         Self::Product(crate::products::ProductKind::Breg),
         Self::Product(crate::products::ProductKind::Casework),
@@ -119,7 +116,6 @@ impl ProjectFamily {
     /// Whether this family claims a directory as one of its roots.
     fn declares_root(self, directory: &Path) -> bool {
         match self {
-            Self::RelayV2 => relay_v2::declares_root(directory),
             Self::Evidence => evidence::declares_root(directory),
             Self::Product(product) => crate::products::declares_root(directory, product),
         }
@@ -127,7 +123,6 @@ impl ProjectFamily {
 
     fn load_documents(self, root: &Path) -> Result<LoadedProjectDocuments> {
         match self {
-            Self::RelayV2 => relay_v2::load_project_documents(root),
             Self::Evidence => evidence::load_project_documents(root),
             Self::Product(product) => {
                 crate::products::load_documents(root, product, &BTreeMap::new())
@@ -140,25 +135,22 @@ impl ProjectFamily {
     /// The two questions beside each other are the whole of what a save can change. A document the
     /// family owns is answered from the text the client just sent, and one it does not own is
     /// answered from disk at the next build or from nowhere at all. Evidence has one file in the
-    /// second class, and a family with none is unaffected: Relay's index is built from the
-    /// documents it holds and nothing else.
+    /// second class, and a family with none is unaffected.
     fn is_read_by_a_build(self, root: &Path, path: &Path) -> bool {
         match self {
-            // Relay V2 builds only from the entry documents and the governed closure already held
-            // by the root. Saving an unrelated path cannot affect that closure.
-            Self::RelayV2 | Self::Product(_) => false,
+            Self::Product(_) => false,
             Self::Evidence => evidence::is_read_by_a_build(root, path),
         }
     }
 
     /// How large a document at this path may be for this family to index it.
     ///
-    /// Relay holds every project document to one limit. Evidence holds each document to the
+    /// Generic products use one project-document limit. Evidence holds each document to the
     /// ceiling the authoring form gives the part it plays, so a document an author's compiler
     /// refuses for its size is a document the editor refuses for the same size.
     fn document_ceiling(self, root: &Path, path: &Path) -> DocumentCeiling {
         match self {
-            Self::RelayV2 | Self::Product(_) => DocumentCeiling::project_document(),
+            Self::Product(_) => DocumentCeiling::project_document(),
             Self::Evidence => evidence::document_ceiling(root, path),
         }
     }
@@ -175,7 +167,7 @@ impl ProjectFamily {
     /// resolves cannot become an unresolved reference on screen.
     fn bounded_directory_of(self, root: &Path, path: &Path) -> Option<PathBuf> {
         match self {
-            Self::RelayV2 | Self::Product(_) => None,
+            Self::Product(_) => None,
             Self::Evidence => evidence::bounded_directory_of(root, path),
         }
     }
@@ -188,7 +180,7 @@ impl ProjectFamily {
         path: &Path,
     ) -> Result<Option<evidence::ScannedDirectory>> {
         match self {
-            Self::RelayV2 | Self::Product(_) => Ok(None),
+            Self::Product(_) => Ok(None),
             Self::Evidence => evidence::scan_bounded_directory(root, path),
         }
     }
@@ -212,7 +204,6 @@ impl ProjectFamily {
         dropped: &BTreeSet<PathBuf>,
     ) -> IndexedProject {
         match self {
-            Self::RelayV2 => relay_v2::build_index(root, documents, parsed),
             Self::Evidence => evidence::build_index(root, documents, parsed, dropped),
             Self::Product(product) => crate::products::build_index(root, product, parsed),
         }
@@ -225,7 +216,6 @@ impl ProjectFamily {
     /// list, so each family says who it is.
     pub(crate) fn diagnostic_source(self) -> &'static str {
         match self {
-            Self::RelayV2 => "relay-v2",
             Self::Evidence => "evidence",
             Self::Product(product) => product.name(),
         }
@@ -235,24 +225,18 @@ impl ProjectFamily {
     /// symbol kind.
     pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
         match self {
-            Self::RelayV2 => Some(format!("{}/{rule}", self.diagnostic_source())),
             Self::Evidence => Some(format!("{}/{rule}", self.diagnostic_source())),
             Self::Product(_) => Some(format!("{}/{rule}", self.diagnostic_source())),
         }
     }
 
-    /// Whether a document contributes a YAML syntax tree. Relay V2 also holds
-    /// governed Markdown rationale bytes for compiler closure validation; they
-    /// are project inputs but not YAML documents.
+    /// Whether a document contributes a YAML syntax tree for its product.
     pub(crate) fn parses_as_yaml(self, path: &Path) -> bool {
         match self {
             Self::Evidence => true,
             Self::Product(_) => path
                 .extension()
                 .is_some_and(|value| value == "yaml" || value == "yml" || value == "json"),
-            Self::RelayV2 => path.extension().is_some_and(|extension| {
-                matches!(extension.to_str(), Some("yaml" | "yml" | "json"))
-            }),
         }
     }
 }
@@ -325,7 +309,7 @@ impl RootState {
     /// a project on its own; a document the client is holding open is one the author is looking at,
     /// and leaving it out would give them a file on screen with no symbols and no reason for it.
     ///
-    /// The project must hold the path before the revision is retained. Relay V2 answers that from
+    /// The project must hold the path before the revision is retained. Each product answers from
     /// its current exact governed closure, rather than from root containment; Evidence then uses
     /// [`Self::settle_open_buffers`] to decide on every rebuild which side of its fixed authoring
     /// layout an already-held path sits on.
@@ -361,13 +345,6 @@ impl RootState {
         }
         if matches!(self.family, ProjectFamily::Product(_)) {
             self.reload_product_with_open_documents();
-            return;
-        }
-        if self.family == ProjectFamily::RelayV2 {
-            // An exact-closure reload owns both the success and failure transitions for Relay.
-            // Falling through after an error would rebuild the partially mutated pre-reload map
-            // and could retain a departed buffer for later adoption.
-            let _ = self.reload_relay_v2_with_open_documents();
             return;
         }
         if was_blocked && self.reload_project_from_disk().is_ok() {
@@ -412,9 +389,6 @@ impl RootState {
     /// reasons a first scan of the same tree would pass it by.
     fn project_holds(&self, path: &Path) -> bool {
         match self.family {
-            ProjectFamily::RelayV2 => {
-                relay_v2::is_project_document(&self.root, path, &self.documents)
-            }
             ProjectFamily::Evidence => evidence::is_safe_authored_file(&self.root, path),
             ProjectFamily::Product(product) => {
                 crate::products::is_project_document(&self.root, path, product, &self.documents)
@@ -492,13 +466,6 @@ impl RootState {
             self.reload_product_with_open_documents();
             return Ok(());
         }
-        if self.family == ProjectFamily::RelayV2 {
-            // The recursive watcher is only a notification mechanism. Its path is not authority
-            // to read that file: resolving the entry documents and their governed closure is the
-            // one path that may open Relay V2 project files.
-            self.reload_relay_v2_with_open_documents()?;
-            return Ok(());
-        }
         if self.indexing_ceiling_path.is_some() {
             self.reload_project_from_disk()?;
             return Ok(());
@@ -558,10 +525,6 @@ impl RootState {
     fn reload_from_disk(&mut self, path: &Path) {
         if matches!(self.family, ProjectFamily::Product(_)) {
             self.reload_product_with_open_documents();
-            return;
-        }
-        if self.family == ProjectFamily::RelayV2 {
-            let _ = self.reload_relay_v2_with_open_documents();
             return;
         }
         if self.indexing_ceiling_path.is_some() {
@@ -642,9 +605,6 @@ impl RootState {
             self.reload_product_with_open_documents();
             return Ok(());
         }
-        if self.family == ProjectFamily::RelayV2 {
-            return self.reload_relay_v2_with_open_documents();
-        }
         let open_text = self
             .open_versions
             .keys()
@@ -676,108 +636,13 @@ impl RootState {
         Ok(())
     }
 
-    /// Recompute Relay V2's exact governed-file closure around the revisions
-    /// held by the client, reading only newly referenced bounded files from
-    /// disk. This is what makes an unsaved `registry.yaml` or classification
-    /// review compile as one complete in-memory project.
-    fn reload_relay_v2_with_open_documents(&mut self) -> Result<()> {
-        debug_assert_eq!(self.family, ProjectFamily::RelayV2);
-        let overrides = self
-            .open_versions
-            .keys()
-            .filter_map(|path| {
-                self.documents
-                    .get(path)
-                    .or_else(|| self.absent_buffers.get(path))
-                    .map(|text| (path.clone(), text.clone()))
-            })
-            .collect::<BTreeMap<_, _>>();
-        let mut loaded =
-            match relay_v2::load_project_documents_with_overrides(&self.root, &overrides) {
-                Ok(loaded) => loaded,
-                Err(error) => {
-                    // No prior document or buffer remains authoritative when the exact closure cannot
-                    // be resolved. In particular, do not let `rebuild` move a departed governed
-                    // buffer into the absent-buffer cache, where a later reference could adopt
-                    // the stale unsaved bytes without another client notification.
-                    self.documents.clear();
-                    self.disk_diagnostics.clear();
-                    self.indexing_ceiling_path = None;
-                    self.open_versions.clear();
-                    self.open_ceiling_diagnostics.clear();
-                    self.absent_buffers.clear();
-                    self.rebuild();
-                    return Err(error);
-                }
-            };
-        let blocked = loaded.indexing_ceiling_path.is_some();
-        if blocked {
-            for path in self.open_versions.keys().filter(|path| {
-                **path == self.root.join(relay_v2::PROJECT_FILE)
-                    || **path == self.root.join(relay_v2::RUNTIME_FILE)
-            }) {
-                if let Some(source) = overrides.get(path) {
-                    loaded.documents.insert(path.clone(), source.clone());
-                }
-            }
-        }
-        for path in self
-            .open_versions
-            .keys()
-            .filter(|path| !overrides.contains_key(*path))
-        {
-            // An oversized open buffer has no retained text. Do not substitute the disk revision
-            // that the exact loader used to resolve the closure while the client owns the path.
-            loaded.documents.remove(path);
-            loaded
-                .diagnostics
-                .retain(|diagnostic| diagnostic.path != *path);
-        }
-        relay_v2::retain_project_documents(
-            &self.root,
-            &mut loaded.documents,
-            &mut loaded.diagnostics,
-        );
-        let retained = self
-            .open_versions
-            .keys()
-            .filter(|path| {
-                let entry_document = **path == self.root.join(relay_v2::PROJECT_FILE)
-                    || **path == self.root.join(relay_v2::RUNTIME_FILE);
-                entry_document
-                    || (!blocked
-                        && relay_v2::is_project_document(&self.root, path, &loaded.documents))
-            })
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        loaded
-            .documents
-            .retain(|path, _| !self.open_versions.contains_key(path) || retained.contains(path));
-        loaded.diagnostics.retain(|diagnostic| {
-            !self.open_versions.contains_key(&diagnostic.path)
-                || retained.contains(&diagnostic.path)
-        });
-        self.documents = loaded.documents;
-        self.disk_diagnostics = loaded.diagnostics;
-        self.indexing_ceiling_path = loaded.indexing_ceiling_path;
-        self.open_versions.retain(|path, _| retained.contains(path));
-        self.open_ceiling_diagnostics
-            .retain(|path, _| retained.contains(path));
-        // Relay does not retain a buffer after it leaves the resolved closure. Holding it aside for
-        // possible future adoption would make the root remember arbitrary project-local bytes.
-        self.absent_buffers.clear();
-        self.rebuild();
-        Ok(())
-    }
-
     /// Takes one document from disk, without rebuilding the index around it.
     ///
     /// A path the client has open is left to the client, whatever the file under it now says or
     /// whether it is there at all: the content of an open document is the client's until it closes
     /// it, so this root does not read one back from disk.
     fn apply_from_disk(&mut self, path: &Path) {
-        if self.family == ProjectFamily::RelayV2
-            || self.indexing_ceiling_path.is_some()
+        if self.indexing_ceiling_path.is_some()
             || !evidence::is_project_document(&self.root, path)
             || self.answers_from_a_buffer(path)
         {
@@ -1073,34 +938,6 @@ mod tests {
     /// whole question has to say for itself is `crates/registry-language-server/tests/`.
     const QUESTION: &str = "version: 1\nid: adult-status\n";
 
-    fn relay_v2_project_in(directory: &Path) {
-        fs::create_dir_all(directory).unwrap();
-        fs::write(
-            directory.join(relay_v2::PROJECT_FILE),
-            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n",
-        )
-        .unwrap();
-    }
-
-    fn copy_tree(source: &Path, destination: &Path) {
-        fs::create_dir_all(destination).unwrap();
-        for entry in fs::read_dir(source).unwrap() {
-            let entry = entry.unwrap();
-            let target = destination.join(entry.file_name());
-            if entry.file_type().unwrap().is_dir() {
-                copy_tree(&entry.path(), &target);
-            } else {
-                fs::copy(entry.path(), target).unwrap();
-            }
-        }
-    }
-
-    fn relay_v2_acceptance_project_in(directory: &Path) {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/relay-v2/acceptance/business-registry");
-        copy_tree(&source, directory);
-    }
-
     /// An authoring project as `evidencectl` leaves it: a marker over the description and the
     /// questions.
     fn evidence_project_in(directory: &Path) {
@@ -1156,6 +993,19 @@ mod tests {
     /// above is a project left undiscovered and not a project nothing can read.
 
     #[test]
+    fn a_retired_relay_marker_does_not_declare_a_supported_root() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("registry.yaml"),
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n",
+        )
+        .unwrap();
+        assert!(ProjectFamily::ALL
+            .iter()
+            .all(|family| !family.declares_root(temp.path())));
+    }
+
+    #[test]
     fn an_evidence_marker_declares_an_evidence_root() {
         let temp = TempDir::new().unwrap();
         evidence_project_in(temp.path());
@@ -1166,277 +1016,6 @@ mod tests {
             workspace.root_at(temp.path()),
             Some((temp.path().canonicalize().unwrap(), ProjectFamily::Evidence))
         );
-    }
-
-    #[test]
-    fn a_relay_v2_marker_declares_a_relay_v2_root() {
-        let temp = TempDir::new().unwrap();
-        relay_v2_project_in(temp.path());
-
-        let workspace = Workspace::default();
-
-        assert_eq!(
-            workspace.root_at(temp.path()),
-            Some((temp.path().canonicalize().unwrap(), ProjectFamily::RelayV2))
-        );
-    }
-
-    #[test]
-    fn a_relay_v2_root_does_not_retain_arbitrary_open_buffers() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project");
-        relay_v2_acceptance_project_in(&project);
-        let mut state = RootState::load(&project, ProjectFamily::RelayV2).unwrap();
-
-        for (index, name) in ["private.yaml", "source-dump.json", "rows.txt"]
-            .into_iter()
-            .enumerate()
-        {
-            let path = project.join(name);
-            fs::write(&path, "sensitive source value\n").unwrap();
-            let path = path.canonicalize().unwrap();
-
-            state.update(
-                path.clone(),
-                "unsaved sensitive value\n".to_owned(),
-                index as i32 + 1,
-            );
-
-            assert!(!state.documents.contains_key(&path), "{name} was indexed");
-            assert!(
-                !state.open_versions.contains_key(&path),
-                "{name} was retained as an open project document"
-            );
-            assert!(
-                !state.absent_buffers.contains_key(&path),
-                "{name} was retained outside the project closure"
-            );
-            assert!(
-                state
-                    .index
-                    .document_paths()
-                    .all(|candidate| candidate != path),
-                "{name} reached the project index"
-            );
-        }
-    }
-
-    #[test]
-    fn relay_v2_watches_refresh_governed_files_without_retaining_arbitrary_files() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project");
-        relay_v2_acceptance_project_in(&project);
-        let mut state = RootState::load(&project, ProjectFamily::RelayV2).unwrap();
-        let governed = project
-            .join("codelists/legal-forms.yaml")
-            .canonicalize()
-            .unwrap();
-        let governed_source = format!(
-            "{}\n# watched revision\n",
-            fs::read_to_string(&governed).unwrap()
-        );
-        fs::write(&governed, &governed_source).unwrap();
-
-        let mut watched = vec![governed.clone()];
-        for name in ["private.yaml", "source-dump.json", "rows.txt"] {
-            let path = project.join(name);
-            fs::write(&path, "sensitive source value\n").unwrap();
-            watched.push(path.canonicalize().unwrap());
-        }
-
-        state.reload_watched_batch(&watched).unwrap();
-
-        assert_eq!(state.documents.get(&governed), Some(&governed_source));
-        for path in watched.iter().skip(1) {
-            assert!(!state.documents.contains_key(path));
-            assert!(!state.open_versions.contains_key(path));
-            assert!(!state.absent_buffers.contains_key(path));
-            assert!(state
-                .index
-                .document_paths()
-                .all(|candidate| candidate != path));
-        }
-    }
-
-    #[test]
-    fn a_failed_relay_v2_watch_reload_never_admits_the_notified_arbitrary_file() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project");
-        relay_v2_acceptance_project_in(&project);
-        let mut state = RootState::load(&project, ProjectFamily::RelayV2).unwrap();
-        let arbitrary = project.join("private.yaml");
-        fs::write(&arbitrary, "sensitive source value\n").unwrap();
-        let arbitrary = arbitrary.canonicalize().unwrap();
-        fs::remove_file(project.join(relay_v2::PROJECT_FILE)).unwrap();
-
-        assert!(state
-            .reload_watched_batch(std::slice::from_ref(&arbitrary))
-            .is_err());
-
-        assert!(!state.documents.contains_key(&arbitrary));
-        assert!(state
-            .disk_diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.path != arbitrary));
-        assert!(state.index.document_paths().all(|path| path != arbitrary));
-    }
-
-    #[test]
-    fn a_relay_v2_update_fails_closed_when_the_project_marker_is_not_a_file() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project");
-        relay_v2_acceptance_project_in(&project);
-        let mut state = RootState::load(&project, ProjectFamily::RelayV2).unwrap();
-        let governed = project
-            .join("codelists/legal-forms.yaml")
-            .canonicalize()
-            .unwrap();
-        let disk_source = fs::read_to_string(&governed).unwrap();
-        let registry = project.join(relay_v2::PROJECT_FILE).canonicalize().unwrap();
-        let registry_source = fs::read(&registry).unwrap();
-        fs::remove_file(&registry).unwrap();
-        fs::create_dir(&registry).unwrap();
-
-        state.update(governed.clone(), "unsaved governed bytes\n".to_owned(), 1);
-
-        fs::remove_dir(&registry).unwrap();
-        fs::write(&registry, registry_source).unwrap();
-        assert!(state.documents.is_empty());
-        assert!(state.disk_diagnostics.is_empty());
-        assert!(state.open_versions.is_empty());
-        assert!(state.open_ceiling_diagnostics.is_empty());
-        assert!(state.absent_buffers.is_empty());
-        assert!(state.index.document_paths().next().is_none());
-
-        state
-            .reload_watched_batch(std::slice::from_ref(&registry))
-            .unwrap();
-
-        assert_eq!(state.documents.get(&governed), Some(&disk_source));
-        assert!(!state.open_versions.contains_key(&governed));
-        assert!(!state.absent_buffers.contains_key(&governed));
-    }
-
-    #[test]
-    fn a_non_file_nested_registry_yaml_cannot_preserve_a_departed_buffer() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project");
-        relay_v2_acceptance_project_in(&project);
-        let mut state = RootState::load(&project, ProjectFamily::RelayV2).unwrap();
-        let governed = project
-            .join("codelists/legal-forms.yaml")
-            .canonicalize()
-            .unwrap();
-        let disk_source = fs::read_to_string(&governed).unwrap();
-        let registry = project.join(relay_v2::PROJECT_FILE).canonicalize().unwrap();
-        let registry_source = fs::read_to_string(&registry).unwrap();
-        let departed_registry = registry_source.replacen(
-            "codelist: codelists/legal-forms.yaml",
-            "codelist: private/registry.yaml",
-            1,
-        );
-        assert_ne!(departed_registry, registry_source);
-        let nested_directory = project.join("private");
-        fs::create_dir(&nested_directory).unwrap();
-        let nested_registry = nested_directory.join(relay_v2::PROJECT_FILE);
-        fs::write(&nested_registry, "sensitive governed bytes\n").unwrap();
-        let nested_registry = nested_registry.canonicalize().unwrap();
-        let nested_registry_source = fs::read(&nested_registry).unwrap();
-        fs::remove_file(&nested_registry).unwrap();
-        fs::create_dir(&nested_registry).unwrap();
-
-        state.update(governed.clone(), "unsaved governed bytes\n".to_owned(), 1);
-        state.update(registry.clone(), departed_registry, 1);
-
-        assert!(!state.documents.contains_key(&governed));
-        assert!(!state.open_versions.contains_key(&governed));
-        assert!(!state.absent_buffers.contains_key(&governed));
-        assert!(!state.documents.contains_key(&nested_registry));
-        assert!(state
-            .index
-            .document_paths()
-            .all(|path| path != nested_registry));
-
-        fs::remove_dir(&nested_registry).unwrap();
-        fs::write(&nested_registry, nested_registry_source).unwrap();
-        state.update(registry, registry_source, 2);
-
-        assert_eq!(state.documents.get(&governed), Some(&disk_source));
-        assert!(!state.open_versions.contains_key(&governed));
-        assert!(!state.absent_buffers.contains_key(&governed));
-    }
-
-    #[test]
-    fn relay_v2_discards_an_open_buffer_when_the_contract_stops_governing_it() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project");
-        relay_v2_acceptance_project_in(&project);
-        let mut state = RootState::load(&project, ProjectFamily::RelayV2).unwrap();
-        let governed = project
-            .join("codelists/legal-forms.yaml")
-            .canonicalize()
-            .unwrap();
-        let never_opened = project
-            .join("governance/classification-review-rationale.md")
-            .canonicalize()
-            .unwrap();
-        assert!(state.documents.contains_key(&never_opened));
-        state.update(governed.clone(), "unsaved governed bytes\n".to_owned(), 1);
-        assert!(state.open_versions.contains_key(&governed));
-
-        let registry = project.join(relay_v2::PROJECT_FILE).canonicalize().unwrap();
-        state.update(registry, "not: a Relay V2 contract\n".to_owned(), 1);
-
-        assert!(!state.documents.contains_key(&governed));
-        assert!(!state.documents.contains_key(&never_opened));
-        assert!(!state.open_versions.contains_key(&governed));
-        assert!(!state.absent_buffers.contains_key(&governed));
-        assert!(state.index.document_paths().all(|path| path != governed));
-    }
-
-    #[test]
-    fn relay_v2_discards_governed_buffers_when_the_open_registry_is_oversized() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("project");
-        relay_v2_acceptance_project_in(&project);
-        let mut state = RootState::load(&project, ProjectFamily::RelayV2).unwrap();
-        let governed = project
-            .join("codelists/legal-forms.yaml")
-            .canonicalize()
-            .unwrap();
-        let never_opened = project
-            .join("governance/classification-review-rationale.md")
-            .canonicalize()
-            .unwrap();
-        assert!(state.documents.contains_key(&never_opened));
-        state.update(governed.clone(), "unsaved governed bytes\n".to_owned(), 1);
-        assert!(state.open_versions.contains_key(&governed));
-
-        let registry = project.join(relay_v2::PROJECT_FILE).canonicalize().unwrap();
-        state.update(registry, "x".repeat(MAX_DOCUMENT_BYTES as usize + 1), 1);
-
-        assert!(!state.documents.contains_key(&governed));
-        assert!(!state.documents.contains_key(&never_opened));
-        assert!(!state.open_versions.contains_key(&governed));
-        assert!(!state.absent_buffers.contains_key(&governed));
-        assert!(state.index.document_paths().all(|path| path != governed));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_symlinked_relay_v2_marker_does_not_declare_a_root() {
-        let temp = TempDir::new().unwrap();
-        let real = temp.path().join("real");
-        let decoy = temp.path().join("decoy");
-        relay_v2_project_in(&real);
-        fs::create_dir_all(&decoy).unwrap();
-        std::os::unix::fs::symlink(
-            real.join(relay_v2::PROJECT_FILE),
-            decoy.join(relay_v2::PROJECT_FILE),
-        )
-        .unwrap();
-
-        assert_eq!(Workspace::default().root_at(&decoy), None);
     }
 
     #[test]
