@@ -71,11 +71,8 @@ GeoJSON branch remains the named BReg shape in the media map.
 Projects now declare `registry.canonicalBaseIri`, publisher `id`, one
 `publicService`, plural `datasets`, plural `dataServices` with nonempty
 `servesDatasets`, optional `distributions`, and one `primaryDataset` on every
-entity. Run `bregctl project migrate PROJECT` to review the exact
-rewrite, then repeat it with `--write` only after approving the proposed
-`<registry-id>-authority` and `<registry-id>-service` identifiers. The migration
-preserves an explicit legacy dataset id and otherwise preserves the old
-effective fallback to `registry.id`.
+entity. Declare `datasets[]` and `dataServices[]` by hand, each with an `id`,
+and point every entity's `primaryDataset` at one of them.
 
 # Breaking authoring change: entity hooks
 
