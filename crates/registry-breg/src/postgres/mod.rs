@@ -63,7 +63,7 @@ pub(crate) use interlock::{
     ActivationStatusRead, DedicatedApplyConnection as VerifiedPackageApplyConnection,
     FieldEncryptionCoveredField, MaintenanceSnapshot, MaintenanceTransition, PackageDdlStatement,
     ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
-    ReviewedPackageExecutionRequest, TransactionEnd,
+    ReviewedPackageExecutionRequest,
 };
 pub(crate) use migration_ledger::{
     statement_checksum, BackupReference, MigrationArtifactBinding, MigrationKind,
@@ -228,8 +228,8 @@ pub enum PostgresKernelError {
     #[error("Registry is unavailable for record operations")]
     RegistryUnavailable,
     /// Another session held the registry's exclusive migration lock until
-    /// this session's wait for it timed out: an apply, an adoption, or a
-    /// reconciliation is in progress.
+    /// this session's wait for it timed out: an apply or a reconciliation is
+    /// in progress.
     #[error("another session holds the registry migration lock")]
     MigrationLockHeld,
     /// Retained history coverage does not admit a successor package.
@@ -239,10 +239,6 @@ pub enum PostgresKernelError {
     /// caller has not acknowledged discarding.
     #[error("a retired audit table still carries unacknowledged rows")]
     RetiredAuditRowsPresent,
-    /// The live managed catalog of an adopted database is not the catalog
-    /// the adopting package declares. Only the live fingerprint is retained.
-    #[error("the live managed schema fingerprint differs from the adopting package")]
-    AdoptionFingerprintMismatch { live: String },
     /// PostgreSQL refused a migration statement. Only the SQLSTATE and the
     /// object names the server reported are retained.
     #[error("PostgreSQL refused a migration statement: {0}")]

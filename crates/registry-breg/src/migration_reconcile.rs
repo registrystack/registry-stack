@@ -215,7 +215,6 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
-            | PostgresKernelError::AdoptionFingerprintMismatch { .. }
             | PostgresKernelError::RegistryUnavailable
             | PostgresKernelError::HistoryCoverageIncomplete
             | PostgresKernelError::RetiredAuditRowsPresent => Self::Unavailable,
@@ -226,10 +225,7 @@ impl From<PostgresKernelError> for ReconcileError {
 impl From<MigrationError> for ReconcileError {
     fn from(error: MigrationError) -> Self {
         match error {
-            MigrationError::PackageBinding
-            | MigrationError::EmptyPlan
-            | MigrationError::AdoptionNotReady
-            | MigrationError::AdoptionFingerprintMismatch { .. } => Self::PackageBinding,
+            MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
             MigrationError::MigrationLockHeld => Self::NotExecutable(ReconcileOutcome::InProgress),
             MigrationError::ApplyFailed
             | MigrationError::StatementFailed(_)
@@ -247,7 +243,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::RetiredAuditRowsPresent
             | MigrationError::ActivationAuditIncomplete
             | MigrationError::ActivationAuditUnavailable
-            | MigrationError::PreLedgerDatabase => Self::Unavailable,
+            | MigrationError::UnrecognizedDatabase => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,
             MigrationError::RuntimeWriteAuthority(_)
             | MigrationError::ResumeRolesDiffer { .. }

@@ -702,8 +702,8 @@ pub async fn erase_field_encryption_history(
 /// Clear whole request snapshots when their frozen originating package
 /// predates a recorded erase-and-rebaseline flip and they mention its field.
 /// Package order comes from the migration ledger, and for the revisions a
-/// pre-ledger database named, from the order adoption kept; it never comes
-/// from request revision timing: a draft can predate the flip while its frozen
+/// pre-ledger database named, from the order an earlier release's adoption
+/// kept; it never comes from request revision timing: a draft can predate the flip while its frozen
 /// proposal and target snapshots are created afterward. This also reaches canceled and rejected creates
 /// whose target never produced a retained record revision.
 async fn scrub_plaintext_request_snapshots(

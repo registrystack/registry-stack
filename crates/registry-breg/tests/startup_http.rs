@@ -508,7 +508,7 @@ fn startup_errors() -> [StartupError; 27] {
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
         StartupError::DatabaseUninitialized,
-        StartupError::PreLedgerDatabase,
+        StartupError::UnrecognizedDatabase,
         StartupError::InstanceClaimMismatch,
         StartupError::RuntimeWriteAuthority,
         StartupError::RuntimeGrantsMissing,
@@ -713,8 +713,8 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::DatabaseUninitialized => {
             "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
         }
-        StartupError::PreLedgerDatabase => {
-            "the Registry database predates the activation ledger; run `bregctl apply --package DIR` once to adopt this database into the ledger"
+        StartupError::UnrecognizedDatabase => {
+            "the Registry database holds registry state this release does not recognise; a release reads only the state its predecessor wrote, so upgrade the database one release at a time"
         }
         StartupError::DatabaseIdentityMismatch => {
             "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"

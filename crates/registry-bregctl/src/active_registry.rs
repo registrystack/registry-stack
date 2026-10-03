@@ -20,14 +20,12 @@ pub(crate) enum ActiveRegistryError {
     /// The database could not be read.
     Unavailable,
     /// Another session held the exclusive migration lock past the lock
-    /// timeout: an apply, an adoption, or a migration reconcile is in
-    /// progress.
+    /// timeout: an apply or a migration reconcile is in progress.
     InProgress,
     /// The database records no activated registry for this package id.
     Uninitialized,
-    /// The database was installed by a release before the activation ledger
-    /// and has not been adopted into it.
-    PreLedger,
+    /// The database holds registry state this release does not recognise.
+    Unrecognized,
     /// The database records a different database id than the runtime
     /// configuration names.
     DatabaseMismatch,
@@ -108,7 +106,7 @@ pub(crate) fn observed_active_identity(
 
 fn read_refusal(error: MigrationError) -> ActiveRegistryError {
     match error {
-        MigrationError::PreLedgerDatabase => ActiveRegistryError::PreLedger,
+        MigrationError::UnrecognizedDatabase => ActiveRegistryError::Unrecognized,
         MigrationError::MigrationLockHeld => ActiveRegistryError::InProgress,
         _ => ActiveRegistryError::Unavailable,
     }
@@ -151,8 +149,8 @@ mod tests {
             ActiveRegistryError::Unavailable
         );
         assert_eq!(
-            read_refusal(MigrationError::PreLedgerDatabase),
-            ActiveRegistryError::PreLedger
+            read_refusal(MigrationError::UnrecognizedDatabase),
+            ActiveRegistryError::Unrecognized
         );
     }
 }

@@ -30,13 +30,11 @@ impl MigrationKind {
 }
 
 /// How one activation relates to the package the database ran before it: the
-/// first package of an empty database, the successor of the active package,
-/// or a database recorded before this ledger existed, adopted as it stands.
+/// first package of an empty database, or the successor of the active package.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivationPlanKind {
     Initial,
     Successor,
-    Adopted,
 }
 
 impl ActivationPlanKind {
@@ -45,7 +43,6 @@ impl ActivationPlanKind {
         match self {
             Self::Initial => "initial",
             Self::Successor => "successor",
-            Self::Adopted => "adopted",
         }
     }
 }
@@ -192,15 +189,10 @@ impl MigrationLedgerEntry {
             return invalid_identity();
         }
         match self.plan_kind {
-            ActivationPlanKind::Initial | ActivationPlanKind::Adopted
-                if self.predecessor_package_digest.is_some() =>
-            {
+            ActivationPlanKind::Initial if self.predecessor_package_digest.is_some() => {
                 return invalid_identity();
             }
             ActivationPlanKind::Successor if self.predecessor_package_digest.is_none() => {
-                return invalid_identity();
-            }
-            ActivationPlanKind::Adopted if self.migration_kind != MigrationKind::MetadataOnly => {
                 return invalid_identity();
             }
             _ => {}
@@ -444,11 +436,12 @@ pub(crate) async fn install_migration_ledger(
 }
 
 /// Installs the order of the package revisions a pre-ledger database's
-/// ledger named. Field-encryption flips and request proposals recorded before
-/// adoption name those revisions, and erasure orders them against each other
-/// here; every position precedes the first activation, so a revision the
-/// ledger records always follows them. The table stays empty on a database
-/// the ledger recorded from its first activation.
+/// ledger named, as an earlier release's adoption of it recorded them.
+/// Field-encryption flips and request proposals recorded before adoption name
+/// those revisions, and erasure orders them against each other here; every
+/// position precedes the first activation, so a revision the ledger records
+/// always follows them. The table is empty on a database the ledger recorded
+/// from its first activation.
 async fn install_pre_ledger_package_positions(migration: &impl GenericClient) -> Result<()> {
     migration
         .batch_execute(
@@ -462,47 +455,6 @@ async fn install_pre_ledger_package_positions(migration: &impl GenericClient) ->
              );
              REVOKE ALL ON TABLE registry_internal.registry_pre_ledger_package_positions
                  FROM PUBLIC;",
-        )
-        .await?;
-    Ok(())
-}
-
-/// Keeps the order a pre-ledger ledger gave its package revisions, before
-/// adoption drops that ledger. A revision is ordered as the ledger ordered
-/// it: a target at its sequence, and a source the ledger never targeted just
-/// before the first target it preceded. The positions are shifted so the
-/// last of them is 0 and the adoption, at apply order 1, follows them all.
-pub(crate) async fn carry_pre_ledger_package_positions(
-    migration: &impl GenericClient,
-) -> Result<()> {
-    install_pre_ledger_package_positions(migration).await?;
-    migration
-        .execute(
-            "WITH target_positions AS (
-                 SELECT target_package_revision AS package_revision, package_sequence
-                   FROM registry_internal.registry_migrations
-             ),
-             source_positions AS (
-                 SELECT source.source_package_revision AS package_revision,
-                        min(source.package_sequence - 1)::bigint AS package_sequence
-                   FROM registry_internal.registry_migrations AS source
-                  WHERE source.source_package_revision IS NOT NULL
-                    AND NOT EXISTS (
-                        SELECT 1 FROM target_positions AS target
-                         WHERE target.package_revision = source.source_package_revision
-                    )
-                  GROUP BY source.source_package_revision
-             ),
-             positions AS (
-                 SELECT package_revision, package_sequence FROM target_positions
-                 UNION ALL
-                 SELECT package_revision, package_sequence FROM source_positions
-             )
-             INSERT INTO registry_internal.registry_pre_ledger_package_positions
-                 (package_revision, package_sequence)
-             SELECT package_revision, package_sequence - max(package_sequence) OVER ()
-               FROM positions",
-            &[],
         )
         .await?;
     Ok(())
@@ -1120,13 +1072,6 @@ mod tests {
         );
         initial.predecessor_package_digest = None;
         initial.validate().expect("an initial activation validates");
-
-        let mut adopted = initial.clone();
-        adopted.plan_kind = ActivationPlanKind::Adopted;
-        adopted.validate().expect("an adoption records no DDL");
-        adopted.migration_kind = MigrationKind::CompiledAdditive;
-        adopted.statement_checksums = vec![statement_checksum("CREATE TABLE")];
-        assert!(adopted.validate().is_err(), "an adoption never runs DDL");
 
         let mut reapplied = metadata;
         reapplied.predecessor_package_digest = Some(reapplied.package_digest.clone());

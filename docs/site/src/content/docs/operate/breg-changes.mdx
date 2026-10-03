@@ -479,10 +479,9 @@ logging that the database is not the instance its claim names, and `GET /ready` 
 accepts writes, admits imports under the authorities the backup held open, and delivers the same
 outbox work from the backup onward, and nothing can merge the two histories afterwards.
 
-Every activation, including the first apply and the apply that adopts a database into the
-activation ledger, records the claim of the database it runs in when the database records none,
-so a registry upgraded from a release without the claim is claimed by its next `apply` and needs
-no adopt. An activation never replaces a claim that is already recorded: a restored copy keeps
+Every activation, including the first apply, records the claim of the database it runs in when
+the database records none, so a registry upgraded from a release without the claim is claimed by
+its next `apply` and needs no adopt. An activation never replaces a claim that is already recorded: a restored copy keeps
 the claim of its original until you adopt it.
 
 The claim is checked when `breg` starts and on every `GET /ready`, not on each request. A process
@@ -541,7 +540,7 @@ keeps the system identifier and needs none.
 
 {/* Evidence: crates/registry-breg/src/instance_claim.rs, record_if_unclaimed(), check(), live_identity(),
     adopt_in();
-    crates/registry-breg/src/postgres/interlock.rs, adopt_pre_ledger_database() and activate_verified_package();
+    crates/registry-breg/src/postgres/interlock.rs, activate_verified_package();
     crates/registry-breg/tests/postgres_migration.rs,
     real_postgres_an_activation_records_the_claim_a_database_has_never_recorded and
     real_postgres_an_activation_keeps_a_claim_that_names_another_database;
