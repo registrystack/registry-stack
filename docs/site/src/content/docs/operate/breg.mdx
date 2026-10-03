@@ -1224,7 +1224,9 @@ reflect any of them. Watch them through two gauges and the operational records t
 on standard output.
 
 `breg_worker_last_success_age_seconds` gives the seconds since each worker last finished an
-iteration without failure, whether or not that iteration found work. `worker` is `webhook`,
+iteration without failure, whether or not that iteration found work. The attachment verification
+worker counts a failed content read or verifier request as a failure, and it does not count an
+idle iteration as a success while a job that failed waits for its retry. `worker` is `webhook`,
 `attachment_verification`, `review`, or `subject_access_log_retention`, and a worker has no sample
 until its first such iteration. The webhook, attachment verification, and review workers wait at
 most a second between iterations, and the retention worker runs once a minute, so an age far
@@ -1280,6 +1282,7 @@ worker to investigate; raising the restart budget only repeats the outage.
     crates/registry-breg/src/main.rs;
     crates/registry-breg/src/review_store.rs, ReviewWorker;
     crates/registry-breg/src/attachment_verification_worker.rs;
+    crates/registry-breg/src/attachment_store.rs, verification_retry_waiting();
     crates/registry-breg/src/subject_access_log.rs, run_retention();
     crates/registry-platform-hooks/src/delivery/service.rs, WORKER_POLL_INTERVAL;
     crates/registry-breg/tests/startup_http.rs;

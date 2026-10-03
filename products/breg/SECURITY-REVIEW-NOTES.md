@@ -1089,9 +1089,11 @@ scrape exhaust the runtime pool or hold locks the workers need.
   identifier.
 - `breg_worker_last_success_age_seconds` carries only a closed `worker`
   label and an age; it is absent until the worker first succeeds. The
-  attachment verification worker notes a success only for a pass that found
-  no due job or reached a verdict, never for one whose content read or
-  verifier request failed and left its job pending for a retry.
+  attachment verification worker notes a success only for a pass that
+  reached a verdict, or that found no due job while no job an earlier
+  attempt failed waits for its retry. A pass whose content read or verifier
+  request failed and left its job pending for a retry is never a success,
+  and neither is an idle pass during that retry wait.
 - `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
   label (`webhook_delivery`, `review_submission`, `review_application`) and
   an age. Each scrape takes one runtime pool connection, serialized across

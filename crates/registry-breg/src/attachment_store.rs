@@ -974,6 +974,31 @@ pub(crate) async fn claim_verification(
     }))
 }
 
+/// Whether a job that an earlier attempt failed still waits for its retry
+/// under `policy`. A job another worker holds a live lease on is not waiting.
+pub(crate) async fn verification_retry_waiting(
+    transaction: &Transaction<'_>,
+    policy: &str,
+) -> Result<bool, MutationError> {
+    if policy == "disabled" || persisted_verification_policy(transaction).await? != policy {
+        return Ok(false);
+    }
+    let row = transaction
+        .query_one(
+            "SELECT EXISTS (SELECT 1
+         FROM registry_internal.registry_attachment_verification v
+         JOIN registry_internal.registry_attachment_blobs b ON b.sha256=v.sha256
+         WHERE v.policy_digest=$1 AND v.verdict='pending' AND b.state='live' AND v.attempts>0
+           AND (v.lease_expires_at IS NULL OR v.lease_expires_at<=transaction_timestamp())
+           AND EXISTS (SELECT 1 FROM registry_internal.registry_request_attachments a
+               WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL))",
+            &[&policy],
+        )
+        .await
+        .map_err(unavailable)?;
+    Ok(row.get(0))
+}
+
 /// A missing or retired lease refuses byte loading. External storage returns
 /// None only for a still-live lease whose bytes reside in the pinned backend.
 pub(crate) async fn load_verification_content(
