@@ -1,8 +1,12 @@
 # Security Policy
 
+This document retains the standalone Registry Platform tag policy. Maintained
+Registry Stack runtimes consume the platform crates in the same workspace and
+follow the [Registry Stack security policy](../../SECURITY.md).
+
 ## Supported Versions
 
-`registry-platform` is pre-1.0 and consumed by Registry Relay and Registry Notary through pinned git tags. Security fixes are released on the newest tag line only unless Jeremi explicitly opens a backport lane for a consumer migration.
+The standalone `registry-platform` release line is pre-1.0. Security fixes are released on the newest tag line only unless Jeremi explicitly opens a backport lane for a consumer migration.
 
 | Version | Supported |
 | --- | --- |
@@ -17,7 +21,7 @@ Please include:
 
 - The affected crate, function, middleware, script, or workflow.
 - Reproduction steps, test case, or exploit sketch.
-- Impacted consumers, if known: Registry Relay, Registry Notary, or both.
+- Impacted runtime products or tooling, if known.
 - Whether secrets, key material, audit integrity, outbound fetching, auth, OIDC, SD-JWT issuance, or config migration are involved.
 
 Do not include live credentials, bearer tokens, private keys, customer data, or full environment dumps.

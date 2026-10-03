@@ -24,21 +24,134 @@ Registry Stack is pre-1.0 Beta software for self-hosted institutional pilots.
 - Generated checks establish contract consistency. They do not certify legal compliance,
   accessibility, source correctness, or institutional authority.
 
-## Base Registry Engine
+## Platform support
 
-Base Registry Engine (BReg) has these current operational limits:
+This is the release artifact matrix for the current source roster, which first applies to version
+0.39.0. Version 0.38.0 is the last numbered release whose immutable archive contains Relay; its
+archived documentation and release manifest preserve that release's original platform roster.
 
-- BReg requires PostgreSQL and owns the records it stores.
-- Model changes, data migration, backup, restoration, and retention require explicit operator plans.
-- Authorization depends on correct identity-provider claims and reviewed access profiles.
+| Artifact | Linux amd64 | Linux arm64 | macOS Apple Silicon |
+| --- | --- | --- | --- |
+| `evidence`, `evidencectl`, and `evidence-oid4vci` | Published | Published | Published |
+| `breg` and `bregctl` | Published | Published | Published |
+| `breg-mcp` and `breg-review` | Published | Published | Published |
+| `casework` and `caseworkctl` | Published | Published | Published |
+| `schedulingctl` | Published | Published | Published |
+| `registry-manifest` | Published | None | None |
+| `discovery` and `discoveryctl` | Published | None | None |
+| `scheduling` | Published | None | None |
+| `messaging` and `messagingctl` | Published | None | None |
+| `registry-render` | Published | None | None |
+| Container images | Published | None | None |
+| Client packages (`@registrystack/client`, `registry-stack-client`) | Published | Published | Published |
 
-## Evidence Gateway
+The container row covers the retained service images: Evidence Gateway, its OID4VCI adapter,
+Discovery, Base Registry Engine, `breg-mcp`, `breg-review`, Casework, Scheduling, Messaging, and
+Registry Render.
 
-- Evidence Gateway answers predefined requirements. It is not a general query or policy engine.
-- A signed assertion proves what the configured service asserted, not that the authoritative source
-  was correct.
-- OID4VCI support has its own bounded profile and does not provide a general wallet.
-- Source and assertion keys require operator-managed rotation and recovery.
+- The release publishes no Windows, Intel macOS, or musl Linux artifact. Installers refuse
+  unsupported operating systems and architectures before downloading.
+- Standalone Linux binaries, including CLI tools, link the GNU C library dynamically and require
+  glibc 2.35 or newer. Installers reject detected musl hosts, including Alpine, and glibc versions
+  below 2.35. Python client wheels are `manylinux_2_17`; no `musllinux` wheel is published.
+- Each container image is `linux/amd64`; no multi-architecture image index is published. An arm64
+  container host therefore needs amd64 emulation.
+- Published macOS executables use arm64 bundles that include the executable, its shared
+  AWS-LC-FIPS libraries, and notices. The release publishes no Homebrew formula, `cargo binstall`
+  target, apt, apk, yum, Nix, winget, or Scoop package.
+
+{/* Evidence: release/scripts/release_candidate.py, _release_payload_inventory and _candidate_image_names;
+    release/scripts/release_roster.py; release/glibc-floor.env;
+    crates/registry-breg/install.sh; crates/registry-casework/install.sh;
+    crates/registry-evidencectl/install.sh; release/scripts/macos_fips_packaging.py;
+    crates/registry-stack-client-node/npm/linux-arm64-gnu/package.json. */}
+
+## Base Registry Engine limits
+
+Base Registry Engine serves one governed registry from a PostgreSQL database it owns, under a
+package an operator activates deliberately. Its current limits are:
+
+- PostgreSQL only: the store requires `btree_gist`, plus PostGIS where the registry declares
+  spatial fields. There is no SQLite, other SQL engine, file, or HTTP source adapter.
+- Audit is outside PostgreSQL: each process writes its own file or `stdout` stream. A crash after a
+  mutation commits can leave a request entry without its response. Revision history still records
+  the change; external append-only storage supplies audit tamper evidence and completeness.
+- Every production model or access change is a package applied deliberately. No runtime API edits
+  access rules, record shapes, or webhook destinations, and nothing hot reloads.
+- No backup or restore command ships. Recovery from an activation that `migration reconcile`
+  cannot resolve depends on the operator's PostgreSQL backups. A destructive migration must name a
+  backup artifact that tooling validates but does not create.
+- `history erase` has no dry run or undo and refuses more than 10,000 revisions in one transaction.
+  `history rebaseline` verifies every live row in one transaction and holds writes to every entity
+  table until it commits.
+- The runtime enforces timeouts and connection-pool bounds but has no request-rate limit. Put a
+  registry that admits anonymous reads behind an upstream limiter.
+- The load-test harness tests a profile on the operator's hardware. No supported throughput or
+  latency figure is committed.
+- A release provides binaries and a container image, not a Helm chart, Compose deployment,
+  operator, or hosted offering. Quickstart Docker usage is a loopback development path.
+
+Encrypted restricted fields add these limits:
+
+- Change-request flows cannot target an encrypted field.
+- One key version is active at a time; envelope-key rotation is not implemented.
+- A flip-on migration requires `history: erase-and-rebaseline` or
+  `history: retain-plaintext-history`. Retaining plaintext history does not meet the database-read
+  guarantee. Erasing and rebaselining can remove history beyond the encrypted field.
+- Backups made before the flip remain plaintext. No tooling retires or encrypts them.
+- Blind indexes deliberately leak equality, presence, and cardinality to a database reader while
+  keeping the indexed value sealed.
+
+{/* Evidence: crates/registry-breg/src/postgres/roles.rs, verify_postgis;
+    crates/registry-breg/src/postgres/catalog.rs, verify_btree_gist;
+    crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
+    crates/registry-breg/src/history_migration.rs, MAX_HISTORY_MIGRATION_COMMIT_MEMBERS;
+    crates/registry-breg/src/runtime_config.rs, OperationalTimeouts;
+    crates/registry-breg/src/change_request.rs, change_request.effect.field_encrypted;
+    crates/registry-breg/src/migration_plan.rs, ReviewedFieldEncryptionHistory;
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::blind_index. */}
+
+## Evidence Gateway limits
+
+Evidence Gateway answers predefined requirements. It is not a general query or policy engine, and
+a signed assertion proves what the configured service asserted rather than the source's correctness.
+
+- A released assertion has no revocation, status-list, or presentation-time callback. It remains
+  verifiable until `validUntil`; rotating a signing key does not invalidate an assertion while its
+  public key remains available. The bounded OID4VCI adapter does not add assertion revocation or a
+  general wallet lifecycle.
+- The request nonce is uninterpreted correlation data echoed into the payload. Evidence Gateway
+  never stores it or checks uniqueness, so it becomes a freshness check only when a verifier
+  independently retains the value it sent.
+- Unsigned output is transport-authenticated convenience, not later-verifiable evidence. Both the
+  immutable bundle and the matched grant must permit it.
+- `disclosureGuard` families are operator attestations, not semantic classification. The runtime
+  cannot detect two differently named families that disclose equivalent information.
+- There is no cumulative disclosure budget. Rate controls are uniform per principal, in-memory,
+  and per process; replicas multiply them and restart resets them. Per-client quotas belong at the
+  gateway.
+- One process serves one trust domain with one token issuer and one set of claim names. Mutually
+  distrustful issuers or clients whose authority uses different claim names need separate
+  deployments, bundles, signers, and audit boundaries.
+- Access tokens are bearer tokens. A token carrying a proof-of-possession confirmation claim is
+  denied because Evidence Gateway validates no sender proof.
+- There is no runtime upload, editor, approval API, hot reload, merge, mutation, governed-field
+  override, or fallback. Every change is a reviewed revision and restart.
+- Startup does not detect overlapping authority paths. Zero paths and multiple paths both deny at
+  request time, so overlap appears as a refusal rather than a deployment-time error.
+- Readiness resolves credentials, trust bindings, the signer, and the audit sink. It sends no
+  evidence-data request and does not prove that a source returns data.
+- Fixed HTTP sources accept bounded JSON media types. A local adapter can validate another source
+  protocol and expose bounded JSON, but Evidence Gateway itself does not implement that protocol's
+  search, pagination, subscription, or conformance behavior.
+- Production signing supports Vault or OpenBao Transit through a workload-local Unix-socket proxy.
+  Local assurance supports a file-backed private JWK. There is no PKCS#11 or cloud-KMS plugin layer.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml;
+    products/evidence/contracts/source-contract.yaml;
+    products/evidence/contracts/runtime.schema.yaml;
+    crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/source.rs;
+    crates/registry-evidence/src/runtime.rs, Runtime::ready. */}
 
 ## Registry Manifest and Discovery
 

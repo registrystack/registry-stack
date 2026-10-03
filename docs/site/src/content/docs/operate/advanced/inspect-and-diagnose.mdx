@@ -22,6 +22,27 @@ bounded and value-free.
 - Use a synthetic subject or non-production registry record.
 - Keep tokens, credentials, source responses, and private keys out of tickets and logs.
 
+## Inspect the runtime surfaces
+
+| Surface | Use | Boundary |
+| --- | --- | --- |
+| `GET /health` | Process liveness | Does not check dependencies or data freshness; Evidence Gateway stays healthy when a source credential is unavailable |
+| `GET /ready` | Traffic admission | Evidence checks signing, audit, subject binding, and source credentials; it does not request evidence data |
+| Product audit records | Security and request evidence | Local entries are not chained or signed; use copies shipped to append-only storage and join request phases by `correlation` |
+| `GET /openapi.json` | Released API shape | Evidence serves the release artifact; it does not describe deployment-specific grants or source behavior |
+| Evidence `GET /metrics` | Bounded operational counts and latency | Exists only on a configured separate listener and uses closed labels without request content |
+
+Query health and readiness through the same network path used for traffic admission:
+
+```sh
+curl -fsS https://<evidence-host>/health
+curl -fsS https://<evidence-host>/ready
+```
+
+Evidence Gateway's closed problem-code catalog is the
+[Evidence problems reference](../../../reference/evidence-problems/). It needs no separate CLI
+catalog because the codes are fixed by the public contract.
+
 ## Diagnose the failure class
 
 1. Confirm the process loaded the expected configuration and package.
@@ -31,6 +52,45 @@ bounded and value-free.
 4. Use the trace identifier to locate the value-free audit or operational record.
 5. Reproduce the request with the smallest supported client call.
 6. Test the external dependency separately using its operator-owned diagnostic path.
+
+### Source access and authorization
+
+Evidence collapses an unreachable source, timeout, wrong credential, wrong media type, oversized
+response, malformed JSON, and source error envelope into the single `source.unavailable` public
+problem. Confirm the fixed destination, trust profile, credential, timeout, and response limit from
+trusted local configuration. Do not widen a source binding to clear the failure.
+
+Authorization denials similarly disclose no internal decision. `evidence.denied` does not say
+whether audience, grant, authority, purpose, subject role, or response-format permission failed.
+Use the value-free refusal phase in audit and inspect those inputs locally.
+
+An ambiguous source result is one of the conditions collapsed into the value-free
+`evidence.unavailable` response. Reproduce it with synthetic fixtures instead of manually selecting
+a production record.
+
+### Offline fixture reproduction
+
+Ask an offline fixture run to explain which stages it reached:
+
+```sh
+evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
+  --fixture "fixtures/<cases>.yaml" --explain
+evidencectl test "<editable-project>" \
+  --target "<deployment-target>" --explain
+```
+
+The trace names `prepare`, `acquire`, `extract`, `derive`, `validate`, `construct`, `sign`, and
+`expect` stages and, for multi-call acquisition, each call role. `--explain-format json` emits the
+same trace as one document.
+
+Explanation output contains shapes only: member names, counts, and identifiers, never selector,
+source, fact, derived, or response values. Each fixture declares values that must never appear, and
+the run refuses to print a trace containing one. This facility is offline only; diagnose served
+requests from their public problem and audit phases.
+
+{/* Evidence: crates/registry-evidence/src/runtime.rs, source_failure_problem;
+    crates/registry-evidence/src/trace.rs;
+    products/evidence/OPERATOR-CONTRACT.md, Source and selector controls. */}
 
 ## Common boundaries
 
@@ -48,9 +108,14 @@ protected response to make diagnosis easier.
 
 ## Expected evidence
 
-Keep the exact version and revision, bounded check output, relevant problem code, trace identifier,
-value-free audit record, dependency status, and the recovery action. Redact credentials and source
-values before sharing the evidence.
+Keep the exact version and revision, timestamped health and readiness status, bounded check output,
+stable problem code, Evidence `traceId` or W3C `traceparent`, shipped value-free audit phases,
+synthetic canary outcome, dependency status, recovery action, and traffic-admission decision. The
+public trace identifier is not the internal audit operation identifier. Do not retain the assertion,
+access token, credential, or source values.
+
+These surfaces prove only the checks they run. They do not prove off-host audit completeness, legal
+approval, source-domain correctness, backup freshness, or an untested client journey.
 
 ## Recover
 

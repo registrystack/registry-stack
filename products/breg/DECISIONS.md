@@ -58,9 +58,11 @@
   module's lock computed as the project is written. Module locks are refreshed
   explicitly with `project lock`; lock digests still bind every module source
   and declared SQL asset before a production package is compiled.
-- Evidence and Relay integrations use their published protocol surfaces and
-  platform primitives. Base Registry Engine does not depend on their product crates
-  or duplicate their policy, disclosure, credential, or publication engines.
+- Evidence integrations use the published HTTP contract or the client and
+  verifier libraries with platform primitives. Base Registry Engine does not
+  depend on the Evidence runtime crate or duplicate its policy, disclosure, or
+  credential behavior. Relay is retired; its former decoupled publication
+  boundary does not imply a maintained Relay integration.
 - Base Registry Engine accepts one PostgreSQL client path: `tokio-postgres` 0.7.18,
   `deadpool-postgres` 0.14.2, and `tokio-postgres-rustls` 0.14.0. The real
   PostgreSQL kernel proves dynamic result handling, transactions, cancellation,

@@ -44,7 +44,7 @@ CPU-heavy crypto and evaluation work should run on bounded worker paths, usually
 
 ## 9. Audit Security Events and Ship Them Off-Host
 
-`registry-platform-audit` provides the audit primitive: `AuditWriter`, which writes one `AuditEntry` per line to a durable, rotated file or to standard output, and the keyed hashing and redaction helpers (`AuditProfile`, `AuditKeyHasher`, `redact`). Consumer applications (Registry Relay, Registry Notary, and other services) are responsible for routing their security-relevant events through it, including auth failures, admin reloads, OIDC verifier changes, policy bypasses, SD-JWT issuance, holder-proof validation failures, config reload outcomes, and outbound fetch denials.
+`registry-platform-audit` provides the audit primitive: `AuditWriter`, which writes one `AuditEntry` per line to a durable, rotated file or to standard output, and the keyed hashing and redaction helpers (`AuditProfile`, `AuditKeyHasher`, `redact`). Maintained runtime consumers are responsible for routing their security-relevant events through it, including authorization refusals, protected source access, disclosure release, governed mutations, credential delivery, configuration failures, and outbound fetch denials. Each product owns its event vocabulary and the phases at which durable audit gates a protected effect.
 
 Platform crates outside `audit` deliberately do not take a hard dependency on `audit`. They surface security-relevant outcomes as `Result` types and structured errors so consumers can choose how to emit them. A consumer audit confirms wiring; absence of wiring inside a platform primitive is not a platform defect.
 
