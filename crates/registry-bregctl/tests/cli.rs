@@ -5344,44 +5344,29 @@ fn migration_explain_is_runtime_bound_deterministic_and_listener_free() {
 }
 
 #[test]
-fn retired_package_flags_are_usage_errors_that_name_their_replacement() {
-    for (command, flag, value, replacement) in [
-        ("package", "--database-id", "db-1", "identity.databaseId"),
-        ("test", "--database-id", "db-1", "identity.databaseId"),
-        (
-            "package",
-            "--baseline-runtime-config",
-            "/runtime.yaml",
-            "--baseline-package",
-        ),
-        (
-            "test",
-            "--baseline-runtime-config",
-            "/runtime.yaml",
-            "--baseline-package",
-        ),
-        ("package", "--signature-threshold", "1", "bregctl apply"),
-        ("package", "--signature-key-id", "key-1", "bregctl apply"),
-        (
-            "package",
-            "--signatures",
-            "/signatures.json",
-            "bregctl package",
-        ),
+fn retired_package_flags_are_refused_as_unknown_arguments() {
+    for (command, flag, value) in [
+        ("package", "--database-id", "db-1"),
+        ("test", "--database-id", "db-1"),
+        ("package", "--baseline-runtime-config", "/runtime.yaml"),
+        ("test", "--baseline-runtime-config", "/runtime.yaml"),
+        ("package", "--signature-threshold", "1"),
+        ("package", "--signature-key-id", "key-1"),
+        ("package", "--signatures", "/signatures.json"),
     ] {
-        let output = bregctl(&[command, PACKAGE_VALUE_CANARY, flag, value]);
-        assert_eq!(output.status.code(), Some(2), "{flag}: {output:?}");
-        let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
-        assert!(stderr.contains(&format!("`{flag}` is removed")), "{stderr}");
-        assert!(stderr.contains(replacement), "{flag}: {stderr}");
-
-        // A retired flag passed without its value reads the same replacement,
-        // not a generic missing-value error.
-        let output = bregctl(&[command, PACKAGE_VALUE_CANARY, flag]);
-        assert_eq!(output.status.code(), Some(2), "bare {flag}: {output:?}");
-        let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
-        assert!(stderr.contains(&format!("`{flag}` is removed")), "{stderr}");
-        assert!(stderr.contains(replacement), "bare {flag}: {stderr}");
+        for arguments in [
+            vec![command, PACKAGE_VALUE_CANARY, flag, value],
+            vec![command, PACKAGE_VALUE_CANARY, flag],
+        ] {
+            let output = bregctl(&arguments);
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+            let stderr = String::from_utf8(output.stderr).expect("usage error is UTF-8");
+            assert!(
+                stderr.contains(&format!("unexpected argument {flag}")),
+                "{arguments:?}: {stderr}"
+            );
+            assert!(!stderr.contains("is removed"), "{arguments:?}: {stderr}");
+        }
     }
     let output = bregctl(&[
         "package",

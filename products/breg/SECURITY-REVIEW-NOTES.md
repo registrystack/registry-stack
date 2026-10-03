@@ -80,7 +80,7 @@ state, and the instance claim.
    `apply_refuses_a_stale_shared_envelope_before_database_authority`,
    `production_package_publishes_the_unsigned_package_in_one_step`,
    `package_always_uses_production_compilation_and_never_offers_a_signing_command`,
-   `retired_package_flags_are_usage_errors_that_name_their_replacement`.
+   `retired_package_flags_are_refused_as_unknown_arguments`.
    `crates/registry-bregctl/src/lib.rs`:
    `apply_chain_refusals_name_the_operators_next_command`.
    `crates/registry-breg/tests/compiler_contract.rs`:
