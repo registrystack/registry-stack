@@ -137,6 +137,82 @@ def write_layout(
     return root
 
 
+OCI_INDEX = "application/vnd.oci.image.index.v1+json"
+
+
+def write_blob(root: Path, payload: bytes) -> str:
+    digest = sha256(payload)
+    blobs = root / "blobs" / "sha256"
+    blobs.mkdir(parents=True, exist_ok=True)
+    (blobs / digest.removeprefix("sha256:")).write_bytes(payload)
+    return digest
+
+
+def top_descriptor(root: Path) -> dict[str, object]:
+    index = json.loads((root / "index.json").read_text(encoding="utf-8"))
+    return index["manifests"][0]
+
+
+def write_crane_layout(root: Path, **kwargs: object) -> Path:
+    """Shape `crane pull REF@DIGEST DIR --format=oci` writes for one manifest.
+
+    The top-level index.json names exactly the pulled manifest, with no
+    platform, the way crane records a single-platform published image.
+    """
+    write_layout(root, **kwargs)  # type: ignore[arg-type]
+    descriptor = dict(top_descriptor(root))
+    descriptor.pop("platform", None)
+    (root / "index.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": OCI_INDEX,
+                "manifests": [descriptor],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def write_nested_layout(
+    root: Path,
+    *,
+    nested_media_type: str = OCI_INDEX,
+    **kwargs: object,
+) -> Path:
+    """Shape crane writes when the published digest names an image index.
+
+    The top-level index.json holds one descriptor for the published index;
+    the application and attestation manifests are one level down.
+    """
+    write_layout(root, **kwargs)  # type: ignore[arg-type]
+    inner = json.loads((root / "index.json").read_text(encoding="utf-8"))
+    inner_payload = json.dumps(
+        {"schemaVersion": 2, "mediaType": OCI_INDEX, **inner},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    inner_digest = write_blob(root, inner_payload)
+    (root / "index.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": OCI_INDEX,
+                "manifests": [
+                    {
+                        "mediaType": nested_media_type,
+                        "digest": inner_digest,
+                        "size": len(inner_payload),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
 class CompareReleaseImageLayoutsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
@@ -288,6 +364,252 @@ class CompareReleaseImageLayoutsTest(unittest.TestCase):
 
             with self.assertRaisesRegex(self.module.LayoutError, "digest mismatch"):
                 self.module.compare_layouts(left, right, exact_image=True)
+
+
+    def test_accepts_crane_layout_bound_to_published_manifest_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_crane_layout(root / "published", layers=[b"base", b"app"])
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+            published_digest = str(top_descriptor(published)["digest"])
+
+            self.module.compare_layouts(
+                published,
+                rebuilt,
+                exact_image=False,
+                published_digest=published_digest,
+            )
+
+    def test_rejects_layout_not_bound_to_published_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_crane_layout(root / "published", layers=[b"base", b"app"])
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+
+            with self.assertRaisesRegex(
+                self.module.LayoutError, "not bound to the published digest"
+            ):
+                self.module.compare_layouts(
+                    published,
+                    rebuilt,
+                    exact_image=False,
+                    published_digest="sha256:" + "7" * 64,
+                )
+
+    def test_published_digest_requires_a_single_top_level_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_layout(
+                root / "published", layers=[b"base", b"app"], provenance=True
+            )
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+
+            with self.assertRaisesRegex(
+                self.module.LayoutError, "not bound to the published digest"
+            ):
+                self.module.compare_layouts(
+                    published,
+                    rebuilt,
+                    exact_image=False,
+                    published_digest=str(top_descriptor(published)["digest"]),
+                )
+
+    def test_rejects_manifest_written_over_index_json(self) -> None:
+        # The repeatability workflow used to copy the published manifest blob
+        # over crane's index.json; a manifest is not an index and must not be
+        # read as one.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_crane_layout(root / "published", layers=[b"base", b"app"])
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+            manifest_digest = str(top_descriptor(published)["digest"])
+            manifest_blob = (
+                published / "blobs" / "sha256" / manifest_digest.removeprefix("sha256:")
+            )
+            (published / "index.json").write_bytes(manifest_blob.read_bytes())
+
+            with self.assertRaisesRegex(
+                self.module.LayoutError, "has no manifest descriptors"
+            ):
+                self.module.compare_layouts(published, rebuilt, exact_image=False)
+
+    def test_resolves_nested_published_index_to_platform_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published", layers=[b"base", b"app"], provenance=True
+            )
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+            published_digest = str(top_descriptor(published)["digest"])
+
+            self.module.compare_layouts(
+                published,
+                rebuilt,
+                exact_image=False,
+                published_digest=published_digest,
+            )
+            context = self.module.manifest_context(
+                published,
+                published_digest=published_digest,
+                require_provenance=True,
+            )
+            self.assertEqual(published_digest, context["index_digest"])
+            self.assertEqual("linux/amd64", context["platform"])
+            self.assertEqual(
+                "buildkit-provenance",
+                context["topology"]["provenance_descriptors"][0]["kind"],
+            )
+
+    def test_nested_index_still_rejects_config_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published", layers=[b"base", b"app"], provenance=True
+            )
+            rebuilt = write_layout(
+                root / "rebuilt", layers=[b"base", b"app"], config_seed="other"
+            )
+
+            with self.assertRaisesRegex(
+                self.module.LayoutError, "config digests differ"
+            ):
+                self.module.compare_layouts(
+                    published,
+                    rebuilt,
+                    exact_image=False,
+                    published_digest=str(top_descriptor(published)["digest"]),
+                )
+
+    def test_nested_index_still_rejects_changed_ordered_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published", layers=[b"base", b"app"], provenance=True
+            )
+            for rebuilt_layers in ([b"base", b"changed"], [b"app", b"base"]):
+                rebuilt = write_layout(
+                    root / f"rebuilt-{len(list(root.iterdir()))}",
+                    layers=rebuilt_layers,
+                )
+                with self.assertRaisesRegex(
+                    self.module.LayoutError, "rootfs layer digests differ"
+                ):
+                    self.module.compare_layouts(
+                        published,
+                        rebuilt,
+                        exact_image=False,
+                        published_digest=str(top_descriptor(published)["digest"]),
+                    )
+
+    def test_nested_index_rejects_wrong_platform_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published",
+                layers=[b"base", b"app"],
+                provenance=True,
+                extra_descriptor=True,
+            )
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+
+            with self.assertRaisesRegex(
+                self.module.LayoutError, "unexpected.*topology"
+            ):
+                self.module.compare_layouts(published, rebuilt, exact_image=False)
+
+    def test_rejects_index_nested_more_than_one_level(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published", layers=[b"base", b"app"]
+            )
+            inner = top_descriptor(published)
+            outer_payload = json.dumps(
+                {"schemaVersion": 2, "mediaType": OCI_INDEX, "manifests": [inner]},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            outer_digest = write_blob(published, outer_payload)
+            (published / "index.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "manifests": [
+                            {
+                                "mediaType": OCI_INDEX,
+                                "digest": outer_digest,
+                                "size": len(outer_payload),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+
+            with self.assertRaisesRegex(self.module.LayoutError, "nested"):
+                self.module.compare_layouts(published, rebuilt, exact_image=False)
+
+    def test_rejects_nested_index_beside_other_descriptors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published", layers=[b"base", b"app"]
+            )
+            index = json.loads((published / "index.json").read_text(encoding="utf-8"))
+            index["manifests"].append(dict(index["manifests"][0]))
+            (published / "index.json").write_text(json.dumps(index), encoding="utf-8")
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+
+            with self.assertRaisesRegex(self.module.LayoutError, "nested"):
+                self.module.compare_layouts(published, rebuilt, exact_image=False)
+
+    def test_rejects_corrupted_nested_index_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published", layers=[b"base", b"app"]
+            )
+            digest = str(top_descriptor(published)["digest"])
+            (published / "blobs" / "sha256" / digest.removeprefix("sha256:")).write_bytes(
+                b"{}"
+            )
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+
+            with self.assertRaisesRegex(self.module.LayoutError, "digest mismatch"):
+                self.module.compare_layouts(published, rebuilt, exact_image=False)
+
+    def test_cli_binds_left_layout_to_published_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            published = write_nested_layout(
+                root / "published", layers=[b"base", b"app"], provenance=True
+            )
+            rebuilt = write_layout(root / "rebuilt", layers=[b"base", b"app"])
+            published_digest = str(top_descriptor(published)["digest"])
+
+            self.assertEqual(
+                0,
+                self.module.main(
+                    [
+                        "--published-digest",
+                        published_digest,
+                        str(published),
+                        str(rebuilt),
+                    ]
+                ),
+            )
+            self.assertEqual(
+                1,
+                self.module.main(
+                    [
+                        "--published-digest",
+                        "sha256:" + "7" * 64,
+                        str(published),
+                        str(rebuilt),
+                    ]
+                ),
+            )
 
 
 if __name__ == "__main__":

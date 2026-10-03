@@ -14,6 +14,9 @@ from typing import Any
 OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 DOCKER_MANIFEST = "application/vnd.docker.distribution.manifest.v2+json"
 IMAGE_MANIFEST_TYPES = {OCI_MANIFEST, DOCKER_MANIFEST}
+OCI_INDEX = "application/vnd.oci.image.index.v1+json"
+DOCKER_MANIFEST_LIST = "application/vnd.docker.distribution.manifest.list.v2+json"
+IMAGE_INDEX_TYPES = {OCI_INDEX, DOCKER_MANIFEST_LIST}
 ATTESTATION_REFERENCE_TYPE = "attestation-manifest"
 ATTESTATION_ANNOTATION = "vnd.docker.reference.type"
 SUBJECT_ANNOTATION = "vnd.docker.reference.digest"
@@ -155,20 +158,72 @@ def validate_provenance_descriptor(
     }
 
 
+def index_descriptors(layout: Path, index: Any, source: str) -> list[dict[str, Any]]:
+    manifests = index.get("manifests") if isinstance(index, dict) else None
+    if not isinstance(manifests, list) or not manifests:
+        raise LayoutError(f"OCI index {source} in {layout} has no manifest descriptors")
+    if any(not isinstance(item, dict) for item in manifests):
+        raise LayoutError(
+            f"OCI index {source} in {layout} has an invalid manifest descriptor"
+        )
+    return manifests
+
+
+def selected_index(
+    layout: Path,
+    published_digest: str | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Return the digest and descriptors of the index that selects the image.
+
+    `crane pull REF@DIGEST DIR --format=oci` writes a top-level index.json with
+    one descriptor naming DIGEST. When DIGEST is an image manifest, that
+    top-level index already selects it. When DIGEST is an image index (a
+    multi-platform or attestation-bearing publication), the platform manifest
+    is one level down, inside the digest-verified index blob. Deeper nesting,
+    or a nested index beside other descriptors, is refused.
+
+    With published_digest, the top-level index must hold exactly one
+    descriptor and it must name that digest, so the comparison is bound to the
+    image the release manifest records and not to whatever the layout holds.
+    """
+    index_path = layout / "index.json"
+    index = read_json(index_path)
+    index_digest = "sha256:" + hashlib.sha256(index_path.read_bytes()).hexdigest()
+    manifests = index_descriptors(layout, index, "index.json")
+    if published_digest is not None:
+        digest_blob(layout, published_digest)
+        if len(manifests) != 1 or manifests[0].get("digest") != published_digest:
+            raise LayoutError(
+                f"OCI layout {layout} is not bound to the published digest "
+                f"{published_digest}: index.json must name exactly that one "
+                "descriptor"
+            )
+    nested = [item for item in manifests if item.get("mediaType") in IMAGE_INDEX_TYPES]
+    if not nested:
+        return index_digest, manifests
+    if len(manifests) != 1:
+        raise LayoutError(
+            f"OCI index.json in {layout} holds a nested image index beside "
+            "other descriptors"
+        )
+    nested_digest = str(manifests[0].get("digest"))
+    nested_index = read_json(verified_digest_blob(layout, nested_digest))
+    nested_manifests = index_descriptors(layout, nested_index, nested_digest)
+    if any(item.get("mediaType") in IMAGE_INDEX_TYPES for item in nested_manifests):
+        raise LayoutError(
+            f"OCI index {nested_digest} in {layout} is nested more than one level"
+        )
+    return nested_digest, nested_manifests
+
+
 def manifest_context(
     layout: Path,
     *,
     expected_platform: str = "linux/amd64",
     require_provenance: bool = False,
+    published_digest: str | None = None,
 ) -> dict[str, Any]:
-    index_path = layout / "index.json"
-    index = read_json(index_path)
-    index_digest = "sha256:" + hashlib.sha256(index_path.read_bytes()).hexdigest()
-    manifests = index.get("manifests") if isinstance(index, dict) else None
-    if not isinstance(manifests, list) or not manifests:
-        raise LayoutError(f"OCI index in {layout} has no manifest descriptors")
-    if any(not isinstance(item, dict) for item in manifests):
-        raise LayoutError(f"OCI index in {layout} has an invalid manifest descriptor")
+    index_digest, manifests = selected_index(layout, published_digest)
 
     applications = [
         item
@@ -252,8 +307,9 @@ def compare_layouts(
     *,
     exact_image: bool,
     rootfs_only: bool = False,
+    published_digest: str | None = None,
 ) -> None:
-    left_context = manifest_context(left)
+    left_context = manifest_context(left, published_digest=published_digest)
     right_context = manifest_context(right)
     if (
         not rootfs_only
@@ -300,6 +356,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--published-digest",
+        help=(
+            "require LEFT to be the layout crane pulled for exactly this "
+            "published digest, an image manifest or a one-level image index"
+        ),
+    )
+    parser.add_argument(
         "--inspect-layout",
         type=Path,
         help="emit normalized config, layer, and provenance-bearing topology JSON",
@@ -316,6 +379,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             or args.right is not None
             or args.exact_image
             or args.rootfs_only
+            or args.published_digest is not None
         ):
             parser.error(
                 "--inspect-layout cannot be combined with comparison arguments"
@@ -344,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             args.right,
             exact_image=args.exact_image,
             rootfs_only=args.rootfs_only,
+            published_digest=args.published_digest,
         )
     except LayoutError as error:
         print(f"release image layout comparison failed: {error}", file=sys.stderr)
