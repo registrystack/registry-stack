@@ -1,4 +1,0 @@
-id: business-registration-status
-version: 1
-status: reviewed
-values: [ACTIVE, SUSPENDED, CLOSED]

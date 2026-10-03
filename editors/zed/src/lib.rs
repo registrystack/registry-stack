@@ -7,9 +7,8 @@ struct RegistryStackExtension;
 // The subcommand an adopter CLI answers to when it hosts the language server.
 const HOSTED_SERVER_ARGS: [&str; 2] = ["tooling", "language-server"];
 
-// The adopter CLIs that may host the server, in product order. A matching
-// relayctl must remain reachable when an older evidencectl is also on PATH.
-const HOSTING_CLI_NAMES: [&str; 2] = ["evidencectl", "relayctl"];
+// Evidence tooling hosts the shared server for every supported product.
+const HOSTING_CLI_NAMES: [&str; 1] = ["evidencectl"];
 
 impl zed::Extension for RegistryStackExtension {
     fn new() -> Self {
@@ -45,12 +44,12 @@ impl zed::Extension for RegistryStackExtension {
 
         if hosting_errors.is_empty() {
             Err(format!(
-                "no supported Registry Stack adopter CLI was found on PATH; install evidencectl or relayctl {} or configure lsp.registry-stack.binary.path",
+                "no supported Registry Stack adopter CLI was found on PATH; install evidencectl {} or configure lsp.registry-stack.binary.path",
                 env!("CARGO_PKG_VERSION")
             ))
         } else {
             Err(format!(
-                "no matching Registry Stack adopter CLI on PATH can host the language server: {}; install evidencectl or relayctl {} or configure lsp.registry-stack.binary.path",
+                "no matching Registry Stack adopter CLI on PATH can host the language server: {}; install evidencectl {} or configure lsp.registry-stack.binary.path",
                 hosting_errors.join("; "),
                 env!("CARGO_PKG_VERSION")
             ))
@@ -163,8 +162,8 @@ mod tests {
 
     #[test]
     fn hosting_probe_command_asks_for_tooling_language_server_help() {
-        let probe = hosting_probe_command("relayctl");
-        assert_eq!(probe.command, "relayctl");
+        let probe = hosting_probe_command("evidencectl");
+        assert_eq!(probe.command, "evidencectl");
         assert_eq!(probe.args, ["tooling", "language-server", "--help"]);
     }
 
@@ -173,21 +172,21 @@ mod tests {
         let version = env!("CARGO_PKG_VERSION");
         let dev_version = format!("{version}-dev");
         assert_eq!(
-            parse_cli_version(format!("relayctl {version}\n").as_bytes(), "relayctl"),
+            parse_cli_version(format!("evidencectl {version}\n").as_bytes(), "evidencectl"),
             Some(version)
         );
         assert_eq!(
             parse_cli_version(
-                format!("relayctl {dev_version} (abc)\n").as_bytes(),
-                "relayctl"
+                format!("evidencectl {dev_version} (abc)\n").as_bytes(),
+                "evidencectl"
             ),
             Some(dev_version.as_str())
         );
         assert_eq!(
-            parse_cli_version(format!("evidencectl {version}\n").as_bytes(), "relayctl"),
+            parse_cli_version(format!("registryctl {version}\n").as_bytes(), "evidencectl"),
             None
         );
-        assert_eq!(parse_cli_version(b"relayctl\n", "relayctl"), None);
+        assert_eq!(parse_cli_version(b"evidencectl\n", "evidencectl"), None);
         assert!(version_matches(version, version));
         assert!(version_matches(&dev_version, version));
         assert!(!version_matches("0.36.0", version));
@@ -201,14 +200,14 @@ mod tests {
         overrides.insert("REGISTRY_TEST".to_owned(), "enabled".to_owned());
         let command = configured_command(
             zed::settings::CommandSettings {
-                path: Some("/chosen/bin/relayctl".to_owned()),
+                path: Some("/chosen/bin/evidencectl".to_owned()),
                 arguments: Some(vec!["tooling".to_owned(), "language-server".to_owned()]),
                 env: Some(overrides),
             },
             vec![("PATH".to_owned(), "/shell/bin".to_owned())],
         )
         .unwrap();
-        assert_eq!(command.command, "/chosen/bin/relayctl");
+        assert_eq!(command.command, "/chosen/bin/evidencectl");
         assert_eq!(command.args, ["tooling", "language-server"]);
         assert!(command
             .env
@@ -229,16 +228,16 @@ mod tests {
     }
 
     #[test]
-    fn matching_relay_cli_follows_mismatched_evidence_cli() {
+    fn matching_evidence_cli_follows_mismatched_copy() {
         let selected = select_hosting_cli(
             [
                 ("evidencectl", "/old/evidencectl".to_owned()),
-                ("relayctl", "/current/relayctl".to_owned()),
+                ("evidencectl", "/current/evidencectl".to_owned()),
             ],
-            |command, _| Ok(command == "/current/relayctl"),
+            |command, _| Ok(command == "/current/evidencectl"),
             |_| Ok(true),
         );
-        assert_eq!(selected.unwrap(), "/current/relayctl");
+        assert_eq!(selected.unwrap(), "/current/evidencectl");
     }
 
     #[test]
@@ -246,12 +245,12 @@ mod tests {
         let selected = select_hosting_cli(
             [
                 ("evidencectl", "/current/evidencectl".to_owned()),
-                ("relayctl", "/current/relayctl".to_owned()),
+                ("evidencectl", "/current/evidencectl".to_owned()),
             ],
             |_, _| Ok(true),
-            |command| Ok(command == "/current/relayctl"),
+            |command| Ok(command == "/current/evidencectl"),
         );
-        assert_eq!(selected.unwrap(), "/current/relayctl");
+        assert_eq!(selected.unwrap(), "/current/evidencectl");
     }
 
     #[test]

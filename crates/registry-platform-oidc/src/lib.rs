@@ -883,7 +883,7 @@ impl TokenVerifierConfig {
     ///
     /// Access tokens must carry one of `allowed_typ`; an empty `allowed_typ`
     /// list fails closed. Related ID tokens and UserInfo JWTs use the project
-    /// defaults accepted by Relay: ID token `typ` values `JWT` and `id_token`,
+    /// related-token defaults: ID token `typ` values `JWT` and `id_token`,
     /// UserInfo JWT `typ` value `JWT`, and required UserInfo expiration by
     /// default.
     pub fn access_token_profile(
@@ -911,7 +911,7 @@ impl TokenVerifierConfig {
         }
     }
 
-    /// Registry Relay access-token verifier profile.
+    /// Legacy access-token verifier preset retained pending item-level cleanup.
     pub fn registry_relay_access_profile(
         issuer: impl Into<String>,
         audiences: Vec<String>,

@@ -7,8 +7,8 @@
       "id": "sec-provider-public-projection",
       "status": "enforced",
       "threat": "Provider generation includes source, authorization, trust, credential, or protected-capability data, or graph merging creates a false cross-capability match.",
-      "enforcementPoint": "Evidence and Relay public projection compilers before packaging.",
-      "requiredNegativeBehavior": "Exclude private fields through the closed public projection; refuse any authored public-projection value that cannot satisfy the closed profile; preserve each exact capability pair under a distinct binding identity.",
+      "enforcementPoint": "Evidence public projection compiler and the current Evidence-only profile parser before packaging.",
+      "requiredNegativeBehavior": "Exclude private fields through the closed public projection; refuse any authored public-projection value that cannot satisfy the current Evidence-only implementation; preserve each exact Evidence capability under a distinct binding identity; refuse historical Relay input without changing the published profile resources.",
       "negativeTest": "private-provider-fields-are-omitted-and-invalid-public-projection-is-refused",
       "binding": {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_excludes_private_configuration_fields"}
     },
@@ -74,6 +74,15 @@
       "requiredNegativeBehavior": "Keep structural validation distinct from trust, refuse local trust mismatch before credential construction or provider traffic, and renew provenance only when trust-relevant service semantics are unchanged; otherwise require new acceptance.",
       "negativeTest": "discovery-selection-cannot-create-trust-or-native-io",
       "binding": {"path": "crates/registry-discovery-client/src/selection.rs", "name": "discovery_metadata_has_no_trust_or_native_io_capability"}
+    },
+    {
+      "id": "sec-retired-service-kind",
+      "status": "enforced",
+      "threat": "A pre-retirement Relay record is silently dropped from a mixed catalog or admitted into the current Evidence-only runtime.",
+      "enforcementPoint": "Current provider-description parser, index parser, and verified package startup.",
+      "requiredNegativeBehavior": "Refuse Relay input and refuse a mixed index as a whole with guidance to remove Relay origins and rebuild the package.",
+      "negativeTest": "retired-relay-input-is-refused-without-partial-catalog-semantics",
+      "binding": {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_refuses_a_pre_retirement_mixed_package_with_rebuild_guidance"}
     },
     {
       "id": "sec-query-and-log-minimization",

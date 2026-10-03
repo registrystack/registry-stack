@@ -1,251 +1,45 @@
 ---
 title: Boundaries and map
-description: The formal Registry Stack products, the separate Solmara Lab adopter demo, and the boundaries between them.
-wide: true
+description: A responsibility map for the maintained Registry Stack products.
 status: current
 owner: registry-docs
 source_repos:
-  - registry-relay
+  - registry-stack
   - registry-platform
-  - registry-manifest
-  - registry-evidence
-  - solmara-lab
-last_reviewed: "2026-08-21"
+last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
-standards_referenced:
-  - openapi
-  - dcat
-  - cpsv-ap
-  - cccev
-  - shacl
-  - json-schema
-  - sd-jwt-vc
+standards_referenced: []
 ---
 
-import ProjectMap from '../../../components/ProjectMap.astro';
+Use this map to find the product that owns a behavior before changing configuration or code. Base
+Registry Engine (BReg) owns governed registry records.
 
-The formal Registry Stack has four products with distinct responsibilities: Registry Platform,
-Registry Manifest, Registry Relay, and Evidence Gateway.
-Solmara Lab is a separate adopter project that demonstrates the products together.
-Use this page to decide which project owns a question before opening implementation docs,
-and to understand how the products and the external demo connect at runtime.
-
-<figure>
-  <img src="../../images/registry-family-map.svg"
-       alt="The formal Registry Stack products and the separate Solmara Lab adopter demo. Registry Platform provides shared auth, audit, HTTP,
-            crypto, SD-JWT, and test crates. Registry Manifest provides portable metadata contracts,
-            validation, and renderers. Registry Relay compiles a reviewed registry contract into a
-            fixed set of protected read-only operations over local read-only SQLite sources. Evidence
-            Gateway answers one bounded question about one subject with a signed assertion. Solmara Lab is an
-            external synthetic-data adopter demo." />
-</figure>
-
-<ProjectMap />
-
-{/* Generated from src/data/projects.yaml by the ProjectMap component.
-    Update projects.yaml to change any row; do not hand-edit the table above. */}
-
-## Flow across the stack
-
-For how the products connect at runtime and how Solmara Lab demonstrates them, see the
-[architecture overview](../../explanation/architecture/).
-
-## Ownership quick reference
-
-| Question | Owning project |
+| Question | Owner |
 | --- | --- |
-| Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](https://github.com/registrystack/registry-stack) |
-| How is a SQLite extract or SQLite-backed registry exposed as a governed, read-only, authorized API? | [Registry Relay](../../products/registry-relay/) |
-| How is that registry contract authored, checked, and sealed into a package before it is served? | [`relayctl`](../../reference/relayctl/) |
-| How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/registrystack/registry-stack) |
-| How is one bounded question about one subject answered with a signed assertion that carries the answer and not the record? | [Evidence Gateway](../../products/registry-evidence/) |
-| How do the services run together in a local demo? | [Solmara Lab](https://github.com/registrystack/solmara-lab/blob/3d5c492ea50c6fdcefd5978df6f036422096421c/README.md) |
+| Who stores and mutates governed registry records? | Base Registry Engine |
+| Who evaluates a bounded evidence requirement and signs the answer? | Evidence Gateway |
+| Who renders static registry metadata? | Registry Manifest |
+| Who serves a curated provider index? | Registry Discovery |
+| Who coordinates accountable human review? | Registry Casework |
+| Who provides shared security and operational primitives? | Registry Platform |
 
-Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
+## Trust boundaries
 
-{/* Generated from src/data/projects.yaml does_not_own lists, reinforced below with evidence packet citations. */}
+| Boundary | Invariant |
+| --- | --- |
+| BReg write boundary | Only compiled model operations and authorized profiles can mutate PostgreSQL records. |
+| Evidence source boundary | Every request target, method, path, credential, timeout, and response bound comes from reviewed configuration. |
+| Evidence assertion boundary | Only declared concepts and value forms enter the signed assertion. |
+| Manifest publication boundary | Output is descriptive static metadata and grants no runtime authority. |
+| Discovery selection boundary | A selection is inert until an application validates and accepts it locally. |
+| Casework decision boundary | Casework records review; the source system retains mutation authority. |
 
-## Registry Platform
-
-Registry Platform is a shared crate workspace. It does not run a service or decide product policy.
-
-**Does not own:**
-
-- Registry Relay route behavior, runtime source binding, metadata publication, or
-  Relay-specific scope semantics.
-- Evidence Gateway requirement definitions, authorization grants, disclosure decisions, service routes,
-  assertion construction, or signing policy.
-  {/* Evidence: Rust in registry-evidence owns authentication, authorization, fixed source
-       execution, output validation, evidence construction, signing, and audit; the platform
-       crates it consumes are listed in crates/registry-evidence/Cargo.toml. */}
-- Operator responsibilities such as tenant isolation, audit retention, secret provisioning,
-  deployment configuration, and incident response.
-
-Use Registry Platform when a primitive needs to behave identically across services. Use the consuming
-repo when the question is about a product route, config file, or user-facing workflow.
-
-## Registry Manifest
-
-Registry Manifest is a pure library and CLI with no runtime data dependencies.
-
-**Does not own:**
-
-- Registry Relay runtime data access. Manifest doesn't serve HTTP, doesn't talk to databases,
-  doesn't run inside a gateway.
-  {/* Evidence: Boundary section, "must not depend on Registry Relay, Axum, DataFusion,
-       Postgres, auth, audit, observability, runtime row access",
-       crates/registry-manifest-core/README.md:33-41 at tag v0.9.0. */}
-- Auth, audit, observability, or secret handling. These are intentionally excluded so the
-  library can be used without running any runtime service.
-  {/* Evidence: Boundary section, crates/registry-manifest-core/README.md:33-41 at tag v0.9.0. */}
-- Production source configuration. Source file paths, source view and column names, scopes, and
-  other deployment details belong in the Registry Relay registry contract and runtime file, not in
-  a portable manifest. Relay does not read a manifest to find them.
-  {/* Evidence: docs/site/src/data/contracts.yaml, registry-manifest.metadata-yaml consumer
-       note; the V2 registry contract and runtime schemas carry no manifest reference,
-       crates/registry-relay-v2/src/contract.rs. */}
-- Evidence Gateway deployment configuration. An Evidence Gateway process loads one immutable governed bundle and
-  one closed runtime file mounted read-only at startup, and reads no portable manifest.
-  {/* Evidence: "Governed bundle and operator runtime", products/evidence/OPERATOR-CONTRACT.md. */}
-
-No HTTP serving, no database queries, no authorization scoping. The manifest compiles and renders only.
-
-## Registry Relay
-
-Registry Relay compiles a reviewed registry contract into a fixed set of read-only operations and
-serves them over the read-only SQLite sources it binds. It owns the compiled contract: which operations exist,
-which reviewed views and columns they may read, which access profile guards each one, which
-disclosure profile shapes each response, and what its audit record says. Everything on that list is
-decided before the process starts, sealed into a package, and re-derived and byte-compared at
-startup.
-
-{/* Evidence: the RelayRuntime struct is a closed deny_unknown_fields schema and cannot widen the
-     package, crates/registry-relay-v2/src/contract.rs; startup verifies the package before
-     opening any other resource, crates/registry-relay-v2/src/startup.rs:96-104; the runtime
-     re-runs the compiler and generator and compares bytes,
-     crates/registry-relay-v2/src/package.rs. */}
-
-It does not own:
-
-- Record provisioning, writes, or any mutation path. This is not a scoping decision deferred to a
-  later version: the router is a fixed set of 14 routes with exactly one `POST` (a declared lookup)
-  and no `PUT`, `PATCH`, or `DELETE` anywhere.
-  {/* Evidence: router() in crates/registry-relay-v2/src/server.rs. */}
-- Source adaptation. Relay reads one local read-only SQLite file per binding, opened in place. It
-  speaks no source protocol, holds no source credential, and makes no outbound call to a source, so
-  a CSV, spreadsheet, Parquet, PostgreSQL, or HTTP registry has to be turned into SQLite by
-  something else before Relay can serve it.
-  {/* Evidence: the SourceProfile enum has exactly two variants, SourceProfile::Snapshot and
-       SourceProfile::LiveReadOnly, crates/registry-relay-v2/src/contract.rs. */}
-- Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are
-  owned by Registry Manifest. Relay does not consume a manifest and does not emit one: its artifact
-  generator produces no `registry-manifest.yaml`, and a test holds that.
-  {/* Evidence: crates/registry-manifest-core/README.md:7-9 at tag v0.9.0 (schema ownership); the
-       test generated_inventory_covers_required_v1_artifact_classes_only asserts
-       artifacts/registry-manifest.yaml is not generated,
-       crates/registry-relay-v2/src/artifacts.rs. */}
-- Assertion evaluation, disclosure, and signing owned by Evidence Gateway. Relay signs nothing. A
-  Relay response is a JSON document shaped by a disclosure profile, with no signature and no
-  assertion semantics, and Relay declares no evidence offering.
-  {/* Evidence: crates/registry-relay-v2/src/contract.rs contains no evidence or manifest
-       vocabulary; contract registry.evidence.fixed-http-json-source/v1,
-       products/evidence/contracts/source-contract.yaml. */}
-- Shared auth, OIDC, audit, HTTP security, crypto, secret-reference, and read-only SQLite primitives
-  owned by Registry Platform. Relay owns how those primitives are configured and enforced on its own
-  operations.
-- Storage internals in public APIs. Public route paths use resource and operation identifiers from
-  the contract; source view and column names stay inside the compiled statements and never appear in
-  a served response, an artifact, or an operational log line.
-- External policy evaluation. Relay carries no policy decision point and evaluates no ODRL,
-  consent, or jurisdiction rule. It checks the scope, purpose claim, and row authority its own
-  contract names, and nothing else.
-- The correctness or freshness of the data underneath. Relay returns what a reviewed view returns,
-  and attaches no observation time to it.
-
-Registry Relay is not an open-data portal and not a query service. It publishes a closed set of
-governed reads for authorized systems, and a caller cannot widen one. A request may narrow a
-response, by selecting fewer fields or filtering on a declared filterable field, but a field or
-filter the contract did not declare is a stable 400 rather than a wider read.
-
-{/* Evidence: the closed ProblemCode set includes request.fields_invalid, filter.unknown_field, and
-     filter.invalid_value, in the define_problem_codes! set in
-     crates/registry-relay-http-contract/src/lib.rs, which crates/registry-relay-v2/src/problem.rs
-     re-exports. */}
-
-## Evidence Gateway
-
-Evidence Gateway answers one bounded question about one subject and returns a signed assertion carrying the
-answer rather than the record. It does not own:
-
-- Source access as a general capability. Each evaluation uses one closed acquisition: one fixed
-  bounded request, or one fixed search followed after a unique schema-valid match by one fixed
-  fetch. A source reaches its data over one of two coequal transports. An HTTP JSON stage has a
-  fixed method, a fixed or tagged selector or prior-fact-bound path, fixed non-secret headers,
-  denied redirects, and a client-side response projection. A statement stage runs one reviewed SQL
-  statement, with its declared result columns and parameter bindings, against a read-only SQLite
-  extract file the runtime binds by logical profile, reaching no origin and resolving no credential.
-  Pagination, transport retry, response-led routing, general multi-source fulfillment, and
-  source-planning scripts are outside the Version 1 contract.
-  {/* Evidence: contracts registry.evidence.fixed-http-json-source/v1,
-       products/evidence/contracts/source-contract.yaml, and
-       registry.evidence.fixed-sqlite-extract-source/v1,
-       products/evidence/contracts/sqlite-extract-source-contract.yaml (both frozen). */}
-- Record lookup and identity resolution. The authoritative provider owns lookup. Evidence Gateway accepts
-  only `match`, `no_match`, or `ambiguous`, and does not score candidates, choose a provider record,
-  or expose counts, near-match hints, or per-field diagnostics.
-  {/* Evidence: "Source and selector controls", products/evidence/OPERATOR-CONTRACT.md. */}
-- Portable metadata renderers owned by Registry Manifest. Evidence Gateway produces no DCAT, SHACL,
-  BRegDCAT-AP, or OGC Records artifacts and consumes no manifest.
-- Shared auth, OIDC, audit, HTTP security, crypto, SD-JWT, and testing primitives owned by Registry
-  Platform. Evidence Gateway owns the assertion behavior that composes those primitives.
-  {/* Evidence: crates/registry-evidence/Cargo.toml depends on registry-platform-audit, -crypto,
-       -httpsec, -httputil, -oidc, and -sdjwt, and on no other product crate. */}
-- Token issuance and identity proofing. Evidence Gateway verifies access tokens under one reviewed OIDC
-  profile with exactly one trusted issuer; it issues none.
-  {/* Evidence: "Supported deployment", products/evidence/OPERATOR-CONTRACT.md. */}
-- Consumer decisions. Requirements, eligibility, ranking, approval, routing, payment, workflow, and
-  action policy stay with the accountable decision owner. Evidence Gateway is not a workflow, orchestration,
-  or case-management engine and not a runtime policy engine or general PDP.
-  {/* Evidence: Version 1 non-goals, products/evidence/CONCEPT.md section 4. */}
-- A credential lifecycle. Version 1 has no issuance session, holder binding ceremony, status list,
-  revocation, or presentation verification, and no federated or delegated evaluation between peers.
-  {/* Evidence: Version 1 non-goals, products/evidence/CONCEPT.md section 4; "Response formats",
-       products/evidence/OPERATOR-CONTRACT.md. */}
-
-The default Evidence Gateway response is a flattened JWS JSON assertion (`application/jose+json`), not a W3C
-Verifiable Credentials Data Model JSON-LD envelope. An SD-JWT VC serialization
-(`application/dc+sd-jwt`) of the same stateless assertion is releasable only where the immutable
-bundle and the one matched authority grant both name that format, under the frozen profile in
-`products/evidence/contracts/sd-jwt-vc-profile.yaml`. That profile adds a response format, never a
-credential lifecycle.
-
-## Solmara Lab
-
-Solmara Lab is a separately maintained adopter demo for the fictional Republic of Solmara.
-It uses generated synthetic data, but it is not a formal
-Registry Stack product. It does not own:
-
-- Production deployment guidance. The demo uses generated synthetic data and demo configuration.
-  It is not a reference for production configuration.
-  {/* Evidence: the pinned Solmara Lab README linked in the ownership table and
-       src/data/projects.yaml, solmara-lab does_not_own "Production deployment guidance". */}
-- Normative API or metadata contracts. API contracts are owned by the runtime services; metadata
-  contracts are owned by Registry Manifest.
-  {/* Evidence: src/data/projects.yaml, solmara-lab does_not_own. */}
-- Real product integrations. The services simulate civil registration, population, social
-  protection, pension, and agriculture registry patterns but are not real integrations with
-  OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
-  {/* Evidence: the pinned Solmara Lab README and src/data/projects.yaml. */}
-
-## Where to look
-
-Detailed setup, configuration, and command references live in the owning repo; cross-project
-orientation, standards evidence, and contract indexes live in these docs.
-
-When a page needs both, these docs summarize the decision and link to the owning source.
+No shared root activates the products atomically. Operators record and recover each product revision
+separately.
 
 ## Next
 
-- [Architecture overview](../../explanation/architecture/): how the formal products connect
-  at runtime and how the separate Solmara Lab demo consumes them.
+- [Architecture](../../explanation/architecture/)
+- [DPI safeguards alignment](../../explanation/dpi-safeguards-alignment/)
+- [Security overview](../../security/)

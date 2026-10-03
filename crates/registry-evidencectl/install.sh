@@ -233,7 +233,7 @@ run_unpinned_installer() {
 	base_version="$(manifest_value base_version "$normalized" || true)"
 	source_sha="$(manifest_value source_sha "$normalized" || true)"
 	created_at="$(manifest_value created_at "$normalized" || true)"
-	if [ "$schema" != "registry-stack.nightly.v1" ]; then
+	if [ "$schema" != "registry-stack.nightly.v1" ] && [ "$schema" != "registry-stack.nightly.v2" ]; then
 		echo "Refusing nightly metadata with a missing or unsupported schema_version." >&2
 		exit 1
 	fi

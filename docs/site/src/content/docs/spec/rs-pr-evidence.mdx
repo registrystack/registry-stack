@@ -38,10 +38,6 @@ The contract files are the source of truth; this document is their protocol-leve
 Where a contract carries a numeric limit, a field name, or an enumerated value, this document points
 at the file rather than copying the value, so the two cannot drift apart.
 
-Evidence Gateway is a separate product from Registry Relay.
-It is the Evidence Gateway counterpart to [RS-PR-RELAY](../rs-pr-relay/), and it is not a Registry Relay
-mode, rewrite, or reduced configuration (`products/evidence/README.md`).
-
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
 
@@ -123,8 +119,6 @@ never a credential lifecycle.
 Presentation-side verification is a relying-party act, not a service surface: Section 7.3 specifies
 what a relying party verifies for a holder-bound credential, and Evidence Gateway itself appends no
 key-binding JWT, issues no challenge, and holds no presentation state.
-Registry Relay's protocol is specified by RS-PR-RELAY; it does not govern Evidence Gateway, and Evidence Gateway
-inherits no requirement from it.
 
 ## 2. Service surface and discovery
 
@@ -999,5 +993,3 @@ the source of this page.
   reference and the link to the generated OpenAPI document.
 - [RS-ARC-G](../rs-arc-g/) places the registry stack services in one architecture.
 - [RS-SEC-G](../rs-sec-g/) holds the cross-product security model this protocol sits inside.
-- [RS-PR-RELAY](../rs-pr-relay/) specifies Registry Relay, the separate product that serves
-  protected reads over data an institution already holds.

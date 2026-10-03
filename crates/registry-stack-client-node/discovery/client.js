@@ -222,14 +222,6 @@ class DiscoveryClient {
     }
   }
 
-  async searchRelayServices(query) {
-    try {
-      return await this.#inner.searchRelayServices(requestValue(query));
-    } catch (error) {
-      throw normalize(error, 'query');
-    }
-  }
-
   selectExact(response, request) {
     try {
       return this.#inner.selectExact(responseValue(response), requestValue(request));
@@ -246,9 +238,6 @@ class DiscoveryClient {
     return selectEvidenceService(response, request);
   }
 
-  selectRelayService(response, request) {
-    return selectRelayService(response, request);
-  }
 }
 
 function selectExact(response, request) {
@@ -273,14 +262,6 @@ function selectEvidenceAlternative(response, evidenceTypeListId = undefined) {
 function selectEvidenceService(response, request) {
   try {
     return native.selectEvidenceService(responseValue(response), requestValue(request));
-  } catch (error) {
-    throw normalize(error, 'query');
-  }
-}
-
-function selectRelayService(response, request) {
-  try {
-    return native.selectRelayService(responseValue(response), requestValue(request));
   } catch (error) {
     throw normalize(error, 'query');
   }
@@ -323,7 +304,6 @@ module.exports = {
   selectEvidenceAlternative,
   selectEvidenceService,
   selectExact,
-  selectRelayService,
   validateSelection,
   validateSelectionStructure,
 };

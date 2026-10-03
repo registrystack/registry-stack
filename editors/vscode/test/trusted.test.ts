@@ -41,8 +41,8 @@ suite('Registry Stack extension', () => {
     }
     await assertExtensionActivated(extension);
 
-    // One client per workspace folder serves both the Relay and Evidence
-    // project families; alpha and beta are Relay V2, while evidence is an
+    // One client per workspace folder serves the BReg and Evidence
+    // project families; alpha and beta are BReg, while evidence is an
     // Evidence authoring project, all discovered through the same
     // installer-selected evidencectl.
     await assertWorkspaceSymbol('alpha-registry');
@@ -87,7 +87,7 @@ suite('Registry Stack extension', () => {
     assert.ok(alphaFolder, 'alpha workspace folder is available');
     fs.writeFileSync(
       path.join(alphaFolder.uri.fsPath, 'registry.yaml'),
-      'apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nregistry: { registryIdentifier: alpha-reloaded }\n',
+      'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: { id: alpha-reloaded }\n',
     );
     await assertWorkspaceSymbol('alpha-reloaded');
 
@@ -95,7 +95,7 @@ suite('Registry Stack extension', () => {
     fs.mkdirSync(gammaPath);
     fs.writeFileSync(
       path.join(gammaPath, 'registry.yaml'),
-      'apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nregistry: { registryIdentifier: gamma-registry }\n',
+      'apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry: { id: gamma-registry }\n',
     );
     assert.strictEqual(
       vscode.workspace.updateWorkspaceFolders(3, 0, {
@@ -113,7 +113,7 @@ suite('Registry Stack extension', () => {
 
     // A selected executable can be replaced after installation. The old
     // version must be passed over before serving any folder, and the matching
-    // relayctl on PATH still serves the real language-server session.
+    // evidencectl on PATH still serves the real language-server session.
     const installedCli = fs.readFileSync(
       path.resolve(__dirname, '../../dist/registry-stack-cli-path'),
       'utf8',
@@ -129,9 +129,9 @@ suite('Registry Stack extension', () => {
     const testRunDirectory = path.dirname(alphaFolder.uri.fsPath);
     const startLog = path.join(testRunDirectory, 'language-server-starts.log');
     const countingServer = path.join(testRunDirectory, 'counting-language-server');
-    const languageServer = path.resolve(
-      __dirname,
-      '../../../../target/debug/registry-language-server',
+    const languageServer = path.join(
+      process.env.CARGO_TARGET_DIR ?? path.resolve(__dirname, '../../../..', 'target'),
+      'debug/registry-language-server',
     );
     fs.writeFileSync(
       countingServer,
@@ -233,7 +233,7 @@ suite('Registry Stack extension', () => {
     // fallback tier genuinely works: the evidencectl that serves the metadata
     // route is kept off PATH, and the evidencectl that is on PATH refuses the
     // subcommand, so once the packaged-CLI metadata is gone every folder can
-    // only be served by the relayctl standing behind it.
+    // only be served by the matching Evidence copy standing behind it.
     fs.rmSync(path.resolve(__dirname, '../../dist/registry-stack-cli-path'), { force: true });
     await configuration.update(
       'languageServer.path',

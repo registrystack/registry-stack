@@ -31,6 +31,8 @@ CANDIDATE_PACKAGES = (
     "messaging-candidate",
     "mint-candidate",
     "registry-render-candidate",
+    # Retain cleanup access for private historical versions until their
+    # lifecycle is closed explicitly. This does not make Relay releasable.
     "relay-candidate",
     "scheduling-candidate",
 )

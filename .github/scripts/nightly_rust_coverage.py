@@ -19,7 +19,7 @@ def coverage_matrix() -> dict[str, list[dict[str, str]]]:
             {
                 "name": name,
                 "packages": " ".join(packages),
-                "all_features": str(name in {"platform", "relay-v2"}).lower(),
+                "all_features": str(name == "platform").lower(),
                 "features": "",
                 "flag": "manifest-unit" if name == "manifest" else name,
             }

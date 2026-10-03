@@ -15,17 +15,6 @@ become enforced bindings in the security matrix.
 5. The maintained native Evidence client requests and verifies an assertion
    directly. Discovery observes neither credentials nor the assertion.
 
-## Relay
-
-1. A validated Relay deployment packages its public description as a sealed
-   public artifact.
-2. The one-shot package operation indexes it as a separate origin record.
-3. A relying application searches an exact public semantic class or operation
-   family, explicitly selects the record, and applies existing native Relay
-   trust.
-4. The maintained Relay client invokes the provider directly. A protected-only
-   Relay advertisement may have no public semantic class or operation family.
-
 ## Failure cases
 
 - A remote context, duplicate JSON member, unknown public field, or invalid
@@ -34,3 +23,5 @@ become enforced bindings in the security matrix.
   validation failure, canonicalization failure, or output-bound failure emits
   no new visible package.
 - A local trust refusal occurs before native credential creation or traffic.
+- A historical Relay description is refused by current Rust publication and a
+  pre-retirement mixed index is refused as a whole with rebuild guidance.

@@ -12,7 +12,6 @@ const {
   renewUnchangedSelection,
   selectEvidenceAlternative,
   selectEvidenceService,
-  selectRelayService,
   validateSelection,
   validateSelectionStructure,
 } = require('../client');
@@ -60,16 +59,6 @@ const service = withDerivedBindingId({
   originContentDigest: digest,
   originFetchedAt: '2026-08-15T00:00:00Z',
 });
-const relayService = withDerivedBindingId({
-  ...service,
-  serviceId: 'urn:example:service:relay',
-  serviceKind: 'relay',
-  registryAuthorityId: 'urn:example:registry-authority',
-  evidenceTypeIds: [],
-  semanticClassIds: ['urn:example:registered-business'],
-  operationFamilyIds: ['urn:example:consultation-list'],
-});
-
 const expectedEvidence = Object.freeze({
   serviceKind: 'evidence',
   serviceId: 'urn:example:service:a',
@@ -192,24 +181,6 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
 
   await new Promise((resolve) => server.close(resolve));
   assert.equal(JSON.parse(JSON.stringify(selection)).recordId, 'record-a');
-});
-
-test('Relay selection retains the correlated semantic and operation match', () => {
-  const selection = selectRelayService(
-    { catalogRevision: digest, items: [relayService] },
-    {
-      recordId: relayService.recordId,
-      capabilityMatch: {
-        semanticClassId: 'urn:example:registered-business',
-        operationFamilyId: 'urn:example:consultation-list',
-      },
-    },
-  );
-  assert.deepEqual(selection.relayCapabilityMatch, {
-    semanticClassId: 'urn:example:registered-business',
-    operationFamilyId: 'urn:example:consultation-list',
-  });
-  assert.equal(validateSelectionStructure(selection).serviceKind, 'relay');
 });
 
 test('adopter acceptance is explicit and precedes credentials or native traffic', () => {
@@ -346,37 +317,6 @@ test('renewal refreshes provenance but never silently accepts semantic drift', (
     );
   }
 
-  const relayWithTwoOperations = withDerivedBindingId({
-    ...relayService,
-    operationFamilyIds: [
-      'urn:example:consultation-list',
-      'urn:example:consultation-search',
-    ],
-  });
-  const relayPrevious = selectRelayService(
-    { catalogRevision: digest, items: [relayWithTwoOperations] },
-    {
-      recordId: relayWithTwoOperations.recordId,
-      capabilityMatch: {
-        semanticClassId: 'urn:example:registered-business',
-        operationFamilyId: 'urn:example:consultation-list',
-      },
-    },
-  );
-  const relayCurrent = selectRelayService(
-    { catalogRevision: refreshedDigest, items: [relayWithTwoOperations] },
-    {
-      recordId: relayWithTwoOperations.recordId,
-      capabilityMatch: {
-        semanticClassId: 'urn:example:registered-business',
-        operationFamilyId: 'urn:example:consultation-search',
-      },
-    },
-  );
-  assert.throws(
-    () => continueAfterRenewal(relayPrevious, relayCurrent),
-    (error) => error instanceof DiscoveryClientError && error.kind === 'selection_changed',
-  );
   assert.throws(
     () => {
       const reselected = selectEvidenceService(
@@ -399,30 +339,20 @@ test('a supported large response remains selectable', () => {
     (_, index) => `urn:example:${name}:${String(index).padStart(3, '0')}`,
   );
   const items = Array.from({ length: 200 }, (_, index) => withDerivedBindingId({
-    ...relayService,
+    ...service,
     recordId: `record-${String(index).padStart(3, '0')}`,
-    serviceId: `urn:example:service:relay:${String(index).padStart(3, '0')}`,
+    serviceId: `urn:example:service:evidence:${String(index).padStart(3, '0')}`,
     jurisdictions: identifiers('jurisdiction'),
     conformsTo: identifiers('profile'),
-    semanticClassIds: [
-      'urn:example:registered-business',
-      ...identifiers('semantic').slice(0, 127),
-    ],
-    operationFamilyIds: [
-      'urn:example:consultation-list',
-      ...identifiers('operation').slice(0, 127),
-    ],
+    evidenceTypeIds: identifiers('evidence'),
   }));
   assert.ok(JSON.stringify(items).length < 16 * 1024 * 1024);
 
-  const selection = selectRelayService(
+  const selection = selectEvidenceService(
     { catalogRevision: digest, items },
     {
       recordId: 'record-000',
-      capabilityMatch: {
-        semanticClassId: 'urn:example:registered-business',
-        operationFamilyId: 'urn:example:consultation-list',
-      },
+      evidenceTypeId: 'urn:example:evidence:000',
     },
   );
   assert.equal(selection.recordId, 'record-000');

@@ -2,7 +2,7 @@
 //! Bounded response decoding for the isolated source-adaptation worker.
 //!
 //! This is the one intentional general-value decoder for registry data. Its
-//! output is admitted only to Relay's isolated script worker boundary. Raw
+//! output is admitted only to an isolated script worker boundary. Raw
 //! destination bytes remain inaccessible, JSON is strict, and code-owned
 //! structural limits are applied before and after allocation.
 

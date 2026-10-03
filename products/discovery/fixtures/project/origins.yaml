@@ -4,7 +4,3 @@ origins:
     catalogUrl: https://evidence.example.invalid/catalog.jsonld
     profile: registry-discovery-v1alpha1
     enabled: true
-  - originId: example-relay
-    catalogUrl: https://relay.example.invalid/v2/artifacts/discovery-description
-    profile: registry-discovery-v1alpha1
-    enabled: true

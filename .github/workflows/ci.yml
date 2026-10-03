@@ -61,8 +61,6 @@ jobs:
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
       config_conformance: ${{ steps.filter.outputs.config_conformance }}
       discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
-      relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
-      relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
       breg_contracts: ${{ steps.filter.outputs.breg_contracts }}
       breg_integration: ${{ steps.filter.outputs.breg_integration }}
       breg_contracts_lanes: ${{ steps.filter.outputs.breg_contracts_lanes }}
@@ -700,95 +698,6 @@ jobs:
         # The page serves on 127.0.0.1:38080 and 38090, which nothing on this
         # runner holds, so the replay runs on the ports a reader gets.
         run: node docs/site/scripts/run-tutorial.mjs --gate discovery
-
-  relay-v2-contracts:
-    name: Relay V2 product contracts
-    needs: changes
-    if: needs.changes.outputs.relay_v2_contracts == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 22.12.0
-          cache: npm
-          cache-dependency-path: docs/site/package-lock.json
-
-      - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-        with:
-          shared-key: workspace-registry
-          cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Relay V2 contract consistency
-        run: products/relay-v2/scripts/check-contracts.sh
-
-      - name: Reproduce Relay V2 authoring schemas
-        run: products/relay-v2/scripts/check-authoring-schema.sh
-
-      - name: Relay V2 coequal HTTP journeys
-        env:
-          RELAY_V2_STOCK_ISSUER: "1"
-        run: products/relay-v2/scripts/test-http.sh
-
-      - name: Install docs dependencies
-        working-directory: docs/site
-        run: npm ci
-
-      - name: Test the tutorial runner
-        working-directory: docs/site
-        run: npm run test:tutorial:runner
-
-      - name: Check tutorial command drift
-        working-directory: docs/site
-        run: npm run check:tutorial:relay:dry-run
-
-      - name: Build the Relay V2 toolset under test
-        run: cargo build --locked -p registry-relay-v2 --features tooling -p registry-relayctl --bins
-
-      - name: Execute the Relay V2 tutorial from a reader directory
-        env:
-          RELAY_BIN: ${{ github.workspace }}/target/debug/relay
-          RELAYCTL_BIN: ${{ github.workspace }}/target/debug/relayctl
-        # The page serves on 127.0.0.1:8080, which nothing on this runner
-        # holds, so the replay runs on the port a reader gets.
-        run: node docs/site/scripts/run-tutorial.mjs --gate relay
-
-  relay-client-contracts:
-    name: Relay client contract and source neutrality
-    needs:
-      - changes
-      - rust-policy
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.relay_client_contracts == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-        with:
-          shared-key: workspace-registry
-          cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Relay client contract consistency
-        run: products/relay-v2/scripts/check-client-contract.sh
-
-      - name: Relay client source neutrality
-        run: products/relay-v2/scripts/check-source-neutrality.sh
 
   casework-postgres:
     name: Casework PostgreSQL transactions
@@ -1470,8 +1379,6 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
-      - relay-v2-contracts
-      - relay-client-contracts
       - breg-contracts
       - breg-wasm
       - identifiers
@@ -2392,7 +2299,6 @@ jobs:
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
-            crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
             crates/registry-messaging-client-node/package-lock.json
@@ -2409,7 +2315,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -2431,7 +2337,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -2483,7 +2389,6 @@ jobs:
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
-            crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
             crates/registry-messaging-client-node/package-lock.json
@@ -2503,7 +2408,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence relay breg casework messaging; do
+          for client in discovery evidence breg casework messaging; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \
@@ -2534,7 +2439,7 @@ jobs:
           done
           client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
           platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-          for client in discovery evidence relay breg casework messaging; do
+          for client in discovery evidence breg casework messaging; do
             cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
               "${platform_dir}/"
           done
@@ -2588,8 +2493,6 @@ jobs:
       - discovery-contracts
       - evidence-contracts
       - evidence-fuzz
-      - relay-v2-contracts
-      - relay-client-contracts
       - breg-contracts
       - breg-wasm
       - identifiers

@@ -75,24 +75,12 @@ pub mod messaging {
     };
 }
 
-pub mod relay {
-    pub use registry_relay_client::{
-        BoundingBox, CollectionContinuation, CollectionContinuationProjection, CollectionPage,
-        Conditional, ListRequest, LookupRequest, ProblemCode, ProtocolFailure, RawDocument,
-        RecordCollectionResponse, RecordFormat, RecordOptions, RecordResponse, RelayClient,
-        RelayClientConfig, RelayClientError, ResourceContinuation, ResourceListRequest,
-        SdmxDataFormat, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest, SearchRequest,
-        ServiceMetadata, StrongEtag,
-    };
-}
-
 pub mod discovery {
     pub use registry_discovery_client::{
         accept_service_selection, renew_unchanged_service_selection, AcceptedServiceSelection,
         DiscoveryClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
         EvidenceResolutionContext, EvidenceSelectionRequest, EvidenceServiceQuery,
-        EvidenceServiceSelection, MatchedCapability, RelayCapabilityMatch, RelaySelectionRequest,
-        RelayServiceQuery, RelayServiceSelection, SelectionRequest, ServiceKind, ServiceRecord,
+        EvidenceServiceSelection, MatchedCapability, SelectionRequest, ServiceKind, ServiceRecord,
         ServiceSearchResponse, ServiceSelection,
     };
 }

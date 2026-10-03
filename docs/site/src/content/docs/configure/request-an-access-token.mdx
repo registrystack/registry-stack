@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 
 Use a private key JWT client assertion when an application needs its own short-lived access token
-for Evidence Gateway, Base Registry Engine (BReg), or Registry Relay. The deployment's OAuth issuer owns
+for Evidence Gateway or Base Registry Engine (BReg). The deployment's OAuth issuer owns
 client registration and token issuance. The resource server independently verifies the resulting
 token against its configured issuer, audience, algorithm, token type, and authority claims.
 
@@ -67,7 +67,7 @@ token = {
 
 Pass this `token` value in the client configuration shown by
 [request Evidence from an application](../../tutorials/request-evidence-from-an-application/).
-The Relay and BReg client bindings expose the same private key JWT credential provider for their
+The BReg client binding exposes a private key JWT credential provider for its
 own resource URLs and registered scopes.
 
 {/* Evidence: crates/registry-platform-httputil/src/client/private_key_jwt.rs;

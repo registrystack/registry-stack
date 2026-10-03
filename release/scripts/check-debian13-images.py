@@ -114,7 +114,6 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.breg-mcp"),
     Path("release/docker/Dockerfile.breg-review"),
     Path("release/docker/Dockerfile.casework"),
-    Path("release/docker/Dockerfile.relay"),
     Path("release/docker/Dockerfile.scheduling"),
     Path("release/docker/Dockerfile.messaging"),
 )
@@ -144,44 +143,6 @@ MAINTAINED_TEXT_PATHS = (
 )
 
 PREPARATION_DOCKERFILES = DOCKERFILES
-RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
-RELAY_RUNTIME_ROOT_STAGE = f"""\
-FROM {DEBIAN_PREPARATION} AS runtime-root
-ARG SOURCE_DATE_EPOCH
-{RUNTIME_PACKAGE_ADD_INSTRUCTIONS}
-RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
-    --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\
-    --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \\
-    {RUNTIME_PACKAGE_MOUNT} \\
-    {RUNTIME_PACKAGE_COMMAND} \\
-    && mkdir -p \\
-        /workspace/runtime-root/licenses/relay \\
-        /workspace/runtime-root/usr/local/bin \\
-        /workspace/runtime-root/var/lib/relay/audit \\
-        /workspace/runtime-root/var/lib/relay/data \\
-    && install -d -o 0 -g 0 -m 0755 \\
-        /workspace/runtime-root \\
-        /workspace/runtime-root/etc \\
-        /workspace/runtime-root/etc/relay \\
-    && install -m 0755 /workspace/image-bin/relay /workspace/runtime-root/usr/local/bin/relay \\
-    && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/relay/LICENSE \\
-    && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/relay/THIRD_PARTY_NOTICES \\
-    && chown -R 65532:65532 /workspace/runtime-root/var/lib/relay \\
-    && chmod 0700 /workspace/runtime-root/var/lib/relay/audit \\
-    && find /workspace/runtime-root -exec touch -h --date="@${{SOURCE_DATE_EPOCH}}" {{}} +
-"""
-RELAY_RUNTIME_STAGE = f"""\
-FROM {DISTROLESS_RUNTIME} AS runtime
-LABEL org.registrystack.runtime.uid="65532" \\
-      org.registrystack.runtime.gid="65532"
-COPY --from=runtime-root /workspace/runtime-root/ /
-WORKDIR /var/lib/relay
-EXPOSE 8080
-ENV RELAY_HEALTHCHECK_URL=http://127.0.0.1:8080/health
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/relay", "healthcheck"]
-ENTRYPOINT ["/usr/local/bin/relay"]
-CMD ["serve", "--runtime-config", "/etc/relay/runtime.yaml"]
-"""
 # Each entry pins the runtime instructions that bind one HTTP-probed service to
 # its configuration. A service that reads no environment variable declares no
 # `environment` and binds its runtime file through the command instead.
@@ -326,28 +287,6 @@ def named_stage(instructions: tuple[str, ...], name: str) -> tuple[str, ...]:
         len(instructions),
     )
     return instructions[start:end]
-
-
-def check_relay_image_shape(text: str, relative: Path, failures: list[str]) -> None:
-    """Pin the fixed Relay preparation and non-root runtime recipes."""
-    instructions = normalized_instructions(text)
-    if named_stage(instructions, "runtime-root") != normalized_instructions(
-        RELAY_RUNTIME_ROOT_STAGE
-    ):
-        failures.append(
-            f"{relative}: Relay V2 runtime preparation stage must match the "
-            "root-owned release recipe"
-        )
-
-    final_runtime_stage = named_stage(instructions, "runtime")
-    if (
-        final_runtime_stage != normalized_instructions(RELAY_RUNTIME_STAGE)
-        or instructions[-len(final_runtime_stage) :] != final_runtime_stage
-    ):
-        failures.append(
-            f"{relative}: Relay V2 runtime stage must match the non-root, "
-            "metadata-preserving release recipe"
-        )
 
 
 def check_repository(root: Path = ROOT) -> list[str]:
@@ -668,46 +607,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
                     failures.append(
                         f"{relative}: Distroless runtime contains {forbidden.strip()!r}"
                     )
-
-    for relative in RELAY_V2_DOCKERFILES:
-        text = texts[relative]
-        check_relay_image_shape(text, relative, failures)
-        require(
-            text,
-            "/usr/local/bin/relay",
-            relative,
-            "Relay V2 binary",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            'ENTRYPOINT ["/usr/local/bin/relay"]',
-            relative,
-            "absolute Relay V2 entrypoint",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            'CMD ["serve", "--runtime-config", "/etc/relay/runtime.yaml"]',
-            relative,
-            "absolute Relay V2 runtime configuration binding",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            "ENV RELAY_HEALTHCHECK_URL=http://127.0.0.1:8080/health",
-            relative,
-            "safe configurable Relay V2 healthcheck default",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s '
-            '--retries=3 CMD ["/usr/local/bin/relay", "healthcheck"]',
-            relative,
-            "environment-aware Relay V2 healthcheck",
-            failures,
-        )
 
     for relative, contract in HTTP_PROBE_DOCKERFILES.items():
         runtime = runtime_stage(texts[relative])

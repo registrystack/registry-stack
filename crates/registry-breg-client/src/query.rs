@@ -2,8 +2,7 @@
 
 //! Bounded request facts for the Base Registry Engine read surface.
 //!
-//! Base Registry Engine and Relay deliberately have different query contracts. This
-//! module mirrors the BReg wire names and bounds without interpreting its
+//! This module mirrors the BReg wire names and bounds without interpreting its
 //! governed filter or ordering grammar in the client.
 
 use std::collections::{BTreeMap, BTreeSet};

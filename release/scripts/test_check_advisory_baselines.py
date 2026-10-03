@@ -19,7 +19,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = Path(__file__).with_name("check-advisory-baselines.py")
 LIVE_BASELINES = (
-    ROOT / "products/relay-v2/security/advisory-baseline.json",
     ROOT / "release/security/breg-advisory-baseline.json",
     ROOT / "release/security/casework-advisory-baseline.json",
     ROOT / "release/security/discovery-advisory-baseline.json",
@@ -32,7 +31,6 @@ LIVE_BASELINES = (
     ROOT / "release/security/registry-render-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:3055b584ef680ab1f71c937bc653f89470088044e14814858b4bf5ea6d290dd5",
     "breg": "sha256:f995d3965b38ad9037132908db6408b2358cc75fc97d60f3f5ee15df1649a4bc",
     "casework": "sha256:a50ecbee234c092060e0588346543b2543c956d5b2ed3ad021379a05dd81af6e",
     "discovery": "sha256:50c9a1abe05b9a080ed9eb995fe6350d2cdb2a367a4b6c5d6215918b4a9d727d",
@@ -51,7 +49,6 @@ LIVE_REFERENCE_SOURCE_REVISION = "252c1bf435c332f65c3a391ccb16a70c0a22587a"
 # exception. Move it forward by hand when the baselines are renewed.
 LIVE_REVIEW_EVALUATION_DATE = "2026-10-01"
 LIVE_REFERENCE_PROVENANCE = {
-    "relay": "local_reproduction",
     "breg": "local_reproduction",
     "casework": "local_reproduction",
     "discovery": "local_reproduction",
@@ -64,7 +61,6 @@ LIVE_REFERENCE_PROVENANCE = {
     "registry-render": "local_reproduction",
 }
 LIVE_EXECUTABLES = {
-    "relay": "/usr/local/bin/relay",
     "breg": "/usr/local/bin/breg",
     "casework": "/usr/local/bin/casework",
     "discovery": "/usr/local/bin/discovery",

@@ -88,15 +88,6 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("REGISTRY_RELEASE_SOURCE_MODE=monorepo", result.stderr)
 
-    def test_monorepo_mode_rejects_missing_relay_v2_crate(self) -> None:
-        with MonorepoFixture() as stack_root:
-            shutil.rmtree(stack_root / "crates" / "registry-relay-v2")
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("registry-relay-v2 crate", result.stderr)
-
     def test_monorepo_mode_rejects_missing_evidence_oid4vci_crate(self) -> None:
         with MonorepoFixture() as stack_root:
             shutil.rmtree(stack_root / "crates" / "registry-evidence-oid4vci")
@@ -278,12 +269,6 @@ class MonorepoFixture:
             "crates/registry-discovery-client",
             "crates/registry-discovery-client-node",
             "crates/registry-discovery-client-py",
-            "crates/registry-relay-v2",
-            "crates/registry-relayctl",
-            "crates/registry-relay-http-contract",
-            "crates/registry-relay-client",
-            "crates/registry-relay-client-node",
-            "crates/registry-relay-client-py",
             "crates/registry-evidence",
             "crates/registry-evidencectl",
             "crates/registry-evidence-oid4vci",

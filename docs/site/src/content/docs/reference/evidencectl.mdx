@@ -283,11 +283,7 @@ line for that rule. The editor bounds a message at 1024 characters.
 
 ### Base Registry Engine projects
 
-The language server serves Evidence Gateway and Registry Relay projects. A Base Registry Engine
-(BReg) project is neither, and it names its own project document `registry.yaml`. The editor tooling in this
-page reports nothing about one, and starts no language server over one.
-
-BReg publishes its authoring JSON Schemas as
+Base Registry Engine (BReg) publishes its authoring JSON Schemas as
 [`registry-project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/breg/generated/authoring/registry-project.schema.json)
 and
 [`registry-module.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/breg/generated/authoring/registry-module.schema.json).
@@ -305,8 +301,7 @@ No command writes a mapping for them, so copy both into the BReg project and map
 
 {/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
     products/breg/generated/authoring/registry-module.schema.json;
-    products/breg/acceptance/business/registry.yaml;
-    crates/registry-language-server/src/relay_v2/index.rs, declares_root(). */}
+    products/breg/acceptance/business/registry.yaml. */}
 
 ## Related reference
 

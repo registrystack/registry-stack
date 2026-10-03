@@ -26,8 +26,8 @@ class FakeCommands:
     digest = "sha256:" + "a" * 64
     revision = "b" * 40
     source = "https://github.com/registrystack/registry-stack"
-    version = "0.26.1"
-    roster = ("breg", "discovery", "evidence", "relay")
+    version = "0.39.0"
+    roster = ("breg", "discovery", "evidence")
 
     def __init__(
         self,
@@ -263,50 +263,16 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
         with self.assertRaises(MODULE.EvidenceError):
             MODULE.parse_roster("evidence mint relay\n")
 
-    def test_post_mint_roster_is_owned_and_complete(self) -> None:
-        result = subprocess.run(
-            [
-                "python3",
-                str(ROOT / "release/scripts/release_candidate.py"),
-                "image-names",
-                "--version",
-                "0.31.0",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(
-            MODULE.parse_roster(result.stdout),
-            ("breg", "casework", "discovery", "evidence", "relay"),
-        )
 
-    def test_v0_33_roster_includes_scheduling(self) -> None:
-        result = subprocess.run(
-            [
-                "python3",
-                str(ROOT / "release/scripts/release_candidate.py"),
-                "image-names",
-                "--version",
-                "0.33.0",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(
-            MODULE.parse_roster(result.stdout),
-            ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
-        )
 
-    def test_v0_38_roster_includes_render_and_oid4vci_images(self) -> None:
+    def test_v0_39_roster_excludes_relay(self) -> None:
         result = subprocess.run(
             [
                 "python3",
                 str(ROOT / "release/scripts/release_candidate.py"),
                 "image-names",
                 "--version",
-                "0.38.0",
+                "0.39.0",
             ],
             check=True,
             capture_output=True,
@@ -324,7 +290,6 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 "evidence-oid4vci",
                 "messaging",
                 "registry-render",
-                "relay",
                 "scheduling",
             ),
         )
@@ -349,40 +314,6 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 with self.assertRaises(MODULE.EvidenceError):
                     MODULE.parse_operator_tools(output, roster)
 
-    def test_v0_36_operator_tools_are_owned_by_the_release_roster(self) -> None:
-        for version, expected in (
-            ("0.35.0", {}),
-            (
-                "0.36.0",
-                {
-                    "breg": "bregctl",
-                    "casework": "caseworkctl",
-                    "scheduling": "schedulingctl",
-                },
-            ),
-        ):
-            with self.subTest(version=version):
-                results = [
-                    subprocess.run(
-                        [
-                            "python3",
-                            str(ROOT / "release/scripts/release_candidate.py"),
-                            command,
-                            "--version",
-                            version,
-                        ],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    ).stdout
-                    for command in ("image-names", "image-operator-tools")
-                ]
-                self.assertEqual(
-                    expected,
-                    MODULE.parse_operator_tools(
-                        results[1], MODULE.parse_roster(results[0])
-                    ),
-                )
 
     def test_each_operator_tool_gets_its_own_exposure_report(self) -> None:
         tools = {"breg": "bregctl"}
@@ -421,8 +352,7 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                     ("breg", "/usr/local/bin/bregctl"),
                     ("discovery", "/usr/local/bin/discovery"),
                     ("evidence", "/usr/local/bin/evidence"),
-                    ("relay", "/usr/local/bin/relay"),
-                ],
+                                    ],
             )
             manifest = json.loads((output / "collection.json").read_text())
             self.assertNotIn("exposure", manifest)
@@ -444,145 +374,15 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 ["breg.json"],
             )
 
-    def test_messaging_joins_the_collector_roster_from_v0_38(
-        self,
-    ) -> None:
-        for version, expected in (
-            (
-                "0.35.0",
-                ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
-            ),
-            (
-                "0.36.0",
-                ("breg", "casework", "discovery", "evidence", "relay", "scheduling"),
-            ),
-            (
-                "1.0.0",
-                (
-                    "breg",
-                    "breg-mcp",
-                    "breg-review",
-                    "casework",
-                    "discovery",
-                    "evidence",
-                    "evidence-oid4vci",
-                    "messaging",
-                    "registry-render",
-                    "relay",
-                    "scheduling",
-                ),
-            ),
-        ):
-            with self.subTest(version=version):
-                result = subprocess.run(
-                    [
-                        "python3",
-                        str(ROOT / "release/scripts/release_candidate.py"),
-                        "image-names",
-                        "--version",
-                        version,
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(
-                    MODULE.parse_roster(result.stdout),
-                    expected,
-                )
 
-    def test_first_messaging_release_roster_includes_messaging(self) -> None:
-        # Messaging has not joined a release, so this patches a hypothetical
-        # first release into release_roster in process instead of adding a
-        # production knob.
-        spec = importlib.util.spec_from_file_location(
-            "release_candidate", ROOT / "release/scripts/release_candidate.py"
-        )
-        assert spec is not None and spec.loader is not None
-        release_candidate = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(release_candidate)
-        stdout = io.StringIO()
-        tools_stdout = io.StringIO()
-        with mock.patch.object(
-            release_candidate.release_roster, "MESSAGING_FIRST_RELEASE", (0, 36, 0)
-        ):
-            with redirect_stdout(stdout):
-                self.assertEqual(
-                    0,
-                    release_candidate.main(["image-names", "--version", "0.36.0"]),
-                )
-            with redirect_stdout(tools_stdout):
-                self.assertEqual(
-                    0,
-                    release_candidate.main(
-                        ["image-operator-tools", "--version", "0.36.0"]
-                    ),
-                )
-        roster = MODULE.parse_roster(stdout.getvalue())
-        self.assertEqual(
-            "messagingctl",
-            MODULE.parse_operator_tools(tools_stdout.getvalue(), roster)["messaging"],
-        )
-        self.assertEqual(
-            roster,
-            (
-                "breg",
-                "casework",
-                "discovery",
-                "evidence",
-                "messaging",
-                "relay",
-                "scheduling",
-            ),
-        )
-        # The collector also supports the held-out breg citizen services.
-        self.assertEqual(
-            MODULE.IMAGE_NAMES - set(roster),
-            {
-                "breg-mcp",
-                "breg-review",
-                "evidence-oid4vci",
-                "registry-render",
-            },
-        )
 
-    def test_the_roster_holds_out_the_breg_citizen_services(self) -> None:
-        # release_roster.BREG_SERVICES_FIRST_RELEASE is unset, so neither the
-        # current nor the next minor collects evidence for breg-mcp or
-        # breg-review.
-        for version in ("0.36.0", "0.37.0"):
-            with self.subTest(version=version):
-                result = subprocess.run(
-                    [
-                        "python3",
-                        str(ROOT / "release/scripts/release_candidate.py"),
-                        "image-names",
-                        "--version",
-                        version,
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(
-                    MODULE.parse_roster(result.stdout),
-                    (
-                        "breg",
-                        "casework",
-                        "discovery",
-                        "evidence",
-                        "relay",
-                        "scheduling",
-                    ),
-                )
 
     def test_the_breg_citizen_services_are_supported_once_they_join(
         self,
     ) -> None:
         self.assertEqual(
             MODULE.parse_roster(
-                "breg breg-mcp breg-review casework discovery evidence relay "
-                "scheduling\n"
+                "breg breg-mcp breg-review casework discovery evidence scheduling\n"
             ),
             (
                 "breg",
@@ -591,7 +391,6 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 "casework",
                 "discovery",
                 "evidence",
-                "relay",
                 "scheduling",
             ),
         )

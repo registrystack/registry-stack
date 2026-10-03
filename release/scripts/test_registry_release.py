@@ -1858,8 +1858,6 @@ class RegistryReleaseTest(TestCase):
                 "identifiers",
                 "breg-contracts",
                 "breg-wasm",
-                "relay-client-contracts",
-                "relay-v2-contracts",
                 "casework-postgres",
                 "scheduling-contracts",
                 "scheduling-postgres",
@@ -1955,7 +1953,6 @@ class RegistryReleaseTest(TestCase):
             "release/docker/Dockerfile.evidence",
             "release/docker/Dockerfile.breg",
             "release/docker/Dockerfile.casework",
-            "release/docker/Dockerfile.relay",
         ]
 
         for dockerfile in release_dockerfiles:
@@ -1963,6 +1960,7 @@ class RegistryReleaseTest(TestCase):
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
         self.assertFalse((ROOT / "release/docker/Dockerfile.registry-relay").exists())
+        self.assertFalse((ROOT / "release/docker/Dockerfile.relay").exists())
         self.assertIn("release/scripts/build-release-image.sh", workflow)
 
     def test_candidate_checks_current_image_labels_before_credentials_and_scanning(
@@ -2264,10 +2262,7 @@ class RegistryReleaseTest(TestCase):
             "python3 release/scripts/check-advisory-baselines.py",
             scan_body,
         )
-        self.assertIn(
-            "baseline=products/relay-v2/security/advisory-baseline.json",
-            scan_body,
-        )
+        self.assertNotIn("products/relay-v2/", scan_body)
         self.assertIn(
             '--syft-report "candidate/security/syft/${name}.syft.json"',
             scan_body,
@@ -2369,16 +2364,17 @@ class RegistryReleaseTest(TestCase):
         )
 
         for current in (
-            "relay-${{ needs.validate.outputs.tag }}-linux-amd64",
-            "relayctl-${{ needs.validate.outputs.tag }}-linux-amd64",
             "release_candidate.py image-names",
             "RELEASE_IMAGE_NAMES: ${{ needs.validate.outputs.image_names }}",
             "echo \"image_names=${release_image_names}\"",
-            "-p registry-relayctl",
         ):
             self.assertIn(current, workflow)
         self.assertIn("registry-manifest-${RELEASE_TAG}-linux-amd64", binary_recipe)
         for retired in (
+            "registry-relay-v2",
+            "registry-relayctl",
+            "relay-${{ needs.validate.outputs.tag }}",
+            "relayctl-${{ needs.validate.outputs.tag }}",
             "-p registryctl ",
             "for name in registry-relay; do",
             "registry-relay-rhai-worker",
@@ -2451,7 +2447,7 @@ class RegistryReleaseTest(TestCase):
         )
 
         for current in (
-            "_relay_v2_payload_inventory",
+            "_release_payload_inventory",
             "payloads: $payloads[0]",
             'canary_image_names="$(python3 release/scripts/release_candidate.py \\\n'
             '            image-names --version "${version}")"\n'
@@ -2476,7 +2472,7 @@ class RegistryReleaseTest(TestCase):
         ):
             self.assertNotIn(retired, workflow)
 
-    def test_relay_scan_workflow_contract_detects_structural_mutations(
+    def test_retained_image_scan_workflow_contract_detects_structural_mutations(
         self,
     ) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
@@ -2493,7 +2489,6 @@ class RegistryReleaseTest(TestCase):
                 "            fi",
                 "Grype did not emit a complete scan report",
                 "now_epoch - db_built_epoch > 259200",
-                "products/relay-v2/security/advisory-baseline.json",
                 'release/security/${name}-advisory-baseline.json',
                 "printf '%s-image\\n' \"${name}\"",
                 '--argjson subjects "${advisory_subjects}"',
@@ -2510,7 +2505,6 @@ class RegistryReleaseTest(TestCase):
             "            fi",
             "Grype did not emit a complete scan report",
             "now_epoch - db_built_epoch > 259200",
-            "products/relay-v2/security/advisory-baseline.json",
             'release/security/${name}-advisory-baseline.json',
             "printf '%s-image\\n' \"${name}\"",
             '--argjson subjects "${advisory_subjects}"',
@@ -2522,7 +2516,7 @@ class RegistryReleaseTest(TestCase):
 
 
 
-    def test_release_packaging_uses_relay_v2_artifact_identities(self) -> None:
+    def test_release_packaging_uses_retained_artifact_identities(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
@@ -2542,18 +2536,14 @@ class RegistryReleaseTest(TestCase):
                 "casework",
                 "scheduling",
                 "messaging",
-                "relay",
             )
         }
 
         self.assertIn("-p registry-manifest-cli", binary_recipe)
-        self.assertIn("-p registry-relay-v2", binary_recipe)
-        self.assertIn("--bin relay", binary_recipe)
-        self.assertIn("--no-default-features", binary_recipe)
-        self.assertIn("-p registry-relayctl", binary_recipe)
+        self.assertNotIn("registry-relay", binary_recipe)
         self.assertIn("-p registry-discovery", binary_recipe)
         self.assertIn("--bin discovery", binary_recipe)
-        for artifact in ("discovery", "registry-manifest", "relay", "relayctl"):
+        for artifact in ("discovery", "registry-manifest"):
             self.assertIn(
                 f'"dist/bin/{artifact}-${{RELEASE_TAG}}-linux-amd64"',
                 binary_recipe,
@@ -2570,7 +2560,6 @@ class RegistryReleaseTest(TestCase):
             "casework",
             "scheduling",
             "messaging",
-            "relay",
         ):
             self.assertIn(
                 f"cp target/release/{name} dist/image-bin/{name}",
@@ -2608,7 +2597,6 @@ class RegistryReleaseTest(TestCase):
             "casework",
             "scheduling",
             "messaging",
-            "relay",
         ):
             self.assertIn(
                 "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
@@ -2622,7 +2610,7 @@ class RegistryReleaseTest(TestCase):
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn(
-            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|relay)",
+            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging)",
             image_recipe,
         )
         self.assertNotIn("registry-relay)", image_recipe)
@@ -3031,6 +3019,8 @@ class RegistryReleaseTest(TestCase):
                 inventory.update({"breg-mcp": version, "breg-review": version})
             if module.release_roster.discoveryctl_in_release(version_tuple):
                 inventory["discoveryctl"] = version
+            if version_tuple >= (0, 39, 0):
+                inventory = {name: value for name, value in inventory.items() if not name.startswith("relay")}
             return inventory
 
         # No version ships Messaging while the roster names no first release.
@@ -3161,6 +3151,8 @@ class RegistryReleaseTest(TestCase):
                         current["discoveryctl"] = version
                     if module.release_roster.messaging_in_release(version_tuple):
                         current.update({"messaging": version, "messagingctl": version})
+                    if version_tuple >= (0, 39, 0):
+                        current = {name: value for name, value in current.items() if not name.startswith("relay")}
                     self.assertEqual(
                         [], module.artifact_inventory_errors(version, current)
                     )
@@ -3280,7 +3272,6 @@ class RegistryReleaseTest(TestCase):
     ) -> None:
         contracts = {
             "evidence": "/workspace/runtime-root/var/lib/registry-evidence/audit",
-            "relay": "/workspace/runtime-root/var/lib/relay/audit",
         }
         for name, audit_path in contracts.items():
             with self.subTest(name=name):
@@ -4783,6 +4774,8 @@ def write_manifest(
     if load_release_roster().messaging_in_release(version_tuple):
         artifacts["messaging"] = version
         artifacts["messagingctl"] = version
+    if version_tuple >= (0, 39, 0):
+        artifacts = {name: value for name, value in artifacts.items() if not name.startswith("relay")}
     manifest = {
         "stack": {
             "release": "beta-6",

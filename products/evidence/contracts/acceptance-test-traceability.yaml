@@ -546,7 +546,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_all_unavailable_is_200_and_records_no_signing_key}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_registry_lookup_declared_unresolved_maps_to_evidence_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_search_is_item_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release}

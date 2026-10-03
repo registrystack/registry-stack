@@ -82,7 +82,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 "discovery-candidate": [version(6, "2026-07-03T00:00:00Z")],
                 "evidence-candidate": [version(4, "2026-07-03T00:00:00Z")],
                 "mint-candidate": [version(5, "2026-07-03T00:00:00Z")],
-                "relay-candidate": [version(3, "2026-07-03T00:00:00Z")],
+                "scheduling-candidate": [version(3, "2026-07-03T00:00:00Z")],
             }
         )
         result = self.module.cleanup(
@@ -97,7 +97,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 ("discovery-candidate", 6),
                 ("evidence-candidate", 4),
                 ("mint-candidate", 5),
-                ("relay-candidate", 3),
+                ("scheduling-candidate", 3),
             ],
             client.deleted,
         )
@@ -154,7 +154,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                     version(1160334666, "2026-07-01T00:00:00Z", ["stuck"]),
                     version(2, "2026-07-01T00:00:00Z", ["deletable"]),
                 ],
-                "relay-candidate": [
+                "scheduling-candidate": [
                     version(3, "2026-07-01T00:00:00Z", ["later-package"])
                 ],
             },
@@ -162,12 +162,12 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         )
         result = self.module.cleanup(
             client,
-            packages=["discovery-candidate", "relay-candidate"],
+            packages=["discovery-candidate", "scheduling-candidate"],
             server_now=self.now,
             apply=True,
         )
         self.assertEqual(
-            [("discovery-candidate", 2), ("relay-candidate", 3)], client.deleted
+            [("discovery-candidate", 2), ("scheduling-candidate", 3)], client.deleted
         )
         actions_by_id = {item["version_id"]: item for item in result["actions"]}
         self.assertEqual("undeletable", actions_by_id[1160334666]["action"])
@@ -183,18 +183,18 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         error = self.module.GitHubApiError(
             "DELETE",
             "https://api.github.com/orgs/registrystack/packages/container/"
-            "relay-candidate/versions/9",
+            "scheduling-candidate/versions/9",
             400,
             detail,
         )
         client = FakeClient(
-            {"relay-candidate": [version(9, "2026-07-01T00:00:00Z", ["old"])]},
-            delete_errors={("relay-candidate", 9): error},
+            {"scheduling-candidate": [version(9, "2026-07-01T00:00:00Z", ["old"])]},
+            delete_errors={("scheduling-candidate", 9): error},
         )
         with self.assertRaisesRegex(self.module.CleanupError, "Some other validation"):
             self.module.cleanup(
                 client,
-                packages=["relay-candidate"],
+                packages=["scheduling-candidate"],
                 server_now=self.now,
                 apply=True,
             )
@@ -206,7 +206,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 error = self.module.GitHubApiError(
                     "DELETE",
                     "https://api.github.com/orgs/registrystack/packages/"
-                    "container/relay-candidate/versions/9",
+                    "container/scheduling-candidate/versions/9",
                     status,
                     json.dumps(
                         {
@@ -219,16 +219,16 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 )
                 client = FakeClient(
                     {
-                        "relay-candidate": [
+                        "scheduling-candidate": [
                             version(9, "2026-07-01T00:00:00Z", ["old"])
                         ]
                     },
-                    delete_errors={("relay-candidate", 9): error},
+                    delete_errors={("scheduling-candidate", 9): error},
                 )
                 with self.assertRaises(self.module.CleanupError):
                     self.module.cleanup(
                         client,
-                        packages=["relay-candidate"],
+                        packages=["scheduling-candidate"],
                         server_now=self.now,
                         apply=True,
                     )
@@ -337,6 +337,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             "messaging",
             "registry-render",
             "evidence-oid4vci",
+            "relay",
         ):
             with self.subTest(name=name):
                 self.assertIn(name, self.module.PUBLIC_PACKAGES)
@@ -348,7 +349,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             with self.subTest(timestamp=timestamp):
                 client = FakeClient(
                     {
-                        "relay-candidate": [
+                        "scheduling-candidate": [
                             version(2, "2026-07-01T00:00:00Z", ["valid-old"]),
                             version(3, timestamp, ["candidate"]),
                         ]
@@ -357,7 +358,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 with self.assertRaises(self.module.CleanupError):
                     self.module.cleanup(
                         client,
-                        packages=["relay-candidate"],
+                        packages=["scheduling-candidate"],
                         server_now=self.now,
                         apply=True,
                     )
@@ -366,11 +367,11 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
     def test_malformed_tag_metadata_fails_closed(self) -> None:
         malformed = version(1, "2026-07-01T00:00:00Z")
         malformed["metadata"]["container"]["tags"] = "not-a-list"
-        client = FakeClient({"relay-candidate": [malformed]})
+        client = FakeClient({"scheduling-candidate": [malformed]})
         with self.assertRaisesRegex(self.module.CleanupError, "malformed tag metadata"):
             self.module.cleanup(
                 client,
-                packages=["relay-candidate"],
+                packages=["scheduling-candidate"],
                 server_now=self.now,
                 apply=True,
             )
@@ -411,7 +412,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 return [version(2, "2026-07-02T00:00:00Z")], {}
 
         client = PaginatedClient()
-        values = client.package_versions("relay-candidate")
+        values = client.package_versions("scheduling-candidate")
         self.assertEqual([1, 2], [item["id"] for item in values])
         self.assertEqual(2, len(client.calls))
 
@@ -433,7 +434,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         self_module = self.module
         client = MissingClient()
         with self.assertRaisesRegex(self.module.CleanupError, "failed with 404"):
-            client.package_versions("relay-candidate")
+            client.package_versions("scheduling-candidate")
         self.assertEqual(1, len(client.calls))
 
     def test_package_version_listing_fails_closed_for_other_errors(self) -> None:
@@ -454,7 +455,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
 
         self_module = self.module
         with self.assertRaisesRegex(self.module.CleanupError, "failed with 500"):
-            FailingClient(500).package_versions("relay-candidate")
+            FailingClient(500).package_versions("scheduling-candidate")
 
         client = FailingClient(404)
         with self.assertRaisesRegex(self.module.CleanupError, "exact candidate allowlist"):
@@ -482,7 +483,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
 
         self_module = self.module
         with self.assertRaisesRegex(self.module.CleanupError, "failed with 404"):
-            MissingSecondPageClient().package_versions("relay-candidate")
+            MissingSecondPageClient().package_versions("scheduling-candidate")
 
     def test_pagination_cannot_change_api_origin(self) -> None:
         class RedirectingClient(self.module.GitHubClient):
@@ -493,7 +494,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 return [], {"link": '<https://example.test/page/2>; rel="next"'}
 
         with self.assertRaisesRegex(self.module.CleanupError, "changed API origin"):
-            RedirectingClient().package_versions("relay-candidate")
+            RedirectingClient().package_versions("scheduling-candidate")
 
     def test_pagination_cannot_repeat_a_page(self) -> None:
         class LoopingClient(self.module.GitHubClient):
@@ -504,13 +505,13 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 return [], {
                     "link": (
                         "<https://api.github.com/orgs/registrystack/packages/"
-                        "container/relay-candidate/versions?"
+                        "container/scheduling-candidate/versions?"
                         'per_page=100>; rel="next"'
                     )
                 }
 
         with self.assertRaisesRegex(self.module.CleanupError, "repeated"):
-            LoopingClient().package_versions("relay-candidate")
+            LoopingClient().package_versions("scheduling-candidate")
 
 
 if __name__ == "__main__":

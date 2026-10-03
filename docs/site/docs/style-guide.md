@@ -20,7 +20,7 @@ If a rule here conflicts with `design-registry-docs.md`, follow the design doc f
 ## Voice and tone
 
 - Use second person (`you`) for actions the reader takes, and keep using it to the end. A procedure that addresses the reader in the prerequisites and then goes impersonal for nine steps has stopped talking to anyone.
-- Use the project name (`Registry Relay`, not `we`) for system behavior.
+- Use the project name (`Evidence Gateway`, not `we`) for system behavior.
 - Use active voice. Exception: when the actor is unimportant or obvious from context.
 - Institutional, calm, technical. More operating manual than marketing copy, and an operating manual is written to the operator.
 - Do not manage the reader's emotions. No "don't worry", "easy", "no problem". Calm is not distance: that a step is destructive, that a mistake here cannot be undone, or that a command runs for ten minutes is information the reader needs, and withholding it is not restraint.
@@ -106,14 +106,12 @@ Preferred terms.
 | Domain                | Preferred                                            |
 | --------------------- | ---------------------------------------------------- |
 | Product family        | `registry stack` (lowercase) for the concept; `Registry Docs` for the site and repo |
-| Formal product names  | `Base Registry Engine`, `Evidence Gateway`, `Registry Discovery`, `Registry Manifest`, `Registry Platform`, `Registry Relay`, and `Registry Render` (Title Case) |
-| Short forms           | Write the formal name on the page's first use, then the short form for the rest of that page: `BReg`, introduced as `Base Registry Engine (BReg)`; `Evidence` for Evidence Gateway; `Relay` for Registry Relay; `Discovery` for Registry Discovery; `Render` for Registry Render. A page may keep the formal name throughout. `Relay V2` names the runtime generation, not the product, so use it only where the page is about that generation. |
-| The two `registry.yaml` documents | Base Registry Engine and Registry Relay each compile a file named `registry.yaml`, and the two grammars are unrelated. Relay's is the Registry contract (`kind: RegistryContract`); BReg's is the root of a registry project. Where both products are in view, write `the BReg registry document` and `the Relay registry document`. |
-| Names that never appear | `BREG`, `Breg`, `bReg`, `B-Reg`, `EG`, `Relay2`, and `RelayV2`. `Registry Server` was renamed to Base Registry Engine and survives only in an explicit rename note. `Protected Registry APIs` names a runtime pattern, never the Relay product; the pattern reads `protected registry API` in lowercase prose. Binaries stay lowercase and monospace, `breg`, `bregctl`, `relay`, `relayctl`, `evidence`, `evidencectl`, `discovery`, `discoveryctl`, and `render`, and none of them is the product name. |
-| Retired product       | `Registry Notary` keeps its Title Case name, but only where the page says in the same block that it is retired |
+| Formal product names  | `Base Registry Engine`, `Evidence Gateway`, `Registry Discovery`, `Registry Manifest`, `Registry Platform`, and `Registry Render` (Title Case) |
+| Short forms           | Write the formal name on the page's first use, then the short form for the rest of that page: `BReg`, introduced as `Base Registry Engine (BReg)`; `Evidence` for Evidence Gateway; `Discovery` for Registry Discovery; `Render` for Registry Render. A page may keep the formal name throughout. |
+| Names that never appear | `BREG`, `Breg`, `bReg`, `B-Reg`, and `EG`. `Registry Server` was renamed to Base Registry Engine and survives only in an explicit rename note. Binaries stay lowercase and monospace, and none of them is the product name. |
+| Retired products      | `Registry Relay` and `Registry Notary` keep their Title Case names, but only where the same block says the product is retired |
 | External adopter demo | `Solmara Lab` (Title Case); not a formal Registry Stack product |
-| Repo slugs            | `registry-platform`, `registry-manifest`, `registry-relay`, `registry-evidence`, `registry-breg`, and `registry-discovery`; `solmara-lab` for the external adopter demo (monospace) |
-| Legacy identifiers    | `registry-evidence-gateway-pdp/v1` is a Relay PDP profile identifier. It does not name or connect to the Evidence Gateway product. |
+| Repo slugs            | `registry-platform`, `registry-manifest`, `registry-evidence`, `registry-breg`, and `registry-discovery`; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
 
@@ -132,7 +130,7 @@ do not relabel an existing integration as a different domain.
 - Parallel structure for a list of like things: options, fields, products, sources. All items are noun phrases, or all are imperative verbs. Do not mix.
 - Steps in a procedure are not a list of like things. Write them as sentences and let them differ in shape. Forcing every step into one frame is how a page ends up repeating an opener nobody chose.
 - No period if every item is a fragment. Period on every item if any item is a complete sentence. The fragment preference does not apply to procedure steps.
-- Use the Oxford comma in prose: `Manifest, Relay, and Evidence Gateway`.
+- Use the Oxford comma in prose: `Manifest, BReg, and Evidence Gateway`.
 - Do not use bold inside list items for keywords. Reserve bold for UI labels.
 
 ## Code, commands, paths

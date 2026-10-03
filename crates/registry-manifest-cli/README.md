@@ -90,7 +90,7 @@ validation, and static publication for any passed consumer manifests.
 ## Boundary
 
 The CLI wraps `registry-manifest-core`. It reads and writes local files, but it
-does not contact Registry Relay, require a running service, read secrets, or
+does not contact a running service, read secrets, or
 inspect runtime data sources.
 
 ## Testing

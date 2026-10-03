@@ -33,9 +33,6 @@ registry-evidence.workspace = true
 registry-evidence-client.workspace = true
 registry-evidence-verifier.workspace = true
 registry-platform-crypto.workspace = true
-registry-platform-sqlite = { workspace = true, features = ["fixture"] }
-registry-relay-client.workspace = true
-registry-relay-v2 = { workspace = true, features = ["tooling"] }
 tempfile.workspace = true
 time.workspace = true
 tokio.workspace = true

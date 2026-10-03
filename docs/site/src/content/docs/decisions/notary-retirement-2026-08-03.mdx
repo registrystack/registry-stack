@@ -1,18 +1,19 @@
 ---
 title: Registry Notary retirement decision
-description: Record of the decision to retire Registry Notary and direct current adoption to Registry Relay and Evidence Gateway.
+description: Historical record of the Registry Notary retirement, with its Relay guidance superseded by the later Relay retirement.
 status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-10-03"
 doc_type: decision
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack decided on 2026-08-03 to retire Registry Notary and direct
-current adopters to Registry Relay and Evidence Gateway.
+Registry Stack decided on 2026-08-03 to retire Registry Notary. At that time, the decision directed
+adopters to Registry Relay and Evidence Gateway. The Relay guidance on this page is historical;
+Registry Relay was later [retired](../registry-relay-retirement-2026-10-03/).
 
 ## Decision
 
@@ -27,10 +28,10 @@ minimum-disclosure assertion product.
 Registry Mint remains a supporting token issuer for deployments without an
 identity provider.
 
-Present two paths to adopters:
+The decision presented two paths at the time:
 
-- Use Registry Relay when another system must read specific, authorized data.
-- Use Evidence Gateway when another system must learn only a fact.
+- The Registry Relay path covered specific, authorized data reads.
+- The Evidence Gateway path covered learning only a fact.
 
 Evidence Gateway owns its source access independently of Registry Relay.
 It is not a Notary mode or a continuation of the Notary credential lifecycle.
@@ -65,4 +66,5 @@ Relay's role or Evidence Gateway's name, contracts, or independence.
 
 ## Superseded by
 
-None.
+The [Registry Relay retirement decision](../registry-relay-retirement-2026-10-03/) supersedes this
+record's Relay adoption path. Evidence Gateway remains a current product.

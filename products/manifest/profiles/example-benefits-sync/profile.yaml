@@ -53,7 +53,7 @@ codelist_expectations:
       - revoked
 unsupported_mappings:
   - source: async subscribe and callback flow
-    reason: benefits sync async operations are Relay runtime behavior, not static metadata.
+    reason: Benefits sync async operations are runtime behavior, not static metadata.
   - source: transaction status polling
     reason: Transaction status is runtime state and is not represented in this metadata fixture.
 conformance_checks:

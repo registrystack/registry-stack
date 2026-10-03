@@ -5,11 +5,9 @@ import {
   renewUnchangedSelection,
   selectEvidenceAlternative,
   selectEvidenceService,
-  selectRelayService,
   validateSelection,
   validateSelectionStructure,
   type EvidenceServiceSelection,
-  type RelayServiceSelection,
   type ServiceRecord,
 } from '../client';
 
@@ -43,24 +41,6 @@ async function useDiscoveryClient(): Promise<void> {
     selection,
   };
   void forged;
-
-  const relayResponse = await client.searchRelayServices({
-    semanticClassId: 'urn:example:business',
-    operationFamilyId: 'urn:example:list',
-  });
-  const relay: RelayServiceSelection = selectRelayService(relayResponse, {
-    recordId: adopterChooseRecord(relayResponse.items).recordId,
-    capabilityMatch: {
-      semanticClassId: 'urn:example:business',
-      operationFamilyId: 'urn:example:list',
-    },
-  });
-  expectType<string | undefined>(relay.relayCapabilityMatch.semanticClassId);
-
-  // @ts-expect-error Relay intent must name at least one public capability.
-  await client.searchRelayServices({});
-  // @ts-expect-error Relay selection must retain at least one matched capability.
-  selectRelayService(relayResponse, { recordId: relay.recordId, capabilityMatch: {} });
 }
 
 void useDiscoveryClient;

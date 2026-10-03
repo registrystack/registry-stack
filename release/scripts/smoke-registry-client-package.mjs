@@ -6,13 +6,12 @@
 
 import assert from 'node:assert';
 import * as client from '@registrystack/client';
-import { breg, casework, discovery, evidence, relay } from '@registrystack/client';
+import { breg, casework, discovery, evidence } from '@registrystack/client';
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
 assert.strictEqual(typeof breg.verifyWebhookDelivery, 'function');
 assert.strictEqual(typeof discovery.DiscoveryClient, 'function');
 assert.strictEqual(typeof evidence.EvidenceClient, 'function');
-assert.strictEqual(typeof relay.RelayClient, 'function');
 assert.strictEqual(typeof casework.CaseworkClient, 'function');
 
 // A published verification key from the Evidence client construction tests. An
@@ -43,10 +42,6 @@ assert.ok(new evidence.EvidenceClient({
   trustedJwks,
   revokedKeyIds: [],
   token: { static: 'placeholder-token' },
-}));
-assert.ok(new relay.RelayClient({
-  baseUrl: 'https://relay.invalid',
-  authorization: { static: 'placeholder-token' },
 }));
 assert.ok(new casework.CaseworkClient({ baseUrl: 'https://casework.invalid' }));
 

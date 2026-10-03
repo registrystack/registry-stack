@@ -52,7 +52,7 @@
         "recordId": {"$ref": "#/$defs/identifier"},
         "bindingId": {"$ref": "#/$defs/uriIdentifier"},
         "serviceId": {"$ref": "#/$defs/uriIdentifier"},
-        "serviceKind": {"enum": ["evidence", "relay"]},
+        "serviceKind": {"const": "evidence"},
         "title": {"$ref": "#/$defs/text"},
         "description": {"$ref": "#/$defs/text"},
         "endpointUrl": {"$ref": "#/$defs/publicUrl"},
@@ -63,30 +63,14 @@
         "technicalProviderId": {"$ref": "#/$defs/uriIdentifier"},
         "jurisdictions": {"$ref": "#/$defs/nonEmptyUriSet"},
         "conformsTo": {"$ref": "#/$defs/nonEmptyUriSet"},
-        "evidenceTypeIds": {"$ref": "#/$defs/uriSet"},
-        "semanticClassIds": {"$ref": "#/$defs/uriSet"},
-        "operationFamilyIds": {"$ref": "#/$defs/uriSet"},
+        "evidenceTypeIds": {"$ref": "#/$defs/nonEmptyUriSet"},
+        "semanticClassIds": {"type": "array", "maxItems": 0},
+        "operationFamilyIds": {"type": "array", "maxItems": 0},
         "originId": {"$ref": "#/$defs/identifier"},
         "originUrl": {"$ref": "#/$defs/publicUrl"},
         "originContentDigest": {"$ref": "#/$defs/digest"},
         "originFetchedAt": {"type": "string", "format": "date-time", "maxLength": 64}
-      },
-      "allOf": [
-        {
-          "if": {"properties": {"serviceKind": {"const": "evidence"}}, "required": ["serviceKind"]},
-          "then": {
-            "properties": {
-              "evidenceTypeIds": {"$ref": "#/$defs/nonEmptyUriSet"},
-              "semanticClassIds": {"maxItems": 0},
-              "operationFamilyIds": {"maxItems": 0}
-            }
-          }
-        },
-        {
-          "if": {"properties": {"serviceKind": {"const": "relay"}}, "required": ["serviceKind"]},
-          "then": {"properties": {"evidenceTypeIds": {"maxItems": 0}}}
-        }
-      ]
+      }
     },
     "alternative": {
       "type": "object",

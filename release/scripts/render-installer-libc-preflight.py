@@ -40,7 +40,6 @@ INSTALLERS = (
     Installer("crates/registry-casework/install.sh", "Registry Casework"),
     Installer("crates/registry-scheduling/install.sh", "Registry Scheduling"),
     Installer("crates/registry-evidencectl/install.sh", "the Evidence toolset"),
-    Installer("crates/registry-relay-v2/install.sh", "Registry Relay"),
 )
 
 TEMPLATE = """\

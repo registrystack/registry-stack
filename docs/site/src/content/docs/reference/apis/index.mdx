@@ -1,111 +1,38 @@
 ---
 title: API references
-description: Where to find fixed, supporting-service, and deployment-generated HTTP API references across Registry Stack.
-wide: true
+description: Maintained Registry Stack API contracts and generated operation references.
 status: current
 owner: registry-docs
 source_repos:
-  - registry-relay
+  - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-10-03"
 doc_type: reference
 locale: en
 standards_referenced:
   - openapi
 ---
 
-import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astro';
-
-Use this section to find each maintained HTTP surface. Evidence Gateway and its OID4VCI wallet
-delivery front end have fixed generated contracts.
-Relay generates its description from each adopter's Registry contract.
-
-{/* Do not duplicate endpoint reference content in narrative pages. */}
+Maintained products publish their API contracts in the owning product section. Base Registry
+Engine (BReg) publishes its contract with its product reference.
 
 ## Fixed generated APIs
 
-Evidence Gateway's routes are the same in every deployment, so one generated OpenAPI document
-describes the product. The development site reads it from the checked-out current source. Archived
-docsets read it from their release ref and hold it under the archive lock.
+The documentation build renders committed OpenAPI contracts for Evidence Gateway, Registry
+Casework, Registry Scheduling, and Registry Messaging when the selected docset contains those
+products. Generated operation pages inherit the source contract and must not be edited by hand.
 
-- [Evidence Gateway API](./registry-evidence/) documents the assertion, requester-scoped
-  definition discovery, request batch, JWT VC issuer metadata, health, readiness, served-contract,
-  and key discovery endpoints.
+Base Registry Engine publishes its maintained API contract in the
+[BReg API reference](../breg-api/). Registry Render documents its input and service modes in its
+product guide.
 
-The document is generated with the other Evidence Gateway contract artifacts:
+## Contract ownership
 
-```sh
-cargo run -p registry-evidence --example evidence-contracts -- --output "<directory>"
-```
+Each product owns its routes, authentication, request and response schemas, problem types, and
+compatibility policy. A client must use the reference for the product it calls.
 
-The committed copy lives in `products/evidence/generated/`, and root CI's `evidence-contracts` job
-fails on any byte difference between the committed artifacts and a fresh generation. A running
-Evidence Gateway service publishes the same document at `GET /openapi.json` with no authentication
-required.
-
-The separate `evidence-oid4vci` supporting service also has a deterministic, committed OpenAPI
-document. Root CI drift-checks it with the Evidence contract artifacts. Use the
-[v0.21.0 OID4VCI OpenAPI artifact](https://github.com/registrystack/registry-stack/blob/v0.21.0/products/evidence/generated/registry-evidence-oid4vci.openapi.json)
-or render the current binary's contract:
-
-```sh
-evidence-oid4vci openapi --output oid4vci.openapi.json
-```
-
-### Rendered source
-
-The card shows how the rendered Evidence Gateway artifact is selected and links to its
-operations. It is generated from `src/data/openapi-sources.yaml`.
-
-<OpenApiSourcesTable />
-
-## Relay: one document per deployment
-
-Relay has no product-level OpenAPI document to pin, so this site publishes none.
-
-A Relay deployment serves data that its own `registry.yaml` declares. The compiler turns that
-document into the deployment's OpenAPI 3.1.0 description, and `relay` serves the public projection
-of it at `GET /openapi.json` with no authentication required. The description names that
-deployment's registry, its contract version, its base URI, and its own resources, operations, and
-statistical datasets. Deployments with different Registry contracts can produce different
-documents. Fetch the document from the deployment you are integrating with:
-
-```sh
-curl -fsS https://<relay-host>/openapi.json
-```
-
-Two projections are generated. The public projection is the artifact served at `GET /openapi.json`
-and it omits every surface the Registry marks operator-only. The full projection,
-`openapi.full.yaml`, is an operator-only artifact and is never served on that route.
-
-What is fixed across every deployment is the route inventory, not the described data. Relay's
-process router is a closed list:
-
-| Route | Method | Purpose |
-| --- | --- | --- |
-| `/health` | GET | Process liveness |
-| `/ready` | GET | Compiled Registry readiness |
-| `/openapi.json` | GET | Public OpenAPI projection for this deployment |
-| `/v2` | GET | Service metadata and the capability inventory |
-| `/v2/resources` | GET | Declared resources |
-| `/v2/resources/{resource}` | GET | One resource's metadata |
-| `/v2/resources/{resource}/records` | GET | Bounded record list |
-| `/v2/resources/{resource}/records/{recordIdentifier}` | GET | One record read |
-| `/v2/resources/{resource}/lookups/{lookup}` | POST | Declared named lookup |
-| `/v2/resources/{resource}/searches/{search}` | GET | Declared named search |
-| `/v2/artifacts/{artifactIdentifier}` | GET | One visibility-appropriate generated artifact |
-| `/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}` | GET | SDMX data with a series key |
-| `/sdmx/v2/data/{context}/{agency}/{resource}/{version}` | GET | SDMX data with the key omitted |
-| `/sdmx/v2/structure/{artefactType}/{agency}/{resource}/{version}` | GET | SDMX structure |
-
-A deployment cannot add a route to that list. What varies is which `{resource}`, `{lookup}`,
-`{search}`, and SDMX artefact identifiers resolve, which is exactly what the deployment's own
-OpenAPI document tells you.
-
-For the meaning of the response envelope, the access profiles that gate these routes, and the
-error taxonomy they share, use the reference and explanation pages rather than a rendered
-document:
-
-- [Errors and status codes](../errors/)
-- [Relay semantics and disclosure](../../explanation/relay-semantics-and-disclosure/)
-- [RS-PR-RELAY](../../spec/rs-pr-relay/)
+- [Evidence Gateway API](./registry-evidence/)
+- [Base Registry Engine API](../breg-api/)
+- [Registry Casework API](./registry-casework/)
+- [Registry Scheduling API](./registry-scheduling/)
+- [Registry Messaging API](./registry-messaging/)

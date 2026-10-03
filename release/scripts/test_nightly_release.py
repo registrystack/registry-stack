@@ -46,6 +46,7 @@ class NightlyTest(unittest.TestCase):
             "channel_head": None,
             "skip": False,
         }
+        self.record["roster"] = nightly.current_roster(BASE, TAG)
         self.plan.write_text(json.dumps(self.record))
 
     def scan(self, severity=None, age=0):
@@ -73,7 +74,7 @@ class NightlyTest(unittest.TestCase):
         ]
         for directory in directories:
             directory.mkdir(parents=True)
-        for name, kind in release_candidate._relay_v2_payload_inventory(BASE).items():
+        for name, kind in release_candidate._release_payload_inventory(BASE).items():
             if kind != "binary":
                 continue
             directory = (
@@ -112,6 +113,28 @@ class NightlyTest(unittest.TestCase):
         nightly.assemble(self.plan, directories, images, output)
         return output
 
+    def manifest_for_roster(self, roster=None):
+        manifest = json.loads(json.dumps(self.record))
+        manifest.pop("skip")
+        manifest["roster"] = roster or manifest["roster"]
+        manifest["assets"] = [
+            {"name": name, "sha256": "0" * 64}
+            for name in manifest["roster"]["payloads"]
+        ]
+        for product in manifest["roster"]["installers"]:
+            for name in (f"{product}-{TAG}-install.sh", f"{product}-install.sh"):
+                manifest["assets"].append({"name": name, "sha256": "0" * 64})
+        for image in manifest["roster"]["images"]:
+            for suffix in ("grype.json", "sbom.spdx.json"):
+                manifest["assets"].append(
+                    {"name": f"{image}.{suffix}", "sha256": "0" * 64}
+                )
+        manifest["images"] = {
+            name: f"ghcr.io/registrystack/{name}@sha256:{'1' * 64}"
+            for name in manifest["roster"]["images"]
+        }
+        return manifest
+
     def test_identity_rejects_invalid_date_source_and_version(self):
         self.assertEqual(nightly.identity(TAG), (BASE, SHA))
         for tag in (
@@ -123,6 +146,75 @@ class NightlyTest(unittest.TestCase):
         ):
             with self.subTest(tag=tag), self.assertRaises(nightly.NightlyError):
                 nightly.identity(tag)
+
+    def test_old_v1_0_39_manifest_with_relay_remains_readable(self):
+        path = self.root / "old-nightly.json"
+        manifest = {
+            "schema_version": nightly.SCHEMA_V1,
+            "tag": TAG,
+            "version": TAG[1:],
+            "base_version": BASE,
+            "source_sha": SHA,
+            "assets": [{"name": "relay-old", "sha256": "0" * 64}],
+            "images": {
+                name: f"ghcr.io/registrystack/{name}@sha256:{'1' * 64}"
+                for name in nightly.historical_image_names(BASE)
+            },
+        }
+        self.assertEqual(
+            {
+                "breg", "breg-mcp", "breg-review", "casework", "discovery",
+                "evidence", "evidence-oid4vci", "messaging", "registry-render",
+                "relay", "scheduling",
+            },
+            set(manifest["images"]),
+        )
+        path.write_text(json.dumps(manifest))
+        self.assertEqual(manifest, nightly.read_manifest(path))
+
+    def test_v2_roster_refuses_incomplete_self_declared_closures(self):
+        path = self.root / "nightly.json"
+        complete = nightly.current_roster(BASE, TAG)
+        cases = {
+            "missing image": {**complete, "images": complete["images"][:-1]},
+            "missing installer": {
+                **complete,
+                "installers": complete["installers"][:-1],
+            },
+            "missing payload": {**complete, "payloads": complete["payloads"][:-1]},
+            "known subset": {
+                **complete,
+                "images": ["breg"],
+                "installers": ["breg"],
+                "payloads": ["THIRD_PARTY_NOTICES"],
+            },
+        }
+        for name, roster in cases.items():
+            with self.subTest(name=name):
+                path.write_text(json.dumps(self.manifest_for_roster(roster)))
+                with self.assertRaisesRegex(nightly.NightlyError, "frozen profile"):
+                    nightly.read_manifest(path)
+
+    def test_v2_roster_refuses_retired_or_extra_valid_looking_assets(self):
+        path = self.root / "nightly.json"
+        complete = nightly.current_roster(BASE, TAG)
+        cases = {
+            "retired mint image": {
+                **complete,
+                "images": sorted([*complete["images"], "mint"]),
+            },
+            "extra platform archive": {
+                **complete,
+                "payloads": sorted(
+                    [*complete["payloads"], f"breg-{TAG}-linux-arm64.tar.gz"]
+                ),
+            },
+        }
+        for name, roster in cases.items():
+            with self.subTest(name=name):
+                path.write_text(json.dumps(self.manifest_for_roster(roster)))
+                with self.assertRaisesRegex(nightly.NightlyError, "frozen profile"):
+                    nightly.read_manifest(path)
 
     def test_complete_payload_hashes_and_pins_installers(self):
         output = self.assembled()
@@ -149,7 +241,7 @@ class NightlyTest(unittest.TestCase):
                 asset.chmod(0o644)
         output = self.root / "public"
         nightly.assemble(self.plan, directories, images, output)
-        for name, kind in release_candidate._relay_v2_payload_inventory(BASE).items():
+        for name, kind in release_candidate._release_payload_inventory(BASE).items():
             asset = output / name.replace(f"v{BASE}", TAG)
             if kind == "binary" and not name.endswith(".tar.gz"):
                 self.assertEqual(asset.stat().st_mode & 0o777, 0o755)
@@ -448,6 +540,16 @@ class NightlyTest(unittest.TestCase):
             "GITHUB_REPOSITORY": nightly.REPOSITORY,
             "GITHUB_OUTPUT": str(self.root / "outputs"),
         }
+
+        def api(path, payload=None):
+            if path == f"repos/{nightly.REPOSITORY}/branches/main":
+                return {"commit": {"sha": SHA}}
+            package = path.rsplit("/", 1)[-1]
+            return {
+                "name": package,
+                "visibility": "private" if package.endswith("-candidate") else "public",
+            }
+
         with (
             patch.dict(os.environ, environment),
             patch.object(nightly, "ROOT", self.root),
@@ -462,6 +564,66 @@ class NightlyTest(unittest.TestCase):
             lookup.assert_not_called()
             self.assertEqual(api.call_count, 1)
         self.assertTrue(json.loads(self.plan.read_text())["skip"])
+
+    def test_plan_advances_from_a_frozen_v1_head_with_relay(self):
+        (self.root / "Cargo.toml").write_text(
+            f'[workspace.package]\nversion = "{BASE}"\n'
+        )
+        old_path = self.root / "old-head.json"
+        old_tag = f"v{BASE}-nightly.20261001.{'b' * 40}"
+        old_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": nightly.SCHEMA_V1,
+                    "tag": old_tag,
+                    "version": old_tag[1:],
+                    "base_version": BASE,
+                    "source_sha": "b" * 40,
+                    "assets": [{"name": "relay-old", "sha256": "0" * 64}],
+                    "images": {
+                        name: f"ghcr.io/registrystack/{name}@sha256:{'1' * 64}"
+                        for name in nightly.historical_image_names(BASE)
+                    },
+                }
+            )
+        )
+        previous = nightly.read_manifest(old_path)
+        environment = {
+            "GITHUB_SHA": SHA,
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_EVENT_NAME": "schedule",
+            "GITHUB_REPOSITORY": nightly.REPOSITORY,
+            "GITHUB_OUTPUT": str(self.root / "outputs"),
+        }
+        def current_api(path, payload=None):
+            if path == f"repos/{nightly.REPOSITORY}/branches/main":
+                return {"commit": {"sha": SHA}}
+            package = path.rsplit("/", 1)[-1]
+            return {
+                "name": package,
+                "visibility": "private" if package.endswith("-candidate") else "public",
+            }
+        with (
+            patch.dict(os.environ, environment),
+            patch.object(nightly, "ROOT", self.root),
+            patch.object(nightly, "run", return_value=SHA),
+            patch.object(nightly, "api", side_effect=current_api),
+            patch.object(
+                nightly, "channel_metadata", return_value=(previous, "c" * 40)
+            ),
+            patch.object(nightly, "optional_api", return_value=None),
+        ):
+            nightly.plan(self.plan)
+
+        planned = json.loads(self.plan.read_text())
+        self.assertEqual(nightly.SCHEMA_V2, planned["schema_version"])
+        self.assertEqual("c" * 40, planned["channel_head"])
+        self.assertFalse(planned["skip"])
+        self.assertNotIn("relay", planned["roster"]["images"])
+        self.assertNotIn("relay", planned["roster"]["installers"])
+        self.assertFalse(
+            any("relay" in name for name in planned["roster"]["payloads"])
+        )
 
     def test_source_ref_rejection_precedes_network_calls(self):
         with (
@@ -548,12 +710,10 @@ cp "$source" "$destination"
         toolsets = {
             ("Linux", "aarch64", "linux-arm64"): {
                 "breg": ("breg", "bregctl"),
-                "relay": None,
                 "evidencectl": ("evidence", "evidencectl", "evidence-oid4vci"),
                 "casework": ("casework", "caseworkctl"),
                 "scheduling": ("schedulingctl",),
             },
-            ("Darwin", "arm64", "macos-arm64"): {"relay": None},
         }
         for (os_name, arch, platform), products in toolsets.items():
             commands = self.root / f"commands-{platform}"

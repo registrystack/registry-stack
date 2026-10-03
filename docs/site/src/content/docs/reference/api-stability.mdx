@@ -45,24 +45,12 @@ The enforcement column names the repository CI checks so the mechanism is audita
 
 | Surface | Contract artifact | Enforcement today |
 | --- | --- | --- |
-| Relay HTTP API (the fixed route inventory and the response envelope it carries) | The closed route list built by `router` in `crates/registry-relay-v2/src/server.rs` and the generated-artifact contract `products/relay-v2/contracts/artifact-inventory.yaml`. Relay has no product-level OpenAPI document to pin, because the resources a document describes come from the adopter's own Registry contract; each deployment serves its own description at `GET /openapi.json`. See [API references](../apis/) | Root CI's `relay-v2-contracts` job runs `products/relay-v2/scripts/check-contracts.sh` and `products/relay-v2/scripts/test-http.sh`, which replay the four coequal acceptance projects under `products/relay-v2/acceptance/` against their recorded `expected-http.yaml` exchanges |
-| Relay authoring grammar and sealed package format | The Registry contract grammar `relay.registrystack.org/v2alpha1`, covering `registry.yaml` (`kind: RegistryContract`), the deployment binding grammar `registry.registrystack.org/relay-runtime/v1alpha1` covering `runtime.yaml` (`kind: RelayRuntimeConfig`), and the sealed package in the shared Registry Stack package format. The grammars carry pre-1.0 version markers today; the promise attaches to the version each one carries at `v1.0.0` | `RegistryContract::parse_yaml` and `RelayRuntime::parse_yaml` reject unknown keys rather than ignoring them (`crates/registry-relay-v2/src/contract.rs`); `products/relay-v2/scripts/check-configs.sh` holds each acceptance project against its recorded contract revision, package digest, and artifact digests in `products/relay-v2/contracts/generated-baselines.yaml`; `relay serve` verifies a package before it activates |
 | Evidence Gateway HTTP API and its Version 1 contracts | The frozen Version 1 source contracts under `products/evidence/contracts/`, indexed by `products/evidence/contracts/README.md`, and the artifacts generated from them under `products/evidence/generated/`, including `registry-evidence.openapi.json` | Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which regenerates every contract artifact and fails on any byte difference from the committed copies, plus `products/evidence/scripts/check-source-neutrality.sh` and `products/evidence/scripts/check-verifier-portability.sh` |
-| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), and the `https://id.registrystack.org/` identifier space. Relay's set is closed by `ProblemCode` in `crates/registry-relay-http-contract/src/lib.rs`. Evidence Gateway's closed problem set has its own frozen contract, `products/evidence/contracts/problem-contract.yaml`, documented at [Evidence Gateway problem types](../evidence-problems/) | Relay's code, status, title, detail, and type URI come from one exhaustive catalog, and product tests pin the rendered body and headers; the `evidence-contracts` job regenerates and byte-diffs the committed Evidence Gateway problem schema against runtime-owned generation |
-| Configuration formats and documented environment variables | Relay's `registry.yaml` and `runtime.yaml` grammars, the frozen Evidence Gateway schemas `products/evidence/contracts/runtime.schema.yaml` and `products/evidence/contracts/bundle.schema.yaml`, plus the [environment variable reference](../environment-variables/) | Relay and Evidence Gateway both parse with `deny_unknown_fields`, so a retired or misspelled key is a startup refusal rather than an ignored field; Evidence Gateway's config parser is tested against the frozen contract schemas (`crates/registry-evidence/src/config.rs`), and `products/evidence/scripts/check-config-key-paths.sh` holds its configuration reference in exact parity with them |
+| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), and the `https://id.registrystack.org/` identifier space. Evidence Gateway's closed problem set has its own frozen contract, `products/evidence/contracts/problem-contract.yaml`, documented at [Evidence Gateway problem types](../evidence-problems/) | The `evidence-contracts` job regenerates and byte-diffs the committed Evidence Gateway problem schema against runtime-owned generation |
+| Configuration formats and documented environment variables | The frozen Evidence Gateway schemas `products/evidence/contracts/runtime.schema.yaml` and `products/evidence/contracts/bundle.schema.yaml`, plus the [environment variable reference](../environment-variables/) | Evidence Gateway parses with `deny_unknown_fields`, so a retired or misspelled key is a startup refusal rather than an ignored field. Its config parser is tested against the frozen contract schemas (`crates/registry-evidence/src/config.rs`), and `products/evidence/scripts/check-config-key-paths.sh` holds its configuration reference in exact parity with them |
 | Registry Manifest schema and rendered artifacts | `registry-manifest/v1` and the rendered artifact schema versions, governed by [RS-DM-MANIFEST](../../spec/rs-dm-manifest/) | `validate_manifest` accepts only `registry-manifest/v1`; REQ-DM-MANIFEST-013 requires strict unknown-key rejection at parse time |
-| Command-line interfaces | Documented commands and flags of `relay`, `evidence`, and `registry-manifest`, and their machine-readable output modes | CLI reference pages; the `evidence` command surface is stated in `products/evidence/OPERATOR-CONTRACT.md` and exercised end to end against the built binary in `crates/registry-evidence/tests/cli.rs`; the release candidate workflow asserts each built binary reports the release version |
-| Release artifacts and verification interface | Released binary asset names, the version-appropriate `ghcr.io/registrystack/<image>` roster recorded in the release manifest, and the signature and provenance layout in `release/VERIFY.md` | Release workflow; signed assets and exact image digests verified as documented in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.21.0/SECURITY.md) |
-
-Relay's covered HTTP surface is its route inventory, not the content of any one deployment's
-OpenAPI document. Adding a resource, an operation, or a statistical dataset to a Registry contract
-changes what one deployment answers; it does not change the product surface, and removing one is a
-decision for the institution running that deployment rather than a stack release event.
-
-No shipping binary currently exposes a covered metric family. Relay serves no metrics route, and
-`release/contracts/selected-metrics.json` now carries an empty metric list, so the
-selected-metrics mechanism defined in this page has nothing under it until a maintained product
-publishes a family through it.
+| Command-line interfaces | Documented commands and flags in the published CLI reference, and their machine-readable output modes | CLI reference pages and their reviewed digest record; the `evidence` command surface is stated in `products/evidence/OPERATOR-CONTRACT.md` and exercised end to end against the built binary in `crates/registry-evidence/tests/cli.rs`; the release candidate workflow asserts each built binary reports the release version |
+| Release artifacts and verification interface | Released binary asset names, the version-appropriate `ghcr.io/registrystack/<image>` roster recorded in the release manifest, and the signature and provenance layout in `release/VERIFY.md` | The release workflow verifies signed assets and exact image digests as documented in `release/VERIFY.md` |
 
 `evidence-oid4vci` is absent from the table because it is a supporting service rather than a
 pattern of its own. Its configuration fields, route shapes, and CLI flags may still change without
@@ -92,11 +80,9 @@ For CLIs:
 - Removing or renaming a documented command or flag
 - Changing the schema of a machine-readable output mode incompatibly
 
-For the Relay authoring grammar and sealed package format:
+For portable metadata and authored projects:
 
 - Removing or renaming a document key, or changing the meaning of an existing one
-- Rejecting a project that the previous release compiled and sealed under the same profile
-- Changing what a compiled artifact contains for an unchanged project and source schema
 
 For a selected metric family, once a maintained product publishes one:
 
@@ -123,22 +109,15 @@ release has no supported upgrade.
 
 {/* Evidence: release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR and FORWARD_PATH_EXCEPTION. */}
 
-The reverse is not promised. Relay and Evidence Gateway parse config with
-`deny_unknown_fields`, so a config file that uses keys introduced in a newer release fails to load
-on an older binary. Pin your config to the release you deploy.
+The reverse is not promised. Evidence Gateway parses config with `deny_unknown_fields`, so a config
+file that uses keys introduced in a newer release fails to load on an older binary. Pin your config
+to the release you deploy.
 
-None of the three products this page covers, Relay, Evidence Gateway, and Registry Manifest, has
-migrated state or a migration command. Relay owns no database: it
-reads the adopter's SQLite source through a read-only boundary and writes the audit log named by
-the `audit` block in its runtime file. Evidence Gateway writes the audit log named by the `audit`
-block in its runtime file. Relay's sealed package is an input to verify rather than state to migrate. `relay` recompiles the
-packaged contract and regenerates its artifacts at startup, and refuses to activate a package they
-do not reproduce, so a package-format change is a repackage of the authoring project rather than a
-conversion of an installed package. A directory that still carries `relay-package.json` instead of
-`SHA256SUMS` is refused with a message naming `relayctl package`.
+Evidence Gateway and Registry Manifest have no migrated state or migration command. Evidence
+Gateway writes the audit log named by the `audit` block in its runtime file.
 
-Base Registry Engine, Casework, and Scheduling are separate runtime products outside this page's
-covered surfaces, and each owns migrated PostgreSQL state with its own migration command:
+Base Registry Engine, Casework, and Scheduling each own migrated PostgreSQL state with their own
+migration command:
 [`bregctl apply`](../../operate/breg-changes/#activate-the-successor) activates a package and runs
 its migration, [`caseworkctl apply`](../../operate/casework/#plan-apply-and-serve) activates a
 Casework package and runs its migrations, and `schedulingctl apply` activates a Scheduling package
@@ -164,27 +143,21 @@ The following are not covered by the compatibility promise, at any version:
   consumers must use the JSON output modes, the structured log format, and the `code` member.
 - Hidden commands and internal protocols. A command or protocol that no reference page documents
   is not a covered surface.
-- Adopter tooling that wraps a covered surface rather than defining one. `relayctl` initializes,
-  compiles, and seals an authoring project and leaves verification, activation, and serving to the
-  `relay` binary; its report JSON is best-effort local automation rather than a contract, as the
-  [relayctl command reference](../relayctl/) states. `evidencectl` generates key material and
-  project scaffolds, delegates runtime decisions to the `evidence` binary, and reuses the Evidence
-  client and portable verifier for relying-party request preparation and offline response
-  verification.
+- Adopter tooling that wraps a covered surface rather than defining one. `evidencectl` generates
+  key material and project scaffolds, delegates runtime decisions to the `evidence` binary, and
+  reuses the Evidence client and portable verifier for relying-party request preparation and
+  offline response verification.
 - The layout of the repository, the `products/` export trees, the docs site internals, and
   the lab tooling.
 - Descriptions, summaries, and ordering inside generated OpenAPI documents. The contract is
   the paths, operations, schemas, and status codes, not the prose.
+- Supporting-service surfaces explicitly identified as pre-contract, and release channels,
+  examples, or draft documentation that make no stable contract claim.
 
 ## Route version namespaces
 
 The HTTP surface carries independent version prefixes per product and per plane. Each namespace
 versions independently; a version bump in one namespace does not imply one in another.
-
-Relay carries two: `/v2` for the Registry Record data plane and `/sdmx/v2` for the statistical read
-plane. Both are served by one listener. Relay has no admin plane, no separate admin listener, and
-no metrics route, so no third namespace exists to version. Its `/health`, `/ready`, and
-`/openapi.json` routes are operational and discovery routes, unversioned by convention.
 
 Evidence Gateway's three versioned operations, `POST /v1/evidence`, `POST /v1/evidence/batch`, and
 `GET /v1/evidence-definitions`, are the whole of its evidence surface under the frozen Version 1
@@ -197,18 +170,15 @@ serves `/metrics` on a separate listener when one is configured, never on the re
 
 The promise is machine-checked where a checker exists:
 
-- Relay: root CI's `relay-v2-contracts` job runs `products/relay-v2/scripts/check-contracts.sh`,
-  which validates the product contracts, the SDMX profile lock, and source neutrality, then holds
-  each acceptance project against its recorded contract revision, package digest, and artifact
-  digests. The same job runs `products/relay-v2/scripts/test-http.sh`, which replays the recorded
-  HTTP journeys for the four acceptance projects and the SDMX read profile against the runtime.
-- Evidence Gateway: root CI's `evidence-contracts` job regenerates every contract artifact from the code
-  with `products/evidence/scripts/check-contracts.sh` and fails on any byte difference from the
-  committed copies, so the OpenAPI document, the problem schema, and the request and response
-  schemas cannot drift from a released binary.
-- Config: Relay's grammars reject unknown keys at parse time rather than ignoring them, and
-  Evidence Gateway's config parser is tested against the frozen contract schemas rather than a schema
-  generated from it.
+- Evidence Gateway: root CI's `evidence-contracts` job regenerates every contract artifact from the
+  code with `products/evidence/scripts/check-contracts.sh` and fails on any byte difference from the
+  committed copies, so the OpenAPI document, problem schema, and request and response schemas
+  cannot drift from a released binary.
+- Config: Evidence Gateway's config parser is tested against the frozen contract schemas rather
+  than a schema generated from it.
+- Registry Manifest: schema and renderer tests pin accepted inputs and deterministic artifacts.
+- Published CLI reference: documentation generation checks the pages against the owned command
+  catalog and its reviewed digest record.
 - Forward state path: the release upgrade rehearsal workflow runs
   `release/scripts/rehearse-upgrade.py` on every pull request that changes a release manifest, and
   on manual dispatch. It downloads the previous release's Base Registry Engine, Casework, and
@@ -216,15 +186,14 @@ The promise is machine-checked where a checker exists:
   describes, and writes records, review work, and audit entries with them against disposable
   PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
   fails when captured domain data or stored revisions change, other captured views differ, or
-  retained tables lose rows. Base Registry Engine rebuilds and applies a successor before serving; its
-  package-bound ETags may change. Audit
-  tables retired by this breaking upgrade must first be preserved in an archive whose row counts
-  are checked. Old audit files are preserved separately from the new entry stream. It refuses to
-  start from a release before `v0.33.0`. Scheduling state is not rehearsed: the rehearsal verifies
-  release runtime binaries, and `v0.33.0` through `v0.37.0` shipped the Scheduling runtime only
-  as a container image. Its standalone runtime binary joins from `v0.38.0`.
-  Retiring Scheduling's audit outbox is covered instead by migration 8, which refuses while the
-  outbox holds unpublished rows, and by the operator archiving the old audit file, as
+  retained tables lose rows. Base Registry Engine rebuilds and applies a successor before serving;
+  its package-bound ETags may change. Audit tables retired by a breaking upgrade must first be
+  preserved in an archive whose row counts are checked. Old audit files are preserved separately
+  from the new entry stream. The rehearsal refuses to start from a release before `v0.33.0`.
+  Scheduling state before `v0.38.0` is not rehearsed because those releases shipped the Scheduling
+  runtime only as a container image. Retiring Scheduling's audit outbox is covered instead by
+  migration 8, which refuses while the outbox holds unpublished rows, and by the operator archiving
+  the old audit file, as
   [Retention and persistent state](../../operate/retention-and-persistent-state/) describes.
 
 {/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), and check_forward_path(); crates/registry-scheduling/src/store.rs, AUDIT_WRITER_MIGRATION_VERSION. */}
@@ -237,5 +206,4 @@ it, together with the deprecation and migration steps required by the
 
 - [Deprecation policy](../deprecation-policy/)
 - [Security support window](../../security/support-window/)
-- [Operate Relay](../../operate/relay/)
 - [Contracts](../contracts/)

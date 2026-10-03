@@ -6,9 +6,11 @@ requirement: residence region as a coarse controlled code.
 
 It is the pattern to copy when the registry data already sits behind an API
 that projects fields, filters by an exact reference, and reports whether a
-result page is complete. Registry Relay presents sources that way, so a Relay
-deployment is the worked example, but nothing in this bundle names Relay or
-depends on it. Any protected read with the same three properties fits.
+result page is complete. The fixture preserves the response shape of historical
+Registry Relay V2 releases, but nothing in this bundle names Relay or depends
+on it. Relay is retired from maintained Registry Stack. Use a maintained source
+with those three properties, and review its actual request and response contract
+when adapting this project.
 
 The reviewed governance bundle is under `bundle/`. Process-local paths and
 listener settings are in `runtime.yaml`. Deployments review and mount both
@@ -35,7 +37,7 @@ governed adapter policy declared by this reviewed bundle and rendered by
 ambiguity. It is not a Rust domain rule and not a property of any registry
 product.
 
-The worked response uses Relay V2's actual JSON shape: every item carries its
+The worked response preserves the historical Relay V2 JSON shape: every item carries its
 mandatory, non-selectable Registry Core fields, selected values are nested
 under `domainData`, the collection is under `items`, and `meta` accompanies
 `pageInfo.nextCursor`. The Evidence projection discards Registry Core and

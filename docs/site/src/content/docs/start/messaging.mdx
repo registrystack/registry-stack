@@ -62,7 +62,7 @@ Messaging guessing.
 Messaging is not a contact directory, a consent registry, or a place to decide whether a message
 should be sent at all. It holds no recipient identity beyond what a request carries, and it never
 writes to another product's database. No Messaging crate reaches a Base Registry Engine, Casework,
-Scheduling, Evidence, or Relay crate, and none of those products reach the Messaging runtime or its
+Scheduling or Evidence crate, and neither product reaches the Messaging runtime or its
 tooling directly: every product composes with Messaging over its public HTTP contract, the same
 surface any other authorized caller uses.
 

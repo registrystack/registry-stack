@@ -5,7 +5,6 @@ wide: true
 status: current
 owner: registry-docs
 source_repos:
-  - registry-relay
   - registry-manifest
   - registry-evidence
   - registrystack-id
@@ -27,7 +26,7 @@ Use this page to find the machine-readable surfaces you can build against: their
 A contract is a machine-readable surface that integrators can depend on:
 
 - **OpenAPI document**: describes HTTP routes, request and response shapes, and authentication for a service.
-- **Authoring grammar**: a closed YAML shape an adopter writes and a compiler accepts, such as Relay's `registry.yaml` and `runtime.yaml`.
+- **Authoring grammar**: a closed YAML shape an adopter writes and a compiler accepts.
 - **Sealed package format**: the versioned directory a compiler produces and a runtime verifies before it activates.
 - **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
 - **Static discovery bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
@@ -65,27 +64,6 @@ policy.
 
 */}
 
-## Relay has no product-level OpenAPI contract
-
-A Relay deployment's HTTP surface is compiled from the adopter's own `registry.yaml`, so no single
-OpenAPI document describes the product. The contract you can depend on across deployments is the
-authoring grammar plus the fixed route inventory; the document describing one deployment's data is
-served by that deployment at `GET /openapi.json`. See
-[API references](../apis/) for the route inventory and how to fetch a deployment's document.
-
-Two Relay surfaces belong in this table instead of an OpenAPI artifact:
-
-- The Registry contract grammar, `relay.registrystack.org/v2alpha1`, covering `registry.yaml`
-  (`kind: RegistryContract`) and `runtime.yaml` (`apiVersion:
-  registry.registrystack.org/relay-runtime/v1alpha1`, `kind: RelayRuntimeConfig`). Both are closed shapes: an
-  unrecognized key is a parse failure rather than an ignored field. Compatibility for recognized
-  keys follows the release policy.
-- The sealed package format: a directory whose `SHA256SUMS` file lists the digest of every other
-  file. `relayctl package` produces it and `relay serve` verifies it before activation. Its
-  package digest, the `sha256:` digest of `SHA256SUMS`, is an integrity digest, not an
-  authenticity proof: packages are unsigned, so the operator's own transport and storage are what
-  bind a package to its author.
-
 ## Machine identifiers
 
 Registry Stack defines stable machine identifiers under `https://id.registrystack.org/`: RFC 9457
@@ -116,21 +94,17 @@ response and its owning source remain authoritative for runtime behavior.
 
 ### Credential contract ownership
 
-Relay issues no credential. It signs no response, holds no issuing key, and serves no
-credential-support route.
-[Evidence Gateway](../../products/registry-evidence/) owns signed assertions and the public verification keys it serves at `/.well-known/evidence/jwks.json`.
-Its assertion contract is frozen at Version 1 and is documented with the product rather than listed in this page's contract table.
-
-A client that needs a signed, minimum-disclosure answer calls Evidence Gateway directly. Evidence
-Gateway may read a Relay-protected API as one of its fixed HTTP sources, which is a source
-relationship rather than a delegation of signing.
+[Evidence Gateway](../../products/registry-evidence/) owns signed assertions and the public
+verification keys it serves. Registry Manifest describes services and evidence offerings but does
+not issue a credential or grant access.
 
 ### JSON-LD namespaces
 
 The identifier catalog records these JSON-LD namespaces and vocabularies:
 
-- `registry-manifest/v1`: Active Registry Manifest terms.
-- `vocab/core` and `vocab/handling`: Active Registry Relay V2 vocabulary bases and terms.
+- `registry-manifest/v1`: active Registry Manifest terms.
+- `vocab/core` and `vocab/handling`: retained deprecated vocabulary from Registry Relay. Current
+  runtimes do not publish or consume these Relay vocabularies.
 
 Child identifiers under `vocab/core/` are adopter-defined semantic predicates.
 Resolving one of those child identifiers identifies the Registry-owned vocabulary base; it does
@@ -139,14 +113,11 @@ not register or review the adopter-defined term.
 Their canonical home is `id.registrystack.org/ns/...` or `id.registrystack.org/vocab/...`, as
 recorded in the generated catalog.
 
-Deployment-owned terms are not stack identifiers. A Relay `application/ld+json` response carries an
-`@context` reference that the deployment's own Registry contract names, and the local vocabulary it
-describes is generated per registry. Deployments with different semantic contracts can publish
-different contexts for the same route shape, which is the point: the semantics belong to the
-authority that runs the registry.
-
 ## Compatibility boundaries
 
-- Relay's authoring grammar is versioned `v2alpha1`, and its sealed package follows the shared
-  Registry Stack package format. Both are pre-1.0 and can change with a documented migration in a
-  release note.
+Current contracts follow the pre-1.0 compatibility policy. Historical Relay identifiers and
+released artifacts keep their recorded identity, but they are not current runtime contracts and
+must not be reassigned to another product.
+
+- [API stability and versioning](../api-stability/)
+- [Registry Relay retirement](../../decisions/registry-relay-retirement-2026-10-03/)

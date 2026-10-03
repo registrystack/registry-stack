@@ -34,8 +34,8 @@ The workflow:
    manifest; it never rewrites the layout crane wrote.
 7. Records a compact result and retains it for 30 days.
 
-The proof excludes native macOS and Linux arm64 Relayctl binaries,
-environment independence, generated SBOM or scan bytes, signatures,
+The proof excludes native macOS and Linux arm64 binaries, environment
+independence, generated SBOM or scan bytes, signatures,
 provenance envelopes, and documentation archives. Starting with v0.33.0, that
 macOS exclusion covers each complete native archive: the executable, relocated
 AWS-LC-FIPS shared libraries, notices, ad hoc signatures, and archive bytes.
@@ -46,8 +46,8 @@ AMD64 proof makes no macOS repeatability claim.
 
 `release/scripts/build-release-binaries.sh` sets `REGISTRY_RELEASE_TAG` to the
 exact release tag. That marker is what makes an executable report the bare
-released version, such as `relayctl 0.19.0`. A build without it reports a
-development version, such as `relayctl 0.19.0-dev`, so an executable built from
+released version, such as `evidencectl 0.39.0`. A build without it reports a
+development version, such as `evidencectl 0.39.0-dev`, so an executable built from
 the same source revision outside the release cannot be mistaken for the
 published one.
 

@@ -13,31 +13,6 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-As a data protection officer or privacy reviewer, you are asked whether a system supports the
-principles you work to (data minimization, purpose limitation, accountability) and where those
-supports stop.
-This page answers one question about Registry Stack: how does its architecture support data
-minimization and purpose limitation by design, where are those supports conditional on how an
-operator configures a deployment, and which data-protection obligations does the architecture not
-address at all?
-This page makes no compliance claim and gives no legal advice.
-Conformance to the underlying specifications does not imply conformance to any external
-standard, nor to GDPR or any data-protection regulation, and no jurisdiction-specific reading is
-offered: that judgement remains yours.
-The specifications here are all draft, pre-1.0 documents and may change, so treat the design as a
-posture under development rather than a finished or warranted product.
-Four terms are enough to follow this page.
-A *requirement* is one predefined, reviewed question about one set of subject roles, together with
-the exact set of values its answer may carry, asked against a registry the institution already
-holds.
-A *Relay consultation* is a Relay-owned contract that fixes the closed request inputs and the
-minimized typed outputs one protected read route may return.
-*Minimized evidence* means a response shaped by data minimization or selective disclosure; a
-*purpose-bound request* is a request that carries or is evaluated against a stated purpose.
-
-Two runtime patterns carry these principles, Registry Relay and Evidence Gateway, and each enforces them
-at its own boundary rather than in one chain.
-
 ## How the requirement model limits collection at the source
 
 The first place minimization appears is in the unit of data the system is built around.
@@ -46,26 +21,11 @@ whole record, so returning a full record would over-collect relative to the ques
 asked.
 The design treats the narrow question, not the record, as the thing to be answered.
 
-That principle is enforced at two separate boundaries. A Relay integration declares closed
-request inputs and minimized typed outputs. An Evidence Gateway requirement uses a closed single or
-search-then-fetch acquisition whose sources, origins, methods, paths, headers, and client-side response
-projections are all set by reviewed configuration, and it discloses only the concepts it declares.
-Callers cannot choose a source destination, credential, selector field, adapter capability, or
-undeclared output at request time in either product.
-
 The project author still decides which source fields the answer needs. Minimization therefore
 depends on a reviewed contract and its fixtures, not on a runtime deriving a source projection
 from the question it was asked.
 
 ## Purpose limitation as an enforced gate, not a label
-
-Purpose limitation in this design is more than a field written into a log. In Evidence Gateway, the
-purpose a caller states is one dimension of a single authorization decision that also binds the
-requester, the requirement revision, every subject role and selector profile, the subject
-authority, and the audience. The match must be exact and complete, and it happens before audit,
-credential resolution, or source access, so a request with a missing or unauthorized purpose
-reaches no source at all. Relay separately verifies its own caller, scopes, and governed policy
-gates before source work.
 
 The closed request schema carries the same idea further: a caller supplies a nonce, a requirement,
 a purpose, one selector per declared role, and optionally a holder public key that matters only to
@@ -223,12 +183,7 @@ whether it meets any legal obligation) depends on how the operator configures an
 
 ## Related
 
-- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/): the closed
-  value forms and what each one reveals
-- [Threat model](../threat-model/): the boundaries, assets, and threats behind this posture
-- [Security overview](../../security/): the high-level security summary
-- [Known limitations and non-guarantees](../known-limitations/): the full inventory of edges
-- [Records stay home](../records-stay-home/): what stays inside the institution's boundary and
-  what crosses it
-- The security and protocol specifications: [RS-SEC-G](../../spec/rs-sec-g/),
-  [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/), [RS-PR-RELAY](../../spec/rs-pr-relay/)
+- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
+- [Threat model](../threat-model/)
+- [Known limitations and non-guarantees](../known-limitations/)
+- [Records stay home](../records-stay-home/)

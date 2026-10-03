@@ -9,8 +9,8 @@
 
 Registry Stack helps institutions run registry-facing services over the data
 they already hold and the registries they do not hold yet: a
-configuration-defined writable registry, protected read APIs, signed
-minimum-disclosure assertions, a provider index, and audit records, without
+configuration-defined writable registry, signed minimum-disclosure assertions,
+a provider index, portable metadata, and audit records, without
 turning the registry into a shared database.
 
 This repository is the monorepo source of truth for Registry Stack product code,
@@ -28,7 +28,7 @@ release manifests, and docs.
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
 | Get a first minimum-disclosure assertion | [Evidence Gateway overview](https://docs.registrystack.org/dev/start/evidence-quickstart/) |
-| Serve a governed read-only API over a registry you hold | [Publish a governed SQLite registry](https://docs.registrystack.org/dev/tutorials/publish-governed-sqlite-registry/) |
+| Serve governed record APIs from PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Build a writable registry backed by PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Publish an index of registry providers | [Publish and consume a Registry Discovery index](https://docs.registrystack.org/dev/tutorials/publish-and-consume-discovery-index/) |
 | Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
@@ -38,7 +38,7 @@ release manifests, and docs.
 
 ## What It Includes
 
-Registry Stack ships eight installable products on one release train. Each has
+Registry Stack ships seven installable products on one release train. Each has
 its own deployment contract and adopter tooling, and each one is optional.
 
 - **Base Registry Engine:** a configuration-defined writable registry backed by
@@ -51,10 +51,6 @@ its own deployment contract and adopter tooling, and each one is optional.
   host uses to read one verified citizen's own data and draft a change request,
   and `breg-review`, the page where that citizen reviews and submits the draft.
   Docs: [Run a citizen chat assistant locally](https://docs.registrystack.org/dev/tutorials/first-citizen-mcp/).
-- **Registry Relay:** scoped, read-only HTTP APIs over an existing read-only
-  SQLite source. One authored contract compiles and seals into the package the
-  `relay` service verifies before it opens a listener.
-  Docs: [Publish a governed SQLite registry](https://docs.registrystack.org/dev/tutorials/publish-governed-sqlite-registry/).
 - **Evidence Gateway:** signed, minimum-disclosure assertions from fixed
   requests to authoritative sources. Version 1 excludes credential lifecycles,
   documents, federation, and a general policy engine.
@@ -82,10 +78,10 @@ its own deployment contract and adopter tooling, and each one is optional.
   caller's source of record.
   Docs: [Registry Messaging API](https://docs.registrystack.org/reference/apis/registry-messaging/).
 
-Evidence Gateway can use a Base Registry Engine or Registry Relay API as one of
-its fixed sources, and keeps its own authorization either way. The stack also
+Evidence Gateway can use a fixed Base Registry Engine route or another bounded
+HTTP endpoint as a source, and keeps its own authorization either way. The stack also
 includes Registry Platform shared primitives, the `bregctl`, `caseworkctl`,
-`schedulingctl`, `messagingctl`, `relayctl`, `evidencectl`, and `discoveryctl`
+`schedulingctl`, `messagingctl`, `evidencectl`, and `discoveryctl`
 adopter tools, unified Node.js and Python clients, and release tooling for validating the
 public source model.
 
@@ -98,16 +94,13 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 # Registry Casework: casework and caseworkctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 
-# Registry Relay: relay and relayctl
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
-
 # Evidence Gateway: evidence, evidencectl, and evidence-oid4vci
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 ```
 
 Each installer verifies the binaries against the published `SHA256SUMS` before
 writing them to `$HOME/.local/bin`, or to the directory `BREG_INSTALL_DIR`,
-`CASEWORK_INSTALL_DIR`, `RELAY_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR`
+`CASEWORK_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR`
 names. Registry Discovery and Registry Manifest publish binaries and no
 installer: download `discovery-<tag>-linux-amd64`,
 `discoveryctl-<tag>-linux-amd64`, or
@@ -120,7 +113,7 @@ beside its container image, and no installer. Registry Messaging publishes
 `registry-render` Linux amd64 binary, and the BReg citizen services
 `breg-mcp` and `breg-review` binaries, each beside its container image and
 with no installer. Container images for `breg`, `breg-mcp`, `breg-review`,
-`casework`, `scheduling`, `messaging`, `registry-render`, `relay`,
+`casework`, `scheduling`, `messaging`, `registry-render`,
 `evidence`, `evidence-oid4vci`, and `discovery` are published as
 `ghcr.io/registrystack/<name>:<tag>`. Which
 platforms each artifact supports, and what is not supported, is recorded in
@@ -130,21 +123,15 @@ platforms each artifact supports, and what is not supported, is recorded in
 flowchart LR
     source["Existing registry source<br/>file, extract, database, platform"]
     manifest["Registry Manifest<br/>describe"]
-    relay["Registry Relay<br/>expose protected reads"]
     breg["Base Registry Engine<br/>hold and update records"]
     evidence["Evidence Gateway<br/>minimum-disclosure assertions"]
     discovery["Registry Discovery<br/>index published providers"]
     caller["Approved service or verifier"]
 
-    source --> relay
-    manifest --> relay
-    relay --> caller
     breg --> caller
     source -. fixed request .-> evidence
-    relay -. protected fixed request .-> evidence
     breg -. protected fixed request .-> evidence
     evidence -. signed assertion .-> caller
-    relay -. advertisement .-> discovery
     evidence -. advertisement .-> discovery
     discovery -. index lookup .-> caller
 ```
@@ -152,9 +139,9 @@ flowchart LR
 ## Repository Layout
 
 - `crates/`: Rust crates and runnable binaries for Base Registry Engine,
-  Registry Relay, Evidence Gateway, Registry Casework, Registry Scheduling,
+  Evidence Gateway, Registry Casework, Registry Scheduling,
   Registry Messaging, Registry Discovery, Registry Manifest, Registry Platform,
-  and the `bregctl`, `caseworkctl`, `schedulingctl`, `messagingctl`, `relayctl`,
+  and the `bregctl`, `caseworkctl`, `schedulingctl`, `messagingctl`,
   `evidencectl`, and `discoveryctl` adopter tools. Base Registry Engine lives in `crates/registry-breg` with one
   `breg` binary, Evidence Gateway in `crates/registry-evidence` with one
   `evidence` binary, Registry Casework in `crates/registry-casework` with one

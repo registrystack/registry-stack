@@ -1,261 +1,134 @@
 ---
-title: Security overview
-description: "The enforced security model of Registry Stack, the responsibilities that stay with the operator, and the public evidence a security reviewer can check."
+title: Security
+description: Security boundaries and verification paths for maintained Registry Stack products.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-relay
   - registry-platform
+  - registry-breg
   - registry-evidence
-last_reviewed: "2026-08-22"
+last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Use this page to assess the security posture of Registry Stack before you deploy it or integrate
-with it.
-It summarizes the model the software enforces, names the responsibilities that stay with the
-operator, and links the public evidence a reviewer can verify.
-The normative source for everything on this page is the security model specification
-[RS-SEC-G](../spec/rs-sec-g/); this page is its narrative summary.
+Registry Stack protects data through product-specific authorization, closed configuration, bounded
+source access, explicit disclosure, package integrity, and accountable audit.
 
-For a focused review, continue with the [threat
-model](../explanation/threat-model/), [known
-limitations](../explanation/known-limitations/), [security
-self-assessment](self-assessment/), and [release trust
-evidence](openssf-evidence/).
+The normative cross-product security model is [RS-SEC-G](../spec/rs-sec-g/). The
+[threat model](../explanation/threat-model/), [known limitations](../explanation/known-limitations/),
+[security self-assessment](self-assessment/), and [release trust evidence](openssf-evidence/) provide
+review context and public evidence.
 
 ## At a glance
 
 | What | Where it stands |
-|------|-----------------|
-| Authentication on every route that touches a record or a claim | Built in |
-| One inbound authentication mode, and it is OIDC | Built in; there is no API-key or static-credential mode in either maintained runtime |
-| Deny-by-default authorization, checked before any data is read | Built in |
-| Only the public half of a signing key is ever published | Built in |
-| Person-level access is written to an audit log | Built in, and fail-closed with no switch to turn it off |
-| Three disclosure modes, with `redacted` revealing neither value nor answer | Built in (Evidence Gateway) |
-| Governed contract verified before the process serves anything | Built in (Relay re-derives its package and compares bytes at startup) |
-| A signature over the governed Relay package | Not provided; the package digest is an integrity digest, not an authenticity proof |
-| Selective-disclosure SD-JWT VC serialization of an assertion | Built in (a second encoding, not a credential lifecycle) |
-| Holder-bound subject binding, proven at presentation by a key-binding JWT | Declared per requirement, verified by the relying party (frozen profile) |
-| Replay prevention for a presented credential | Not provided anywhere; the challenge lifecycle is the relying party's |
-| Token issuers authenticate clients by one registered method, asymmetric by default | Built in; client-secret compatibility is explicit and limited to standard authority |
-| Hardened HTTP headers and outbound-traffic limits | Recommended, confirm your build applies them |
-| Key custody, retention, isolation, TLS, rate limiting | Your deployment's job |
-| Compliance with any external standard it cites | Not claimed |
+| --- | --- |
+| Evidence authentication on every assertion or definition route | Built in; operational probes, OpenAPI, issuer metadata, and public verification keys are the exceptions |
+| Evidence inbound authentication | OIDC bearer with one governed issuer profile; no API-key or static-credential mode |
+| Deny-by-default authorization before source access | Built in |
+| Only public verification material is published | Built in |
+| Evidence person-level access audit | Built in and fail-closed, with no best-effort switch |
+| Evidence disclosure modes | `value`, `predicate`, and `redacted`; the requirement fixes what is permitted |
+| SD-JWT VC assertion serialization | Built in as an encoding; the assertion format itself is not a credential lifecycle |
+| Holder-bound presentation | Declared per requirement and verified by the relying party |
+| Replay prevention for presentation | Not provided; the relying party owns challenge issuance, retention, and consumption |
+| Hardened HTTP headers and outbound source limits | Recommended by RS-SEC-G; confirm the deployed product applies them |
+| Key custody, audit retention, isolation, TLS, and edge quotas | Operator responsibilities |
+| Compliance with cited external standards | Not claimed |
 
-## The model in one pass
+## The Evidence request in one pass
 
-Every request that returns person-level records or claim results moves through the same pipeline:
-authenticate, authorize, serve, audit.
+- **Authenticate.** Evidence verifies the bearer signature, issuer, audience, token type, and
+  algorithm against one governed OIDC profile. It never trusts a proxy identity header or falls
+  back to an alternate principal claim.
+- **Authorize.** One complete grant and authority path must match the requester, requirement,
+  purpose, subject roles, selector profiles, origin, authority, and audience. Authorization finishes
+  before source credential resolution or source access.
+- **Serve.** The core runs only the governed fixed source stages, validates typed concepts, and
+  constructs the permitted `value`, `predicate`, or `redacted` answer. Caller input cannot add a
+  source request, expression, disclosure field, or output projection.
+- **Audit.** An access-attempt record is durably accepted before each acquisition stage and a
+  disclosure-release record before the response leaves. Audit failure blocks the corresponding
+  action. Entries are minimized and value-free; tamper evidence depends on shipping them to
+  append-only storage.
 
-- Authenticate: a maintained runtime service runs exactly one inbound authentication mode, and it
-  is OIDC (REQ-SEC-G-002). Each service trusts exactly one issuer, and tokens are accepted only
-  after signature, issuer, audience, token-type, and algorithm checks (REQ-SEC-G-004). Registry
-  Relay narrows this further: the issuer's discovery URL must be an `https` URL byte-identical to
-  its canonical `/.well-known/openid-configuration` form, the accepted token type is exactly
-  `at+jwt`, and exactly one of EdDSA, ES256, or RS256 is permitted per deployment.
-- Authorize: authorization is scope-based and deny-by-default. The required scope is enforced
-  before any source is read, and a caller's reach is never widened at request time
-  (REQ-SEC-G-005, REQ-SEC-G-006). Where a Relay operation declares a purpose constraint or an
-  authority row binding, both are read from the verified token, never from a request field.
-- Serve: the service returns the configured surface: a governed read shaped by a compiled
-  disclosure profile, a claim result, a selected value, a signed assertion, or a denial. Relay
-  denials come from a closed set of 26 problem codes. Every Evidence Gateway claim is answered in
-  one of three disclosure modes: `value` hands back the computed value, `predicate` returns only a
-  yes/no, and `redacted` returns neither the value nor the yes/no; the claim's policy fixes which
-  modes are allowed.
-  [Disclosure modes and computed answers](../explanation/disclosure-modes-and-computed-answers/)
-  covers this in depth.
-- Audit: the request is recorded in a minimized audit entry capturing the caller
-  principal kind, the authority exercised, a request identifier, and the governed revision the
-  answer was produced under (REQ-SEC-G-008). Audit is fail-closed and there is no configuration to
-  make it otherwise: a Relay request whose audit record cannot be written returns
-  `503 audit.unavailable` instead of an answer, and Relay re-checks its audit file for readiness
-  rather than trusting the check it did at startup (REQ-SEC-G-009). Entries are not chained or
-  signed; tamper evidence comes from shipping them to append-only storage.
+Every Evidence route returning an assertion or its protected definition requires a verified access
+token. `/health`, `/ready`, `/openapi.json`, the issuer JWKS, and issuer metadata may be public
+because they contain no person-level result or grant inventory. An issuer publishes only the public
+half of an assertion-signing key, so a verifier needs no source or service credential.
 
-{/* Evidence: OidcRuntime::checked_profile() requires token_types == ["at+jwt"], exactly one of
-     EdDSA/ES256/RS256, a canonical https issuer, and keys from its discovery document or one
-     canonical https JWKS URI, crates/registry-relay-v2/src/contract.rs:1516-1591; PurposeConstraint and AuthorityRowBinding
-     are read from the verified principal, crates/registry-relay-v2/src/auth.rs:204-257; every
-     audit failure maps to ProblemCode::AuditUnavailable (503),
-     crates/registry-relay-v2/src/api.rs, with the test
-     audit_path_replacement_revokes_readiness in crates/registry-relay-v2/src/startup.rs; Evidence
-     Gateway's inbound authentication is OIDC only, crates/registry-evidence/src/auth.rs, and its
-     audit is a fail-closed write through the shared AuditWriter with no enable switch,
-     crates/registry-evidence/src/audit.rs and crates/registry-platform-audit/src/writer.rs. */}
+Evidence can encode an assertion as SD-JWT VC, with digests in place of disclosable values. That is
+a serialization of the same bounded assertion. Revocation, status, presentation replay state, and a
+general wallet lifecycle are outside that assertion format. The separate OID4VCI adapter provides
+its documented delivery profile without changing those limits.
 
-{/* TODO[evidence]: REQ-SEC-G-002, -003, -004, -008, and -009 are cited from RS-SEC-G, which is
-     being revised for the V2 cutover in parallel with this page. The retired static-credential
-     fingerprint mode (previously REQ-SEC-G-003) has no implementation in either maintained
-     runtime, so its citation is dropped here rather than restated. Re-check these five IDs against
-     RS-SEC-G once that revision lands; if any is renumbered or retired, this list must follow. */}
+A requirement chooses one of two subject-binding modes. Audience-scoped binding derives a
+pseudonym over the relying-party audience. An optional holder key in that mode is echoed into `cnf`
+without proof. Holder-bound mode derives from the RFC 7638 holder-key thumbprint and requires a
+key-binding JWT that the relying party verifies at presentation. Evidence issues no key-binding
+JWT, keeps no challenge state, and runs no presentation endpoint. Comparing a challenge nonce does
+not consume it, so the relying party must prevent replay.
 
-Every route that returns person-level records or an evidence assertion requires authentication.
-Operational probes, public verification keys, issuer metadata, and docs or OpenAPI when configured
-may be public because they carry no person-level data.
-Evidence Gateway exempts only its probes, its OpenAPI document, its issuer JWKS, and its issuer metadata
-document; both its assertion route and its evidence-definition discovery route require a verified
-access token (REQ-SEC-G-006).
-Registry Relay exempts `GET /health`, `GET /ready`, and `GET /openapi.json`, and beyond those it is
-the contract, not the route, that decides: each compiled operation carries an access profile that is
-either public or protected, so a Relay deployment can legitimately publish an open operation and
-must therefore be reviewed at the contract, not at the route table. Metadata is separately gated by
-a declared visibility of public, operation-bound, or operator-only, and an operator-only artifact
-answers `404 resource.not_found` rather than confirming it exists.
-Issuers sign with asymmetric keys and publish only the public half, so any verifier can check a
-signed artifact without holding a credential of its own (REQ-SEC-G-007).
+The portable verifier library and `evidence verify-presentation` check issuer and key-binding
+signatures, the expected audience and nonce, and independently pinned expectations. A successful
+issuer signature alone does not prove holder possession.
 
-Evidence Gateway can serialize the same signed assertion as an SD-JWT VC, where the signed body carries
-hashes of each disclosable field rather than the values.
-That is a second encoding of one response, not a credential lifecycle: there is no issuance
-session, credential offer, status list, revocation, reissuance, or persisted credential state, and
-no part of OID4VCI.
-A requirement in the immutable bundle declares which of two subject binding modes it issues under.
-The vocabulary is closed at two values and has no default, and no caller input selects a mode.
+{/* Evidence: crates/registry-evidence/src/auth.rs;
+    crates/registry-evidence/src/runtime.rs; crates/registry-evidence/src/audit.rs;
+    crates/registry-evidence-verifier/src/verifier.rs;
+    crates/registry-platform-audit/src/writer.rs. */}
 
-By default the binding is audience-scoped: the subject identifier is a pseudonym derived over the
-audience, so the same person requested for a different audience yields a different identifier. A
-request may carry an optional `holderKey`, echoed into the `cnf` claim; Evidence Gateway binds
-nothing to it and verifies nothing, so `cnf` is an unverified caller-supplied convenience for
-whatever presentation layer the operator runs elsewhere.
+## Maintained boundaries
 
-A requirement may instead declare the holder-bound mode, where the binding derives from the RFC
-7638 thumbprint of the holder key rather than from the audience, `cnf` is required, and the
-audience check moves from issuance to presentation. Possession is then proven by a key-binding JWT
-under RFC 9901 section 4.3, which the relying party verifies. The service still issues no
-key-binding JWT, holds no challenge or presentation state, and runs no presentation endpoint;
-verification is a relying-party act, offered as the portable verifier library and the
-`evidence verify-presentation` operator command. Reviewers should read three consequences
-together: the mode accepts cross-verifier correlation through holder key reuse, which the service
-can neither prevent nor detect; comparing a challenge nonce is not consuming it, so nothing here
-is replay prevention; and the mode's profile is frozen, a status it carries only because every
-negative test it names resolves to an executable test.
-[Known limitations](../explanation/known-limitations/) states both modes side by side.
+- Base Registry Engine authenticates callers and applies compiled access profiles to its own records,
+  changes, history, and events.
+- Evidence Gateway authorizes before contacting a fixed source and signs only the concepts its
+  reviewed requirement declares.
+- Registry Manifest publishes static metadata and grants no runtime authority.
+- Registry Discovery returns inert public metadata. The application owns provider trust.
+- Registry Platform supplies shared primitives while each product owns policy and configuration.
 
-Protected services verify access tokens from the deployment's configured OAuth issuer.
-Delegated evaluation, where one service asks a trusted peer to evaluate a claim, does not exist in
-this stack: no service holds such a surface, and REQ-SEC-G-010 is retired.
+## Recommended controls that require confirmation
 
-## What's recommended, not enforced
+RS-SEC-G recommends sourcing security-critical authentication, OIDC, audit, HTTP policy,
+cryptography, and SD-JWT helpers from Registry Platform so behavior stays consistent and reviewable.
+Confirm each deployed service uses those primitives because the specification does not force an
+implementation choice.
 
-Two behaviors are recommended rather than required, so confirm them rather than assume them.
+Security response headers and outbound HTTP limits are also recommended controls. For Evidence,
+confirm fixed-origin and hostname verification, redirect and proxy denial, TLS trust, timeouts,
+response-size bounds, and the one-request-per-stage ceiling. The governed bundle constrains source
+behavior, while the operator still owns the network path, edge controls, and certificates.
 
-- Registry Platform sourcing: security-critical primitives (authentication, OIDC verification,
-  audit envelopes, HTTP security, outbound HTTP policy, cryptography, and SD-JWT VC helpers) are
-  meant to come from Registry Platform rather than be reimplemented per service, so they behave
-  the same everywhere and can be reviewed in one place. RS-SEC-G recommends this rather than
-  forcing it (REQ-SEC-G-001), so confirm the service you deploy sources them from
-  Registry Platform rather than reimplementing its own.
-- HTTP hardening: security response headers and limits on outbound source-fetch traffic are
-  recommended posture (REQ-SEC-G-012). Check that your build applies them rather than assuming
-  it. The outbound half applies to Evidence Gateway, which fetches from configured authoritative
-  sources. Registry Relay makes no outbound source request at all: its only outbound traffic is
-  OIDC discovery and JWKS retrieval, so for Relay this reduces to response headers and the request
-  and response limits its runtime file sets.
+## Operator responsibilities
 
-## What Registry Relay checks before it serves
+Operators provide identity issuance, TLS and network controls, secret storage, key rotation, durable
+audit storage, database security, backups, monitoring, and incident response. Product checks do not
+replace these controls.
 
-Relay has no declared assurance level, no posture endpoint, and no findings-and-waivers catalog. A
-deployment does not state the assurance it claims; it either satisfies the startup checks or the
-process does not serve. Those checks are the security surface worth reviewing:
-
-- The package is verified first. Before Relay opens a source, a sink, or a socket, it re-runs the
-  compiler and the artifact generator over the sealed inputs and compares the results byte for byte
-  against what the package contains. A package that does not re-derive does not start.
-- The runtime file cannot widen the package. `runtime.yaml` (`kind: RelayRuntimeConfig`) is a closed
-  schema that rejects unknown fields, and it binds only local concerns: listen address, package
-  path, source paths, the audit sink, an optional OIDC issuer, cursor settings, limits, quotas, and
-  shutdown. Nothing in it can add an operation, a readable column, or a disclosure.
-- Contract and runtime must agree. A contract with any protected access requires a configured
-  issuer, and a contract that declares any lookup requires quotas. Neither is a warning.
-- Secrets are referenced, never inlined. The runtime file accepts exactly two reference grammars,
-  `secret:env/<NAME>` and `secret:file/<name>`, and nothing else. A file secret must be a single
-  flat filename under the declared `secretProviders.file.root`, owned by the running user, with
-  mode `0400` or `0600` and a link count of one, and no secret may exceed 64 KiB.
-- The source is opened read-only and pinned. Relay opens SQLite with
-  `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NO_MUTEX`, refuses a symlink, refuses a
-  `-wal` or `-journal` sidecar beside a snapshot, and requires a snapshot to sit on a read-only
-  filesystem or to be non-writable by its own mode bits.
-- Operational logging is a closed enum. `RELAY_LOG` accepts `off`, `error`, `warn`, `info`,
-  `debug`, or `trace`; any other value falls back to the crate's own `info` filter rather than
-  enabling a dependency's logging.
-- Unix only, and it fails closed off it. On a non-Unix target Relay's permission check returns
-  false unconditionally and the runtime configuration loader refuses to read `runtime.yaml`, so
-  the process refuses to start rather than running without the ownership and mode checks it relies
-  on.
-
-{/* Evidence: verify_compiled_derivation() and verify_artifact_derivation() re-run the compiler and
-     generator and compare bytes, and safe_permissions() returns false unconditionally under
-     #[cfg(not(unix))], crates/registry-relay-v2/src/package.rs; prepare() verifies the package
-     first, validate_runtime_contract() requires an issuer for protected access and quotas for
-     lookups, crates/registry-relay-v2/src/startup.rs; #[cfg(not(unix))]
-     require_trusted_ownership returns an error, crates/registry-platform-config/src/loader.rs;
-     RelayRuntime is a closed deny_unknown_fields schema, crates/registry-relay-v2/src/contract.rs;
-     the two secret grammars, the 64 KiB bound, and the uid, 0400-or-0600 mode, and nlink==1 file checks with
-     their tests references_use_only_the_two_exact_contract_grammars and
-     file_secret_accepts_only_owner_read_and_optional_owner_write_modes,
-     crates/registry-platform-config/src/secrets.rs; the open flags,
-     crates/registry-platform-sqlite/src/schema.rs:131-133 and src/statement.rs:494-496; sidecar
-     and symlink refusal and the read-only-or-non-writable requirement,
-     crates/registry-platform-sqlite/src/capture.rs:11, :34-36, :42-45;
-     operational_log_directive() with the test
-     operational_log_filter_cannot_enable_dependency_targets,
-     crates/registry-relay-v2/src/main.rs. */}
-
-Two of these are worth stating as limits rather than as controls. The package check proves the
-package is internally consistent and unmodified, not that a trusted party produced it: there is no
-signature over a Relay package. And a snapshot's immutability past startup is an operator duty,
-because a process comparing two hashes cannot exclude a privileged writer that changes and restores
-the bytes between them.
-
-The runtime keys are documented in the [Relay configuration reference](../configure/relay/) and the
-day-two procedures in [operate Relay](../operate/relay/).
-Evidence Gateway states its own operator obligations in its operator contract rather than through
-any posture block.
-
-## What stays with the operator
-
-The security model ends where the deployment begins.
-Secret and key provisioning, key custody and rotation schedules, audit retention and storage,
-tenant isolation, transport termination and certificate management, edge rate limiting, deployment
-configuration, and incident response are operator responsibilities (RS-SEC-G Section 9).
-The software keeps secrets out of distributable artifacts (REQ-SEC-G-013) and provides the
-primitives; the operator provisions, configures, and operates them.
-Record those responsibilities in the
+The software keeps secrets out of distributable artifacts and supplies the enforcement primitives;
+the operator provisions and runs them. Record ownership and recovery paths in the
 [operator handoff checklist](../operate/) before activation.
 
-## Evidence Gateway for reviewers
+## Verify before production
 
-Public, checkable evidence, from most to least formal:
+1. Run the product's production checks on the exact package and configuration.
+2. Exercise valid, missing, invalid, expired, and insufficient credentials.
+3. Confirm a denial reaches no protected source or mutation.
+4. Confirm required audit failure blocks release of protected output.
+5. Test dependency timeout, size limit, backup, restoration, and rollback.
+6. Record the exact source, package digest, configuration revision, and approval.
 
-- [RS-SEC-G](../spec/rs-sec-g/) is the normative security model; [RS-PR-RELAY](../spec/rs-pr-relay/)
-  and [RS-PR-EVIDENCE](../spec/rs-pr-evidence/) carry its wire-level form per service.
-- [OpenSSF and release trust](openssf-evidence/) records which release-integrity checks are
-  verifiable today (signatures, provenance, Scorecard) and which are still incomplete.
-- The [security support window](support-window/) states which release lines receive fixes.
-- The [standards register](../reference/standards/) records the adoption mode and evidence for each
-  cited standard.
-- [DPI safeguards alignment](../explanation/dpi-safeguards-alignment/) maps the stack to safeguards
-  language for review programs.
+{/* Evidence: crates/registry-breg/src/access.rs; crates/registry-evidence/src/auth.rs;
+    crates/registry-platform-oidc/src/lib.rs; crates/registry-platform-audit/src/lib.rs. */}
 
-These pages are review material, not a certification.
-The hosted lab is a synthetic-data demo, not a production assurance claim.
+## Continue
 
-## Report a vulnerability
-
-Suspected vulnerabilities go through the private disclosure process, never public issues or pull
-requests.
-See [Report a vulnerability](report-a-vulnerability/).
-
-## Next
-
-- [RS-SEC-G: Registry family security model](../spec/rs-sec-g/)
-- [Prepare the operator handoff](../operate/)
-- [Review the security support window](support-window/)
-- [Review release trust](openssf-evidence/)
+- [Threat model](../explanation/threat-model/)
+- [Production hardening checklist](hardening-checklist/)
+- [Known limitations](../explanation/known-limitations/)
 - [Report a vulnerability](report-a-vulnerability/)
+- [Support window](support-window/)

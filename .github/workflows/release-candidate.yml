@@ -365,10 +365,6 @@ jobs:
             --messaging binary-shards/messaging \
             --output dist \
             --builder-image "${RELEASE_BUILDER_IMAGE}"
-          test "$("dist/bin/relay-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
-            "relay ${{ needs.validate.outputs.version }}"
-          test "$("dist/bin/relayctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
-            "relayctl ${{ needs.validate.outputs.version }}"
           IFS=. read -r release_major release_minor _release_patch \
             <<<"${{ needs.validate.outputs.version }}"
           if (( release_major > 0 || release_minor >= 26 )); then
@@ -587,7 +583,7 @@ jobs:
           rustup toolchain install 1.95.0 \
             --profile minimal --target "${{ matrix.target }}"
           cargo build --release --locked \
-            -p registry-relayctl -p registry-evidence -p registry-evidencectl \
+            -p registry-evidence -p registry-evidencectl \
             -p registry-evidence-oid4vci \
             --target "${{ matrix.target }}"
           IFS=. read -r release_major release_minor _release_patch \
@@ -630,11 +626,6 @@ jobs:
               --target "${{ matrix.target }}"
           fi
           mkdir -p platform
-          asset="relayctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
-          cp "target/${{ matrix.target }}/release/relayctl" "platform/${asset}"
-          chmod 0755 "platform/${asset}"
-          test "$("platform/${asset}" --version)" = \
-            "relayctl ${{ needs.validate.outputs.version }}"
           for evidence_binary in evidence evidencectl evidence-oid4vci; do
             asset="${evidence_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${evidence_binary}" \
@@ -832,7 +823,6 @@ jobs:
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
-            crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
             crates/registry-messaging-client-node/package-lock.json
@@ -848,7 +838,7 @@ jobs:
             target/release-client-node
           # AWS-LC does not track the deployment-target environment variable.
           # Exclude older runner images and builds without the macOS 11 pin.
-          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-messaging-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          key: registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}${{ hashFiles('.github/workflows/release-candidate.yml', 'rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/macos_fips_packaging.py', 'release/scripts/bundle-client-macos-fips.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-messaging-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
             registry-stack-release-isolated-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ matrix.asset == 'macos-arm64' && 'macos-26-deployment-11.0-' || '' }}
 
@@ -881,7 +871,7 @@ jobs:
           if (( client_major > 0 || client_minor >= 30 )); then
             include_casework=1
           fi
-          clients=(discovery evidence relay)
+          clients=(discovery evidence)
           if [[ "${unified_client}" -eq 1 ]]; then
             clients+=(breg)
           fi
@@ -896,10 +886,6 @@ jobs:
           for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
                 (( client_major == 0 && client_minor < 23 )); then
-              continue
-            fi
-            if [[ "${client}" == relay ]] &&
-                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
             fi
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-py"
@@ -974,7 +960,6 @@ jobs:
               --output-dir "${wheel_dir}" \
               --discovery-wheel "${built_wheel_dir}/registry_discovery_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --evidence-wheel "${built_wheel_dir}/registry_evidence_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
-              --relay-wheel "${built_wheel_dir}/registry_relay_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --breg-wheel "${built_wheel_dir}/registry_breg_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               "${casework_wheel_args[@]}" \
               "${messaging_wheel_args[@]}"
@@ -1015,13 +1000,9 @@ jobs:
               release/scripts/smoke-registry-client-package.py
             exit 0
           fi
-          for client in discovery evidence relay; do
+          for client in discovery evidence; do
             if [[ "${client}" == discovery ]] &&
                 (( client_major == 0 && client_minor < 23 )); then
-              continue
-            fi
-            if [[ "${client}" == relay ]] &&
-                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
             fi
             IFS=. read -r major minor _patch <<<"${CLIENT_VERSION}"
@@ -1061,7 +1042,7 @@ jobs:
           if (( client_major > 0 || client_minor >= 30 )); then
             include_casework=1
           fi
-          clients=(discovery evidence relay)
+          clients=(discovery evidence)
           if [[ "${unified_client}" -eq 1 ]]; then
             clients+=(breg)
           fi
@@ -1076,10 +1057,6 @@ jobs:
           for client in "${clients[@]}"; do
             if [[ "${client}" == discovery ]] &&
                 (( client_major == 0 && client_minor < 23 )); then
-              continue
-            fi
-            if [[ "${client}" == relay ]] &&
-                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
             fi
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
@@ -1129,7 +1106,7 @@ jobs:
           done
           if [[ "${unified_client}" -eq 1 ]]; then
             platform_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node/npm/${{ matrix.napi_platform }}"
-            platform_clients=(discovery evidence relay breg)
+            platform_clients=(discovery evidence breg)
             if [[ "${include_casework}" -eq 1 ]]; then
               platform_clients+=(casework)
             fi
@@ -1200,9 +1177,9 @@ jobs:
                 "${root_package}" "${platform_package}"
               test -z "$(find node_modules/@registrystack/client \
                 -maxdepth 1 -name '*.node' -print -quit)"
-              expected_addons=4
+              expected_addons=3
               if [[ "${include_casework}" -eq 1 ]]; then
-                expected_addons=5
+                expected_addons=4
               fi
               if [[ "${messaging_in_release}" == true ]]; then
                 expected_addons=$((expected_addons + 1))
@@ -1232,13 +1209,9 @@ jobs:
             fi
             exit 0
           fi
-          for client in discovery evidence relay; do
+          for client in discovery evidence; do
             if [[ "${client}" == discovery ]] &&
                 (( major == 0 && minor < 23 )); then
-              continue
-            fi
-            if [[ "${client}" == relay ]] &&
-                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
             fi
             smoke="${RUNNER_TEMP}/node-smoke-${client}"
@@ -1606,11 +1579,7 @@ jobs:
           for name in ${RELEASE_IMAGE_NAMES}; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
-            if [[ "${name}" == "relay" ]]; then
-              baseline=products/relay-v2/security/advisory-baseline.json
-            else
-              baseline="release/security/${name}-advisory-baseline.json"
-            fi
+            baseline="release/security/${name}-advisory-baseline.json"
             python3 release/scripts/check-advisory-baselines.py \
               grype "candidate/security/grype/${name}.grype.json" \
               --baseline "${baseline}" \
@@ -1652,11 +1621,6 @@ jobs:
           if (( client_major > 0 || client_minor >= 33 )); then
             cp THIRD_PARTY_NOTICES candidate/bundle-root/
           fi
-          include_relay_clients=0
-          if [[ ! "${version}" =~ ^0\.([0-9]|1[0-8])\. ]] &&
-              [[ "${version}" != "0.19.0" ]]; then
-            include_relay_clients=1
-          fi
           include_unified_client=0
           if (( client_major > 0 || client_minor > 26 ||
                 (client_minor == 26 && client_patch >= 1) )); then
@@ -1680,9 +1644,6 @@ jobs:
               expected_client_assets=2
             else
               expected_client_assets=2
-              if [[ "${include_relay_clients}" -eq 1 ]]; then
-                expected_client_assets=4
-              fi
               if [[ "${include_registry_packages}" -eq 1 ]]; then
                 expected_client_assets=6
               fi
@@ -1726,21 +1687,11 @@ jobs:
               for wheel_platform in "${wheel_platforms[@]}"; do
                 echo "registry_evidence_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
               done
-            if [[ "${include_relay_clients}" -eq 1 ]]; then
-              for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
-                echo "relay-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
+            if [[ "${include_registry_packages}" -eq 1 ]]; then
+              echo "registrystack-evidence-client-${version}.tgz"
+              for platform in darwin-arm64 linux-arm64-gnu linux-x64-gnu; do
+                echo "registrystack-evidence-client-${platform}-${version}.tgz"
               done
-              for wheel_platform in "${wheel_platforms[@]}"; do
-                echo "registry_relay_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
-              done
-              if [[ "${include_registry_packages}" -eq 1 ]]; then
-                for client in evidence relay; do
-                  echo "registrystack-${client}-client-${version}.tgz"
-                  for platform in darwin-arm64 linux-arm64-gnu linux-x64-gnu; do
-                    echo "registrystack-${client}-client-${platform}-${version}.tgz"
-                  done
-                done
-              fi
             fi
             if [[ "${include_discovery_clients}" -eq 1 ]]; then
               for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
@@ -1761,10 +1712,7 @@ jobs:
           find candidate/bundle-root -maxdepth 1 -type f \
             \( -name 'evidence-client-node-*.tgz' \
                -o -name 'registry_evidence_client-*.whl' \
-               -o -name 'relay-client-node-*.tgz' \
                -o -name 'registrystack-evidence-client-*.tgz' \
-               -o -name 'registrystack-relay-client-*.tgz' \
-               -o -name 'registry_relay_client-*.whl' \
                -o -name 'discovery-client-node-*.tgz' \
                -o -name 'registrystack-discovery-client-*.tgz' \
                -o -name 'registry_discovery_client-*.whl' \
@@ -1780,7 +1728,7 @@ jobs:
               --version "${version}" \
               --client stack
           elif [[ "${include_registry_packages}" -eq 1 ]]; then
-            for client in discovery evidence relay; do
+            for client in discovery evidence; do
               if [[ "${client}" == discovery ]] &&
                   [[ "${include_discovery_clients}" -ne 1 ]]; then
                 continue
@@ -1791,44 +1739,7 @@ jobs:
                 --client "${client}"
             done
           fi
-          IFS=. read -r relay_major relay_minor relay_patch <<< "${version}"
-          if (( relay_major > 0 || relay_minor > 19 ||
-                (relay_minor == 19 && relay_patch >= 1) )); then
-            relay_installer="relay-${{ needs.validate.outputs.tag }}-install.sh"
-            awk -v version="${{ needs.validate.outputs.tag }}" '
-              $0 == "default_version=\"\"" {
-                print "default_version=\"" version "\""
-                rendered = 1
-                next
-              }
-              { print }
-              END { if (!rendered) exit 1 }
-            ' crates/registry-relay-v2/install.sh \
-              > "candidate/bundle-root/${relay_installer}"
-            chmod 0755 "candidate/bundle-root/${relay_installer}"
-            cp "candidate/bundle-root/${relay_installer}" \
-              candidate/bundle-root/relay-install.sh
-            chmod 0755 candidate/bundle-root/relay-install.sh
-            (
-              cd candidate/bundle-root
-              sha256sum -- \
-                "relay-${{ needs.validate.outputs.tag }}-linux-amd64" \
-                "relayctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
-                > SHA256SUMS
-            )
-            relay_install_dir="${RUNNER_TEMP}/candidate-relay-install"
-            RELAY_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
-            RELAY_INSTALL_DIR="${relay_install_dir}" \
-              bash "candidate/bundle-root/${relay_installer}"
-            observed="$("${relay_install_dir}/relay" --version)"
-            test "${observed}" = \
-              "relay ${{ needs.validate.outputs.version }}"
-            observed="$("${relay_install_dir}/relayctl" --version)"
-            test "${observed}" = \
-              "relayctl ${{ needs.validate.outputs.version }}"
-            rm candidate/bundle-root/SHA256SUMS
-          fi
-          if (( relay_major > 0 || relay_minor >= 26 )); then
+          if (( client_major > 0 || client_minor >= 26 )); then
             breg_installer="breg-${{ needs.validate.outputs.tag }}-install.sh"
             awk -v version="${{ needs.validate.outputs.tag }}" '
               $0 == "default_version=\"\"" {
@@ -1867,7 +1778,7 @@ jobs:
               check "${breg_project}"
             rm candidate/bundle-root/SHA256SUMS
           fi
-          if (( relay_major > 0 || relay_minor >= 30 )); then
+          if (( client_major > 0 || client_minor >= 30 )); then
             casework_installer="casework-${{ needs.validate.outputs.tag }}-install.sh"
             awk -v version="${{ needs.validate.outputs.tag }}" '
               $0 == "default_version=\"\"" {
@@ -2007,7 +1918,7 @@ jobs:
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
                     THIRD_PARTY_NOTICES) kind=notice ;;
-                    discovery-client-node-*.tgz|evidence-client-node-*.tgz|relay-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-relay-client-*.tgz|registrystack-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_relay_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
+                    discovery-client-node-*.tgz|evidence-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_stack_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac
                   jq -n \

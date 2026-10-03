@@ -1,674 +1,201 @@
 ---
 title: Threat model
-description: The trust boundaries, assets, and threats the Registry Stack design considers (what it mitigates, and the residual risks it leaves to the operator or treats as out of scope).
-status: draft
+description: Assets, trust boundaries, threats, and residual risks for maintained Registry Stack products.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-relay
+  - registry-platform
+  - registry-breg
   - registry-evidence
-  - solmara-lab
-last_reviewed: "2026-08-21"
+last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
-standards_referenced:
-  - sd-jwt-vc
+standards_referenced: []
 ---
 
-If you review or audit systems and already reason in terms of assets, trust boundaries, and
-adversaries, but do not yet know where the Registry Stack's boundaries actually sit, this threat
-model answers one question: **why does this design produce the security
-properties it claims: which threats does the architecture consider, what does it actually
-mitigate, and where do the residual risks lie?**
-It is deliberately a map of boundaries and limits, not a runbook.
-Hardening procedures belong to the [hardening checklist](../../security/hardening-checklist/),
-and the invariant-by-invariant statement of what the Evidence Gateway runtime enforces belongs to the
-[Evidence Gateway security model](../../security/evidence/).
-Here the goal is a defensible threat model: the boundaries the design draws, the threats it
-places in and out of scope, and the residual risks.
+This page summarizes the cross-product threat model. Product specifications and source-owned
+security tests remain authoritative for exact behavior. Base Registry Engine (BReg) owns the
+governed record boundary described below.
 
-## The two-layer architecture and its primary trust boundary
+## Assets
 
-The stack is a two-layer design, and the split between the layers is the first trust
-boundary the model relies on. A **portable metadata layer** only *describes*: it carries no
-production data, no authentication, and no secrets. A **runtime services layer** *enforces*:
-it is where authentication, authorization, and disclosure actually happen.
+- Authoritative registry records and history.
+- Person-level source data. Evidence reads source data in place and releases only a computed,
+  disclosure-shaped answer; no source row crosses the assertion boundary.
+- Private signing keys. Only public verification material leaves the service, so offline
+  verification requires no protected access.
+- Caller and source credentials, subject selectors, and source responses.
+- Governed packages and runtime configuration.
+- Audit integrity and availability of required service and recovery paths.
 
-The consequence for a reviewer is that the metadata layer authorizes nothing, enforces
-nothing, and does not assert that any record exists or satisfies a question. Publishing a
-dataset, a policy, or an offering does not grant access and is not proof that a record
-exists. Read this strictly for policy documents: a published ODRL policy describes intent and
-nothing enforces it. Registry Manifest can carry an ODRL policy reference and an enforcement
-profile identifier, but no current runtime service reads them, so treat a published policy as a
-statement about a deployment rather than a control the stack applies.
-{/* Evidence: registry-manifest-core still defines ODRL_ENFORCEMENT_PROFILE and
-     SUPPORTED_ODRL_ENFORCEMENT_TERMS, crates/registry-manifest-core/src/lib.rs:13-14, but
-     crates/registry-relay-v2 contains no ODRL, PDP, or policy-enforcement path; the runtime
-     that enforced that profile is retired. */}
-This also closes one threat directly: because the metadata
-layer is meant to be distributed and inspected, secrets are never embedded in it. The
-operator injects them at deployment, which keeps secret material out of the portable
-artifact entirely.
+Evidence Gateway is a minimum-disclosure assertion service. Registry Platform supplies shared
+security primitives so authentication, HTTP policy, audit, cryptography, and secret handling remain
+reviewable in one place instead of diverging between services. Demo integrations sit outside this
+production boundary and do not establish a production freshness or replay-protection profile.
 
-## Components and where they sit on the boundaries
+## Trust boundaries
 
-Four formal components sit on or beside the trust boundaries, with one supporting service
-beside them. A separate adopter demo sits outside the production trust boundary:
+| Boundary | Main control |
+| --- | --- |
+| Caller to product | OIDC authentication, explicit authorization, bounded request parsing |
+| BReg to PostgreSQL | Compiled schema and operations, least-privilege database identity |
+| Evidence to source | Fixed destination and request, credential isolation, transport and response bounds |
+| Evidence to verifier | Signed assertion, published verification material, audience and expiry checks |
+| Product to audit storage | Value-free records, durable append path, fail-closed behavior where required |
+| Operator to package | Closed schemas, digest verification, reviewed activation and rollback |
 
-- Registry Manifest: the offline metadata producer. No production data, no auth, no
-  secrets. It lives entirely on the describe side of the primary boundary.
-- Registry Relay: a contract-compiled read-only API over local read-only SQLite sources. It makes
-  no outbound source call, holds no source credential, and signs nothing.
-- Evidence Gateway: a minimum-disclosure assertion service. It answers one bounded, predefined
-  question about one subject with a signed assertion carrying the answer and not the record.
-- Registry Platform: the shared security primitives that the runtime services build on.
-- Solmara Lab: a separate adopter demo, running on synthetic data and demo configuration.
-  Treat Solmara Lab as out of scope for production trust. Its demo and template integrations
-  are integration examples, not a production freshness or replay-protection profile, and a
-  team copying them into production must add request freshness, expiry, or nonce checks itself.
+## Evidence authentication and source boundaries
 
-This model has no credential-issuance or peer-federation boundary, because no product here has
-one: Evidence Gateway issues no credential lifecycle and evaluates nothing on a peer's behalf.
+Evidence Gateway runs one reviewed OIDC bearer profile with one trusted issuer and exact audience,
+token-type, and algorithm allowlists. One configured principal claim is authoritative; it does not
+fall back to `client_id`, `azp`, a proxy header, or a request field. Only operational and discovery
+routes are unauthenticated, and none reveals enabled definitions or requester permissions.
 
-Security-critical primitives are concentrated in Registry Platform so that the behavior is
-identical across services and reviewable in one place. This is a deliberate attack-surface
-decision: it removes the risk of divergent, per-service security code that would each need
-auditing separately.
+The caller names a predefined requirement revision, purpose, and bounded subject selectors. One
+authorization decision binds the requester, requirement, purpose, roles, selector profiles,
+authority, origin tuple, and audience. Partial grants cannot be combined. Possession of a selector
+or a caller-supplied consent reference is lookup input, not authority. Evidence authorizes before
+credential resolution or source access and constructs the released assertion from validated,
+declared concept values.
 
-## Trust boundaries in detail
+Evidence reaches data through one of two fixed transports owned by the core:
 
-{/* SVG diagram. Every boundary label is restated in the sections that follow. */}
-<figure>
-  <img src="../../images/registry-trust-boundaries.svg"
-       alt="The Registry Stack trust boundaries in one map. One request path runs from a caller with an
-            access token to Evidence Gateway, and then to
-            Evidence Gateway's configured authoritative source, which it reaches over a fixed HTTP
-            request or a read-only SQLite extract. Registry Relay has a separate
-            protected-read path to its own sources. The dashed rule above Evidence Gateway marks
-            the authenticated service edge; the dashed rule below it marks the source edge, which
-            is authenticated only when the source is HTTP, since a statement source has no origin,
-            no credential, and no network hop.
-            Evidence Gateway
-            runs one OIDC bearer profile with one trusted issuer, one principal claim, and no trust
-            in proxy identity headers. Caller to Evidence Gateway carries a bearer token, a declared
-            purpose, a named requirement revision, and selector values; the answer, not the record,
-            comes back, only predefined revisions are evaluable, one authorization decision binds
-            the whole tuple, and possession is never authority. Evidence Gateway to its fixed sources
-            runs one fixed source request per acquisition stage, fixed by trusted configuration and
-            executed only by the core: an HTTP source fixes origin, method, path, headers,
-            authentication, TLS, projection, and redirect and proxy denial, and a statement source fixes
-            one reviewed SQL statement over a local read-only extract, with no origin, no credential,
-            and no network hop. Lookup collapses to match, no match, or ambiguous, and raw responses
-            are never logged. Evidence
-            Gateway and Registry Relay keep separate sources, credentials, authorization decisions, and
-            audit trails. Evidence Gateway verifies tokens against its configured issuer URL and key
-            set. Relay's separate path to its source is a local
-            read-only SQLite file opened in place, with no origin, credential, or outbound request of
-            any kind. A separate lane runs operator to key file to Evidence Gateway to public JWKS to
-            verifier, where private material reaches the process only by secret reference to an
-            owner-only file, signing is fail-closed, and the verifier pins the key set. Only
-            /health, /ready, /openapi.json, /.well-known/evidence/jwks.json, and
-            /.well-known/jwt-vc-issuer are unauthenticated at the Evidence Gateway edge." />
-</figure>
+- A fixed HTTP JSON request pins origin, method, path authority, headers, authentication, TLS,
+  projection, redirect denial, proxy denial, and one request per acquisition stage. Request scripts
+  may prepare only bounded query pairs and at most one JSON body.
+- A reviewed SQL statement runs against a local read-only SQLite extract. It has no origin, network
+  route, database credential, or caller-selected statement. Rust binds a bounded map of scalar
+  values by index, and the runtime caps rows, cells, statement steps, time, response bytes, and
+  concurrency.
 
-{/* Evidence: the diagram's two source transports are the closed http-json and sqlite-extract
-     variants under `source` in products/evidence/contracts/bundle.schema.yaml (frozen), governed by
-     contracts registry.evidence.fixed-http-json-source/v1,
-     products/evidence/contracts/source-contract.yaml, and
-     registry.evidence.fixed-sqlite-extract-source/v1,
-     products/evidence/contracts/sqlite-extract-source-contract.yaml (both frozen). The statement
-     transport's absent origin, credential, and network path are stated in the latter under
-     evidence_data_request.transport_absences. */}
+Every source response is validated against its governed schema before extraction. Lookup collapses
+to match, no match, or ambiguous; Evidence does not fetch broad candidate sets, follow pages, score
+candidates, or expose counts. Raw source responses are neither persisted nor logged.
 
-**The service edge (authentication).** Authentication is the trust boundary at the service
-edge, and each service authenticates every record- or assertion-bearing route before
-responding. Registry Relay has exactly one authentication mode, OIDC bearer, and it is
-per-operation rather than per-route: an operation whose compiled access profile is `Protected`
-requires a verified token carrying the declared scope, and one whose profile is `Public` does
-not. A Relay contract with any protected operation refuses to start without a configured issuer,
-so a deployment cannot leave a protected operation unauthenticated by omission. There is no
-static-credential mode and no API-key mode; the runtime reads no credential from configuration.
-{/* Evidence: AuthenticationRuntime carries only an optional issuer,
-     crates/registry-relay-v2/src/contract.rs; validate_runtime_contract requires an issuer
-     when the contract has protected access, crates/registry-relay-v2/src/startup.rs;
-     RelayAuthenticator::authorize() admits CompiledAccess::Public unconditionally and
-     requires a scoped principal for CompiledAccess::Protected,
-     crates/registry-relay-v2/src/auth.rs. */}
-Evidence Gateway runs one reviewed OIDC bearer profile with exactly one trusted
-issuer and exact audience, token type, and algorithm allowlists, and one configured principal
-claim with no `client_id`, `azp`, header, or request fallback: missing data denies rather than
-falling back to another claim (`V1-I04`). Evidence Gateway's unauthenticated surfaces are operational
-and discovery only: `/health`, `/ready`, `/openapi.json`,
-`/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. None of them reveals
-which evidence definitions are enabled or which requesters may invoke them. Evidence Gateway never
-trusts a proxy-supplied identity header, whatever the gateway in front of it asserts.
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml;
+    products/evidence/contracts/source-contract.yaml;
+    products/evidence/contracts/sqlite-extract-source-contract.yaml;
+    products/evidence/contracts/runtime.schema.yaml;
+    crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/source.rs. */}
 
-**Caller to Evidence Gateway.** This is the boundary the whole product exists to draw. The caller
-crosses it with a bearer access token, a declared purpose, a named requirement revision, and
-selector values for the subject roles that requirement declares; what comes back is the
-answer, not the record. Four properties hold it:
+## Threats the design mitigates
 
-- Only predefined, versioned requirement revisions are evaluable, and the request schema is
-  closed. A caller cannot supply thresholds, expressions, scripts, paths, headers, source
-  fields, relationship types, adapter parameters, or response projections (`V1-I01`,
-  `V1-I02`).
-- One authorization decision binds requester tags, optional actor, requirement revision,
-  purpose, every role, profile, and origin tuple, authority, and audience together. Partial
-  matches across separate grants cannot be unioned into access, and exactly one authority
-  path must match: zero paths and two or more paths both deny (`V1-I05`).
-- Possession is not authority. A selector value, a demographic tuple, or a caller-supplied
-  consent, approval, or grant reference is a lookup input, never proof that the caller may
-  ask (`V1-I06`, `V1-I07`).
-- What is released is constructed by the core after full output validation, from declared
-  typed concept values only. A script cannot inject envelope fields, subject identifiers, or
-  unsupported claims (`V1-I12`, `V1-I25`).
+- Secret material in deployment configuration: an HTTP source credential is named by a logical
+  secret reference instead of stored in the bundle. A statement source has no credential by
+  construction. Credential-free HTTP is admitted only for local assurance at a canonical numeric
+  loopback origin.
+- Token forgery: signatures, issuer, audience, token type, and algorithm are checked before token
+  claims are trusted. Route scopes and grants remain governed even when a token is valid.
+- Sender-constrained token replay as bearer: Evidence denies an access token with a
+  proof-of-possession confirmation claim because it validates no sender proof.
+- Privilege escalation: authorization is deny-by-default and requires exactly one complete grant
+  and authority-path match before source access. Reach is never widened by request input.
+- Membership and authorization oracles: no-match, ambiguous, missing-fact, and inconsistent results
+  collapse to one public shape. Authorization refusals collapse to `evidence.denied`. Detailed
+  categories stay in value-free audit.
+- Cross-purpose tracking: subject bindings use a keyed, domain-separated derivation over audience,
+  purpose, role, selector profile, key version, and the complete canonical selector bundle.
+- Error, log, and telemetry leakage: public problems carry stable codes. Selector, source, and
+  disclosed values do not appear in logs or native audit. Metrics are off by default and use a
+  separate private listener with closed labels.
+- Over-collection: callers cannot supply thresholds, expressions, scripts, source fields, paths,
+  headers, relationship types, or response projections. Undeclared concepts and values outside
+  governed type, codelist, cardinality, precision, or size bounds are rejected.
+- Payload substitution: signed flattened JWS is the default. Unsigned output uses a distinct media
+  type and requires permission in both the immutable bundle and matched grant; the strict verifier
+  rejects it.
+- Release without accountability: final response bytes are produced before the disclosure-release
+  audit entry is durably accepted, and only then released.
+- Hot policy mutation and tenant confusion: the runtime has no override, reload, merge, or fallback.
+  One process has one issuer-governance boundary, bundle lifecycle, signer, and audit boundary.
+- SSRF and uncontrolled egress: the fixed HTTP executor owns origin, method, path authority,
+  authentication, TLS, headers, redirect denial, proxy denial, and request count. The statement
+  transport opens one local file and has no network destination an attacker can steer.
+- Hostile or defective reviewed scripts: the script engine has no filesystem, environment, network,
+  process, module, ambient clock, or randomness. Operation ceilings stop runaway execution. A
+  statement script never receives SQL text, an extract path, file handle, or database connection.
 
-Purpose is enforced rather than advisory: an unauthorized purpose is denied before credential
-acquisition and source contact, purpose is an input to every subject binding and audit
-pseudonym, and purpose sits inside the signed payload where a verifier can reject a mismatch.
-A reviewer should still read a declared purpose as the caller's authorized selection from the
-granted set rather than an identity-provider attestation, unless the operator has issued a
-distinct requester tag per purpose.
+**Audit as a control.** Evidence writes a mandatory access-attempt entry before each acquisition
+stage and a disclosure-release entry after signing but before returning the response. A failure
+blocks the corresponding action. Native audit contains reviewed identifiers and decision categories,
+not raw selectors, source values, credentials, tokens, or subject identifiers. A keyed, versioned,
+domain-separated pseudonym covers the canonical selector bundle where correlation is required.
 
-**Evidence Gateway to its fixed sources.** Evidence Gateway's outbound edge is deliberately not
-general-purpose. A source reaches its data over one of two coequal transports, a fixed HTTP JSON
-request or one reviewed SQL statement against a read-only SQLite extract file mounted beside the
-process, and the core owns both. Source calls are fixed by trusted bundle configuration and
-executed only by the core, which owns the closed single or search-then-fetch sequence, the limits,
-and the one-request-per-stage ceiling on either transport, and on the HTTP transport also the
-origin, method, fixed or tagged selector or prior-fact-bound path, fixed headers, authentication,
-TLS, projection, redirect denial, and proxy denial; this is what closes SSRF, credential
-forwarding, script-directed networking, and response-led routing (`V1-I09`, `V1-I40`). A preparation
-script renders only ordered query pairs and at most one JSON body on the HTTP transport, or a
-bounded map of scalar parameters on the statement transport, and Rust validates that output
-before a credential is resolved or a row is read. Every source declares a response schema
-that Rust validates the projected response against before any extraction script runs, so a
-response outside its reviewed shape is a source-protocol failure rather than an input to fact
-construction. Lookup collapses to `match`, `no_match`, or `ambiguous`: Evidence Gateway never fetches
-broad candidate sets, follows pages, scores candidates, or exposes counts (`V1-I10`). Raw
-source responses are never persisted or logged (`V1-I14`). Hostname and fixed-origin
-verification stay mandatory, there is no trust-all mode, and ambient `HTTP_PROXY`-family
-variables are ignored.
-The statement transport has none of those fields to fix: a statement source has no origin, scheme,
-host, port, method, path, request or response media type, redirect policy, or header, and Evidence
-Gateway holds no database credential for it.
-What trusted configuration fixes there is the one reviewed SQL statement with its declared result
-columns and parameter bindings, the read-only extract file the runtime binds by logical profile,
-and the row, cell, statement-step, timeout, response-byte, and concurrency limits.
-
-{/* Evidence: the two coequal transports, products/evidence/CONCEPT.md, "A fixed source request
-     reaches its source over one of two coequal transports". The statement transport's absences,
-     contract registry.evidence.fixed-sqlite-extract-source/v1,
-     products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen), keys
-     evidence_data_request.transport_absences.statement and
-     evidence_data_request.transport_absences.credentials. Preparation output shapes: that
-     contract's preparation_channel.output and preparation_channel.validation_order, "Rust
-     validates the exact map shape, entry count, value kinds, and sizes ... before any row is
-     read", beside ownership.scripts.prepare, "Renders only ordered query pairs and at most one
-     JSON body", in products/evidence/contracts/source-contract.yaml (frozen). The governed
-     statement, declared result columns, parameter bindings, logical extractProfile name, and the
-     row, cell, statement-step, timeout, response-byte, and concurrency limits, the same statement
-     contract's ownership.governed_bundle; the runtime binds each logical name to a process-local
-     path under sourceExtracts, products/evidence/contracts/runtime.schema.yaml (frozen). */}
-
-**Registry Relay and Evidence Gateway remain separate.** A deployment may operate both products,
-and neither inherits the other's decisions. Evidence Gateway reaches its own configured
-authoritative sources over either transport: a fixed HTTP JSON request, which does cross a network
-boundary, or one reviewed SQL statement against a read-only SQLite extract file mounted beside the
-process, which does not. Relay reaches no source over the network at all, and reads its own local
-SQLite file. The two local reads are still not the same thing: Relay compiles a whole registry
-contract into the fixed route set it serves over its source, while an Evidence Gateway statement
-source runs one reviewed statement and returns one assertion. Each
-product owns its own credentials, authorization decision, audit trail, and readiness checks. One
-composition is supported, and it runs one way only: a Relay-served API is an ordinary protected
-HTTP endpoint, so an Evidence bundle may name one as a fixed HTTP source. That is a deployment
-choice, not a feature either product declares. Relay does not know it is being read, and Evidence
-Gateway still makes its own authorization and disclosure decision. A reviewer should reject a
-deployment description that treats Relay authorization as Evidence Gateway authorization.
-
-{/* Evidence: the statement transport's absent network path, contract
-     registry.evidence.fixed-sqlite-extract-source/v1,
-     products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen), key
-     evidence_data_request.transport_absences.network, "There is no network path from Evidence into
-     a registry data tier. The transport opens one local file."; Relay re-derives its whole
-     compiled contract and serves the fixed route set from it, crates/registry-relay-v2/src/package.rs
-     and router() in crates/registry-relay-v2/src/server.rs. */}
-
-## Assets protected by the design
-
-The assets the design sets out to protect are:
-
-- Private signing keys: The private signing key never leaves the service; only the public
-  half is published through the JWKS route. A verifier needs no credential and no protected
-  access to verify a stored response, which keeps verification off the protected side entirely.
-- Person-level source data: The source is read in place and is never copied out wholesale. What
-  crosses is bounded differently per surface, and the difference matters: behind an Evidence
-  Gateway assertion no source row crosses at all, only a computed, disclosure-shaped answer;
-  behind a Relay response the properties a compiled disclosure profile declares do cross, to a
-  caller the operation's access profile authorized.
-- Audit integrity: Audit is treated as a security control rather than best-effort
-  logging (see Audit as a control).
-- Secret material: Bearer tokens, raw credentials, and key material are kept out of both
-  the portable layer and client-facing surfaces.
-
-The design treats these threat classes as security-relevant: authentication bypass, credential
-disclosure, audit redaction or integrity failure, signing-key handling bugs, source data leakage
-through a governed read, and privacy regressions that expose raw subject identifiers.
-
-## Threats the design considers and mitigates
-
-- Secret material in deployment configuration: Relay holds no source credential, because its
-  source is a local file. The only secret it resolves is the optional cursor integrity key, named
-  indirectly as `secret:env/<NAME>` or `secret:file/<name>` rather than written inline. The file provider accepts only a single flat
-  filename under the runtime root, refuses traversal and nesting, opens with `O_NOFOLLOW`, and
-  requires a regular file owned by the effective user, with mode `0400` or `0600`, and exactly one
-  hard link.
-  An Evidence Gateway statement source resolves no source credential either: that transport has no
-  connection string, no secret reference, and no authentication kind, so it is credential-free by
-  construction rather than by profile, and a credential that does not exist cannot leak, expire
-  unnoticed, or be widened. An Evidence Gateway HTTP source is the case where a source credential
-  does exist, and the bundle names it by logical secret reference rather than writing it inline. The
-  one HTTP source that resolves none is the `none` authentication kind, and it is credential-free by
-  allowance rather than by construction: only a `local` assurance bundle may declare it, only at a
-  canonical numeric-loopback origin, and production and evidence-grade bundles reject that kind.
-  {/* Evidence: RelayRuntime::check() refuses a reference whose provider is not declared,
-       crates/registry-relay-v2/src/contract.rs, through check_reference() in
-       crates/registry-platform-config/src/blocks.rs;
-       SecretReference, validate_file_metadata(), and the tests
-       references_use_only_the_two_exact_contract_grammars,
-       file_secret_accepts_only_owner_read_and_optional_owner_write_modes, and
-       file_secret_rejects_every_name_for_a_hard_link in
-       crates/registry-platform-config/src/secrets.rs. Note the non-Unix branch of
-       read_secret_file() checks only symlink-and-regular-file, with no owner or mode check. The
-       statement transport's absent database credential, contract
-       registry.evidence.fixed-sqlite-extract-source/v1,
-       products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen), key
-       evidence_data_request.transport_absences.credentials, with the reading it carries under
-       evidence_data_request.transport_absences.reading; the HTTP transport's logical secret
-       references, contract registry.evidence.fixed-http-json-source/v1,
-       products/evidence/contracts/source-contract.yaml (frozen), key
-       ownership.governed_bundle; `none` "sends no credential and is admitted only by a `local`
-       assurance bundle at a canonical numeric-loopback origin; production and evidence-grade
-       bundles reject that kind", under `sources.*.authentication.kind` in
-       products/evidence/contracts/bundle.schema.yaml (frozen). */}
-- Token forgery or acceptance of untrusted tokens: A token is trusted only after signature
-  verification against the configured issuer JWKS, plus issuer, audience, token type, and
-  algorithm checks. The service still owns its route scopes and grants regardless of what the
-  token asserts.
-- A sender-constrained token replayed as a bearer token: Evidence Gateway denies an access token
-  carrying an RFC 7800 proof-of-possession confirmation claim rather than accepting it as an
-  ordinary bearer, because it validates no sender proof and accepting one would silently
-  discard the constraint the token was issued under (`V1-I32`).
-- Privilege escalation or over-reach: Authorization is deny-by-default. Relay refuses
-  unauthorized callers before source work; Evidence Gateway requires exactly one complete entitlement
-  match before audit, credential resolution, or source access. Reach is never widened at
-  request time.
-- An existence or matching oracle: No-match, ambiguous, missing-fact, and
-  inconsistent-derivation outcomes collapse by default to one public problem shape, with the
-  granular category kept in audit without counts, so response shape, message, or avoidable
-  timing cannot be used to probe registry membership (`V1-I16`). Every authorization refusal likewise
-  collapses to one generic `evidence.denied` problem that does not reveal which check failed.
-- Cross-purpose or cross-relying-party tracking: Subject bindings are derived with a keyed,
-  domain-separated function over audience, purpose, role, profile, key version, and the
-  complete canonical selector bundle, so the same person is not linkable across purposes or
-  relying parties (`V1-I17`).
-- Information leakage in error, log, and telemetry surfaces: `problem+json` bodies carry
-  stable codes only. Selector, source, and disclosed values never appear in logs or native
-  audit (`V1-I15`), and operational telemetry is off by default, served only on a separate
-  operator-private listener, with every series label drawn from a closed set rather than from
-  request content (`V1-I33`). Relay exposes no metrics endpoint at all, maps each request URI
-  onto a closed set of literal route shapes before logging it so no identifier or query value
-  can reach a log line, and accepts only six fixed values for `RELAY_LOG`, collapsing anything
-  else to `info` so the variable cannot switch on a dependency's own logging of URLs or headers.
-  {/* Evidence: operational_route() with the tests
-       operational_dimensions_never_include_request_values and
-       operational_trace_identifier_is_closed_and_bounded, crates/registry-relay-v2/src/server.rs;
-       operational_log_directive() with the test
-       operational_log_filter_cannot_enable_dependency_targets,
-       crates/registry-relay-v2/src/main.rs. */}
-- Over-collection through the request: The caller names a requirement and supplies only the
-  selector values that requirement's named profiles admit. Undeclared concepts, extra fields,
-  and values violating type, codelist, cardinality, precision, or size bounds are rejected
-  before evidence construction (`V1-I12`).
-- Payload substitution and unsigned success masquerading as verified evidence: The signed
-  flattened JWS is mandatory, available to every authorized grant issuing under the
-  audience-scoped subject binding, and the default response.
-  Unsigned output exists only through its own exact media type, and only when both the
-  immutable bundle and the one matched grant permit it; requesting a format creates no
-  permission of its own (`V1-I21`, `V1-I28`). The unsigned envelope is self-identifying and is
-  rejected by the strict JWS verifier, so it cannot be stored and later mistaken for signed
-  evidence.
-- A release with no accountability record: The final immutable response bytes exist before the
-  disclosure-release audit is durably accepted, and those exact bytes are what is released
-  afterward. Every authorized-material native audit event records the closed response-protection
-  mode, with a signing key identity present exactly for a cryptographically protected release,
-  while the minimal authorization-refusal event records neither field (`V1-I29`, `V1-I30`).
-- Unreviewed hot mutation of policy: Configuration is immutable for the life of the serving
-  process. There is no runtime override, reload, merge, or fallback path, and the closed
-  runtime file cannot reach any governed field (`V1-I18`).
-- Cross-tenant confusion: One process serves one operator-controlled trust domain, with one
-  service trust domain, issuer governance boundary, bundle lifecycle, signer, and audit
-  boundary (`V1-I19`).
-- SSRF and uncontrolled egress: Relay closes this by construction rather than by policy. It
-  reaches no source over the network, so there is no source origin, no destination, and no
-  request an attacker could steer. Its only outbound traffic is OIDC discovery and JWKS
-  retrieval against the one configured issuer, over an `https` discovery URL with no userinfo,
-  query, or fragment, which must be byte-identical to its canonical form and must end in
-  `/.well-known/openid-configuration`. The health-check subcommand refuses a URL carrying
-  userinfo, a password, a query, or a fragment, disables proxies, and follows no redirect.
-  Evidence Gateway's fixed executor closes the same class for its own HTTP sources: origin,
-  method, path authority, headers, authentication, TLS, projection, redirect denial, proxy denial,
-  and a one-request-per-stage ceiling, with scripts controlling request flow only inside that
-  host-enforced authority. Evidence Gateway's statement transport closes the class the way Relay
-  does, by construction rather than by policy: that transport opens one local extract file and has
-  no origin, no scheme, no host, no port, and no network path into a registry data tier, so there
-  is nothing for a URL security rule or a redirect denial to govern and no destination an attacker
-  could steer.
-  {/* Evidence: OidcRuntime::checked_profile() and canonical_issuer_transport_url() key-URL
-       constraints, crates/registry-relay-v2/src/contract.rs; healthcheck() rejects userinfo,
-       password, query, and fragment and uses .no_proxy() with redirect::Policy::none(),
-       crates/registry-relay-v2/src/startup.rs. The statement transport's absences, contract
-       registry.evidence.fixed-sqlite-extract-source/v1,
-       products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen), keys
-       evidence_data_request.transport_absences.statement, "There is nothing for a fixed-header
-       allowlist, a URL security rule, or a redirect denial to govern, so this contract states
-       none.", and evidence_data_request.transport_absences.network, "There is no network path from
-       Evidence into a registry data tier. The transport opens one local file." */}
-- A hostile or defective reviewed script: Evidence Gateway's script engine has no filesystem,
-  environment, network, process, or module access, no ambient clock or randomness, and a
-  normative operation ceiling that terminates a runaway invocation with a closed, value-free
-  error. On the statement transport a script additionally never receives the statement text, a SQL
-  fragment or constructed SQL, the extract path, the file handle, or the database connection, and
-  Rust binds every value into the prepared statement by index rather than rendering it into
-  statement text, so a statement's shape is identical for every request it serves. Statement
-  parameters are named only, and a positional parameter is refused.
-  {/* Evidence: contract registry.evidence.fixed-sqlite-extract-source/v1,
-       products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen), keys
-       ownership.scripts.prohibited, parameters.binding_owner, "Rust binds every value into the
-       prepared statement by index. No value is ever rendered into statement text, so a statement's
-       shape is identical for every request it serves.", and parameters.named_only. */}
-- A caller widening its own read (Relay side): a Relay caller supplies only the named parameters
-  the compiled operation declares, and cannot add a filter, a projection, a source column, or a
-  statement. Where an operation declares an authority row binding, every row it returns is pinned
-  to a value taken from the caller's verified token, either a named claim or the principal
-  identifier, injected as a bound SQL parameter under an exact-equality `COLLATE BINARY`
-  predicate rather than concatenated into a statement. A caller cannot substitute that value,
-  because it is never read from the request.
-- Tampering with the governed contract on disk (Relay side): at startup Relay re-runs the
-  compiler and the artifact generator over the sealed authored inputs and requires byte-for-byte
-  equality with what the package claims, before it opens a source, an audit sink, or a listener.
-  It also refuses a package or runtime file whose path contains a symlink or a component owned by
-  a third party or writable by group or other. This detects a modified package; it does not
-  authenticate one, because the package is not signed.
-
-**Audit as a control.** Evidence Gateway writes one mandatory access-attempt record before every
-actual acquisition stage, plus one disclosure-release record per successful response. Each
-access-attempt event must be durably accepted before its source read, and the disclosure-release
-event must be durably accepted after signing and before the response is released. Either
-failure blocks the corresponding action. The log has no severity levels and no way to turn
-records off, and carries reviewed identifiers and decision categories only: never raw selector values, per-field selector hashes, source values, credentials, tokens,
-or raw subject identifiers. Where correlation is required, one keyed, domain-separated,
-versioned pseudonym covers the complete canonical selector bundle and is deliberately not
-globally stable across purposes or audiences.
-
-Relay audits on the same principle under its own schema, `registry.relay.audit/v2alpha2`. It
-records an attempt phase, a refusal phase, and a terminal phase, joined by the operation
-identifier, carrying resource, operation,
-contract revision, access and disclosure profile names, transform identifiers, and the principal
-kind, and never a row value or a selector value. Failure to durably accept a record refuses the
-request with a `503` `audit.unavailable` problem, and this is not configurable: there is no
-best-effort mode to fall back to. Readiness re-verifies the audit writer, so replacing the audit
-file under a running process takes the deployment out of `/ready`.
-{/* Evidence: AUDIT_SCHEMA and the value-free AuditContext,
-     crates/registry-relay-v2/src/audit.rs:1-140; every audit failure returns
-     ProblemCode::AuditUnavailable, crates/registry-relay-v2/src/api.rs; the test
-     audit_path_replacement_revokes_readiness, crates/registry-relay-v2/src/startup.rs. */}
-
-Three caveats for the auditor. First, the audit log is not chained or signed, so the host that
-writes it can rewrite or delete entries without detection. Tamper evidence and completeness come
-only from shipping sealed files, or the standard-output stream, to append-only storage the
-service account cannot change, and neither service proves remote receipt. Second, exactly one
-process may write a given audit path: the writer takes an exclusive lock, and a second process on
-the same path fails at startup, so each replica needs its own path or a standard-output
-destination. Third, audit records hashed principals and correlation identifiers, so
-operator-side investigation depends on retaining the hashing secret and request context.
+The audit log is not chained or signed, so the writing host can rewrite or delete local entries.
+Tamper evidence and completeness require shipping sealed files or `stdout` to append-only storage.
+One process may write each audit path because the writer takes an exclusive lock. Investigation also
+depends on retaining the pseudonym key and request context.
 
 ## The automated adversary
 
-The model assumes the adversary is automated before it is expert. Publicly disclosed
-vulnerabilities reach commodity exploitation quickly, and every reachable deployment is probed
-continuously at machine speed by tooling that does not need to understand the registry domain to
-try each generic technique against it. Three consequences follow, and the mitigations above carry
-most of the answer.
+The model assumes every reachable deployment is probed continuously at machine speed. Refusal
+shapes therefore avoid distinguishing signals, and source calls remain fixed by governed
+configuration. Request schemas expose no caller-supplied expression, script, path, header, or
+projection. Parsers and scripts apply size, count, and operation ceilings so one request cannot buy
+unbounded work.
 
-First, probing must yield no signal: the collapsed refusal and unresolved-outcome shapes listed
-under the existence oracle above leave an automated caller unable to learn which check failed or
-to read registry membership out of the response (`V1-I16`). Second, the shapes automated scanners
-look for are absent rather than filtered. The request schema is closed with no caller-supplied
-thresholds, expressions, scripts, paths, headers, or response projections (`V1-I01`, `V1-I02`),
-and source calls are fixed by trusted configuration (`V1-I09`, `V1-I40`). Request content reaches
-a source call only through a tagged selector or prior-fact-bound path segment and the bounded
-query pairs and JSON body a reviewed script prepares; it never selects the origin, method,
-headers, credentials, or number of calls, which stays at one request per configured stage.
-Third, work is bounded per request: parsers and scripts enforce size, count, and operation
-ceilings, so a machine-speed stream of requests cannot buy unbounded computation from any single
-one of them.
+Nightly and merge-queue fuzz smoke covers platform token and API-key parsing, SD-JWT issuance and
+holder-proof input, reviewed SQLite statement parsing, Evidence verification, authoring readers,
+and Manifest YAML and rendered-artifact JSON. It does not cover every request path or every
+presentation path behind an otherwise valid signature.
 
-Several parsing surfaces this adversary reaches are smoke-fuzzed nightly and in the merge queue,
-for about a minute per target, rather than only at release time. The platform and Evidence
-smokes run in the merge queue when a change reaches their crates and again in the nightly sweep;
-the manifest smoke runs nightly. Together they cover bearer, access-token, and API-key parsing;
-SD-JWT issuance input and holder-proof verification; reviewed SQLite statement parsing; the
-Evidence response verifier's flattened-JWS and SD-JWT VC paths; the Evidence authoring readers for
-OpenAPI descriptions and project documents; and the manifest YAML and rendered-artifact JSON
-readers. Evidence request parsing is not fuzzed, nor are SD-JWT VC disclosures behind a valid
-issuer signature or the verifier's holder-bound presentation path.
-{/* Evidence: the target rosters in products/platform/fuzz/Cargo.toml,
-     products/evidence/fuzz/Cargo.toml, and products/manifest/fuzz/Cargo.toml, with the coverage
-     limits in products/evidence/fuzz/README.md. products/platform/scripts/run-fuzz-smoke.sh and
-     products/evidence/scripts/run-fuzz-smoke.sh run as the platform-fuzz and evidence-fuzz jobs
-     whose assurance tier selects the merge queue in .github/scripts/ci_changes.py, with all
-     three rosters in .github/workflows/nightly-security.yml. */}
-
-Two residual risks sharpen under this adversary, and the [hardening
-checklist](../../security/hardening-checklist/) carries the operator side of each. The human
-controls are the ones automation cannot tire past, so the bundle review, the whole-surface
-disclosure review, and project approval are load-bearing under sustained machine-speed pressure
-rather than ceremony in front of it; and because the rate budgets are per process (see the
-residual risks below), edge rate control is part of the enumeration defense, not a throughput
-convenience. Patch velocity is the operator's share of the same premise: a runtime update fixes
-nothing in a deployment that does not take it, and each advisory this repository's `deny.toml`
-ignores is accepted residual risk, recorded with a rationale and a dated review trigger, that
-stays in released code until it is resolved.
-{/* Evidence: the [advisories] ignore list and its comments in deny.toml. */}
+Human review remains load-bearing under sustained probing. It must cover the whole enabled
+disclosure surface, project semantics, dependency update cadence, and edge rate controls.
 
 ## Field encryption draws a boundary inside the database
 
-Base Registry Engine field encryption adds one boundary the other products do not have, drawn inside
-the database rather than at a service edge. A restricted field the project declares `encrypted`
-stores its values as AES-256-GCM envelopes under a data-encryption key the process wraps and
-unwraps through Vault or OpenBao Transit, so the value is protected against a reader of the
-database itself: a database administrator account, a replica, a dump, a backup, or a read that SQL
-injection obtains. That reader learns no restricted value. Two readers sit outside the boundary,
-and the feature does not claim otherwise: field encryption does not protect restricted values
-against the running process, or against holders of the Transit credential, because both can ask for
-plaintext.
+BReg can store a restricted field as an AES-256-GCM envelope under a data-encryption key wrapped by
+Vault or OpenBao Transit. This protects values from database administrators, replicas, dumps,
+backups, and SQL injection that reaches only ciphertext. It does not protect values from the running
+process or a holder of the Transit credential because both can obtain plaintext.
 
-A reviewer should weigh three consequences. First, the boundary fails closed: when the registry
-cannot unwrap the key, entities with encrypted fields answer with an HTTP `503`
-`runtime.field_encryption.unavailable` problem instead of degrading to plaintext, and entities
-without encrypted fields keep serving. Second, the blind index that equality lookups resolve
-through leaks equality, presence, and cardinality to a database reader by design: it is an
-HMAC-SHA-256 over a normalized value under a key that never leaves the process, so the reader sees
-which rows hold a value and which rows share one without learning the value. Third, the boundary
-has a time condition: plaintext backups taken before a field was encrypted stay inside the stated
-threat model for as long as they are retained, so retiring or encrypting pre-flip backups is a
-precondition of the flip-on migration, not an afterthought.
-[Field encryption for restricted fields](../breg-field-encryption/) carries the migration's history
-choices, and the [hardening checklist](../../security/hardening-checklist/) carries the custody
-items.
+When the key cannot be unwrapped, entities with encrypted fields answer with HTTP `503`
+`runtime.field_encryption.unavailable` while entities without encrypted fields continue serving.
+Equality lookups use an HMAC-SHA-256 blind index, which deliberately exposes equality, presence,
+and cardinality to a database reader. Plaintext backups taken before encryption remain outside the
+boundary until retired or encrypted.
 
-The cryptography behind field encryption is the FIPS build of AWS-LC (`aws-lc-rs` with the `fips`
-feature, linking `aws-lc-fips-sys`, which binds AWS-LC-FIPS 3.0.x), always on, with no non-FIPS
-fallback path. Runtime paths, including those the JWT library uses, select the FIPS backend through
-unified features, while the non-FIPS `aws-lc-sys` crate remains an unreferenced but
-supply-chain-relevant build dependency. Upstream documents that the bound module has completed FIPS
-validation testing by an accredited lab and directs consumers to NIST CMVP for certification
-status. Registry Stack does not claim certification of itself.
+The implementation uses the FIPS build of AWS-LC with no non-FIPS runtime fallback. Registry Stack
+does not claim certification of itself.
 
-{/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field(),
-    open_field(), FieldAad, and blind_index_hmac();
-    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::activate() and
-    FieldEncryptionService::open_existing();
+{/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field, open_field,
+    FieldAad, and blind_index_hmac; crates/registry-breg/src/field_encryption.rs,
+    FieldEncryptionService::activate and FieldEncryptionService::open_existing;
     crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
-    crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable;
-    crates/registry-breg/src/api/mod.rs, field_encryption_refusal();
-    crates/registry-platform-crypto/Cargo.toml and Cargo.lock, with
-    release/notes/dependency-vetting-aws-lc-fips.md. */}
+    crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable. */}
 
-## Residual risks and what is left to the operator
+## Residual risks and operator duties
 
-The canonical inventory of every current limit is [Known limitations and
-non-guarantees](../known-limitations/); the residual risks in this section are the subset a
-threat model must weigh.
+- Health, readiness, and offline checks do not certify Transit policy or key custody. A
+  local-assurance deployment can be internally consistent without production-grade custody.
+- Combined disclosure remains a human review. Differently named disclosure families can overlap,
+  and rate limits do not make an unsafe bundle safe.
+- Startup does not detect overlapping authority paths. Ambiguity denies at request time but appears
+  as an unexplained refusal.
+- Rate limits are per process and in memory. Replicas multiply budgets and restart resets them,
+  including the failed-selector enumeration defense.
+- Released assertions have no recall, revocation, status list, or presentation-time check. Validity
+  windows and key publication determine how long they verify.
+- The request nonce is echoed correlation data, not replay prevention. Evidence does not enforce
+  uniqueness or consume it.
+- Secret provisioning, key custody and rotation, audit retention, backups, database access,
+  network isolation, TLS, edge quotas, monitoring, dependency response, incident response, source
+  correctness, and legal authority remain operator duties.
+- Project approval remains semantic. Validators cannot decide whether an institution chose the
+  lawful purpose, correct source fields, derivation, or disclosure default.
 
-These are the risks the design does *not* close:
+## Verification
 
-- Key custody is not certified by health checks: Readiness, liveness, and offline validation
-  confirm that governed key material and the selected signer agree. They do not independently
-  certify the Transit service, workload-local proxy, or operator policy. A local-assurance
-  deployment using demo-generated software keys can be reachable and internally consistent yet
-  not production-secure. Custody, rotation, and provider approval remain operator responsibilities.
-- The combined disclosure surface is a human review: The runtime validates one bundle at
-  startup and refuses two simultaneously enabled requirements that declare the same disclosure
-  family, but a declared family is a trusted operator attestation, not a semantic classifier.
-  Threshold ladders, overlapping categories, increasingly precise regions, and coexisting
-  revisions that together reconstruct a protected value are caught by the operator's review of
-  the whole enabled bundle or not at all. Rate controls do not make an unsafe bundle safe
-  (`V1-I03`, `V1-I20`).
-- Overlapping authority paths are not detected at startup: Startup validation does not detect
-  two authority paths covering the same requirement, purpose, and subject tuple. At request
-  time that ambiguity denies, which fails safe but presents as an unexplained refusal; the
-  operator owns the review that prevents it.
-- Rate limits are per process and in memory: The configured request, burst, and
-  failed-selector budgets are tracked in one process's memory, never shared across replicas, so
-  running N instances behind a load balancer multiplies every limit by N and a restart resets
-  each budget to full. This matters most for the failed-selector budget, because that budget,
-  not throughput, is the selector-enumeration defense.
-- A released assertion cannot be recalled: Evidence Gateway has no revocation, status list, or
-  presentation-time check. The only levers over a released assertion are its declared validity
-  window and signing-key rotation, and rotation does not invalidate assertions a retained
-  public key still verifies.
-- The request nonce is not replay protection: It is uninterpreted correlation data echoed into
-  the payload. Reuse is not rejected, and no uniqueness check exists.
-- The operator boundary is where coverage ends: Secret and key provisioning, key custody
-  and rotation, audit retention, backup, restore and access control, tenant isolation, TLS
-  termination and certificates, edge rate limiting, per-client quotas, deployment
-  configuration, and incident response are operator responsibilities, not behavior the model
-  defines.
-- Aggregate data is not a privacy budget: Relay's SDMX aggregate-data routes serve compiled
-  statistical datasets and track no cumulative disclosure across repeated or overlapping
-  queries. Per-operation quotas bound request rate, not information released. Do not describe a
-  Relay aggregate as privacy-budgeted unless a separate deployed control provides it. This is a
-  residual disclosure risk left to the operator.
-- Relay quotas are per process and in memory: the configured requests-per-minute and burst
-  budgets are a token bucket per compiled operation held in one process's memory, never shared
-  across replicas, so running N instances multiplies every budget by N and a restart resets each
-  bucket. Treat them as an availability control, not an enumeration defense.
-  {/* Evidence: QuotaLimiter is an in-memory per-operation token bucket,
-       crates/registry-relay-v2/src/server.rs. */}
-- A Relay package is not authenticated: its package digest is a SHA-256 integrity digest that any
-  holder of the package can recompute. Startup detects drift and tampering by re-deriving every
-  artifact, but it cannot tell a legitimate package from a well-formed forgery. Package
-  provenance is an operator duty: the delivery path, the filesystem ownership checks, and the
-  release verification procedure carry it, not the package format.
-- Project approval remains a semantic control: Schemas and validators reject malformed
-  configuration, duplicate identifiers, and unsupported modes. They cannot decide whether an
-  institution selected the correct source fields, lawful purpose, derivation rule, or
-  disclosure default. Those decisions require project review and fixture evidence.
-- Admin reload is not a capability: neither product has an admin listener, a reload route, a
-  posture endpoint, or a configuration apply path. Relay serves a fixed route set with no
-  administrative surface at all, and Evidence Gateway has none either. A configuration change is
-  a new reviewed revision and a restart, in both cases.
+Use product-owned tests and production checks, then verify one realistic authenticated request,
+denial behavior, audit failure, dependency failure, backup, and recovery.
 
-## What is explicitly out of scope
-
-These are non-goals for this version. None of them should be read into a Registry Stack
-conformance claim:
-
-- A credential lifecycle: Evidence Gateway's SD-JWT VC output is a second serialization of the same
-  stateless assertion. There is no issuance session, credential offer, status list, revocation,
-  reissuance, persisted credential state, or OID4VCI endpoint of any kind, in either subject
-  binding mode. Under the default audience-scoped mode there is no holder binding ceremony either,
-  and an optional caller-supplied holder key is echoed unverified into a confirmation claim rather
-  than proved. A requirement that declares the holder-bound mode adds a proof of possession the
-  relying party checks at presentation, and nothing else: the service appends no key-binding JWT,
-  issues no challenge, and retains no presentation or replay state.
-- Delegated or federated evaluation between peers: no service in this model evaluates a
-  question on another deployment's behalf, and there is no trust-chain discovery, peer
-  registry, or cross-institution evaluation route.
-- Identity resolution: lookup is match, no-match, or ambiguous. Evidence Gateway is not an
-  identity-resolution or record-linkage engine and returns no candidate material.
-- Cross-verifier credential use under the default binding mode: an audience-scoped subject binding
-  makes an assertion meaningful to one relying party and correlatable across none. A requirement
-  that declares the holder-bound mode opts out of this non-goal deliberately, and accepts the
-  correlation that follows: holder key reuse links a holder across every verifier that sees it,
-  and the service can neither prevent nor detect that. Batch issuance under distinct keys reduces
-  the deterministic key-based link; it does not make credentials unlinkable, because members still
-  share an issuance timestamp, purpose, requirement, Evidence Type, configuration revision, and
-  disclosed values.
-- Replay prevention at presentation: a relying party verifying a key-binding JWT compares the
-  nonce from the challenge it issued, and comparing a nonce is not consuming it. The same
-  presentation bytes verify again under the same stateless policy. RFC 9901 section 7.3 places the
-  challenge lifecycle in the surrounding protocol, so issuing a nonce, retaining it, and retiring
-  it are the relying party's own duties.
-- External policy enforcement of any kind: no runtime service in this stack evaluates an
-  external policy. There is no policy decision point, no ODRL term enforcement, and no policy
-  discovery. Registry Manifest can publish a policy reference, and that reference describes
-  intent rather than naming a control the stack applies.
-- Certified standards compliance: Aligning with a standard is not conforming to it. Speaking
-  the shape of OIDC, OAuth 2.0, SD-JWT VC, CCCEV, or the rest does not certify conformance to
-  any of them, and CCCEV-shaped output is not conformant to CCCEV 2.00. Relay's aggregate-data
-  routes speak a narrow aligned subset of SDMX REST 2.2.2 and its geospatial responses use CRS84
-  points; it is explicitly not conformant to OGC API Features, CQL2, EDR, or tiles.
-- Adapters, connectors, and feature-gated protocol surfaces: Relay has none. Its route set is
-  fixed by the compiled contract and does not vary by build feature, so there is no OGC API
-  Features, Records, or EDR adapter and no SP-DCI synchronization surface to reason about.
-- A hostile local account on the machine that runs adopter tooling: `bregctl`, `evidencectl`,
-  `caseworkctl`, `schedulingctl`, `relayctl`, and the other authoring and scaffolding commands
-  assume a single-user machine the adopter trusts, and resisting another account on that machine
-  is not a tooling guarantee. Some `bregctl` lifecycle writes walk directories by descriptor:
-  they refuse a symbolic link they encounter, and an ancestor replaced after the walk cannot
-  redirect them, because they keep writing into the directory they already hold. Other tooling
-  writes use ordinary path-based file operations, and another account that can write to a parent
-  directory can race their directory creation or redirect them through a symbolic link. Generate
-  production key material on a machine where no other account can write anywhere along the output
-  path. The owner, mode, and no-follow checks described for the runtimes are runtime startup
-  checks.
-  {/* Evidence: descriptor-held SafeDir walk with openat and O_NOFOLLOW,
-       crates/registry-bregctl/src/safe_path.rs; path-based directory creation in
-       ensure_private_dir_impl and ensure_parent_dir, crates/registry-evidencectl/src/keygen.rs,
-       and ensure_private_parents, crates/registry-bregctl/src/field_encryption.rs. */}
-- Non-Unix targets: both runtimes are Unix-only, and both fail closed rather than degrading.
-  Evidence Gateway's secret and audit invariants depend on owner, mode, no-follow, link-count,
-  and open-file identity checks. Relay refuses to start on a non-Unix target outright, because
-  its package and runtime trust checks have no equivalent there, and its published binary is
-  built for Linux amd64 only.
-  {/* Evidence: #[cfg(not(unix))] require_trusted_ownership returns an error, so the loader
-       refuses every runtime configuration, crates/registry-platform-config/src/loader.rs; the
-       non-Unix safe_permissions in crates/registry-relay-v2/src/package.rs returns false
-       unconditionally; the installer refuses any platform other than Linux amd64, proven by
-       unsupported_platform_fails_before_download_or_install,
-       crates/registry-relay-v2/tests/install_script.rs. */}
+{/* Evidence: crates/registry-breg/src/access.rs; crates/registry-breg/src/postgres/mutation.rs;
+    crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/server.rs;
+    crates/registry-platform-httpsec/src/lib.rs; crates/registry-platform-audit/src/lib.rs. */}
 
 ## Related
 
-- [RS-SEC-G](../../spec/rs-sec-g/): the security model
-- [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/), [RS-PR-RELAY](../../spec/rs-pr-relay/):
-  protocol contracts
-- [RS-ARC-G](../../spec/rs-arc-g/): the two-layer architecture
-- [Evidence Gateway security model](../../security/evidence/): the invariant matrix and its tests
-- [Harden a production deployment](../../security/hardening-checklist/): hardening procedures
-- [Field encryption for restricted fields](../breg-field-encryption/): the sealed-field model and
-  its migration lifecycle
-- [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/)
+- [Security overview](../../security/)
+- [Production hardening checklist](../../security/hardening-checklist/)
+- [DPI safeguards alignment](../dpi-safeguards-alignment/)

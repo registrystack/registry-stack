@@ -1,5 +1,9 @@
 # feat(discovery): add a small immutable Registry Discovery index
 
+> Historical launch record. This document describes the original Discovery
+> implementation before Relay retirement. Current publication, index, query,
+> and client support is Evidence-only; see [ADR-006](DECISIONS.md#adr-006-current-implementation-supports-evidence-only).
+
 ## Summary
 
 Replace the managed Federation V1 direction with Registry Discovery: Evidence

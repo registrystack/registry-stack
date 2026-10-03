@@ -1,4 +1,4 @@
-export type ServiceKind = 'evidence' | 'relay';
+export type ServiceKind = 'evidence';
 
 export interface DiscoveryClientOptions {
   baseUrl: string;
@@ -32,8 +32,6 @@ export interface ServiceFilters {
   jurisdiction?: string[];
   conformsTo?: string[];
   evidenceType?: string[];
-  semanticClass?: string[];
-  operationFamily?: string[];
 }
 
 export interface EvidenceServiceQuery {
@@ -42,17 +40,6 @@ export interface EvidenceServiceQuery {
   serviceIds?: string[];
   conformsTo?: string[];
 }
-
-interface RelayServiceQueryOptions {
-  jurisdiction?: string;
-  serviceIds?: string[];
-  conformsTo?: string[];
-}
-
-export type RelayServiceQuery = RelayServiceQueryOptions & (
-  | { semanticClassId: string; operationFamilyId?: string }
-  | { semanticClassId?: string; operationFamilyId: string }
-);
 
 export interface ServiceRecord {
   recordId: string;
@@ -83,10 +70,7 @@ export interface ServiceSearchResponse {
   items: ServiceRecord[];
 }
 
-export type MatchedCapability =
-  | { kind: 'evidence-type'; id: string }
-  | { kind: 'semantic-class'; id: string }
-  | { kind: 'operation-family'; id: string };
+export type MatchedCapability = { kind: 'evidence-type'; id: string };
 
 export interface SelectionRequest {
   recordId: string;
@@ -110,15 +94,6 @@ export interface EvidenceSelectionRequest {
   resolution?: EvidenceResolutionContext;
 }
 
-export type RelayCapabilityMatch =
-  | { semanticClassId: string; operationFamilyId?: string }
-  | { semanticClassId?: string; operationFamilyId: string };
-
-export interface RelaySelectionRequest {
-  recordId: string;
-  capabilityMatch: RelayCapabilityMatch;
-}
-
 export interface CommonServiceSelection extends Omit<ServiceRecord, 'title' | 'description'> {
   matchedCapability: MatchedCapability;
   catalogRevision: string;
@@ -129,14 +104,6 @@ export interface EvidenceServiceSelection extends CommonServiceSelection {
   serviceKind: 'evidence';
   matchedCapability: { kind: 'evidence-type'; id: string };
   evidenceResolution?: EvidenceResolutionContext;
-}
-
-export interface RelayServiceSelection extends CommonServiceSelection {
-  serviceKind: 'relay';
-  matchedCapability:
-    | { kind: 'semantic-class'; id: string }
-    | { kind: 'operation-family'; id: string };
-  relayCapabilityMatch: RelayCapabilityMatch;
 }
 
 export type ServiceSelection = CommonServiceSelection;
@@ -168,7 +135,6 @@ export class DiscoveryClient {
   resolveEvidenceTypes(request: EvidenceTypeResolveRequest): Promise<EvidenceTypeResolveResponse>;
   searchServices(filters?: ServiceFilters): Promise<ServiceSearchResponse>;
   searchEvidenceServices(query: EvidenceServiceQuery): Promise<ServiceSearchResponse>;
-  searchRelayServices(query: RelayServiceQuery): Promise<ServiceSearchResponse>;
   selectExact(response: ServiceSearchResponse, request: SelectionRequest): CommonServiceSelection;
   selectEvidenceAlternative(
     response: EvidenceTypeResolveResponse,
@@ -178,10 +144,6 @@ export class DiscoveryClient {
     response: ServiceSearchResponse,
     request: EvidenceSelectionRequest,
   ): EvidenceServiceSelection;
-  selectRelayService(
-    response: ServiceSearchResponse,
-    request: RelaySelectionRequest,
-  ): RelayServiceSelection;
 }
 
 export function selectExact(
@@ -198,11 +160,6 @@ export function selectEvidenceService(
   response: ServiceSearchResponse,
   request: EvidenceSelectionRequest,
 ): EvidenceServiceSelection;
-
-export function selectRelayService(
-  response: ServiceSearchResponse,
-  request: RelaySelectionRequest,
-): RelayServiceSelection;
 
 /**
  * Validate closed shape and capability binding only.

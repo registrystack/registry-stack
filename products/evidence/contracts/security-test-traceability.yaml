@@ -132,7 +132,7 @@ entries:
   - id: sec-source-canary-absent-everywhere
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_registry_lookup_declared_unresolved_maps_to_evidence_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: an_undeclared_source_404_stays_source_unavailable_and_logs_a_value_free_cause}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_renamed_source_member_warns_once_per_interval_and_counts_every_drifted_response}
@@ -152,7 +152,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_existence_disclosure_mode_governs_the_public_collapse}
       - {file: crates/registry-evidence/src/runtime.rs, name: derivation_input_inconsistency_collapses_with_the_unresolved_classes}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_registry_lookup_declared_unresolved_maps_to_evidence_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_search_is_item_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_unresolved_fetch_after_unique_search_is_dependency_failure}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_aborts_without_partial_release}
@@ -587,7 +587,7 @@ entries:
   - id: sec-request-batch-no-partial-release
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
-      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_registry_lookup_declared_unresolved_maps_to_evidence_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_search_is_item_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release}

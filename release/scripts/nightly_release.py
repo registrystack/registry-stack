@@ -17,17 +17,24 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import release_candidate  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "registrystack/registry-stack"
-SCHEMA = "registry-stack.nightly.v1"
+SCHEMA_V1 = "registry-stack.nightly.v1"
+SCHEMA_V2 = "registry-stack.nightly.v2"
+SCHEMA = SCHEMA_V2
 CHANNEL = "nightly-channel"
 TAG = re.compile(
     r"^v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-nightly\.([0-9]{8})\.([0-9a-f]{40})$"
 )
 INSTALLERS = {
     "breg": ("registry-breg", "BREG", ("breg", "bregctl")),
-    "relay": ("registry-relay-v2", "RELAY", ("relay", "relayctl")),
     "evidencectl": (
         "registry-evidencectl",
         "EVIDENCECTL",
@@ -36,6 +43,67 @@ INSTALLERS = {
     "casework": ("registry-casework", "CASEWORK", ("casework", "caseworkctl")),
     "scheduling": ("registry-scheduling", "SCHEDULING", ("schedulingctl",)),
 }
+HISTORICAL_INSTALLERS = INSTALLERS | {
+    "relay": ("registry-relay-v2", "RELAY", ("relay", "relayctl")),
+}
+V2_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.0"
+# Schema v2 names one frozen publication contract. Keep this inventory literal:
+# deriving it from the checkout would let an older public manifest change meaning
+# when the source roster evolves. An incompatible inventory requires a new
+# schema/profile and reader branch.
+V2_IMAGES = (
+    "breg",
+    "breg-mcp",
+    "breg-review",
+    "casework",
+    "discovery",
+    "evidence",
+    "evidence-oid4vci",
+    "messaging",
+    "registry-render",
+    "scheduling",
+)
+V2_INSTALLERS = ("breg", "casework", "evidencectl", "scheduling")
+V2_PAYLOAD_TEMPLATES = (
+    "THIRD_PARTY_NOTICES",
+    "breg-mcp-{tag}-linux-amd64",
+    "breg-mcp-{tag}-linux-arm64",
+    "breg-mcp-{tag}-macos-arm64.tar.gz",
+    "breg-review-{tag}-linux-amd64",
+    "breg-review-{tag}-linux-arm64",
+    "breg-review-{tag}-macos-arm64.tar.gz",
+    "breg-{tag}-linux-amd64",
+    "breg-{tag}-linux-arm64",
+    "breg-{tag}-macos-arm64.tar.gz",
+    "bregctl-{tag}-linux-amd64",
+    "bregctl-{tag}-linux-arm64",
+    "bregctl-{tag}-macos-arm64.tar.gz",
+    "casework-{tag}-linux-amd64",
+    "casework-{tag}-linux-arm64",
+    "casework-{tag}-macos-arm64.tar.gz",
+    "caseworkctl-{tag}-linux-amd64",
+    "caseworkctl-{tag}-linux-arm64",
+    "caseworkctl-{tag}-macos-arm64.tar.gz",
+    "discovery-{tag}-linux-amd64",
+    "discoveryctl-{tag}-linux-amd64",
+    "evidence-oid4vci-{tag}-linux-amd64",
+    "evidence-oid4vci-{tag}-linux-arm64",
+    "evidence-oid4vci-{tag}-macos-arm64.tar.gz",
+    "evidence-{tag}-linux-amd64",
+    "evidence-{tag}-linux-arm64",
+    "evidence-{tag}-macos-arm64.tar.gz",
+    "evidencectl-{tag}-linux-amd64",
+    "evidencectl-{tag}-linux-arm64",
+    "evidencectl-{tag}-macos-arm64.tar.gz",
+    "messaging-{tag}-linux-amd64",
+    "messagingctl-{tag}-linux-amd64",
+    "registry-manifest-{tag}-linux-amd64",
+    "registry-render-{tag}-linux-amd64",
+    "scheduling-{tag}-linux-amd64",
+    "schedulingctl-{tag}-linux-amd64",
+    "schedulingctl-{tag}-linux-arm64",
+    "schedulingctl-{tag}-macos-arm64.tar.gz",
+)
 
 
 class NightlyError(ValueError):
@@ -91,12 +159,12 @@ def digest(path: Path) -> str:
 def read_manifest(path: Path) -> dict:
     manifest = json.loads(path.read_text())
     base, sha = identity(manifest["tag"])
+    schema = manifest.get("schema_version")
     if (
-        manifest.get("schema_version"),
         manifest.get("base_version"),
         manifest.get("version"),
         manifest.get("source_sha"),
-    ) != (SCHEMA, base, manifest["tag"][1:], sha):
+    ) != (base, manifest["tag"][1:], sha) or schema not in {SCHEMA_V1, SCHEMA_V2}:
         raise NightlyError("nightly manifest identity mismatch")
     assets = manifest.get("assets")
     if not isinstance(assets, list) or not assets:
@@ -116,9 +184,23 @@ def read_manifest(path: Path) -> dict:
         names.add(name)
     if not isinstance(manifest.get("images"), dict) or not manifest["images"]:
         raise NightlyError("nightly manifest has no images")
-    expected_images = image_names(base)
-    if set(manifest["images"]) != set(expected_images):
-        raise NightlyError("nightly image roster mismatch")
+    if schema == SCHEMA_V1:
+        expected_images = historical_image_names(base)
+        if set(manifest["images"]) != set(expected_images):
+            raise NightlyError("nightly image roster mismatch")
+    else:
+        roster = validate_v2_roster(manifest.get("roster"), manifest["tag"])
+        if set(manifest["images"]) != set(roster["images"]):
+            raise NightlyError("nightly image roster mismatch")
+        expected_assets = set(roster["payloads"])
+        for product in roster["installers"]:
+            expected_assets.update(
+                {f"{product}-{manifest['tag']}-install.sh", f"{product}-install.sh"}
+            )
+        for image in roster["images"]:
+            expected_assets.update({f"{image}.grype.json", f"{image}.sbom.spdx.json"})
+        if names != expected_assets:
+            raise NightlyError("nightly asset roster differs from the recorded source roster")
     for name, reference in manifest["images"].items():
         if not re.fullmatch(
             rf"ghcr\.io/registrystack/{re.escape(name)}@sha256:[0-9a-f]{{64}}",
@@ -130,9 +212,54 @@ def read_manifest(path: Path) -> dict:
 
 def image_names(version: str) -> list[str]:
     # The release roster remains the owner of image membership.
-    import release_candidate
-
     return sorted(release_candidate._candidate_image_names(version))
+
+
+def historical_image_names(version: str) -> list[str]:
+    """Return the v1 base-version roster, including pre-retirement Relay."""
+
+    names = set(image_names(version))
+    parsed = tuple(int(part) for part in version.split("."))
+    if parsed >= release_candidate.RELAY_V2_RELEASE_MINIMUM_VERSION:
+        names.add("relay")
+    return sorted(names)
+
+
+def current_roster(version: str, tag: str) -> dict:
+    base, _ = identity(tag)
+    if base != version:
+        raise NightlyError("nightly roster version does not match its tag")
+    return {
+        "profile": V2_ROSTER_PROFILE,
+        "images": list(V2_IMAGES),
+        "installers": list(V2_INSTALLERS),
+        "payloads": [template.format(tag=tag) for template in V2_PAYLOAD_TEMPLATES],
+    }
+
+
+def validate_v2_roster(value: object, tag: str) -> dict:
+    if not isinstance(value, dict) or set(value) != {
+        "profile",
+        "images",
+        "installers",
+        "payloads",
+    }:
+        raise NightlyError("invalid nightly source roster")
+    if value["profile"] != V2_ROSTER_PROFILE:
+        raise NightlyError("unknown nightly source roster profile")
+    for field in ("images", "installers", "payloads"):
+        items = value[field]
+        if (
+            not isinstance(items, list)
+            or not items
+            or not all(isinstance(item, str) for item in items)
+            or items != sorted(set(items))
+        ):
+            raise NightlyError(f"invalid nightly roster {field}")
+    expected = current_roster(identity(tag)[0], tag)
+    if value != expected:
+        raise NightlyError("nightly source roster differs from its frozen profile")
+    return value
 
 
 def channel_metadata() -> tuple[dict | None, str | None]:
@@ -180,6 +307,7 @@ def plan(output: Path) -> None:
         "channel_head": channel_head,
         "skip": skip,
     }
+    plan_record["roster"] = current_roster(version, tag)
     # Preserve the original metadata when reconciling an interrupted build.
     # Uploading nightly.json first makes that recovery identity discoverable.
     existing_release = (
@@ -298,18 +426,17 @@ def assemble(
     # the tag. A missing platform or binary cannot advance the channel.
     import release_candidate
 
-    release_assets = release_candidate._relay_v2_payload_inventory(base)
+    expected_roster = current_roster(base, record["tag"])
+    if record.get("schema_version") != SCHEMA_V2 or record.get("roster") != expected_roster:
+        raise NightlyError("build plan source roster mismatch")
+    release_assets = release_candidate._release_payload_inventory(base)
     for name, kind in release_assets.items():
         if kind == "notice":
             notice = ROOT / name
             if not notice.is_file() or notice.is_symlink():
                 raise NightlyError(f"release notice must be a regular file: {name}")
             shutil.copy2(notice, output / name)
-    expected = {
-        name.replace(f"v{base}", record["tag"])
-        for name, kind in release_assets.items()
-        if kind in {"binary", "notice"}
-    }
+    expected = set(record["roster"]["payloads"])
     if {path.name for path in output.iterdir()} != expected:
         raise NightlyError(
             "nightly binary roster differs from the release platform roster"
@@ -319,7 +446,8 @@ def assemble(
     for name, kind in release_assets.items():
         if kind == "binary" and not name.endswith(".tar.gz"):
             (output / name.replace(f"v{base}", record["tag"])).chmod(0o755)
-    for product, (crate, _, _) in INSTALLERS.items():
+    for product in record["roster"]["installers"]:
+        crate, _, _ = INSTALLERS[product]
         installer = (ROOT / "crates" / crate / "install.sh").read_text()
         if installer.count('default_version=""') != 1:
             raise NightlyError("installer pinning template changed")
@@ -330,7 +458,7 @@ def assemble(
             (output / name).write_text(installer)
             (output / name).chmod(0o755)
     image_references = {}
-    for name in image_names(base):
+    for name in record["roster"]["images"]:
         reference = (images / f"{name}.digest").read_text().strip()
         if not re.fullmatch(
             rf"ghcr\.io/registrystack/{re.escape(name)}-candidate@sha256:[0-9a-f]{{64}}",
@@ -373,7 +501,12 @@ def smoke(directory: Path) -> None:
             expected += f" (typst {match[1]})"
         if run(str((directory / name).resolve()), "--version") != expected:
             raise NightlyError(f"nightly {binary} reports another build identity")
-    for product, (_, prefix, binaries) in INSTALLERS.items():
+    installers = (
+        HISTORICAL_INSTALLERS
+        if manifest["schema_version"] == SCHEMA_V1
+        else {name: INSTALLERS[name] for name in manifest["roster"]["installers"]}
+    )
+    for product, (_, prefix, binaries) in installers.items():
         with tempfile.TemporaryDirectory(prefix="nightly-install-") as temporary:
             destination = Path(temporary) / "bin"
             environment = os.environ | {

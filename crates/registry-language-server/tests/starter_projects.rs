@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What an editor reports over the projects the adopter tooling scaffolds.
 //!
-//! Two of those projects are not Relay V2 and not an OpenAPI-backed Evidence project, and both used
-//! to collect a diagnostic that named a rule their own build never applies. A Base Registry Engine
-//! project root is a `registry.yaml`, the same file name Relay V2 marks its root with, so the
-//! marker alone cannot say which product wrote the directory. An Evidence project whose questions
+//! Project roots use product-owned discriminators. An Evidence project whose questions
 //! read a named source carries no `source.openapi.yaml`, which the description reading used to
 //! require of every root.
 //!
@@ -47,19 +44,15 @@ async fn a_breg_project_root_is_claimed_by_its_own_family() {
 }
 
 #[tokio::test]
-async fn a_relay_v2_project_root_is_still_claimed_by_its_own_family() {
-    let root = acceptance_project("relay-v2/acceptance/business-registry");
-    let registry = root.join("registry.yaml");
-    let document = fs::read_to_string(&registry).expect("registry.yaml reads");
+async fn a_retired_relay_root_is_not_adopted() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = temp.path().join("registry.yaml");
+    let document = "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n";
+    fs::write(&registry, document).unwrap();
     let mut session = LspSession::start();
-    session.initialize(&root).await;
-    session.open(&registry, &document, 1).await;
-
-    assert_eq!(
-        session.published_diagnostics(&registry),
-        Some(Vec::<Value>::new()),
-        "the accepted Relay V2 project is still indexed and still compiler-clean"
-    );
+    session.initialize(temp.path()).await;
+    session.open(&registry, document, 1).await;
+    assert_eq!(session.published_diagnostics(&registry), None);
 }
 
 #[tokio::test]

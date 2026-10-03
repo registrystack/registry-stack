@@ -3,7 +3,7 @@
 //! The closed set of public problem types Base Registry Engine emits.
 //!
 //! Every refusal names its type on the shared Registry Stack identifier host,
-//! the convention Registry Discovery, Evidence Gateway, and Registry Relay
+//! the convention Registry Discovery and Evidence Gateway
 //! already share, so an adopter can resolve the type it was handed. A dot in a
 //! code separates path segments under the product prefix.
 

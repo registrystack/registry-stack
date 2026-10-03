@@ -877,7 +877,7 @@ pub struct DatasetManifest {
     pub conforms_to: Vec<String>,
     /// DCAT-AP `dcatap:applicableLegislation` IRIs. These are standard
     /// evidence links only; downstream systems may use them to infer legal
-    /// readiness, but Registry Relay does not publish an authority verdict.
+    /// readiness, but metadata publication does not establish an authority verdict.
     #[serde(default)]
     pub applicable_legislation: Vec<String>,
     #[serde(default)]
@@ -3403,8 +3403,7 @@ pub fn render_shacl(compiled: &CompiledMetadata) -> Value {
     })
 }
 
-/// Consumed by Registry Relay's metadata API (`src/api/metadata.rs`) to render a
-/// per-entity SHACL document.
+/// Render the compiled metadata as a per-entity SHACL document.
 pub fn render_entity_shacl(
     compiled: &CompiledMetadata,
     dataset_id: &str,
@@ -3450,15 +3449,13 @@ pub fn render_ogc_records_items(compiled: &CompiledMetadata) -> Value {
     })
 }
 
-/// Consumed by Registry Relay's metadata + OGC Records API
-/// (`src/api/metadata.rs`, `src/api/ogc/records.rs`) to render a single record.
+/// Render one compiled dataset as an OGC Records item.
 pub fn render_ogc_records_item(compiled: &CompiledMetadata, record_id: &str) -> Option<Value> {
     compiled.dataset(record_id).map(record_feature_json)
 }
 
 // OGC API Records collection / conformance scaffolding. Currently unused
-// inside the workspace (Registry Relay serves its own collection / conformance
-// documents). Kept as `pub(crate)` so the renderer set stays internally
+// inside the workspace. Kept as `pub(crate)` so the renderer set stays internally
 // complete; the `#[allow(dead_code)]` will lift the moment a caller is added.
 #[allow(dead_code)]
 pub(crate) fn render_ogc_records_collections() -> Value {
@@ -5661,7 +5658,7 @@ fn breg_dcat_dataset(compiled: &CompiledMetadata, dataset: &CompiledDataset) -> 
     obj["adms:status"] = json!(adms_status_uri(dataset.adms_status));
     let codelists = dataset_codelist_references(compiled, dataset);
     if !codelists.is_empty() {
-        // Registry Relay interpretation: DCAT/BRegDCAT-AP do not define a
+        // Metadata interpretation: DCAT/BRegDCAT-AP do not define a
         // dedicated property for field codelist linkage. We use standard
         // `dcterms:references` from the dataset to the SKOS concept schemes
         // used by its field constraints, without claiming source-of-truth
