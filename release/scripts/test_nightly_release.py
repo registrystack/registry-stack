@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib.util
 import json
 import os
 import re
@@ -17,6 +18,12 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import nightly_release as nightly  # noqa: E402
 import release_candidate  # noqa: E402
+
+_merge_spec = importlib.util.spec_from_file_location(
+    "merge_release_binary_shards", SCRIPTS / "merge-release-binary-shards.py"
+)
+merge_shards = importlib.util.module_from_spec(_merge_spec)
+_merge_spec.loader.exec_module(merge_shards)
 
 SHA = "a" * 40
 BASE = "0.39.0"
@@ -56,9 +63,16 @@ class NightlyTest(unittest.TestCase):
         }
 
     def payload(self):
-        directories = [self.root / name for name in ("amd64", "arm64", "macos")]
+        # Mirror the directories the workflow's prepare job passes to assemble:
+        # the merged canonical Linux bin, the arm64 artifact and merged macOS.
+        suffix = "1-1"
+        directories = [
+            self.root / f"inputs/nightly-canonical-{suffix}/bin",
+            self.root / f"inputs/nightly-arm64-{suffix}",
+            self.root / "macos/platform",
+        ]
         for directory in directories:
-            directory.mkdir()
+            directory.mkdir(parents=True)
         for name, kind in release_candidate._relay_v2_payload_inventory(BASE).items():
             if kind != "binary":
                 continue
@@ -78,6 +92,10 @@ class NightlyTest(unittest.TestCase):
                 version += f" (typst {typst})"
             asset.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
             asset.chmod(0o755)
+        # The canonical shard merge always lists its binaries in SHA256SUMS.
+        merge_shards.write_sums(
+            directories[0], sorted(path.name for path in directories[0].iterdir())
+        )
         images = self.root / "images"
         images.mkdir()
         for name in nightly.image_names(BASE):
@@ -140,6 +158,18 @@ class NightlyTest(unittest.TestCase):
         directories, images = self.payload()
         (directories[0] / "unexpected").write_text("bad")
         with self.assertRaisesRegex(nightly.NightlyError, "unexpected"):
+            nightly.assemble(self.plan, directories, images, self.root / "public")
+
+    def test_canonical_shard_checksums_are_not_published(self):
+        output = self.assembled()
+        manifest = nightly.read_manifest(output / "nightly.json")
+        self.assertNotIn("SHA256SUMS", {asset["name"] for asset in manifest["assets"]})
+        nightly.require_file_closure(output, manifest)
+
+    def test_binary_changed_after_canonical_merge_is_refused(self):
+        directories, images = self.payload()
+        (directories[0] / f"breg-{TAG}-linux-amd64").write_text("changed in transit")
+        with self.assertRaisesRegex(nightly.NightlyError, "shard checksums"):
             nightly.assemble(self.plan, directories, images, self.root / "public")
 
     def test_mismatched_hash_fails_before_public_writes(self):
