@@ -86,7 +86,7 @@ state, and the instance claim.
    `crates/registry-bregctl/src/lib.rs`:
    `apply_chain_refusals_name_the_operators_next_command`.
    `crates/registry-breg/tests/compiler_contract.rs`:
-   `retired_package_identity_keys_are_refused_with_their_replacement`,
+   `deployment_identity_keys_in_the_project_are_refused_as_unknown_fields`,
    `registry_revision_is_a_function_of_the_compiled_model_only`.
 2. **Migration credential and runtime credential.** `bregctl apply`, `bregctl
    plan`, and `bregctl status` connect through `database.migrationUrlRef` as
