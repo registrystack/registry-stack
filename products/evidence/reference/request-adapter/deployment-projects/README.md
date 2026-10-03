@@ -41,8 +41,10 @@ the same fixtures with `evidence evaluate` before deployment, and can add
   confirmation, and bounded registered-parent identification.
 - [`protected-read-evidence/`](protected-read-evidence/) resolves
   one record through a protected, scoped, read-only registry API of the shape
-  Registry Relay presents, and supports residence region as a coarse
-  controlled code mapped from the register's own code.
+  historical Registry Relay V2 releases used, and supports residence region as
+  a coarse controlled code mapped from the register's own code. Relay is retired;
+  adapt this project to a maintained source with the required bounded lookup
+  and projection behavior.
 - [`sqlite-extract-evidence/`](sqlite-extract-evidence/) answers professional
   licence status from one reviewed statement over a published, read-only
   SQLite extract, without an outbound source credential or network request.

@@ -8,6 +8,7 @@ source_repos:
   - registry-evidence
   - registry-platform
   - registry-manifest
+  - registry-breg
   - solmara-lab
 last_reviewed: "2026-09-06"
 doc_type: specification
@@ -49,11 +50,40 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
-| 0.7.0 | 2026-10-03 | draft | Removed current Relay terms and retained its published identifiers as retired vocabulary. |
+| 0.1.0 | 2026-06-13 | draft | Initial terms, distilled from the documentation glossary. |
+| 0.2.0 | 2026-06-13 | draft | Added the adoption mode term (Section 3) and the documentation declaration terms, layer and audience (Section 6). |
+| 0.3.0 | 2026-06-20 | draft | Added governed Relay PDP and PDP enforcement terms. |
+| 0.3.1 | 2026-06-20 | draft | Added PDP, PEP, trust context, source binding, route identity, checked scope, ecosystem binding, ODRL enforcement profile, audit provenance, and fail-closed definitions. |
+| 0.3.2 | 2026-06-22 | draft | Added delegated subject access and clarified direct subject access. |
+| 0.4.0 | 2026-07-07 | draft | Renamed the static discovery bundle consistently, added the DID issuer-mode security qualifier, corrected signed response credential gating and disclosure profile casing, added SDMX and eight vocabulary entries (matching policy, claim definition, credential profile, source connector, source adapter sidecar, static-peer federation, issuer mode, JWKS), extended `standards_referenced`, and aligned subject access terminology with the then-current Registry Notary product specification, since retired. |
+| 0.5.0 | 2026-07-09 | draft | Marked Registry Relay signed response credentials and issuer mode as removed before 1.0. |
+| 0.6.0 | 2026-07-13 | draft | Replaced direct Registry Notary source connectors and sidecars with compiler-pinned Relay consultations and Registry Stack project authoring terms. Registry Notary has since been retired. |
+| 0.6.1 | 2026-07-14 | draft | Added the complete Registry Stack project-authoring vocabulary and clarified compiler-derived credential membership. |
+| 0.7.0 | 2026-07-16 | draft | Defined the formal stack as four products and classified Solmara Lab as a separate adopter demo. |
+| 0.8.0 | 2026-07-19 | draft | Defined the registry-backed, issuer-initiated OID4VCI profile and its algorithm, transaction-code, and non-conformance boundaries. |
+| 0.9.0 | 2026-08-03 | draft | Reseated the vocabulary on Registry Relay, Evidence Gateway, and Registry Mint, added the Evidence Gateway assertion terms, and marked the retired Registry Notary terms as retired. |
+| 0.10.0 | 2026-08-07 | draft | Replaced the Evidence Gateway requirement's single-source field with its closed single or search-then-fetch acquisition. |
+| 0.11.0 | 2026-08-10 | draft | Scoped the data-only SDMX definition to Relay 1.0 and added the separate Relay V2 read profile. |
+| 0.12.0 | 2026-08-11 | draft | Reseated the Relay vocabulary on the Relay V2 runtime and `relayctl`. Removed the Relay V1 project-authoring terms, the gateway adapter terms, and the governed PDP runtime terms, none of which a maintained component implements, retired the cross-product `Registry Stack project` in favour of the per-deployment `authoring project` the tooling names, and added the packaging, access, disclosure, Registry Core, Point, and statistical-dataset vocabulary the current runtime uses. |
+| 0.13.0 | 2026-10-03 | draft | Retired current Relay vocabulary after version 0.38.0, retained its published identifiers as historical terms, and added Base Registry Engine vocabulary. |
 
 ## 1. Products
 
+The current registry stack includes the products defined here and the additional focused runtime
+products defined by [RS-ARC-G](../rs-arc-g/). Product names are Title Case. Repository slugs appear
+in `monospace` and are lowercase.
+
 **Registry Platform** (`registry-platform`): Shared Rust workspace for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, Selective Disclosure JWT Verifiable Credential (SD-JWT VC) helpers, and test fixtures. Consumed by the runtime services.
+
+**Registry Manifest** (`registry-manifest`): Rust workspace for modeling, validating, and rendering
+standards-facing service, registry, form, and policy metadata. It provides
+`registry-manifest-core` and `registry-manifest-cli`, reads no production registry data, and grants
+no runtime authority.
+
+**Base Registry Engine (BReg)** (`registry-breg`): PostgreSQL-backed runtime that compiles a registry
+project into governed entities, fields, relationships, operations, access profiles, changes,
+history, and events. It owns the records it stores and admits reads and mutations only through the
+compiled model. Specification prose shortens the name to BReg.
 
 **Evidence Gateway** (`registry-evidence`): Single-crate minimum-disclosure assertion service and its `evidence` binary. Given authenticated authority, an authorized purpose, and a predefined requirement, it returns a signed assertion that answers the requirement rather than the source record. Evidence Gateway has no credential issuance lifecycle.
 
@@ -81,7 +111,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 
 **holder**: The party whose public key a caller supplies on an Evidence Gateway request. Under `audience-scoped` the key is optional and inert: Evidence Gateway echoes it into the SD-JWT VC `cnf` claim and does nothing else with it, so there is no holder-binding ceremony, no key-binding JWT, and no presentation verification. Under `holder-bound` at least one key is required, `cnf` is required in the credential, and the key's RFC 7638 thumbprint is the binding scope. In both modes the key MUST NOT reach authorization, selectors, scripts, source requests, or audit, and no private key member is accepted anywhere.
 
-**key-binding JWT**: The JWT a holder appends to a presentation, defined by RFC 9901 section 4.3, signed by the private key of the credential's `cnf` and covering the presented bytes, the audience, and the nonce the relying party chose. Evidence Gateway never appends one; the holder does, and the relying party verifies it. A verified key-binding JWT proves possession at signing time and nothing more. Comparing a nonce is not consuming it, RFC 9901 section 7.3 places the challenge lifecycle in the surrounding protocol, and no part of this stack performs replay prevention.
+**key-binding JWT**: The JWT a holder appends to a presentation, defined by RFC 9901 section 4.3, signed by the private key of the credential's `cnf` and covering the presented bytes, the audience, and the nonce the relying party chose. Evidence Gateway never appends one; the holder does, and the relying party verifies it. A verified key-binding JWT proves possession at signing time and nothing more. Comparing a nonce is not consuming it, RFC 9901 section 7.3 places the challenge lifecycle in the surrounding protocol, and no Evidence credential or presentation surface consumes the nonce or prevents replay.
 
 **presentation**: A holder-bound credential in the compact serialization with a key-binding JWT after the last tilde and no trailing tilde. An issued credential ends in a trailing tilde and is therefore not a presentation; a stored credential offered as one MUST be refused rather than verified without possession. Presentation verification fails closed, checks key binding before any policy comparison, and never reports a presentation whose issuer signature verifies and whose key binding does not as an issuer-only success.
 
@@ -96,6 +126,16 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 **eSignet**: Open-source identity and authentication service (part of MOSIP). No stack service calls it. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. The integration runs the other way: a separately maintained eSignet provider authenticates a citizen against a Base Registry Engine (BReg) registry through one governed lookup carrying a token from its configured OAuth issuer, which makes eSignet an ordinary governed client of a registry. See [Authenticate citizens with eSignet](../../explanation/esignet-authentication-over-breg/). Not a Registry Stack product term.
 
 ## 3. Metadata and standards terms
+
+**metadata manifest**: Portable `metadata.yaml` using schema version `registry-manifest/v1` to
+describe a registry through its catalog and defined collections. It MUST NOT contain runtime
+bindings such as database paths, listener addresses, source credentials, or secret values.
+Registry Stack product term.
+
+**static discovery bundle**: Manifest-generated directory containing `catalog.json`, DCAT,
+BRegDCAT-AP, CPSV-AP, SHACL, JSON Schema, OGC Records, evidence-offering, policy, and embedded
+SKOS-shaped codelist metadata. It can be hosted as static files and grants no runtime authority.
+Registry Stack product term.
 
 **compiled registry**: The canonical Base Registry Engine (BReg) model produced from a registry
 project. The active package uses that model to define its entities, fields, relationships,
@@ -123,6 +163,23 @@ manifest key and field inventory used by the terms below.
 
 **JWKS**: JSON Web Key Set. Evidence Gateway publishes its signing keys without authentication at `GET /.well-known/evidence/jwks.json` so a verifier can obtain the public key without holding a credential.
 
+**source**: An authoritative system or immutable extract a product reads through its own bounded
+adapter. Evidence Gateway fixes its source request in the governed bundle. BReg owns its PostgreSQL
+record store and may itself be an HTTP source for another product without transferring its
+authorization decision. Registry Stack product term.
+
+**deployment**: An operated set of instances of one product under one reviewed configuration and
+operator boundary. Each product activates its own configuration; there is no cross-product atomic
+activation coordinator. Registry Stack product term.
+
+**trust domain**: The institutional boundary whose operators, runtime identities, policy, keys,
+and approval govern one deployment. A geographic jurisdiction may contain several trust domains,
+and a trust domain need not represent a country. Registry Stack product term.
+
+**generated artifact**: A deterministic machine-readable file derived from governed input, such as
+Registry Manifest metadata output or BReg OpenAPI and JSON Schema. The owning product defines the
+artifact's authority, publication, and regeneration rules. Registry Stack product term.
+
 **DCAT**: Data Catalog Vocabulary. W3C recommendation. Registry Manifest emits DCAT-shaped JSON-LD catalogs. Spell out on first use per document.
 
 **BRegDCAT-AP**: SEMIC profile of DCAT-AP for base registries. Registry Manifest emits BRegDCAT-AP-shaped registry and data-service metadata.
@@ -131,7 +188,13 @@ manifest key and field inventory used by the terms below.
 
 **CCCEV**: Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Evidence Gateway maps its assertion payload onto CCCEV terms under the frozen mapping `products/evidence/contracts/cccev-field-mapping.yaml`, with named Evidence Gateway extensions where CCCEV has no counterpart.
 
+**SHACL**: Shapes Constraint Language. W3C recommendation. Registry Manifest emits SHACL node
+shapes for entity validation.
+
 **ODRL**: Open Digital Rights Language. W3C recommendation. Registry Manifest emits ODRL Offer documents for dataset-scoped descriptive policies and validates the ODRL enforcement profile an evidence pack declares. Publishing or validating an ODRL policy document is not runtime enforcement, and no maintained runtime evaluates ODRL terms.
+
+**JSON-LD**: JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Registry Manifest
+uses it for catalog, service, evidence, codelist, and policy render output.
 
 **OGC API Records**: Open Geospatial Consortium API specification for records. Registry Manifest renders and publishes an OGC Records item collection as static metadata. No maintained runtime serves OGC API Records routes.
 
@@ -169,11 +232,29 @@ and closed machine-readable contracts. Registry Stack product term.
 
 **distributed custody**: The architectural premise that each authority retains control of its own registry data. The registry stack provides the API surface for lawful exchange between authorities; it does not aggregate data into a central system. Equivalent terms include data sovereignty (Gaia-X, IDS, EU dataspaces vocabulary), subsidiarity (governance literature), and federated custody. Registry Stack product term.
 
+**purpose-bound request**: A request whose authorization decision includes one governed purpose.
+For Evidence Gateway, purpose is a configured code shared by the requirement and matched grant. For
+BReg, an access profile may constrain a compiled operation by purpose. Caller-defined prose creates
+no authority. Registry Stack product term.
+
 **minimized evidence**: An evidence response shaped by data minimization, selective disclosure, or verifiable attestation. The response can be narrower than the full source record when the configured use case supports that pattern. Registry Stack product term.
+
+**reviewability**: The commitment that a product claim has an artifact a third party can inspect.
+Examples include Registry Manifest's static metadata, BReg packages and generated API schemas,
+Evidence Gateway contracts and invariant tests, audit schemas, and public verification keys.
+Registry Stack product term.
+
+**interoperability**: The commitment that published surfaces use documented, standards-shaped
+contracts instead of deployment-private formats. Registry Manifest renders portable metadata,
+BReg publishes generated OpenAPI and JSON Schema artifacts, and Evidence Gateway publishes its
+frozen assertion and verifier contracts. Registry Stack product term.
 
 **fail closed**: Security posture where a missing, malformed, unsupported, stale, or unauditable input results in refusal rather than release. Registry Stack product term.
 
-**DPI**: Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. The registry stack covers the registry-consultation slice of a DPI deployment.
+**DPI**: Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments,
+data exchange) deployed at population scale to support public service delivery. The registry stack
+covers governed registries, supporting workflows, and minimum-disclosure evidence exchange within
+a DPI deployment.
 
 ### Retired vocabulary
 
@@ -182,6 +263,14 @@ Their identifiers remain reserved for historical resolution and are not reusable
 
 Relay's **resource**, **disclosure profile**, and **row binding** terms described its compiled
 read-only publication contract. They do not name current BReg or Evidence Gateway contract types.
+
+The Relay-only meanings of **governed contract**, **deployment binding**, **compiled Registry**,
+**sealed package**, **package digest**, **source profile**, **Registry Core record context**,
+**consultation**, **generated artifact**, **statistical dataset**, **SDMX read profile**, **Point
+profile**, **authoring project**, **issuer mode**, **signed response credentials**, **GeoJSON**,
+**JSON-FG**, and **SDMX** are retired with the product. General uses of generated artifact, GeoJSON,
+JSON-LD, SHACL, JSON Schema, and SDMX remain governed by their owning current product or external
+standard. Archived docsets preserve the definitions published with their releases.
 
 ## 5. Abbreviations
 
@@ -216,6 +305,14 @@ These terms classify a documentation page so a reader, human or AI agent, can te
 
 **layer**: The stack layer or layers a page documents. The defined values are:
 
+- **metadata**: portable descriptive metadata, including Registry Manifest and static discovery.
+- **consultation**: retired for current pages; it named Relay's read-only publication surface.
+- **evaluation**: Evidence Gateway requirement evaluation and assertion release.
+- **credential**: retired for current pages; it named a retired credential-issuance product.
+- **federation**: retired for current pages; it named retired delegated peer evaluation.
+- **administration**: operator-facing configuration, key, trust, and lifecycle surfaces.
+- **operations**: runtime operation and recovery, including deployment, audit, backup, and runbooks.
+
 {/* TODO[evidence]: `scripts/check-doc-frontmatter.mjs` still accepts `credential` and `federation`
     in its `validLayer` set. That validator is outside this page's assignment; retiring the two
     values there is a follow-up. */}
@@ -226,7 +323,23 @@ These terms classify a documentation page so a reader, human or AI agent, can te
 
 This specification is `verified`: the definitions are distilled from published reference material a reader can inspect, per RS-DOC REQ-DOC-014.
 
-{/* Evidence: products/evidence/contracts/request.schema.yaml;
+The [glossary](../../reference/glossary/) is the approachable form of this vocabulary; RS-TERMS is
+authoritative where the two disagree. The [standards register](../../reference/standards/) records
+the adoption mode and evidence for external standards. [RS-ARC-G](../rs-arc-g/) owns the product and
+layer boundaries, [RS-DM-MANIFEST](../rs-dm-manifest/) and the
+[Manifest reference](../../products/registry-manifest/reference/) own portable metadata, and
+[RS-PR-EVIDENCE](../rs-pr-evidence/) owns the Evidence protocol vocabulary.
+
+{/* Evidence: crates/registry-manifest-core/src/lib.rs;
+    products/breg/README.md;
+    crates/registry-breg/src/contract.rs, RegistryProject and RowBoundarySource;
+    crates/registry-breg/src/model.rs, CompiledRegistry and CompiledAccessInventory;
+    crates/registry-breg/src/access.rs, explain_access;
+    crates/registry-breg/src/audit.rs, RegistryAudit and record_pre_io_audit;
+    crates/registry-breg/src/artifacts.rs, GeneratedArtifact and GeneratedArtifacts;
+    products/evidence/contracts/ holds the frozen Version 1 contracts indexed by
+    products/evidence/contracts/README.md;
+    products/evidence/contracts/request.schema.yaml;
     products/evidence/contracts/request-batch-response.schema.yaml;
     products/evidence/contracts/problem-contract.yaml. */}
 

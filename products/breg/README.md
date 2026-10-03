@@ -433,15 +433,16 @@ path grant explicitly limits the target fields, filters, ordering, and count
 support available through that traversal.
 
 Evidence can consume an authenticated Base Registry Engine REST route through its
-existing bounded `http-json` source and an explicitly reviewed adapter. Relay
-remains a separate publication boundary. A direct Relay source adapter should
-be added only for a concrete publication journey, rather than coupling either
-product to Base Registry Engine internals.
+existing bounded `http-json` source and an explicitly reviewed adapter.
+Evidence keeps its own authorization and disclosure boundary; the integration
+does not couple either runtime to the other's internals.
 
 ## Relationship to Registry Stack
 
-Base Registry Engine is a writable source-of-truth product. Registry Relay remains
-the separately deployed read-only publication product; Evidence remains the
+Base Registry Engine is a writable source-of-truth product. Evidence remains the
 minimum-disclosure assertion product; Manifest receives a safe one-way
 metadata projection; an operated OIDC issuer supplies configured tokens; and
 PublicSchema is an authoring input rather than a runtime dependency.
+
+Registry Relay is retired from maintained Registry Stack. Base Registry Engine
+does not replace Relay's publication of an institution's existing SQLite data.

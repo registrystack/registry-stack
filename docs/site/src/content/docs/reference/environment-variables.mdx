@@ -12,7 +12,24 @@ locale: en
 standards_referenced: []
 ---
 
+This page lists Registry Stack's supported fixed environment-variable interfaces for runtimes,
+adopter tooling, and installers.
+
+The stack's other kind of environment variable is operator-named. Secret material is not read
+from a fixed variable name: a configuration field carries a reference that names the variable,
+and the operator chooses the name. Base Registry Engine and Evidence Gateway work that way, and
+the reference grammar is closed rather than free-form. Each reads a secret from an operator-named
+variable only when its runtime file opts in to the environment provider, as its section records.
+
 ## Configuration expansion
+
+Evidence Gateway substitutes `${VAR}` and `${VAR:-default}` in string values of its runtime file
+after parsing, in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`). It refuses
+a `${...}` expression in a secret reference or under `secretProviders`, and refuses any `${...}`
+expression in the governed bundle, so the reviewed bundle is the one that runs. Base Registry
+Engine substitutes `${VAR}`, `${VAR:-default}`, and `${VAR:?message}` in string values of its
+runtime file after parsing, through the shared configuration loader, and refuses any `${...}`
+expression in the authored project or module files, as [its section](#base-registry-engine) records.
 
 There is no escape for a literal `${` in a runtime file that substitutes. Put the literal text in a variable and reference that variable: a substituted value is not expanded again.
 
@@ -32,9 +49,20 @@ and names `--runtime-config` as the replacement, rather than silently ignoring i
 
 ### Secret references
 
-Evidence Gateway runtime configuration names secrets through `secret:env/` or `secret:file/` references
-under an explicitly configured provider. Fields that name a secret reference do not expand
-`${...}` expressions, so the environment cannot redirect a reviewed secret binding.
+Evidence Gateway resolves secrets through the providers `runtime.yaml` declares under
+`secretProviders`: `file: {root: <absolute directory>}` enables `secret:file/<name>` references,
+which resolve to an owner-only regular file under that directory, and `environment: {}` enables
+`secret:env/<NAME>` references, which resolve to the operator-named environment variable.
+
+| Grammar | Resolves to | Accepted name |
+| --- | --- | --- |
+| `secret:env/<NAME>` | The value of the environment variable `<NAME>`, when `secretProviders.environment` is declared | Starts with an uppercase ASCII letter, then uppercase ASCII letters, digits, or `_`, up to 128 characters |
+| `secret:file/<name>` | A file named `<name>` under `secretProviders.file.root` | Starts with a lowercase ASCII letter, then lowercase ASCII letters, digits, `.`, `_`, or `-`, up to 128 characters |
+
+A reference in the runtime file or the governed bundle that names a provider the runtime file does
+not declare is refused at startup, so an environment-backed secret is always an explicit operator
+choice. See [Configure Evidence Gateway](../../configure/evidence/) for the runtime file and the
+bundle it binds.
 
 ## Evidencectl
 
@@ -77,6 +105,13 @@ The `breg` binary reads one fixed variable.
 ### Expansion and secret references in `runtime.yaml`
 
 `breg` substitutes `${NAME}` expressions in the string values of `runtime.yaml` after parsing it, so a substituted value is always text: it cannot add a key, change a number or boolean, or carry YAML structure, and a line break inside it stays part of the string. A bare `${NAME}` refuses the file when the variable is unset or empty, `${NAME:-fallback}` substitutes the fallback in that case, and `${NAME:?message}` refuses the file without repeating the message. A field whose name ends in `Ref` and every value under `secretProviders` refuse an expression, so the environment cannot choose which secret is read or where it comes from. The authored project and module files refuse any `${...}` expression, so the reviewed package is the one that runs. A refused substitution stops the process at startup.
+
+Secret references use two grammars: `secret:env/<NAME>` names an operator-chosen environment
+variable and `secret:file/<name>` names a file under the `secretProviders.file.root` directory.
+`secret:env/<NAME>` resolves only when `runtime.yaml` declares `secretProviders.environment`;
+without that declaration the reference is refused. See
+[Deploy a registry](../../operate/breg/#write-the-runtime-configuration) for the fields that take a
+reference.
 
 ### Bregctl
 

@@ -17,6 +17,70 @@ standards_referenced: []
 Registry Stack protects data through product-specific authorization, closed configuration, bounded
 source access, explicit disclosure, package integrity, and accountable audit.
 
+The normative cross-product security model is [RS-SEC-G](../spec/rs-sec-g/). The
+[threat model](../explanation/threat-model/), [known limitations](../explanation/known-limitations/),
+[security self-assessment](self-assessment/), and [release trust evidence](openssf-evidence/) provide
+review context and public evidence.
+
+## At a glance
+
+| What | Where it stands |
+| --- | --- |
+| Evidence authentication on every assertion or definition route | Built in; operational probes, OpenAPI, issuer metadata, and public verification keys are the exceptions |
+| Evidence inbound authentication | OIDC bearer with one governed issuer profile; no API-key or static-credential mode |
+| Deny-by-default authorization before source access | Built in |
+| Only public verification material is published | Built in |
+| Evidence person-level access audit | Built in and fail-closed, with no best-effort switch |
+| Evidence disclosure modes | `value`, `predicate`, and `redacted`; the requirement fixes what is permitted |
+| SD-JWT VC assertion serialization | Built in as an encoding; the assertion format itself is not a credential lifecycle |
+| Holder-bound presentation | Declared per requirement and verified by the relying party |
+| Replay prevention for presentation | Not provided; the relying party owns challenge issuance, retention, and consumption |
+| Hardened HTTP headers and outbound source limits | Recommended by RS-SEC-G; confirm the deployed product applies them |
+| Key custody, audit retention, isolation, TLS, and edge quotas | Operator responsibilities |
+| Compliance with cited external standards | Not claimed |
+
+## The Evidence request in one pass
+
+- **Authenticate.** Evidence verifies the bearer signature, issuer, audience, token type, and
+  algorithm against one governed OIDC profile. It never trusts a proxy identity header or falls
+  back to an alternate principal claim.
+- **Authorize.** One complete grant and authority path must match the requester, requirement,
+  purpose, subject roles, selector profiles, origin, authority, and audience. Authorization finishes
+  before source credential resolution or source access.
+- **Serve.** The core runs only the governed fixed source stages, validates typed concepts, and
+  constructs the permitted `value`, `predicate`, or `redacted` answer. Caller input cannot add a
+  source request, expression, disclosure field, or output projection.
+- **Audit.** An access-attempt record is durably accepted before each acquisition stage and a
+  disclosure-release record before the response leaves. Audit failure blocks the corresponding
+  action. Entries are minimized and value-free; tamper evidence depends on shipping them to
+  append-only storage.
+
+Every Evidence route returning an assertion or its protected definition requires a verified access
+token. `/health`, `/ready`, `/openapi.json`, the issuer JWKS, and issuer metadata may be public
+because they contain no person-level result or grant inventory. An issuer publishes only the public
+half of an assertion-signing key, so a verifier needs no source or service credential.
+
+Evidence can encode an assertion as SD-JWT VC, with digests in place of disclosable values. That is
+a serialization of the same bounded assertion. Revocation, status, presentation replay state, and a
+general wallet lifecycle are outside that assertion format. The separate OID4VCI adapter provides
+its documented delivery profile without changing those limits.
+
+A requirement chooses one of two subject-binding modes. Audience-scoped binding derives a
+pseudonym over the relying-party audience. An optional holder key in that mode is echoed into `cnf`
+without proof. Holder-bound mode derives from the RFC 7638 holder-key thumbprint and requires a
+key-binding JWT that the relying party verifies at presentation. Evidence issues no key-binding
+JWT, keeps no challenge state, and runs no presentation endpoint. Comparing a challenge nonce does
+not consume it, so the relying party must prevent replay.
+
+The portable verifier library and `evidence verify-presentation` check issuer and key-binding
+signatures, the expected audience and nonce, and independently pinned expectations. A successful
+issuer signature alone does not prove holder possession.
+
+{/* Evidence: crates/registry-evidence/src/auth.rs;
+    crates/registry-evidence/src/runtime.rs; crates/registry-evidence/src/audit.rs;
+    crates/registry-evidence-verifier/src/verifier.rs;
+    crates/registry-platform-audit/src/writer.rs. */}
+
 ## Maintained boundaries
 
 - Base Registry Engine authenticates callers and applies compiled access profiles to its own records,
@@ -27,11 +91,27 @@ source access, explicit disclosure, package integrity, and accountable audit.
 - Registry Discovery returns inert public metadata. The application owns provider trust.
 - Registry Platform supplies shared primitives while each product owns policy and configuration.
 
+## Recommended controls that require confirmation
+
+RS-SEC-G recommends sourcing security-critical authentication, OIDC, audit, HTTP policy,
+cryptography, and SD-JWT helpers from Registry Platform so behavior stays consistent and reviewable.
+Confirm each deployed service uses those primitives because the specification does not force an
+implementation choice.
+
+Security response headers and outbound HTTP limits are also recommended controls. For Evidence,
+confirm fixed-origin and hostname verification, redirect and proxy denial, TLS trust, timeouts,
+response-size bounds, and the one-request-per-stage ceiling. The governed bundle constrains source
+behavior, while the operator still owns the network path, edge controls, and certificates.
+
 ## Operator responsibilities
 
 Operators provide identity issuance, TLS and network controls, secret storage, key rotation, durable
 audit storage, database security, backups, monitoring, and incident response. Product checks do not
 replace these controls.
+
+The software keeps secrets out of distributable artifacts and supplies the enforcement primitives;
+the operator provisions and runs them. Record ownership and recovery paths in the
+[operator handoff checklist](../operate/) before activation.
 
 ## Verify before production
 
