@@ -1571,8 +1571,9 @@ and release provenance (the release image and the upgrade rehearsal).
    the operator's acknowledgement, now that `apply` no longer guards them.
 7. A database whose managed catalog has drifted from the package passes
    verification under the fingerprint the package does not carry.
-8. A shape only an earlier release wrote is read with a filled-in default
-   that grants more than the shape said: a compiled permission target with
+8. A shape only an earlier release wrote is read under a default this
+   release fills in, so what is authorized is not what the package or the
+   server stated: a compiled permission target with
    no `operation` or `source`, served metadata with no
    `readableRequestFields`, version 1 prepared lifecycle evidence, a
    `package/v1` manifest, or a predecessor governed model with missing
@@ -1619,7 +1620,8 @@ and release provenance (the release image and the upgrade rehearsal).
   `UnrecognizedDatabase`, one generic refusal that names no recorded value.
   Startup binds no listener, and status, plan, and apply change nothing. A
   database an earlier release adopted keeps its `adopted` ledger row and
-  `registry_pre_ledger_package_positions`, which v0.38.0 state still needs.
+  `registry_pre_ledger_package_positions`. This release serves it, and
+  activates a successor over it, without rewriting either.
 - Schema install has dropped the retired audit tables since v0.35.0, so no
   database v0.38.0 served holds them and the guard could no longer trigger on
   predecessor state. `apply` takes no acknowledgement and has no
@@ -1632,13 +1634,16 @@ and release provenance (the release image and the upgrade rehearsal).
   predecessor governed model is read exactly as v0.38.0 wrote it. The client
   refuses served metadata whose operation omits `readableRequestFields`
   instead of reading it as an empty grant, and refuses version 1 prepared
-  lifecycle evidence. Every one of these refuses where it filled in.
+  lifecycle evidence. Each of these is refused, and none is read under a
+  filled-in default.
 - The removed project keys are refused by the strict source shape and the
   removed runtime keys by `deny_unknown_fields`, as `runtime_config.document`.
   Environment substitution runs before that refusal, so a `${VAR}` in a
-  removed key is resolved first; the refusal names the field and never the
-  value. `breg --config` is refused by the argument parser with exit status 2
-  and does not echo the path.
+  removed key is resolved first. When the variable is set, the refusal names
+  the field and never the substituted value. When it is unset, the document
+  is refused as `runtime_config.env_expansion`, which names neither the field
+  nor the variable. `breg --config` is refused by the argument parser with
+  exit status 2 and does not echo the path.
 
 ### Tests
 
@@ -1673,7 +1678,8 @@ and release provenance (the release image and the upgrade rehearsal).
    `test_required_operator_tools_cannot_be_optional`.
 5. `crates/registry-breg/tests/postgres_migration.rs`:
    `real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing`
-   (BREG-NEG-122).
+   (BREG-NEG-122),
+   `real_postgres_a_ledger_an_earlier_release_adopted_is_served_and_succeeded`.
    `crates/registry-breg/tests/postgres_startup.rs`:
    `startup_refuses_an_unrecognised_registry_state_and_writes_nothing`.
 6. No test remains for the retired audit guard: its subject is gone. The
@@ -1683,7 +1689,9 @@ and release provenance (the release image and the upgrade rehearsal).
 8. `crates/registry-breg/tests/immediate_action_compiler.rs`:
    `permission_targets_without_discriminators_are_refused`.
    `crates/registry-breg/tests/postgres_package.rs`:
+   `predecessor_package_loads_after_an_unchanged_temporal_rewrite`,
    `predecessor_package_refuses_temporal_bindings_without_a_value_kind`,
+   `predecessor_package_refuses_a_temporal_value_kind_its_fields_do_not_have`,
    `predecessor_package_refuses_temporal_scope_fields`.
    `crates/registry-breg-client/tests/write_http_boundary.rs`:
    `prepared_lifecycle_recovers_original_apply_after_action_disappears`
@@ -1694,9 +1702,12 @@ and release provenance (the release image and the upgrade rehearsal).
    `a_refused_package_keeps_the_cause_that_refused_it`.
 9. `crates/registry-breg/tests/compiler_contract.rs`:
    `deployment_identity_keys_in_the_project_are_refused_as_unknown_fields`
-   (BREG-NEG-01).
+   (BREG-NEG-01),
+   `singular_manifest_projection_keys_are_refused_as_unknown_fields`.
    `crates/registry-breg/tests/runtime_config.rs`:
-   `unknown_package_keys_are_refused_as_document_errors_without_their_value`.
+   `unknown_package_keys_are_refused_as_document_errors_without_their_value`,
+   `an_unknown_package_key_holding_a_set_variable_is_refused_without_the_substituted_value`,
+   `an_unknown_package_key_holding_an_unset_variable_is_refused_as_an_expansion_error`.
    `crates/registry-breg-mcp/src/config.rs`:
    `retired_config_keys_are_refused_as_unknown_fields`.
 
@@ -1720,14 +1731,21 @@ and release provenance (the release image and the upgrade rehearsal).
   and rebuilt the four-state check since v0.36.0, whose apply every database
   v0.38.0 can serve has been through, so such a database holds none.
 - **A leftover retired audit table is no longer dropped.** A database that
-  v0.38.0 left in maintenance by its retired-audit refusal, and that was
-  never applied again under v0.38.0, keeps the tables. Catalog verification
-  then refuses the database, because the tables are not in the package's
-  managed catalog. The operator finishes the v0.38.0 apply first.
-- **Pre-ledger support is kept where v0.38.0 state needs it.**
+  v0.38.0 refused for its retired audit rows, and that was never applied
+  again under v0.38.0, keeps the tables. In the common case v0.38.0 refused
+  it while adopting it, inside the transaction that would have installed the
+  ledger, so the database has no ledger and this release refuses it as
+  `UnrecognizedDatabase`. A database that has a ledger and still holds the
+  tables is refused by catalog verification, because the tables are not in
+  the package's managed catalog. Either way the operator finishes the
+  v0.38.0 apply first.
+- **Pre-ledger support is kept where adopted state needs it.**
   `registry_pre_ledger_package_positions`, the `adopted` plan kind, and the
-  sha256 package fingerprint stay, because a database v0.38.0 adopted has
-  them. They are removed in the release after this one.
+  sha256 package fingerprint stay, because a database an earlier release
+  adopted has them and this release serves it without rewriting them. They
+  stay until a release converts adopted state to the form a fresh ledger
+  has: removing them before that would refuse a database the predecessor
+  serves.
 - **The authored `temporal.scopeFields` key stays accepted.** Predecessor
   rehearsal recompiles the v0.38.0 package's own sources, which may carry the
   key, so removing it would refuse a supported upgrade.

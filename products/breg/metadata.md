@@ -37,7 +37,10 @@ bypass a required mutation or record-state capability.
 writable fields. `readableFields`, `createWritableFields`, `patchWritableFields`,
 and `titleFields` contain **logical IDs** and never grant rights to another
 operation. The create set is populated only on Create, and the patch set only on
-PATCH. Each field contains:
+PATCH. `readableRequestFields` is present on every operation and lists the
+change-request metadata, such as `review_state`, that the operation's profile
+may read. It is empty when the profile holds no such grant. The maintained
+client refuses metadata whose operation omits it. Each field contains:
 
 ```json
 {
