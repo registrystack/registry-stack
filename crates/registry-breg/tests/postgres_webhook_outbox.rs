@@ -631,6 +631,40 @@ async fn real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_an
         inserted.as_db_error().and_then(|error| error.constraint()),
         Some("registry_webhook_delivery_state_answer_digest_required")
     );
+    let undigested = migration
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt,
+                  delivered_at, handler_message)
+             VALUES ($1, 'case-created:webhook', 1, 'delivered', 1,
+                     transaction_timestamp(), $2)",
+            &[&event_id, &answer],
+        )
+        .await
+        .expect_err("a delivered row that keeps its raw answer without a digest is refused");
+    assert_eq!(
+        undigested
+            .as_db_error()
+            .and_then(|error| error.constraint()),
+        Some("registry_webhook_delivery_state_answer_digest_required")
+    );
+    let undelivered = migration
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt,
+                  next_attempt_at, handler_message)
+             VALUES ($1, 'case-created:webhook', 1, 'pending', 0,
+                     transaction_timestamp(), $2)",
+            &[&event_id, &answer],
+        )
+        .await
+        .expect_err("a row that is not delivered cannot keep raw answer bytes");
+    assert_eq!(
+        undelivered
+            .as_db_error()
+            .and_then(|error| error.constraint()),
+        Some("registry_webhook_delivery_state_answer_digest_required")
+    );
 
     migration
         .execute(
