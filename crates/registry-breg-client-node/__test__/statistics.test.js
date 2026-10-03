@@ -90,6 +90,21 @@ test('statistics methods preserve route, representation, status and caller key',
     await assert.rejects(client.statisticsReleaseVersion('enrolments', '2025-01', 0), error => error.kind === 'invalid_request');
     assert.equal(requests.length, count);
 
+    await client.statisticsLive('enrolments', '0001', '9998');
+    await client.statisticsLatestRelease('enrolments', '9999-Q3', 'any');
+    await client.statisticsReleaseVersion('enrolments', '9999-11', 1);
+    await client.statisticsReleaseSeries('enrolments', '2024-02-29', '9999-12-30', 'any');
+    const afterCanonicalPeriods = requests.length;
+    await assert.rejects(
+      client.statisticsPublish('enrolments', '2025-99', 'final', 'publisher', 'invalid-period-key'),
+      error => error.kind === 'invalid_request',
+    );
+    await assert.rejects(
+      client.statisticsWithdraw('enrolments', '----', 1, 'source-data-error', 'publisher', 'invalid-period-key'),
+      error => error.kind === 'invalid_request',
+    );
+    assert.equal(requests.length, afterCanonicalPeriods);
+
     const maximumCursor = 'c'.repeat(10_978);
     await client.statisticsReleases('d'.repeat(64), 10, maximumCursor, 'p'.repeat(64));
     const afterMaximumCursor = requests.length;

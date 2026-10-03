@@ -137,6 +137,26 @@ class StatisticsTests(unittest.TestCase):
             self.client.statistics_release_version("enrolments", "2025-01", 0)
         self.assertEqual(len(self.requests), count)
 
+        self.client.statistics_live("enrolments", from_period="0001", to_period="9998")
+        self.client.statistics_latest_release("enrolments", "9999-Q3", "any")
+        self.client.statistics_release_version("enrolments", "9999-11", 1)
+        self.client.statistics_release_series(
+            "enrolments", "2024-02-29", "9999-12-30", "any"
+        )
+        after_canonical_periods = len(self.requests)
+        for invalid_period_call in (
+            lambda: self.client.statistics_publish(
+                "enrolments", "2025-99", "final", "publisher", "invalid-period-key"
+            ),
+            lambda: self.client.statistics_withdraw(
+                "enrolments", "----", 1, "source-data-error",
+                "publisher", "invalid-period-key"
+            ),
+        ):
+            with self.assertRaises(BaseRegistryClientError):
+                invalid_period_call()
+        self.assertEqual(len(self.requests), after_canonical_periods)
+
         maximum_cursor = "c" * 10_978
         self.client.statistics_releases(
             "d" * 64, top=10, skip_token=maximum_cursor, access_profile="p" * 64

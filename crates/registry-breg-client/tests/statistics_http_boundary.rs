@@ -379,6 +379,64 @@ async fn statistics_live_emits_each_optional_period_bound_independently() {
 }
 
 #[tokio::test]
+async fn statistics_period_codes_admit_each_canonical_calendar_form_and_upper_bound() {
+    let (client, captured) = client().await;
+    client
+        .statistics_live(
+            "enrolments",
+            Some("0001"),
+            Some("9998"),
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap();
+    client
+        .statistics_latest_release(
+            "enrolments",
+            "9999-Q3",
+            BRegReleaseSelection::Any,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap();
+    client
+        .statistics_release_version("enrolments", "9999-11", 1, None, BRegStatisticsFormat::Json)
+        .await
+        .unwrap();
+    client
+        .statistics_release_series(
+            "enrolments",
+            "2024-02-29",
+            "9999-12-30",
+            BRegReleaseSelection::Any,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .unwrap();
+
+    let requests = captured.lock().unwrap();
+    assert_eq!(
+        requests[0].uri,
+        "/tenant/v1/statistics/enrolments:live?from=0001&to=9998"
+    );
+    assert_eq!(
+        requests[1].uri,
+        "/tenant/v1/statistics/enrolments/releases/9999-Q3"
+    );
+    assert_eq!(
+        requests[2].uri,
+        "/tenant/v1/statistics/enrolments/releases/9999-11/versions/1"
+    );
+    assert_eq!(
+        requests[3].uri,
+        "/tenant/v1/statistics/enrolments/releases:series?from=2024-02-29&to=9999-12-30"
+    );
+}
+
+#[tokio::test]
 async fn statistics_problems_keep_concealment_and_closed_domain_details() {
     let (client, _) = client().await;
     let missing = client
@@ -618,8 +676,110 @@ async fn statistics_mutations_require_matching_representation_digests() {
 async fn invalid_statistics_arguments_fail_before_token_or_io() {
     let token = Arc::new(CountingToken(AtomicUsize::new(0)));
     let (client, captured) = client_with_provider(token.clone()).await;
+    let key = BRegIdempotencyKey::parse("caller-owned-key-123").unwrap();
     assert!(client
         .statistics_live("Bad Dataset", None, None, None, BRegStatisticsFormat::Json,)
+        .await
+        .is_err());
+    assert!(client
+        .statistics_live(
+            "enrolments",
+            Some("2025-99"),
+            None,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_live(
+            "enrolments",
+            Some("9999"),
+            None,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_live(
+            "enrolments",
+            Some("2025€"),
+            None,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_latest_release(
+            "enrolments",
+            "----",
+            BRegReleaseSelection::Any,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_latest_release(
+            "enrolments",
+            "9999-Q4",
+            BRegReleaseSelection::Any,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_release_version("enrolments", "0000", 1, None, BRegStatisticsFormat::Json,)
+        .await
+        .is_err());
+    assert!(client
+        .statistics_release_version("enrolments", "9999-12", 1, None, BRegStatisticsFormat::Json,)
+        .await
+        .is_err());
+    assert!(client
+        .statistics_release_series(
+            "enrolments",
+            "2024-Q0",
+            "2024-Q1",
+            BRegReleaseSelection::Any,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_release_series(
+            "enrolments",
+            "9999-12-30",
+            "9999-12-31",
+            BRegReleaseSelection::Any,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_publish(
+            "enrolments",
+            "2023-02-29",
+            BRegReleaseStatus::Final,
+            "publisher",
+            &key,
+        )
+        .await
+        .is_err());
+    assert!(client
+        .statistics_withdraw(
+            "enrolments",
+            "2025-Q5",
+            1,
+            BRegWithdrawalReason::DisclosureRisk,
+            "publisher",
+            &key,
+        )
         .await
         .is_err());
     assert!(client
@@ -636,7 +796,6 @@ async fn invalid_statistics_arguments_fail_before_token_or_io() {
         )
         .await
         .is_err());
-    let key = BRegIdempotencyKey::parse("caller-owned-key-123").unwrap();
     assert!(client
         .statistics_withdraw(
             "enrolments",

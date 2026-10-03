@@ -3,6 +3,7 @@
 
 use reqwest::StatusCode;
 use serde::Serialize;
+use time::{Date, Month};
 
 use crate::client::{access_profile_query, validate_breg_identifier};
 use crate::{
@@ -283,15 +284,45 @@ fn validate_dataset(dataset: &str) -> Result<(), BaseRegistryClientError> {
 
 fn validate_period(period: &str) -> Result<(), BaseRegistryClientError> {
     let bytes = period.as_bytes();
-    if bytes.len() < 4
-        || bytes.len() > MAX_PERIOD_CODE_BYTES
-        || !bytes
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'-' | b'Q'))
-    {
+    let valid = bytes.len() <= MAX_PERIOD_CODE_BYTES
+        && parse_ascii_decimal(bytes.get(..4).unwrap_or_default())
+            .filter(|year| (1..=9999).contains(year))
+            .is_some_and(|year| match bytes.len() {
+                4 => year < 9999,
+                7 if bytes[4] == b'-' && bytes[5] == b'Q' => parse_ascii_decimal(&bytes[6..])
+                    .filter(|quarter| (1..=4).contains(quarter))
+                    .is_some_and(|quarter| year < 9999 || quarter < 4),
+                7 if bytes[4] == b'-' => parse_ascii_decimal(&bytes[5..])
+                    .filter(|month| (1..=12).contains(month))
+                    .is_some_and(|month| year < 9999 || month < 12),
+                10 if bytes[4] == b'-' && bytes[7] == b'-' => {
+                    let month = parse_ascii_decimal(&bytes[5..7])
+                        .and_then(|month| u8::try_from(month).ok())
+                        .and_then(|month| Month::try_from(month).ok());
+                    let day =
+                        parse_ascii_decimal(&bytes[8..]).and_then(|day| u8::try_from(day).ok());
+                    match (month, day) {
+                        (Some(month), Some(day)) => {
+                            Date::from_calendar_date(year as i32, month, day).is_ok()
+                                && !(year == 9999 && month == Month::December && day == 31)
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            });
+    if !valid {
         return Err(invalid("the statistics period code is invalid"));
     }
     Ok(())
+}
+
+fn parse_ascii_decimal(bytes: &[u8]) -> Option<u32> {
+    (!bytes.is_empty() && bytes.iter().all(u8::is_ascii_digit)).then(|| {
+        bytes
+            .iter()
+            .fold(0_u32, |value, byte| value * 10 + u32::from(byte - b'0'))
+    })
 }
 
 fn validate_skip_token(token: &str) -> Result<(), BaseRegistryClientError> {
