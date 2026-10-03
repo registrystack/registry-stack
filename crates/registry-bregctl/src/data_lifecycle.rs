@@ -2526,6 +2526,47 @@ mod tests {
     }
 
     #[test]
+    fn a_sidecar_of_another_version_in_the_current_shape_is_refused_without_a_request() {
+        let input = import_input();
+        let (plan, inspected) = import_plan_and_inspected(&input);
+        let directory = test_directory("ingestion-other-version-sidecar");
+        let checkpoint_path = directory.join("import.checkpoint.json");
+        let state_path = import_state_path(&checkpoint_path);
+        let other = json!({
+            "apiVersion": "registry.registrystack.org/bregctl-data/v1",
+            "kind": IMPORT_STATE_KIND,
+            "packageRevision": PACKAGE,
+            "schemaFingerprint": SCHEMA,
+            "entityId": ENTITY,
+            "operation": "create",
+            "profileId": PROFILE,
+            "inputDigest": plan.input_digest(),
+            "importId": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2c",
+            "runId": "018f06d6-0248-4c7f-8a7e-df9dfbd83d2d",
+        });
+        let other_bytes = canonicalize_json(&other).unwrap();
+        fs::write(&state_path, &other_bytes).unwrap();
+        let (address, handle) = spawn_scripted_server(Vec::new());
+        let base = parse_breg_url(&format!("http://{address}")).unwrap();
+        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let drive = ingestion_drive(&plan, &inspected, &input, &client);
+
+        let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
+        let error = match load_or_start_ingestion(&drive, destinations) {
+            Err(error) => error,
+            Ok(_) => panic!("a sidecar of another version is refused rather than resumed"),
+        };
+        let requests = handle.join().unwrap();
+
+        assert!(matches!(error, DataLifecycleError::Checkpoint));
+        assert!(requests.is_empty());
+        assert_eq!(fs::read(&state_path).unwrap(), other_bytes);
+        assert!(!checkpoint_path.exists());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn a_blocked_run_and_a_cancelled_run_stop_the_import_with_distinct_errors() {
         let input = import_input();
         let (plan, inspected) = import_plan_and_inspected(&input);
