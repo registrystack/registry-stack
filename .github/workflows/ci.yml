@@ -680,7 +680,11 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs/site
-        run: npm ci
+        # The tutorial runner needs only pure-JS packages. Skipping install
+        # scripts keeps the Vale postinstall's unauthenticated GitHub
+        # download, which shared runner addresses get refused on, out of
+        # this job.
+        run: npm ci --ignore-scripts
 
       - name: Test the tutorial runner
         working-directory: docs/site
@@ -1768,7 +1772,11 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs/site
-        run: npm ci
+        # The tutorial runner needs only pure-JS packages. Skipping install
+        # scripts keeps the Vale postinstall's unauthenticated GitHub
+        # download, which shared runner addresses get refused on, out of
+        # this job.
+        run: npm ci --ignore-scripts
 
       - name: Test the tutorial runner
         working-directory: docs/site
@@ -1887,7 +1895,11 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs/site
-        run: npm ci
+        # The tutorial runner needs only pure-JS packages. Skipping install
+        # scripts keeps the Vale postinstall's unauthenticated GitHub
+        # download, which shared runner addresses get refused on, out of
+        # this job.
+        run: npm ci --ignore-scripts
 
       - name: Test the tutorial runner
         working-directory: docs/site
@@ -1994,7 +2006,11 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs/site
-        run: npm ci
+        # The tutorial runner needs only pure-JS packages. Skipping install
+        # scripts keeps the Vale postinstall's unauthenticated GitHub
+        # download, which shared runner addresses get refused on, out of
+        # this job.
+        run: npm ci --ignore-scripts
 
       - name: Test the tutorial runner
         working-directory: docs/site
