@@ -1,6 +1,6 @@
 from typing import Callable, Generic, Literal, TypeVar, TypedDict
 
-ServiceKind = Literal["evidence", "relay"]
+ServiceKind = Literal["evidence"]
 
 class _EvidenceTypeResolveRequestRequired(TypedDict):
     requirementId: str
@@ -25,8 +25,6 @@ class ServiceFilters(TypedDict, total=False):
     jurisdiction: list[str]
     conformsTo: list[str]
     evidenceType: list[str]
-    semanticClass: list[str]
-    operationFamily: list[str]
 
 class _EvidenceServiceQueryRequired(TypedDict):
     evidenceTypeId: str
@@ -35,25 +33,6 @@ class EvidenceServiceQuery(_EvidenceServiceQueryRequired, total=False):
     jurisdiction: str
     serviceIds: list[str]
     conformsTo: list[str]
-
-class _RelayServiceQueryOptions(TypedDict, total=False):
-    jurisdiction: str
-    serviceIds: list[str]
-    conformsTo: list[str]
-
-class _RelaySemanticServiceQuery(_RelayServiceQueryOptions):
-    semanticClassId: str
-
-class _RelayOperationServiceQuery(_RelayServiceQueryOptions):
-    operationFamilyId: str
-
-class _RelayCombinedServiceQuery(_RelayServiceQueryOptions):
-    semanticClassId: str
-    operationFamilyId: str
-
-RelayServiceQuery = (
-    _RelaySemanticServiceQuery | _RelayOperationServiceQuery | _RelayCombinedServiceQuery
-)
 
 class _ServiceRecordRequired(TypedDict):
     recordId: str
@@ -88,11 +67,7 @@ class EvidenceMatchedCapability(TypedDict):
     kind: Literal["evidence-type"]
     id: str
 
-class RelayMatchedCapability(TypedDict):
-    kind: Literal["semantic-class", "operation-family"]
-    id: str
-
-MatchedCapability = EvidenceMatchedCapability | RelayMatchedCapability
+MatchedCapability = EvidenceMatchedCapability
 
 class _SelectionRequestRequired(TypedDict):
     recordId: str
@@ -118,24 +93,6 @@ class _EvidenceSelectionRequestRequired(TypedDict):
 
 class EvidenceSelectionRequest(_EvidenceSelectionRequestRequired, total=False):
     resolution: EvidenceResolutionContext
-
-class _RelaySemanticCapabilityMatch(TypedDict):
-    semanticClassId: str
-
-class _RelayOperationCapabilityMatch(TypedDict):
-    operationFamilyId: str
-
-class _RelayCombinedCapabilityMatch(TypedDict):
-    semanticClassId: str
-    operationFamilyId: str
-
-RelayCapabilityMatch = (
-    _RelaySemanticCapabilityMatch | _RelayOperationCapabilityMatch | _RelayCombinedCapabilityMatch
-)
-
-class RelaySelectionRequest(TypedDict):
-    recordId: str
-    capabilityMatch: RelayCapabilityMatch
 
 class _CommonServiceSelectionRequired(TypedDict):
     recordId: str
@@ -182,15 +139,7 @@ class EvidenceServiceSelection(
 ):
     evidenceResolution: EvidenceResolutionContext
 
-class RelayServiceSelection(
-    _CommonServiceSelectionRequired,
-    _CommonServiceSelectionOptional,
-):
-    serviceKind: Literal["relay"]
-    matchedCapability: RelayMatchedCapability
-    relayCapabilityMatch: RelayCapabilityMatch
-
-ServiceSelection = CommonServiceSelection | EvidenceServiceSelection | RelayServiceSelection
+ServiceSelection = CommonServiceSelection | EvidenceServiceSelection
 _SelectionT = TypeVar("_SelectionT", bound=ServiceSelection)
 
 class AcceptedServiceSelection(Generic[_SelectionT]):
@@ -232,7 +181,6 @@ class DiscoveryClient:
     def resolve_evidence_types(self, request: EvidenceTypeResolveRequest) -> EvidenceTypeResolveResponse: ...
     def search_services(self, filters: ServiceFilters) -> ServiceSearchResponse: ...
     def search_evidence_services(self, query: EvidenceServiceQuery) -> ServiceSearchResponse: ...
-    def search_relay_services(self, query: RelayServiceQuery) -> ServiceSearchResponse: ...
     def select_exact(self, response: ServiceSearchResponse, request: SelectionRequest) -> CommonServiceSelection: ...
     def select_evidence_alternative(
         self,
@@ -244,11 +192,6 @@ class DiscoveryClient:
         response: ServiceSearchResponse,
         request: EvidenceSelectionRequest,
     ) -> EvidenceServiceSelection: ...
-    def select_relay_service(
-        self,
-        response: ServiceSearchResponse,
-        request: RelaySelectionRequest,
-    ) -> RelayServiceSelection: ...
 
 def select_exact(response: ServiceSearchResponse, request: SelectionRequest) -> CommonServiceSelection: ...
 def select_evidence_alternative(
@@ -259,10 +202,6 @@ def select_evidence_service(
     response: ServiceSearchResponse,
     request: EvidenceSelectionRequest,
 ) -> EvidenceServiceSelection: ...
-def select_relay_service(
-    response: ServiceSearchResponse,
-    request: RelaySelectionRequest,
-) -> RelayServiceSelection: ...
 def validate_selection_structure(selection: _SelectionT) -> _SelectionT:
     """Validate closed shape and capability binding, not trust or currentness."""
     ...

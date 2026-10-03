@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::model::{
-    parse_index, DiscoveryIndex, MAXIMUM_HTTP_BODY_BYTES, MAXIMUM_INDEX_BYTES,
+    parse_index, DiscoveryIndex, IndexError, MAXIMUM_HTTP_BODY_BYTES, MAXIMUM_INDEX_BYTES,
     MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS, MINIMUM_HTTP_RESPONSE_BYTES,
 };
 use crate::query::Directory;
@@ -118,6 +118,11 @@ pub enum StartupError {
          `discoveryctl package`"
     )]
     PackageIndexInvalid,
+    #[error(
+        "the Discovery package contains a retired Relay service; remove Relay origins and rebuild \
+         it with `discoveryctl package`"
+    )]
+    PackageIndexRetiredService,
     #[error("the Discovery index could not be loaded")]
     IndexLoad,
     #[error("the Discovery index is invalid")]
@@ -323,7 +328,10 @@ pub fn load_verified_index(
             path: INDEX_FILE.to_owned(),
         });
     }
-    parse_index(&bytes).map_err(|_| StartupError::PackageIndexInvalid)
+    parse_index(&bytes).map_err(|error| match error {
+        IndexError::RetiredServiceKind => StartupError::PackageIndexRetiredService,
+        _ => StartupError::PackageIndexInvalid,
+    })
 }
 
 fn bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>, StartupError> {
@@ -689,6 +697,30 @@ logLevel: info
         let runtime_path = write_runtime(temporary.path(), &runtime_for(&package_root, None));
         let message = prepare_error(&runtime_path).to_string();
         assert!(message.contains("extra: note.txt"), "{message}");
+    }
+
+    #[test]
+    fn startup_refuses_a_pre_retirement_mixed_package_with_rebuild_guidance() {
+        let temporary = canonical_tempdir();
+        let package_root = temporary.path().join("package");
+        let fixture = include_bytes!(
+            "../../../products/discovery/fixtures/compatibility/pre-retirement-mixed-index.json"
+        );
+        let index = fixture.strip_suffix(b"\n").unwrap_or(fixture).to_vec();
+        write_package(
+            &package_root,
+            &BTreeMap::from([(INDEX_FILE.to_owned(), index)]),
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap();
+        let runtime_path = write_runtime(temporary.path(), &runtime_for(&package_root, None));
+
+        let message = prepare_error(&runtime_path).to_string();
+        assert!(message.contains("retired Relay service"), "{message}");
+        assert!(message.contains("remove Relay origins"), "{message}");
+        assert!(message.contains("discoveryctl package"), "{message}");
     }
 
     #[test]

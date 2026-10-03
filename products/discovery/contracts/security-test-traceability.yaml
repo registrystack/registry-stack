@@ -10,9 +10,7 @@
       "tests": [
         {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_excludes_private_configuration_fields"},
         {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_preserves_evidence_type_profile_correlation"},
-        {"path": "crates/registry-relay-v2/src/artifacts.rs", "name": "provider_discovery_description_excludes_protected_and_internal_contract_fields"},
-        {"path": "crates/registry-relay-v2/src/artifacts.rs", "name": "provider_discovery_description_preserves_semantic_class_operation_family_correlation"},
-        {"path": "crates/registry-relay-v2/src/compiler.rs", "name": "publication_projection_fields_fail_during_compilation"}
+        {"path": "crates/registry-discovery-profile/src/lib.rs", "name": "historical_relay_profile_fixture_is_refused_by_current_rust"}
       ]
     },
     {
@@ -111,7 +109,18 @@
         {"path": "crates/registry-discovery-client-node/__test__/surface.test.js", "name": "renewal refreshes provenance but never silently accepts semantic drift"},
         {"path": "crates/registry-discovery-client-py/tests/python/test_client.py", "name": "test_exact_local_acceptance_precedes_credentials_and_native_io"},
         {"path": "crates/registry-discovery-client-py/tests/python/test_client.py", "name": "test_renewal_only_updates_provenance_for_the_same_accepted_subject"},
-        {"path": "crates/registry-discovery-client/tests/native_journey.rs", "name": "complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively"}
+        {"path": "crates/registry-discovery-client/tests/native_journey.rs", "name": "complete_evidence_journey_builds_selects_trusts_and_invokes_a_signed_assertion"}
+      ]
+    },
+    {
+      "id": "sec-retired-service-kind",
+      "negativeTest": "retired-relay-input-is-refused-without-partial-catalog-semantics",
+      "testId": "discovery_runtime::retired_relay_refused",
+      "tests": [
+        {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_refuses_a_pre_retirement_mixed_package_with_rebuild_guidance"},
+        {"path": "crates/registry-discovery/src/model.rs", "name": "pre_retirement_mixed_index_is_refused_as_a_whole"},
+        {"path": "crates/registry-discovery-profile/src/lib.rs", "name": "historical_relay_profile_fixture_is_refused_by_current_rust"},
+        {"path": "crates/registry-discovery-client/src/selection.rs", "name": "persisted_relay_selection_is_refused_by_the_current_wire_type"}
       ]
     },
     {

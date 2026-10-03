@@ -14,9 +14,8 @@ use registry_discovery_client::{
     renew_unchanged_service_selection, validate_service_selection_structure,
     DiscoveryClient as CoreClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
     EvidenceSelectionRequest, EvidenceServiceQuery, EvidenceTypeResolveRequest,
-    EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt, RelaySelectionRequest,
-    RelayServiceQuery, SelectionRequest, ServiceFilters, ServiceSearchResponse,
-    ServiceSearchSelectionExt, ServiceSelection,
+    EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt, SelectionRequest, ServiceFilters,
+    ServiceSearchResponse, ServiceSearchSelectionExt, ServiceSelection,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -145,13 +144,6 @@ pub fn select_evidence_service(response: Value, request: Value) -> Result<Value>
 }
 
 #[napi]
-pub fn select_relay_service(response: Value, request: Value) -> Result<Value> {
-    let response: ServiceSearchResponse = decode(response)?;
-    let request: RelaySelectionRequest = decode(request)?;
-    encode(&response.select_relay(request).map_err(error)?)
-}
-
-#[napi]
 pub fn validate_selection_structure(selection: Value) -> Result<Value> {
     let selection: ServiceSelection = decode(selection)?;
     validate_service_selection_structure(&selection).map_err(error)?;
@@ -248,18 +240,6 @@ impl DiscoveryClient {
     }
 
     #[napi]
-    pub async fn search_relay_services(&self, query: Value) -> Result<Value> {
-        let query: RelayServiceQuery = decode(query)?;
-        encode(
-            &self
-                .inner
-                .search_relay_services(query)
-                .await
-                .map_err(error)?,
-        )
-    }
-
-    #[napi]
     pub fn select_exact(&self, response: Value, request: Value) -> Result<Value> {
         selection(response, request)
     }
@@ -276,10 +256,5 @@ impl DiscoveryClient {
     #[napi]
     pub fn select_evidence_service(&self, response: Value, request: Value) -> Result<Value> {
         select_evidence_service(response, request)
-    }
-
-    #[napi]
-    pub fn select_relay_service(&self, response: Value, request: Value) -> Result<Value> {
-        select_relay_service(response, request)
     }
 }

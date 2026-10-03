@@ -1,4 +1,4 @@
-//! Closed Registry Discovery provider-publication profile.
+//! Closed Registry Discovery provider-publication profile for Evidence services.
 //!
 //! This crate accepts exactly one JSON-LD document shape. It does not expand
 //! JSON-LD, resolve contexts, fetch links, hold RDF graphs, or make trust or
@@ -258,18 +258,13 @@ impl ServiceDescription {
         {
             return Err(ProfileError::BindingIdentity);
         }
-        match self.service_kind {
-            ServiceKind::Evidence
-                if self.evidence_type_ids.is_empty()
-                    || !self.semantic_class_ids.is_empty()
-                    || !self.operation_family_ids.is_empty() =>
-            {
-                Err(ProfileError::KindCapabilities)
-            }
-            ServiceKind::Relay if !self.evidence_type_ids.is_empty() => {
-                Err(ProfileError::KindCapabilities)
-            }
-            _ => Ok(()),
+        if self.evidence_type_ids.is_empty()
+            || !self.semantic_class_ids.is_empty()
+            || !self.operation_family_ids.is_empty()
+        {
+            Err(ProfileError::KindCapabilities)
+        } else {
+            Ok(())
         }
     }
 }
@@ -330,12 +325,14 @@ impl ServiceRoles {
     }
 }
 
-/// The two native product families advertisement may identify.
+/// The native product family accepted by the current implementation.
+///
+/// The published v1alpha1 profile resources historically also describe Relay.
+/// Current Rust parsing deliberately implements the Evidence-only subset.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ServiceKind {
     Evidence,
-    Relay,
 }
 
 /// A closed-profile parsing or validation refusal.
@@ -373,6 +370,10 @@ pub enum ProfileError {
     IdentifierCollection(&'static str),
     #[error("Registry Discovery service-kind capabilities do not match the service kind")]
     KindCapabilities,
+    #[error(
+        "Registry Discovery service kind is retired; remove Relay origins and rebuild the package"
+    )]
+    RetiredServiceKind,
 }
 
 /// Strictly parse and validate a provider description. This function performs
@@ -406,9 +407,7 @@ fn validate_kind_field_presence(value: &serde_json::Value) -> Result<(), Profile
             {
                 return Err(ProfileError::KindCapabilities);
             }
-            Some("relay") if fields.contains_key("evidenceTypeIds") => {
-                return Err(ProfileError::KindCapabilities);
-            }
+            Some("relay") => return Err(ProfileError::RetiredServiceKind),
             _ => {}
         }
     }
@@ -846,15 +845,29 @@ mod tests {
     }
 
     #[test]
-    fn shipped_product_fixtures_satisfy_the_closed_rust_profile() {
-        for fixture in [
-            include_bytes!("../../../products/discovery/fixtures/descriptions/evidence.jsonld")
-                .as_slice(),
-            include_bytes!("../../../products/discovery/fixtures/descriptions/relay.jsonld")
-                .as_slice(),
-        ] {
-            parse_description(fixture).expect("shipped fixture satisfies the closed profile");
-        }
+    fn pre_retirement_evidence_fixture_keeps_its_bytes_and_binding_identity() {
+        let fixture =
+            include_bytes!("../../../products/discovery/fixtures/compatibility/pre-retirement-evidence-description.jsonld");
+        let description = parse_description(fixture)
+            .expect("the pre-retirement Evidence description remains supported");
+        assert_eq!(
+            render_description(&description).expect("the Evidence description renders"),
+            fixture
+        );
+        assert_eq!(
+            description.services()[0].binding_id(),
+            "urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c"
+        );
+    }
+
+    #[test]
+    fn historical_relay_profile_fixture_is_refused_by_current_rust() {
+        let fixture =
+            include_bytes!("../../../products/discovery/fixtures/descriptions/relay.jsonld");
+        assert!(matches!(
+            parse_description(fixture),
+            Err(ProfileError::RetiredServiceKind)
+        ));
     }
 
     #[test]

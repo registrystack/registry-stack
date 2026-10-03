@@ -33,6 +33,7 @@ REQUIRED_INVARIANTS = {
     "sec-profile-parser-confinement", "sec-build-resource-bounds",
     "sec-origin-record-isolation", "sec-atomic-index-package", "sec-package-integrity",
     "sec-discovery-not-trust", "sec-query-and-log-minimization",
+    "sec-retired-service-kind",
 }
 REQUIRED_DOD_IDS = {
     "discovery-dod-16-1-product-scope", "discovery-dod-16-2-standards-profile",
@@ -148,6 +149,11 @@ def check_standards_and_offline_rdf() -> None:
         "reason": "Registry Discovery implements a closed selected-term application profile, not the complete mandatory class and constraint sets of either application profile.",
     }:
         fail("standards contract must refuse full DCAT-AP and BRegDCAT-AP claims")
+    if standards.get("implementationSubset") != {
+        "currentServiceKinds": ["evidence"],
+        "publishedProfileHistory": "The unchanged v1alpha1 context, schema, and SHACL resources also describe Relay for historical validation. Current Rust publication, index, query, and client contracts refuse Relay.",
+    }:
+        fail("standards contract must distinguish historical profile validation from current Rust support")
     expected_standards = {
         ("DCAT", "3", "W3C Recommendation 2024-08-22", "https://www.w3.org/TR/2024/REC-vocab-dcat-3-20240822/"),
         ("DCAT-AP", "3.0.1", "Recommendation targeted for selected alignment", "https://semiceu.github.io/DCAT-AP/releases/3.0.1/"),
@@ -210,7 +216,7 @@ def check_standards_and_offline_rdf() -> None:
     expected_oracles = {
         (
             "crates/registry-discoveryctl/tests/schema_contract.rs",
-            "every_positive_fixture_satisfies_draft_2020_12_and_the_closed_rust_parser",
+            "current_fixtures_match_rust_while_historical_profile_fixtures_remain_schema_valid",
             "jsonschema",
             "0.18.3",
         ),

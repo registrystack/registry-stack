@@ -13,15 +13,13 @@ use crate::model::{
     MAXIMUM_RESULT_RECORDS,
 };
 
-const FILTER_NAMES: [&str; 8] = [
+const FILTER_NAMES: [&str; 6] = [
     "recordId",
     "serviceId",
     "serviceKind",
     "jurisdiction",
     "conformsTo",
     "evidenceType",
-    "semanticClass",
-    "operationFamily",
 ];
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -147,14 +145,11 @@ pub fn parse_service_filters(raw_query: &str) -> Result<ServiceFilters, QueryErr
             "serviceId" => filters.service_id.push(value.into_owned()),
             "serviceKind" => filters.service_kind.push(match value.as_ref() {
                 "evidence" => ServiceKind::Evidence,
-                "relay" => ServiceKind::Relay,
                 _ => return Err(QueryError::InvalidRequest),
             }),
             "jurisdiction" => filters.jurisdiction.push(value.into_owned()),
             "conformsTo" => filters.conforms_to.push(value.into_owned()),
             "evidenceType" => filters.evidence_type.push(value.into_owned()),
-            "semanticClass" => filters.semantic_class.push(value.into_owned()),
-            "operationFamily" => filters.operation_family.push(value.into_owned()),
             _ => return Err(QueryError::InvalidRequest),
         }
     }
@@ -206,12 +201,10 @@ pub fn validate_service_filters(filters: &ServiceFilters) -> Result<(), QueryErr
         &filters.jurisdiction,
         &filters.conforms_to,
         &filters.evidence_type,
-        &filters.semantic_class,
-        &filters.operation_family,
     ];
     if query_value_characters(filters)
         .is_none_or(|characters| characters > MAXIMUM_QUERY_VALUE_CHARACTERS)
-        || filters.service_kind.len() > 2
+        || filters.service_kind.len() > 1
         || filters
             .service_kind
             .windows(2)
@@ -229,14 +222,6 @@ pub fn validate_service_filters(filters: &ServiceFilters) -> Result<(), QueryErr
         return Err(QueryError::InvalidRequest);
     }
 
-    let only_evidence = filters.service_kind == [ServiceKind::Evidence];
-    let only_relay = filters.service_kind == [ServiceKind::Relay];
-    if only_relay && !filters.evidence_type.is_empty()
-        || only_evidence
-            && (!filters.semantic_class.is_empty() || !filters.operation_family.is_empty())
-    {
-        return Err(QueryError::InvalidRequest);
-    }
     Ok(())
 }
 
@@ -247,17 +232,12 @@ fn query_value_characters(filters: &ServiceFilters) -> Option<usize> {
         &filters.jurisdiction,
         &filters.conforms_to,
         &filters.evidence_type,
-        &filters.semantic_class,
-        &filters.operation_family,
     ];
     string_values
         .into_iter()
         .flatten()
         .map(|value| value.chars().count())
-        .chain(filters.service_kind.iter().map(|kind| match kind {
-            ServiceKind::Evidence => "evidence".len(),
-            ServiceKind::Relay => "relay".len(),
-        }))
+        .chain(filters.service_kind.iter().map(|_| "evidence".len()))
         .try_fold(0usize, usize::checked_add)
 }
 
@@ -268,8 +248,6 @@ pub fn service_matches_filters(service: &ServiceRecord, filters: &ServiceFilters
         && any_member(&filters.jurisdiction, &service.jurisdictions)
         && any_member(&filters.conforms_to, &service.conforms_to)
         && any_member(&filters.evidence_type, &service.evidence_type_ids)
-        && any_member(&filters.semantic_class, &service.semantic_class_ids)
-        && any_member(&filters.operation_family, &service.operation_family_ids)
 }
 
 fn any_exact(expected: &[String], actual: &str) -> bool {
@@ -359,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_product_filters_are_invalid() {
+    fn retired_product_filters_are_invalid() {
         assert_eq!(
             parse_service_filters("serviceKind=relay&evidenceType=urn%3Atype"),
             Err(QueryError::InvalidRequest)

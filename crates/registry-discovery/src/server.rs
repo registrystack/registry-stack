@@ -647,7 +647,7 @@ mod tests {
         let parameters = paths[SERVICES_ROUTE]["get"]["parameters"]
             .as_array()
             .unwrap();
-        assert_eq!(parameters.len(), 8);
+        assert_eq!(parameters.len(), 6);
         let expected = [
             "recordId",
             "serviceId",
@@ -655,8 +655,6 @@ mod tests {
             "jurisdiction",
             "conformsTo",
             "evidenceType",
-            "semanticClass",
-            "operationFamily",
         ];
         assert_eq!(
             parameters

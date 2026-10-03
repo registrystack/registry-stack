@@ -82,90 +82,6 @@ impl EvidenceServiceQuery {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RelayServiceQuery {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub semantic_class_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation_family_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub jurisdiction: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub service_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conforms_to: Vec<String>,
-}
-
-impl RelayServiceQuery {
-    #[must_use]
-    pub fn for_semantic_class(semantic_class_id: impl Into<String>) -> Self {
-        Self {
-            semantic_class_id: Some(semantic_class_id.into()),
-            operation_family_id: None,
-            jurisdiction: None,
-            service_ids: Vec::new(),
-            conforms_to: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn for_operation_family(operation_family_id: impl Into<String>) -> Self {
-        Self {
-            semantic_class_id: None,
-            operation_family_id: Some(operation_family_id.into()),
-            jurisdiction: None,
-            service_ids: Vec::new(),
-            conforms_to: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_operation_family(mut self, operation_family_id: impl Into<String>) -> Self {
-        self.operation_family_id = Some(operation_family_id.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_semantic_class(mut self, semantic_class_id: impl Into<String>) -> Self {
-        self.semantic_class_id = Some(semantic_class_id.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_jurisdiction(mut self, jurisdiction: impl Into<String>) -> Self {
-        self.jurisdiction = Some(jurisdiction.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_service_id(mut self, service_id: impl Into<String>) -> Self {
-        self.service_ids.push(service_id.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_conformance(mut self, profile: impl Into<String>) -> Self {
-        self.conforms_to.push(profile.into());
-        self
-    }
-
-    fn filters(self) -> Result<ServiceFilters, DiscoveryClientError> {
-        if self.semantic_class_id.is_none() && self.operation_family_id.is_none() {
-            return Err(DiscoveryClientError::Query);
-        }
-        Ok(ServiceFilters {
-            service_id: self.service_ids,
-            service_kind: vec![ServiceKind::Relay],
-            jurisdiction: self.jurisdiction.into_iter().collect(),
-            conforms_to: self.conforms_to,
-            semantic_class: self.semantic_class_id.into_iter().collect(),
-            operation_family: self.operation_family_id.into_iter().collect(),
-            ..ServiceFilters::default()
-        })
-    }
-}
-
 pub struct DiscoveryClientConfig {
     base_url: url::Url,
     request_timeout: Duration,
@@ -304,15 +220,6 @@ impl DiscoveryClient {
         query: EvidenceServiceQuery,
     ) -> Result<ServiceSearchResponse, DiscoveryClientError> {
         self.search_services(query.filters()).await
-    }
-
-    /// Search one correlated Relay semantic-class/operation-family tuple.
-    /// At least one tuple member is required and exactly one exchange occurs.
-    pub async fn search_relay_services(
-        &self,
-        query: RelayServiceQuery,
-    ) -> Result<ServiceSearchResponse, DiscoveryClientError> {
-        self.search_services(query.filters()?).await
     }
 
     async fn exchange<T, B>(
@@ -615,21 +522,13 @@ fn service_query(filters: &ServiceFilters) -> Result<String, DiscoveryClientErro
     for value in &filters.service_id {
         serializer.append_pair("serviceId", value);
     }
-    for value in &filters.service_kind {
-        serializer.append_pair(
-            "serviceKind",
-            match value {
-                ServiceKind::Evidence => "evidence",
-                ServiceKind::Relay => "relay",
-            },
-        );
+    for _ in &filters.service_kind {
+        serializer.append_pair("serviceKind", "evidence");
     }
     for (name, values) in [
         ("jurisdiction", &filters.jurisdiction),
         ("conformsTo", &filters.conforms_to),
         ("evidenceType", &filters.evidence_type),
-        ("semanticClass", &filters.semantic_class),
-        ("operationFamily", &filters.operation_family),
     ] {
         for value in values {
             serializer.append_pair(name, value);
@@ -946,15 +845,15 @@ mod tests {
 
     #[test]
     fn query_serialization_preserves_fragment_iris_as_values() {
-        let fragment = "https://example.org/vocabulary#RegisteredBusiness";
+        let fragment = "https://example.org/vocabulary#AdultStatus";
         let mut filters = ServiceFilters::default();
-        filters.semantic_class.push(fragment.into());
+        filters.evidence_type.push(fragment.into());
 
         let query = service_query(&filters).expect("valid fragment IRI filter");
         assert!(!query.contains('#'));
         assert_eq!(
             url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>(),
-            [("semanticClass".into(), fragment.into())]
+            [("evidenceType".into(), fragment.into())]
         );
     }
 
