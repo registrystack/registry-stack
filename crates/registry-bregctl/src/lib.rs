@@ -518,43 +518,6 @@ struct PackageCandidateArgs {
     /// Directory containing reviewed migration descriptors and evidence in package layout. Used identically by test and package; requires a baseline package.
     #[arg(long, value_name = "DIRECTORY", requires = "baseline_package")]
     reviewed_migrations: Option<PathBuf>,
-
-    #[arg(
-        long = "database-id",
-        hide = true,
-        num_args = 0..=1,
-        default_missing_value = "",
-        value_parser = refuse_database_id_flag
-    )]
-    _database_id: Option<String>,
-
-    #[arg(
-        long = "baseline-runtime-config",
-        hide = true,
-        num_args = 0..=1,
-        default_missing_value = "",
-        value_parser = refuse_baseline_runtime_config_flag
-    )]
-    _baseline_runtime_config: Option<String>,
-
-    #[arg(
-        long = "signature-threshold",
-        hide = true,
-        num_args = 0..=1,
-        default_missing_value = "",
-        value_parser = refuse_signature_threshold_flag
-    )]
-    _signature_threshold: Option<String>,
-
-    #[arg(
-        long = "signature-key-id",
-        hide = true,
-        allow_hyphen_values = true,
-        num_args = 0..=1,
-        default_missing_value = "",
-        value_parser = refuse_signature_key_id_flag
-    )]
-    _signature_key_id: Option<String>,
 }
 
 /// An `--expected-digest` value is a package digest in the form every command
@@ -565,30 +528,6 @@ fn parse_expected_digest(value: &str) -> Result<String, String> {
     } else {
         Err("`--expected-digest` must be sha256: followed by 64 lowercase hex digits, the package digest as plan and package print it".to_owned())
     }
-}
-
-// Each retired package flag stays a hidden argument so an operator who still
-// passes it reads a usage error naming its replacement, not an unknown flag.
-// Its value is optional, so a bare flag reaches the same refusal instead of a
-// generic missing-value error.
-fn refuse_database_id_flag(_: &str) -> Result<String, String> {
-    Err("`--database-id` is removed; a package names no database. Remove it: the runtime configuration's `identity.databaseId` names the database at apply".to_owned())
-}
-
-fn refuse_baseline_runtime_config_flag(_: &str) -> Result<String, String> {
-    Err("`--baseline-runtime-config` is removed; name the chain tip package directory with `--baseline-package DIR` instead".to_owned())
-}
-
-fn refuse_signature_threshold_flag(_: &str) -> Result<String, String> {
-    Err("`--signature-threshold` is removed; packages are unsigned. Remove it: `bregctl apply` with the migration credential authorizes an activation".to_owned())
-}
-
-fn refuse_signature_key_id_flag(_: &str) -> Result<String, String> {
-    Err("`--signature-key-id` is removed; packages are unsigned. Remove it: `bregctl apply` with the migration credential authorizes an activation".to_owned())
-}
-
-fn refuse_signatures_flag(_: &str) -> Result<String, String> {
-    Err("`--signatures` is removed; packages are unsigned. Remove it: `bregctl package` publishes the package directory in one step".to_owned())
 }
 
 #[derive(Debug, Args)]
@@ -604,15 +543,6 @@ struct PackageArgs {
     /// Canonical receipt from a successful schema test of this exact candidate.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     test_receipt: PathBuf,
-
-    #[arg(
-        long = "signatures",
-        hide = true,
-        num_args = 0..=1,
-        default_missing_value = "",
-        value_parser = refuse_signatures_flag
-    )]
-    _signatures: Option<String>,
 
     /// New build directory that receives the schema-test receipt and the published package/.
     #[arg(long, value_name = "DIRECTORY")]
