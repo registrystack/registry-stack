@@ -55,20 +55,27 @@
   - A database that holds registry tables but no activation ledger is no
     longer adopted. Startup, `bregctl status`, `bregctl plan`, and `bregctl
     apply` refuse it with one generic refusal and change nothing. The codes
-    are `status.database.unrecognized` and `apply.database.unrecognized`.
-    Upgrade it one release at a time through v0.38.0 first. A database that
-    v0.38.0 or an earlier release already adopted is unaffected.
+    are `startup.database.unrecognized`, `status.database.unrecognized`, and
+    `apply.database.unrecognized`. The maintenance commands that bind the
+    active registry refuse it as `<prefix>.active_registry.unrecognized`,
+    where the suffix was `pre_ledger`. The codes
+    `startup.database.pre_ledger`, `status.database.pre_ledger`,
+    `apply.database.pre_ledger`, `apply.adoption.not_ready`, and
+    `apply.adoption.fingerprint_mismatch` are removed, and `plan` and `apply`
+    no longer report `adopted` as an `activation`. Upgrade the database one
+    release at a time through v0.38.0 first. A database that v0.38.0 or an
+    earlier release already adopted is unaffected.
   - `bregctl apply --acknowledge-retired-audit-discard` and the refusal code
     `apply.audit.retired_rows_present` are removed. Schema install has dropped
     the retired audit tables since v0.35.0, so a v0.38.0 database no longer
     holds them.
-  - Catalog verification accepts only the named-column fingerprint. A package
-    carrying the older physical-column fingerprint no longer starts or
-    upgrades. Rebuild it with a current `bregctl package`.
-  - A `package/v1` package is refused as an integrity failure
-    (`*.package.integrity_refused`). The dedicated `legacy_format` refusal
-    that named `bregctl package` is gone. Rebuild the package with a current
-    `bregctl package`.
+  - A `package/v1` package is refused like any other package this release
+    cannot read: `plan` and `apply` report `apply.package.refused`, and the
+    commands that inspect a package report `*.package.integrity_refused`. The
+    dedicated `legacy_format` refusal that named `bregctl package` is gone.
+    So is the physical-column catalog fingerprint that only those packages
+    carried: catalog verification computes the named-column fingerprint
+    only. Rebuild the package with a current `bregctl package`.
   - The removed project keys no longer have dedicated `*.removed`
     diagnostics. They are refused as `source.shape.invalid` (JSON) or
     `source.yaml.invalid` (YAML), naming the unknown field. The keys are
@@ -80,7 +87,9 @@
     `activeRevision`, `activeSequence`, and `compilerSourceRevision` are
     refused as `runtime_config.document`, naming the unknown field, where they
     were `runtime_config.package_key_removed`. A `${VAR}` reference in one of
-    them is substituted before the refusal.
+    them is substituted before the refusal, so a reference to an unset
+    variable is refused first as `runtime_config.env_expansion`, which names
+    neither the key nor the variable.
   - `breg --config FILE` fails with the standard unexpected-argument error
     (exit status 2). Use `--runtime-config`.
   - `breg-mcp` refuses `resourceServer.jwks` and `audit.maximumFileBytes` with

@@ -556,7 +556,7 @@ keeps the system identifier and needs none.
 ## Inspect the migration plan
 
 `migration explain --runtime-config <file>` describes the configured package's migration plan
-without executing it; it does not report live database status. New schema fingerprints identify
+without executing it; it does not report live database status. The schema fingerprint identifies
 columns by name, so a fresh installation and an in-place upgrade match even when PostgreSQL stores
 columns in a different order. The runtime verifies a package under that fingerprint only.
 

@@ -754,12 +754,12 @@ previous release omits it the same way.
 The audit-writer transition intentionally retires Casework's
 `casework_audit_outbox`. The rehearsal exports every row of that exact table to
 a private JSON Lines archive and checks its row count before allowing removal.
-It waits for the old Casework
-publisher to drain before stopping it. Old Casework and Evidence audit files
-move to separate archives before the new writer starts; Evidence's new stream
-must contain valid current envelopes after the upgraded request. The old
-Evidence bundle and runtime audit blocks are rewritten to the new configuration
-shape while retaining the same key reference and version.
+It waits for the old Casework publisher to drain before stopping it. Old
+Casework and Evidence audit files move to separate archives before the new
+writer starts; Evidence's new stream must contain valid current envelopes
+after the upgraded request. The old Evidence bundle and runtime audit blocks
+are rewritten to the new configuration shape while retaining the same key
+reference and version.
 
 Every other table remains subject to the row-preservation check. When the
 rehearsal reports a row loss, fix the migration so that it refuses with an error
