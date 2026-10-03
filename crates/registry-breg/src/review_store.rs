@@ -1498,16 +1498,6 @@ pub(crate) async fn install(
                  CHECK ((state IN ('accepted','cancelling') AND accepted_binding IS NOT NULL)
                      OR state NOT IN ('accepted','cancelling'))
              );
-             ALTER TABLE registry_internal.registry_request_review_submissions
-                 ADD COLUMN IF NOT EXISTS withdrawn boolean NOT NULL DEFAULT false;
-             ALTER TABLE registry_internal.registry_request_review_submissions
-                 ADD COLUMN IF NOT EXISTS recovery_deadline timestamptz NOT NULL
-                     DEFAULT (transaction_timestamp()+interval '30 days');
-             ALTER TABLE registry_internal.registry_request_review_submissions
-                 ADD COLUMN IF NOT EXISTS result_poll_attempts integer NOT NULL DEFAULT 0;
-             ALTER TABLE registry_internal.registry_request_review_submissions
-                 ADD COLUMN IF NOT EXISTS next_result_poll_at timestamptz NOT NULL
-                     DEFAULT transaction_timestamp();
              CREATE INDEX IF NOT EXISTS registry_request_review_submission_jobs
                  ON registry_internal.registry_request_review_submissions
                  (next_attempt_at, created_at)
@@ -1546,8 +1536,6 @@ pub(crate) async fn install(
                      REFERENCES registry_internal.registry_request_review_submissions,
                  CHECK (available_until > completed_at)
              );
-             ALTER TABLE registry_internal.registry_request_review_results
-                 DROP CONSTRAINT IF EXISTS registry_request_review_results_result_check;
              ALTER TABLE registry_internal.registry_request_review_results
                  DROP CONSTRAINT IF EXISTS registry_request_review_results_result_size;
              ALTER TABLE registry_internal.registry_request_review_results
@@ -1602,35 +1590,10 @@ pub(crate) async fn install(
         .map_err(|_| MutationError::Unavailable)?;
     client
         .batch_execute(
-            "ALTER TABLE registry_internal.registry_request_application_jobs
-                 ADD COLUMN IF NOT EXISTS claim_token uuid;
-             ALTER TABLE registry_internal.registry_request_application_jobs
-                 ADD COLUMN IF NOT EXISTS action_href text;
-             ALTER TABLE registry_internal.registry_request_application_jobs
-                 ADD COLUMN IF NOT EXISTS action_if_match text;
-             ALTER TABLE registry_internal.registry_request_application_jobs
-                 ADD COLUMN IF NOT EXISTS receipt_recovered boolean NOT NULL DEFAULT false;
-             DO $$ BEGIN
-                 ALTER TABLE registry_internal.registry_request_application_jobs
-                     ADD CONSTRAINT registry_request_application_jobs_action_href_check
-                     CHECK (action_href IS NULL OR
-                         (action_href <> '' AND octet_length(action_href) <= 2048));
-             EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-             DO $$ BEGIN
-                 ALTER TABLE registry_internal.registry_request_application_jobs
-                     ADD CONSTRAINT registry_request_application_jobs_action_if_match_check
-                     CHECK (action_if_match IS NULL OR
-                         (action_if_match <> '' AND octet_length(action_if_match) <= 1024));
-             EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-             DO $$ BEGIN
+            "DO $$ BEGIN
                  ALTER TABLE registry_internal.registry_request_application_jobs
                      ADD CONSTRAINT registry_request_application_jobs_action_binding_check
                      CHECK ((action_href IS NULL) = (action_if_match IS NULL));
-             EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-             DO $$ BEGIN
-                 ALTER TABLE registry_internal.registry_request_application_jobs
-                     ADD CONSTRAINT registry_request_application_jobs_receipt_recovered_check
-                     CHECK (NOT receipt_recovered OR state = 'applied');
              EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
         )
         .await

@@ -159,12 +159,8 @@ pub async fn install_mutation_schema(
                  CHECK (predecessor_revision IS NULL OR predecessor_revision < record_revision)
              );
             ALTER TABLE registry_internal.registry_revisions
-                 ADD COLUMN IF NOT EXISTS erased_at timestamptz,
-                 ALTER COLUMN snapshot DROP NOT NULL,
-                 DROP CONSTRAINT IF EXISTS registry_revisions_snapshot_check,
                  DROP CONSTRAINT IF EXISTS registry_revisions_snapshot_bounds,
-                 DROP CONSTRAINT IF EXISTS registry_revisions_erasure_shape,
-                 DROP CONSTRAINT IF EXISTS registry_revisions_mutation_kind_check;
+                 DROP CONSTRAINT IF EXISTS registry_revisions_erasure_shape;
              ALTER TABLE registry_internal.registry_revisions
                  ADD CONSTRAINT registry_revisions_snapshot_bounds CHECK (
                      snapshot IS NULL OR
@@ -172,9 +168,7 @@ pub async fn install_mutation_schema(
                  ),
                  ADD CONSTRAINT registry_revisions_erasure_shape CHECK (
                      (snapshot IS NULL) = (erased_at IS NOT NULL)
-                 ),
-                 ADD CONSTRAINT registry_revisions_mutation_kind_check
-                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'))"
+                 )"
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -279,29 +273,17 @@ pub async fn install_mutation_schema(
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    // Existing databases keep record/batch receipts intact while admitting the
-    // separately typed, proposal-bound result of an atomic application.
+    // The receipt erasure column and the result count, response body, and
+    // erasure constraints are installed after creation, so a reinstall replaces
+    // each constraint under its stable name. The inline result count check
+    // spans two columns, so PostgreSQL names it `registry_idempotency_check`;
+    // it is replaced by `registry_idempotency_result_count_check`.
     migration
         .batch_execute(&format!(
             "ALTER TABLE registry_internal.registry_idempotency
-                 ADD COLUMN IF NOT EXISTS proposal_version bigint CHECK (proposal_version > 0);
-             ALTER TABLE registry_internal.registry_idempotency
                  ADD COLUMN IF NOT EXISTS erased_at timestamptz;
-             ALTER TABLE registry_internal.registry_immediate_action_applications
-                 ADD COLUMN IF NOT EXISTS handler_answer_digest bytea;
-             DO $registry_handler_answer_digest_upgrade$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'registry_internal.registry_immediate_action_applications'::regclass
-                        AND conname = 'registry_action_application_answer_digest_bounds'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_immediate_action_applications
-                         ADD CONSTRAINT registry_action_application_answer_digest_bounds
-                         CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32);
-                 END IF;
-             END
-             $registry_handler_answer_digest_upgrade$;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_check;
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_count_check;
              ALTER TABLE registry_internal.registry_idempotency
@@ -320,95 +302,7 @@ pub async fn install_mutation_schema(
                      (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES})
                  ),
                  ADD CONSTRAINT registry_idempotency_erasure_shape
-                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_check,
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values,
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_check,
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_shape;
-             ALTER TABLE registry_internal.registry_idempotency
-                 ADD CONSTRAINT registry_idempotency_result_kind_values
-                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased')),
-                 ADD CONSTRAINT registry_idempotency_result_shape CHECK (
-                     (result_kind = 'record' AND record_reference IS NOT NULL
-                         AND record_revision IS NOT NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'batch' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NOT NULL
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'application' AND record_reference IS NOT NULL
-                         AND record_revision IS NOT NULL AND result_count IS NOT NULL
-                         AND result_count BETWEEN 1 AND 16
-                         AND proposal_version IS NOT NULL)
-                     OR
-                     (result_kind = 'immediate_action' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NOT NULL
-                         AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
-                         AND proposal_version IS NULL)
-                     OR
-                     (result_kind = 'erased' AND record_reference IS NULL
-                         AND record_revision IS NULL AND result_count IS NULL
-                         AND proposal_version IS NULL)
-                 );",
-        ))
-        .await
-        .map_err(|_| MutationError::Unavailable)?;
-    // `CREATE TABLE IF NOT EXISTS` does not evolve databases activated by an
-    // earlier Base Registry Engine build, so the idempotency result
-    // constraints are installed under explicit existence guards.
-    migration
-        .batch_execute(&format!(
-            "ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_check;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values;
-             ALTER TABLE registry_internal.registry_idempotency
-                 DROP CONSTRAINT IF EXISTS registry_idempotency_check;
-             DO $registry_idempotency_upgrade$
-             BEGIN
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'registry_internal.registry_idempotency'::regclass
-                        AND conname = 'registry_idempotency_result_kind_values'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_idempotency
-                         ADD CONSTRAINT registry_idempotency_result_kind_values
-                         CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased'));
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'registry_internal.registry_idempotency'::regclass
-                        AND conname = 'registry_idempotency_result_shape'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_idempotency
-                         ADD CONSTRAINT registry_idempotency_result_shape CHECK (
-                             (result_kind = 'record' AND record_reference IS NOT NULL
-                                 AND record_revision IS NOT NULL AND result_count IS NULL
-                                 AND proposal_version IS NULL)
-                             OR
-                             (result_kind = 'batch' AND record_reference IS NULL
-                                 AND record_revision IS NULL AND result_count IS NOT NULL
-                                 AND proposal_version IS NULL)
-                             OR
-                             (result_kind = 'application' AND record_reference IS NOT NULL
-                                 AND record_revision IS NOT NULL AND result_count IS NOT NULL
-                                 AND result_count BETWEEN 1 AND 16
-                                 AND proposal_version IS NOT NULL)
-                             OR
-                             (result_kind = 'immediate_action' AND record_reference IS NULL
-                                 AND record_revision IS NULL AND result_count IS NOT NULL
-                                 AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
-                                 AND proposal_version IS NULL)
-                             OR
-                             (result_kind = 'erased' AND record_reference IS NULL
-                                 AND record_revision IS NULL AND result_count IS NULL
-                                 AND proposal_version IS NULL)
-                         );
-                 END IF;
-             END
-             $registry_idempotency_upgrade$;",
+                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));",
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;

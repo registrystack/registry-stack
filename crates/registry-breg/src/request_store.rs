@@ -57,13 +57,6 @@ pub(crate) async fn install(
              PRIMARY KEY (request_entity_id, request_id)
          );
          ALTER TABLE registry_internal.registry_request_state
-             ADD COLUMN IF NOT EXISTS detail_erased_at timestamptz,
-             DROP COLUMN IF EXISTS review_completed_at,
-             DROP CONSTRAINT IF EXISTS registry_request_state_state_check;
-         ALTER TABLE registry_internal.registry_request_state
-             ADD CONSTRAINT registry_request_state_state_check CHECK (state IN
-                 ('draft','submitted','cancelled','applied'));
-         ALTER TABLE registry_internal.registry_request_state
              DROP CONSTRAINT IF EXISTS registry_request_state_detail_erasure_terminal;
          ALTER TABLE registry_internal.registry_request_state
              ADD CONSTRAINT registry_request_state_detail_erasure_terminal CHECK (

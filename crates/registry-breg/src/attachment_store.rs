@@ -43,8 +43,6 @@ pub(crate) async fn install(
             verification_policy text NOT NULL DEFAULT 'disabled' CHECK (verification_policy <> ''),
             pinned_at timestamptz NOT NULL DEFAULT transaction_timestamp()
         );
-        ALTER TABLE registry_internal.registry_attachment_storage_binding
-            ADD COLUMN IF NOT EXISTS verification_policy text NOT NULL DEFAULT 'disabled';
         CREATE TABLE IF NOT EXISTS registry_internal.registry_attachment_blobs (
             sha256 text PRIMARY KEY CHECK (sha256 ~ '^[0-9a-f]{64}$'),
             byte_size bigint NOT NULL CHECK (byte_size BETWEEN 0 AND 16777216),
@@ -56,13 +54,6 @@ pub(crate) async fn install(
             CHECK ((backend_id = 'database' AND content IS NOT NULL AND octet_length(content) = byte_size)
                 OR (backend_id <> 'database' AND content IS NULL))
         );
-        ALTER TABLE registry_internal.registry_attachment_blobs
-            ADD COLUMN IF NOT EXISTS deletion_checked_at timestamptz;
-        ALTER TABLE registry_internal.registry_attachment_blobs
-            DROP CONSTRAINT IF EXISTS registry_attachment_blobs_state_check;
-        ALTER TABLE registry_internal.registry_attachment_blobs
-            ADD CONSTRAINT registry_attachment_blobs_state_check
-            CHECK (state IN ('staged','live','delete_pending','delete_confirmed'));
         CREATE TABLE IF NOT EXISTS registry_internal.registry_attachment_verification (
             sha256 text NOT NULL REFERENCES registry_internal.registry_attachment_blobs ON DELETE CASCADE,
             policy_digest text NOT NULL CHECK (policy_digest <> 'disabled' AND policy_digest <> ''),

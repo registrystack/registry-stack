@@ -1622,34 +1622,3 @@ async fn the_runtime_role_cannot_rewrite_or_remove_the_instance_claim() {
     drop(runtime);
     runtime_task.abort();
 }
-
-/// A run table created before the authority attempt outcome existed accepts
-/// it after the next schema install, so a run blocked by its authority on an
-/// upgraded registry records the outcome instead of failing the chunk.
-#[tokio::test]
-async fn an_upgraded_run_table_records_the_authority_attempt_outcome() {
-    let harness = Harness::create().await;
-    let (migration, migration_task) = harness.database.connect_migration().await;
-    migration
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_ingestion_runs
-                 DROP CONSTRAINT registry_ingestion_runs_attempt_values,
-                 ADD CONSTRAINT registry_ingestion_runs_attempt_values
-                 CHECK (last_attempt_outcome IS NULL OR last_attempt_outcome IN
-                     ('committed', 'replayed', 'invalid_item', 'refused',
-                      'binding_changed', 'chunk_mismatch', 'run_not_open', 'unavailable'))",
-        )
-        .await
-        .expect("the test restores the earlier attempt vocabulary");
-    install_mutation_schema(&migration, &harness.database.runtime_role, false)
-        .await
-        .expect("the install upgrades the attempt vocabulary");
-    migration_task.abort();
-
-    let authority = harness.open("widget", "loader", 10, &[]).await;
-    let load = plan("upgraded-attempt-vocabulary", 6);
-    let run_id = harness.created_run("widgets", "loader", &load).await;
-    harness.committed_chunk(&run_id, &load, 0).await;
-    harness.close(authority.authority_id).await;
-    harness.blocked_chunk(&run_id, &load, 1).await;
-}

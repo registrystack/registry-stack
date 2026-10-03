@@ -193,10 +193,8 @@ impl ImportAuthorityCloseRequest<'_> {
     }
 }
 
-/// KERNEL INTERNAL SCHEMA MIGRATION (import authorities): creates
-/// `registry_internal.registry_import_authorities` and its runtime grants.
-/// The ingestion-run half of the same migration lives in
-/// `ingestion_store::install`. Both are additive and idempotent.
+/// Creates `registry_internal.registry_import_authorities` with its runtime
+/// grants and row-level policies. Idempotent.
 pub(crate) async fn install(
     migration: &impl tokio_postgres::GenericClient,
     runtime_role: &SqlIdentifier,
