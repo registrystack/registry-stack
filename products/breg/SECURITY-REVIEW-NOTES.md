@@ -209,7 +209,7 @@ state, and the instance claim.
    `real_postgres_package_startup_apply_failure_and_old_process_are_closed`,
    `local_unsigned_package_rederives_every_artifact_and_refuses_filesystem_tampering`.
    `crates/registry-breg/tests/postgres_package/fingerprint.rs`:
-   `legacy_fingerprint_starts_and_upgrades_without_rewriting_package_bytes`.
+   `package_fingerprint_starts_refuses_drift_and_upgrades_without_rewriting_package_bytes`.
    `crates/registry-breg/tests/postgres_migration.rs`:
    `real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing`.
 
