@@ -1431,10 +1431,6 @@ fn predecessor_package_derives_legacy_temporal_value_kind_from_signed_fields() {
         .find_map(|operation| operation.temporal.as_ref())
         .expect("temporal query is retained in predecessor baseline");
     assert_eq!(serde_json::to_value(temporal.value_kind).unwrap(), "date");
-    assert!(
-        temporal.scope_fields.is_empty(),
-        "deprecated predecessor query scopes are planning-normalized"
-    );
     let successor_module = module_bytes(PlanChoice::TemporalSchema);
     let successor_module = parse_module_yaml(&successor_module).expect("successor module parses");
     let successor = prepare_package(build_request(BuildRequestParts {

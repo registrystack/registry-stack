@@ -6150,10 +6150,6 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
         .expect("temporal declaration is preserved in the compiled model");
     assert_eq!(temporal.start_field, "valid-from");
     assert_eq!(temporal.end_field, "valid-to");
-    assert!(
-        temporal.scope_fields.is_empty(),
-        "new compiled temporal metadata does not own exclusion scope"
-    );
 
     let operations = &compiled.queries().operations;
     let route = compiled
@@ -6247,10 +6243,6 @@ fn compiled_query_inventory_is_profile_scoped_bounded_and_temporal() {
             .expect("temporal query carries a fixed temporal binding");
         assert_eq!(binding.start_field, "valid-from");
         assert_eq!(binding.end_field, "valid-to");
-        assert!(
-            binding.scope_fields.is_empty(),
-            "new query temporal metadata does not own exclusion scope"
-        );
         assert_eq!(
             binding.semantics,
             CompiledQueryTemporalSemantics::StartInclusiveEndExclusive
@@ -6394,14 +6386,7 @@ fn temporal_validity_compiles_without_non_overlap_constraint() {
     .expect("temporal validity does not require non-overlap");
     let entity = &compiled.entities()["membership"];
     assert!(entity.constraints.is_empty());
-    assert_eq!(
-        entity
-            .temporal
-            .as_ref()
-            .expect("temporal metadata is compiled")
-            .scope_fields,
-        Vec::<String>::new()
-    );
+    assert!(entity.temporal.is_some(), "temporal metadata is compiled");
     assert!(compiled.ddl().statements.iter().any(|statement| {
         statement.id == "entity.membership.constraint.temporal-order"
             && statement.sql.contains(" IS NULL OR ")
@@ -6565,7 +6550,6 @@ fn snapshot_operation_is_authenticated_stored_field_history_contract() {
         .expect("temporal entities allow snapshot validAt");
     assert_eq!(temporal.start_field, "valid-from");
     assert_eq!(temporal.end_field, "valid-to");
-    assert!(temporal.scope_fields.is_empty());
 
     let snapshot_metadata = compiled
         .metadata()

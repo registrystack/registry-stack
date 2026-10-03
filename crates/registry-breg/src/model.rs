@@ -1101,10 +1101,6 @@ pub struct CompiledGeoJsonBinding {
 pub struct CompiledTemporal {
     pub start_field: String,
     pub end_field: String,
-    /// Deprecated predecessor compatibility. New compiled temporal semantics do
-    /// not derive query scope or exclusion policy from this field.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scope_fields: Vec<String>,
 }
 
 impl From<TemporalSource> for CompiledTemporal {
@@ -1112,7 +1108,6 @@ impl From<TemporalSource> for CompiledTemporal {
         Self {
             start_field: source.start_field,
             end_field: source.end_field,
-            scope_fields: Vec::new(),
         }
     }
 }
@@ -1380,10 +1375,6 @@ pub struct CompiledQueryTemporalBinding {
     pub start_field: String,
     pub end_field: String,
     pub value_kind: CompiledQueryTemporalValueKind,
-    /// Deprecated predecessor compatibility. New query bindings leave this
-    /// empty and generated contracts do not expose it as temporal semantics.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scope_fields: Vec<String>,
     pub semantics: CompiledQueryTemporalSemantics,
 }
 

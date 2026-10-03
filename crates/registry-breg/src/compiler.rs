@@ -6973,7 +6973,6 @@ fn temporal_binding(
         start_field: temporal.start_field.clone(),
         end_field: temporal.end_field.clone(),
         value_kind,
-        scope_fields: Vec::new(),
         semantics: CompiledQueryTemporalSemantics::StartInclusiveEndExclusive,
     })
 }
