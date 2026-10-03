@@ -57,9 +57,6 @@ use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
 
 pub const PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v2";
-/// The manifest format that bound one environment and carried signatures. It
-/// is recognized only to refuse it with the command that rebuilds it.
-const LEGACY_PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v1";
 pub const COMPILER_ID: &str = "breg";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
 pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -674,10 +671,6 @@ pub enum PackageError {
     /// not secrets, so the refusal names them.
     #[error("{0}")]
     ExpectedDigestMismatch(registry_platform_config::blocks::PackageDigestMismatch),
-    /// The package was built in the manifest format that bound one
-    /// environment and carried signatures. The same sources rebuild it.
-    #[error("{}", LEGACY_PACKAGE_FORMAT)]
-    LegacyFormat,
     #[error("the package identity binding is invalid")]
     Binding,
     #[error("the package compiler derivation failed")]
@@ -694,10 +687,6 @@ pub enum PackageError {
 }
 
 pub type Result<T> = std::result::Result<T, PackageError>;
-
-/// The operator-facing refusal for [`PackageError::LegacyFormat`].
-pub const LEGACY_PACKAGE_FORMAT: &str =
-    "the package uses the retired package/v1 manifest format; rebuild it with `bregctl package`";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageSourceFile {
@@ -3615,13 +3604,9 @@ fn bind_shared_envelope_files(
     Ok(())
 }
 
-/// Parse a package manifest, refusing the retired `package/v1` format with
-/// the rebuild instruction before its shape is read.
+/// Parse a package manifest, refusing any api version other than the one
+/// this release writes.
 fn parse_package_envelope(bytes: &[u8]) -> Result<PackageEnvelope> {
-    let value = parse_json_strict(bytes).map_err(|_| PackageError::CanonicalJson)?;
-    if value.get("apiVersion").and_then(Value::as_str) == Some(LEGACY_PACKAGE_API_VERSION) {
-        return Err(PackageError::LegacyFormat);
-    }
     let envelope: PackageEnvelope = parse_canonical(bytes)?;
     if envelope.api_version != PACKAGE_API_VERSION
         || envelope.manifest.files.is_empty()

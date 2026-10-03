@@ -75,10 +75,10 @@ async fn a_refused_package_keeps_the_cause_that_refused_it() {
     };
 
     let other = StartupFixture::new();
-    let legacy = PackageFixture::build(&other.root);
-    legacy.rewrite_as_retired_format();
-    let retired = match prepare(&other.write_config(&legacy)).await {
-        Ok(_) => panic!("package in the retired manifest format prepared"),
+    let unknown = PackageFixture::build(&other.root);
+    unknown.rewrite_with_unknown_api_version();
+    let refused = match prepare(&other.write_config(&unknown)).await {
+        Ok(_) => panic!("package with an unknown manifest api version prepared"),
         Err(error) => error,
     };
 
@@ -87,15 +87,10 @@ async fn a_refused_package_keeps_the_cause_that_refused_it() {
         StartupError::PackageEnvelopeRefused(SHARED_PACKAGE_TAMPER.to_owned())
     );
     assert_eq!(
-        retired,
-        StartupError::PackageRefused(PackageError::LegacyFormat)
+        refused,
+        StartupError::PackageRefused(PackageError::Integrity)
     );
-    assert_eq!(
-        PackageError::LegacyFormat.to_string(),
-        "the package uses the retired package/v1 manifest format; rebuild it with `bregctl \
-package`"
-    );
-    assert_ne!(tampered, retired);
+    assert_ne!(tampered, refused);
 }
 
 struct StartupFixture {
@@ -251,19 +246,19 @@ impl PackageFixture {
         Self { root }
     }
 
-    /// Rewrite the published manifest under the retired package/v1 api
-    /// version and reseal the sum file, so only the manifest format differs.
-    fn rewrite_as_retired_format(&self) {
+    /// Rewrite the published manifest under an api version this release does
+    /// not read and reseal the sum file, so only the manifest format differs.
+    fn rewrite_with_unknown_api_version(&self) {
         let manifest_path = self.root.join("package.json");
         let manifest = fs::read_to_string(&manifest_path).expect("manifest reads");
-        let retired = manifest.replacen(
+        let unknown = manifest.replacen(
             "registry.registrystack.org/package/v2",
             "registry.registrystack.org/package/v1",
             1,
         );
-        assert_ne!(retired, manifest, "the manifest names its api version");
+        assert_ne!(unknown, manifest, "the manifest names its api version");
         fs::remove_file(&manifest_path).expect("manifest removes");
-        fs::write(&manifest_path, retired).expect("retired manifest writes");
+        fs::write(&manifest_path, unknown).expect("rewritten manifest writes");
         fs::remove_file(self.root.join(SUM_FILE)).expect("sum file removes");
         write_sum_file(
             &self.root,
@@ -271,7 +266,7 @@ impl PackageFixture {
             &PackageLimits::default(),
             "bregctl package",
         )
-        .expect("sum file reseals the retired manifest");
+        .expect("sum file reseals the rewritten manifest");
     }
 }
 

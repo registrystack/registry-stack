@@ -620,7 +620,6 @@ mod tests {
             PackageError::MigrationPlan,
             PackageError::Permissions,
             PackageError::Envelope,
-            PackageError::LegacyFormat,
         ];
         let mut messages = HashSet::new();
         for cause in &causes {
