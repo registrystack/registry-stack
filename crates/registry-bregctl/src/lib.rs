@@ -235,7 +235,7 @@ enum FieldEncryptionCommand {
 #[derive(Debug, Args)]
 struct FieldEncryptionKeygenArgs {
     /// Absolute output path for the base64 data key (written 0600, parents 0700).
-    #[arg(long, alias = "out")]
+    #[arg(long)]
     output: PathBuf,
 }
 
@@ -14112,6 +14112,13 @@ mod tests {
             // than the one named, so the two forms do not combine.
             vec!["bregctl", "dev", "tutorial-work/project", "stop"],
             vec!["bregctl", "dev", "one", "two"],
+            vec![
+                "bregctl",
+                "dev",
+                "tutorial-work/project",
+                "--clients",
+                "clients.yaml",
+            ],
         ] {
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
         }
@@ -15863,6 +15870,15 @@ mod field_encryption_keygen_tests {
             fs::read_to_string(&output).expect("the existing file reads"),
             EXISTING,
             "an existing data key file is never overwritten"
+        );
+    }
+
+    #[test]
+    fn keygen_names_its_destination_only_with_output() {
+        assert!(Cli::try_parse_from(keygen_arguments(Path::new("/dek"))).is_ok());
+        assert!(
+            Cli::try_parse_from(["bregctl", "field-encryption", "keygen", "--out", "/dek"])
+                .is_err()
         );
     }
 
