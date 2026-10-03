@@ -61,6 +61,7 @@ def metadata() -> dict:
         "titleFields": ["legal-name"],
         "fields": [field, sequence_field],
         "readableFields": ["legal-name", "sequence"],
+        "readableRequestFields": [],
         "createWritableFields": ["legal-name", "sequence"],
         "patchWritableFields": [],
         "selectors": [],

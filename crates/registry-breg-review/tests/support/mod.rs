@@ -505,6 +505,7 @@ fn operation(identifier: &str, method: &str, path: &str, kind: &str, request: Va
         "titleFields": ["new-address-line"],
         "fields": request_fields(),
         "readableFields": REQUEST_READABLE,
+        "readableRequestFields": [],
         "createWritableFields": [],
         "patchWritableFields": [],
         "selectors": [],
@@ -532,6 +533,7 @@ fn target_operation() -> Value {
             field("postal-code", "postalCode", "Postal code")
         ],
         "readableFields": TARGET_READABLE,
+        "readableRequestFields": [],
         "createWritableFields": [],
         "patchWritableFields": [],
         "selectors": [],

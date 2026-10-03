@@ -114,8 +114,10 @@ Parsed metadata retains selectors, read paths, vocabulary labels, reference
 operations, actions, and change-request capabilities. Descriptions grant no
 authority. `select_immediate_action`, `select_batch`, and `select_tombstone`
 require complete executable contracts bound to the source, profile, and package.
-Optional descriptors may be absent on older servers; absent executable contracts
-produce an unsupported selection error. Upgrade clients and servers together
+Every operation lists its `readableRequestFields`, empty when the selected
+profile holds no request metadata grant; metadata without it is refused. A
+descriptor the engine does not serve is absent, and an absent executable contract
+produces an unsupported selection error. Upgrade clients and servers together
 because older strict metadata decoders can reject added descriptors.
 
 Immediate action target conditions are an explicit read before invocation;

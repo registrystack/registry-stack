@@ -51,7 +51,7 @@ function lookupOperation() {
   return {id:'records.item.lookup', method:'POST', path:'/v1/records/items:lookup', operation:'lookup',
     sourceEntity:'item', responseEntity:'item', accessProfile:profile, requiredCapabilities:[],
     entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields,
-    readableFields:fields.map(f=>f.id), createWritableFields:[], patchWritableFields:[],
+    readableFields:fields.map(f=>f.id), readableRequestFields:[], createWritableFields:[], patchWritableFields:[],
     selectors:[{id:'by-wide-value',label:'By wide value',valueOrigin:'request',
       fields:[{id:'wide',apiName:'wide',label:'Wide',schema:{type:'integer'},required:true}],requestFields:['wide']}],
     readPath:{id:'related-items',label:'Related items'}, query:null,
@@ -64,7 +64,7 @@ function lifecycleOperation() {
     operation:'apply_request', sourceEntity:'item', responseEntity:'item', accessProfile:profile,
     requiredCapabilities:['change_request_lifecycle'],
     entityLabel:'Item', identifier:{apiName:'id',location:'envelope'}, titleFields:[], fields:[],
-    readableFields:[], createWritableFields:[], patchWritableFields:[], selectors:[], query:null,
+    readableFields:[], readableRequestFields:[], createWritableFields:[], patchWritableFields:[], selectors:[], query:null,
     request:{fieldNames:'api',queryParameters:[],body:'change_request_action',contentType:'application/json',
       idempotencyKeyRequired:true,ifMatchRequired:true,mutationSemantics:'change_request_lifecycle',
       schema:{

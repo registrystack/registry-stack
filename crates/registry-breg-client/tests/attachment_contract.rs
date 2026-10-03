@@ -68,6 +68,7 @@ fn operation(
         "titleFields": ["legal-name"],
         "fields": [field("legal-name", "legalName")],
         "readableFields": ["legal-name"],
+        "readableRequestFields": [],
         "createWritableFields": create_writable,
         "patchWritableFields": patch_writable,
         "selectors": [],

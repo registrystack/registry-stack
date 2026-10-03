@@ -65,6 +65,7 @@ def operation(identifier: str, method: str, path: str, kind: str, request: dict)
         "titleFields": ["legal-name"],
         "fields": [field()],
         "readableFields": ["legal-name"],
+        "readableRequestFields": [],
         "createWritableFields": [],
         "patchWritableFields": [],
         "selectors": [],

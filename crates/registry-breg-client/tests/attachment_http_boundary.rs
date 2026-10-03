@@ -242,6 +242,7 @@ fn operation(identifier: &str, method: &str, path: &str, kind: &str, request: Va
         "titleFields": ["legal-name"],
         "fields": fields(),
         "readableFields": ["legal-name", SLOT],
+        "readableRequestFields": [],
         "createWritableFields": [],
         "patchWritableFields": ["legal-name"],
         "selectors": [],

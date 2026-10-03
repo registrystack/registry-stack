@@ -101,6 +101,7 @@
           }
         ],
         "readableFields": ["legal-name", "supporting-file"],
+        "readableRequestFields": [],
         "createWritableFields": [],
         "patchWritableFields": ["legal-name"],
         "selectors": [],
@@ -202,6 +203,7 @@
           }
         ],
         "readableFields": ["legal-name", "supporting-file"],
+        "readableRequestFields": [],
         "createWritableFields": [],
         "patchWritableFields": [],
         "selectors": [],

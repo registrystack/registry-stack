@@ -85,7 +85,7 @@ fn metadata() -> Value {
             "entityLabel": "Companies", "identifier": {"apiName": "id", "location": "envelope"},
             "titleFields": ["legal-name"],
             "fields": [{"id":"legal-name","apiName":"legalName","label":"Legal name","schema":{"type":"string"},"required":true,"nullable":true,"readOnly":false,"removable":true}],
-            "readableFields": ["legal-name"], "createWritableFields": [], "patchWritableFields": [],
+            "readableFields": ["legal-name"], "readableRequestFields": [], "createWritableFields": [], "patchWritableFields": [],
             "selectors": [], "query": null,
             "request": {
                 "fieldNames": "api", "queryParameters": [], "body": "change_request_action",
