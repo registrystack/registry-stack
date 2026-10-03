@@ -1866,6 +1866,17 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Keep the bregctl dev database port out of the source port range
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 55432, the `bregctl dev` default database port, is inside the
+          # runner's ephemeral range. A loopback client socket from the steps
+          # below can take it as its source port and hold it through
+          # TIME_WAIT, and the tutorial gate's first start then refuses it as
+          # occupied.
+          sudo sysctl -w net.ipv4.ip_local_reserved_ports=55432
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
