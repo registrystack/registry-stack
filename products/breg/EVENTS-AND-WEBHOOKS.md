@@ -129,10 +129,9 @@ settle, before the upgrade: every delivery captured under the earlier body
 spends its whole retry budget on attempts that cannot succeed.
 
 This contract does not reinterpret delivery history created by the earlier
-experimental webhook shape. An empty pre-Version 1 internal schema upgrades
-automatically. A database containing pre-Version 1 webhook history requires an
-explicit operator migration before this version starts, even when those rows
-are terminal; Base Registry Engine does not invent CloudEvents metadata for them.
+experimental webhook shape. The delivery tables are read only as the previous
+release wrote them; Base Registry Engine does not upgrade an older delivery
+schema in place and does not invent CloudEvents metadata for its rows.
 
 ### Wire format
 
