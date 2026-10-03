@@ -32,7 +32,6 @@ RUNTIME_FUNCTION_NAMES = {
     "select_evidence_alternative",
     "select_evidence_service",
     "select_exact",
-    "select_relay_service",
     "validate_selection",
     "validate_selection_structure",
 }

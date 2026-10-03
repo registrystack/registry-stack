@@ -250,7 +250,7 @@ origins:
         let root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/discovery/fixtures/project");
         let checked = check_project(&root, false).expect("shipped project checks offline");
-        assert_eq!(checked.origins.len(), 2);
+        assert_eq!(checked.origins.len(), 1);
         assert_eq!(checked.mappings.len(), 1);
     }
 

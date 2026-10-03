@@ -18,8 +18,6 @@ use crate::{
 #[serde(tag = "kind", content = "id", rename_all = "kebab-case")]
 pub enum MatchedCapability {
     EvidenceType(String),
-    SemanticClass(String),
-    OperationFamily(String),
 }
 
 /// Complete, inert provenance for one resolved Evidence Type AND-list.
@@ -137,62 +135,6 @@ impl EvidenceSelectionRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RelayCapabilityMatch {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub semantic_class_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation_family_id: Option<String>,
-}
-
-impl RelayCapabilityMatch {
-    #[must_use]
-    pub fn for_semantic_class(semantic_class_id: impl Into<String>) -> Self {
-        Self {
-            semantic_class_id: Some(semantic_class_id.into()),
-            operation_family_id: None,
-        }
-    }
-
-    #[must_use]
-    pub fn for_operation_family(operation_family_id: impl Into<String>) -> Self {
-        Self {
-            semantic_class_id: None,
-            operation_family_id: Some(operation_family_id.into()),
-        }
-    }
-
-    #[must_use]
-    pub fn with_semantic_class(mut self, semantic_class_id: impl Into<String>) -> Self {
-        self.semantic_class_id = Some(semantic_class_id.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_operation_family(mut self, operation_family_id: impl Into<String>) -> Self {
-        self.operation_family_id = Some(operation_family_id.into());
-        self
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RelaySelectionRequest {
-    pub record_id: String,
-    pub capability_match: RelayCapabilityMatch,
-}
-
-impl RelaySelectionRequest {
-    #[must_use]
-    pub fn new(record_id: impl Into<String>, capability_match: RelayCapabilityMatch) -> Self {
-        Self {
-            record_id: record_id.into(),
-            capability_match,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SelectionRequest {
     pub record_id: String,
     pub matched_capability: MatchedCapability,
@@ -226,8 +168,6 @@ pub struct ServiceSelection {
     pub matched_capability: MatchedCapability,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_resolution: Option<EvidenceResolutionContext>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay_capability_match: Option<RelayCapabilityMatch>,
     pub origin_id: String,
     pub origin_url: String,
     pub origin_content_digest: String,
@@ -301,49 +241,12 @@ impl EvidenceServiceSelection {
     }
 
     pub fn matched_evidence_type_id(&self) -> Result<&str, DiscoveryClientError> {
-        let MatchedCapability::EvidenceType(id) = &self.0.matched_capability else {
-            return Err(DiscoveryClientError::Protocol);
-        };
+        let MatchedCapability::EvidenceType(id) = &self.0.matched_capability;
         Ok(id)
     }
 }
 
 impl std::ops::Deref for EvidenceServiceSelection {
-    type Target = ServiceSelection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(transparent)]
-pub struct RelayServiceSelection(ServiceSelection);
-
-impl RelayServiceSelection {
-    #[must_use]
-    pub fn selection(&self) -> &ServiceSelection {
-        &self.0
-    }
-
-    #[must_use]
-    pub fn into_selection(self) -> ServiceSelection {
-        self.0
-    }
-
-    pub fn advertised_base_url(&self) -> Result<Url, DiscoveryClientError> {
-        self.0.advertised_base_url()
-    }
-
-    pub fn capability_match(&self) -> Result<&RelayCapabilityMatch, DiscoveryClientError> {
-        self.0
-            .relay_capability_match
-            .as_ref()
-            .ok_or(DiscoveryClientError::Protocol)
-    }
-}
-
-impl std::ops::Deref for RelayServiceSelection {
     type Target = ServiceSelection;
 
     fn deref(&self) -> &Self::Target {
@@ -366,11 +269,6 @@ pub trait ServiceSearchSelectionExt {
         &self,
         request: EvidenceSelectionRequest,
     ) -> Result<EvidenceServiceSelection, DiscoveryClientError>;
-
-    fn select_relay(
-        &self,
-        request: RelaySelectionRequest,
-    ) -> Result<RelayServiceSelection, DiscoveryClientError>;
 }
 
 impl ServiceSearchSelectionExt for ServiceSearchResponse {
@@ -431,7 +329,6 @@ impl ServiceSearchSelectionExt for ServiceSearchResponse {
             operation_family_ids: service.operation_family_ids.clone(),
             matched_capability: request.matched_capability,
             evidence_resolution: None,
-            relay_capability_match: None,
             origin_id: service.origin_id.clone(),
             origin_url: service.origin_url.clone(),
             origin_content_digest: service.origin_content_digest.clone(),
@@ -494,41 +391,6 @@ impl ServiceSearchSelectionExt for ServiceSearchResponse {
         selection.evidence_resolution = request.resolution;
         Ok(EvidenceServiceSelection(selection))
     }
-
-    fn select_relay(
-        &self,
-        request: RelaySelectionRequest,
-    ) -> Result<RelayServiceSelection, DiscoveryClientError> {
-        let semantic_class_id = request.capability_match.semantic_class_id.as_deref();
-        let operation_family_id = request.capability_match.operation_family_id.as_deref();
-        if semantic_class_id.is_none() && operation_family_id.is_none() {
-            return Err(DiscoveryClientError::Query);
-        }
-        if semantic_class_id.is_some_and(|id| !valid_uri_identifier(id))
-            || operation_family_id.is_some_and(|id| !valid_uri_identifier(id))
-        {
-            return Err(DiscoveryClientError::Query);
-        }
-        let matched_capability = semantic_class_id
-            .map(|id| MatchedCapability::SemanticClass(id.to_owned()))
-            .or_else(|| {
-                operation_family_id.map(|id| MatchedCapability::OperationFamily(id.to_owned()))
-            })
-            .ok_or(DiscoveryClientError::Query)?;
-        let mut selection = self.select_exact(SelectionRequest {
-            record_id: request.record_id,
-            matched_capability,
-            mapping_revision: None,
-        })?;
-        if semantic_class_id.is_some_and(|id| !selection.semantic_class_ids.iter().any(|v| v == id))
-            || operation_family_id
-                .is_some_and(|id| !selection.operation_family_ids.iter().any(|v| v == id))
-        {
-            return Err(DiscoveryClientError::CapabilityMismatch);
-        }
-        selection.relay_capability_match = Some(request.capability_match);
-        Ok(RelayServiceSelection(selection))
-    }
 }
 
 fn resolution_context(
@@ -578,12 +440,6 @@ fn capability_matches(service: &ServiceRecord, capability: &MatchedCapability) -
     match capability {
         MatchedCapability::EvidenceType(id) => {
             service.service_kind == ServiceKind::Evidence && service.evidence_type_ids.contains(id)
-        }
-        MatchedCapability::SemanticClass(id) => {
-            service.service_kind == ServiceKind::Relay && service.semantic_class_ids.contains(id)
-        }
-        MatchedCapability::OperationFamily(id) => {
-            service.service_kind == ServiceKind::Relay && service.operation_family_ids.contains(id)
         }
     }
 }
@@ -641,55 +497,21 @@ pub fn validate_service_selection_structure(
     {
         return Err(DiscoveryClientError::Protocol);
     }
-    match (
-        selection.service_kind,
-        &selection.evidence_resolution,
-        &selection.relay_capability_match,
-    ) {
-        (ServiceKind::Evidence, Some(resolution), None) => {
-            validate_resolution(resolution).map_err(|_| DiscoveryClientError::Protocol)?;
-            let MatchedCapability::EvidenceType(evidence_type_id) = &selection.matched_capability
-            else {
-                return Err(DiscoveryClientError::Protocol);
-            };
-            if selection.mapping_revision.as_deref() != Some(&resolution.mapping_revision)
-                || !resolution
-                    .evidence_type_ids
-                    .iter()
-                    .any(|required| required == evidence_type_id)
-                || resolution
-                    .jurisdiction
-                    .as_ref()
-                    .is_some_and(|jurisdiction| !selection.jurisdictions.contains(jurisdiction))
-            {
-                return Err(DiscoveryClientError::Protocol);
-            }
+    if let Some(resolution) = &selection.evidence_resolution {
+        validate_resolution(resolution).map_err(|_| DiscoveryClientError::Protocol)?;
+        let MatchedCapability::EvidenceType(evidence_type_id) = &selection.matched_capability;
+        if selection.mapping_revision.as_deref() != Some(&resolution.mapping_revision)
+            || !resolution
+                .evidence_type_ids
+                .iter()
+                .any(|required| required == evidence_type_id)
+            || resolution
+                .jurisdiction
+                .as_ref()
+                .is_some_and(|jurisdiction| !selection.jurisdictions.contains(jurisdiction))
+        {
+            return Err(DiscoveryClientError::Protocol);
         }
-        (ServiceKind::Evidence, None, None) => {}
-        (ServiceKind::Relay, None, Some(capabilities)) => {
-            if capabilities.semantic_class_id.is_none()
-                && capabilities.operation_family_id.is_none()
-                || capabilities.semantic_class_id.as_ref().is_some_and(|id| {
-                    !valid_uri_identifier(id) || !selection.semantic_class_ids.contains(id)
-                })
-                || capabilities.operation_family_id.as_ref().is_some_and(|id| {
-                    !valid_uri_identifier(id) || !selection.operation_family_ids.contains(id)
-                })
-                || match &selection.matched_capability {
-                    MatchedCapability::SemanticClass(id) => {
-                        capabilities.semantic_class_id.as_ref() != Some(id)
-                    }
-                    MatchedCapability::OperationFamily(id) => {
-                        capabilities.operation_family_id.as_ref() != Some(id)
-                    }
-                    MatchedCapability::EvidenceType(_) => true,
-                }
-            {
-                return Err(DiscoveryClientError::Protocol);
-            }
-        }
-        (ServiceKind::Relay, None, None) => {}
-        _ => return Err(DiscoveryClientError::Protocol),
     }
     Ok(())
 }
@@ -748,7 +570,6 @@ fn same_acceptance_subject(left: &ServiceSelection, right: &ServiceSelection) ->
         && left.operation_family_ids == right.operation_family_ids
         && left.matched_capability == right.matched_capability
         && left.evidence_resolution == right.evidence_resolution
-        && left.relay_capability_match == right.relay_capability_match
         && left.origin_id == right.origin_id
         && left.origin_url == right.origin_url
         && left.mapping_revision == right.mapping_revision
@@ -1043,63 +864,6 @@ mod tests {
     }
 
     #[test]
-    fn relay_selection_retains_the_exact_correlated_capability_tuple() {
-        let mut record = service();
-        record.service_kind = ServiceKind::Relay;
-        record.legal_issuer_id = None;
-        record.technical_provider_id = None;
-        record.registry_authority_id = Some("urn:registry-authority".into());
-        record.evidence_type_ids.clear();
-        record.semantic_class_ids =
-            vec!["urn:semantic:business".into(), "urn:semantic:person".into()];
-        record.operation_family_ids = vec!["urn:operation:list".into()];
-        refresh_binding_id(&mut record);
-        let expected_binding_id = record.binding_id.clone();
-        let response = ServiceSearchResponse {
-            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
-            items: vec![record],
-        };
-
-        let selection = response
-            .select_relay(RelaySelectionRequest {
-                record_id: "record-a".into(),
-                capability_match: RelayCapabilityMatch {
-                    semantic_class_id: Some("urn:semantic:business".into()),
-                    operation_family_id: Some("urn:operation:list".into()),
-                },
-            })
-            .expect("exact Relay binding selection");
-
-        assert_eq!(selection.selection().binding_id, expected_binding_id);
-        assert_eq!(
-            selection.selection().semantic_class_ids,
-            ["urn:semantic:business", "urn:semantic:person"]
-        );
-        assert_eq!(
-            selection.selection().operation_family_ids,
-            ["urn:operation:list"]
-        );
-        assert!(selection.selection().evidence_type_ids.is_empty());
-        assert_eq!(
-            selection.selection().relay_capability_match,
-            Some(RelayCapabilityMatch {
-                semantic_class_id: Some("urn:semantic:business".into()),
-                operation_family_id: Some("urn:operation:list".into()),
-            })
-        );
-        validate_service_selection_structure(selection.selection())
-            .expect("the Relay tuple revalidates structurally");
-
-        let mut persisted = selection.into_selection();
-        persisted.matched_capability =
-            MatchedCapability::SemanticClass("urn:semantic:person".into());
-        assert_eq!(
-            validate_service_selection_structure(&persisted),
-            Err(DiscoveryClientError::Protocol)
-        );
-    }
-
-    #[test]
     fn persisted_selection_refuses_binding_identity_drift() {
         let record = service();
         let response = ServiceSearchResponse {
@@ -1217,46 +981,6 @@ mod tests {
             assert_eq!(credentials_constructed, 0);
             assert_eq!(native_calls, 0);
         }
-
-        let mut relay = service();
-        relay.service_kind = ServiceKind::Relay;
-        relay.legal_issuer_id = None;
-        relay.technical_provider_id = None;
-        relay.registry_authority_id = Some("urn:registry-authority".into());
-        relay.evidence_type_ids.clear();
-        relay.semantic_class_ids = vec!["urn:semantic:business".into()];
-        relay.operation_family_ids =
-            vec!["urn:operation:list".into(), "urn:operation:search".into()];
-        refresh_binding_id(&mut relay);
-        let relay_response = ServiceSearchResponse {
-            catalog_revision: catalog_revision(std::slice::from_ref(&relay)).unwrap(),
-            items: vec![relay],
-        };
-        let relay_previous = relay_response
-            .select_relay(RelaySelectionRequest::new(
-                "record-a",
-                RelayCapabilityMatch::for_semantic_class("urn:semantic:business")
-                    .with_operation_family("urn:operation:list"),
-            ))
-            .expect("valid Relay tuple")
-            .into_selection();
-        let relay_current = relay_response
-            .select_relay(RelaySelectionRequest::new(
-                "record-a",
-                RelayCapabilityMatch::for_semantic_class("urn:semantic:business")
-                    .with_operation_family("urn:operation:search"),
-            ))
-            .expect("a changed Relay tuple remains structurally valid")
-            .into_selection();
-        assert_eq!(relay_previous.binding_id, relay_current.binding_id);
-        assert_eq!(
-            relay_previous.matched_capability,
-            relay_current.matched_capability
-        );
-        assert_eq!(
-            renew_unchanged_service_selection(&relay_previous, &relay_current),
-            Err(DiscoveryClientError::SelectionChanged)
-        );
     }
 
     #[test]
@@ -1316,6 +1040,36 @@ mod tests {
         let decoded: ServiceSelection =
             serde_json::from_slice(&encoded).expect("selection deserializes");
         assert_eq!(decoded, selection);
+    }
+
+    #[test]
+    fn pre_retirement_evidence_selection_keeps_its_wire_bytes_and_binding_identity() {
+        let fixture = include_bytes!(
+            "../../../products/discovery/fixtures/compatibility/pre-retirement-evidence-selection.json"
+        );
+        let fixture = fixture.strip_suffix(b"\n").unwrap_or(fixture);
+        let selection: ServiceSelection =
+            serde_json::from_slice(fixture).expect("the old Evidence selection decodes");
+
+        validate_service_selection_structure(&selection)
+            .expect("the old Evidence selection remains structurally valid");
+        assert!(selection.semantic_class_ids.is_empty());
+        assert!(selection.operation_family_ids.is_empty());
+        assert_eq!(
+            selection.binding_id,
+            "urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c"
+        );
+        assert_eq!(serde_json::to_vec(&selection).unwrap(), fixture);
+    }
+
+    #[test]
+    fn persisted_relay_selection_is_refused_by_the_current_wire_type() {
+        let fixture = include_bytes!(
+            "../../../products/discovery/fixtures/compatibility/pre-retirement-evidence-selection.json"
+        );
+        let mut value: serde_json::Value = serde_json::from_slice(fixture).unwrap();
+        value["serviceKind"] = serde_json::json!("relay");
+        assert!(serde_json::from_value::<ServiceSelection>(value).is_err());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 ## ADR-001: Discovery is an index, not a trust or invocation layer
 
 Discovery records are advertisements with origin provenance. An adopting
-application remains responsible for existing native Evidence or Relay trust
+application remains responsible for existing native Evidence trust
 configuration and invokes the provider directly. Discovery has no trust-store
 schema, credentials, provider proxy, or procedure model.
 
@@ -74,3 +74,15 @@ already owns; the catalog does not require an invented role.
 `registry-discovery-profile` owns provider-publication descriptions only. It
 does not own origins, fetched-byte digests, index records, mappings, revisions,
 HTTP routes, query filters, native clients, or provider routing.
+
+## ADR-006: Current implementation supports Evidence only
+
+The published `registry-discovery-v1alpha1` context, schema, and SHACL bytes
+remain immutable historical resources and continue to validate Relay profile
+fixtures. Current Rust publication, index, query, and client models support
+Evidence only. Their retained `semanticClassIds` and `operationFamilyIds` wire
+fields must be empty, preserving existing Evidence bytes and binding identity.
+
+A pre-retirement mixed index is rejected as a whole. Operators must remove
+Relay origins and rebuild the package rather than silently dropping records or
+serving a partial catalog.

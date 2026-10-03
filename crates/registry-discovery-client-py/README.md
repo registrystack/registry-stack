@@ -3,7 +3,7 @@
 Synchronous PyO3 binding for the bounded Rust `registry-discovery-client` SDK.
 It performs exact service search, Evidence Type resolution, and ambiguity-safe
 selection. A returned selection is inert public metadata. Apply local trust
-policy before calling its Evidence or Relay endpoint.
+policy before calling its Evidence endpoint.
 
 This crate publishes through the unified `registry-stack-client`
 distribution, which imports as `registry_client`. Install the exact client
@@ -220,10 +220,3 @@ capability, origin, or mapping context raises
 fresh selection. Both cases require explicit reselection and a new local
 acceptance decision; renewal never switches to another service or Evidence
 alternative automatically.
-
-Relay follows the same boundary with `search_relay_services` and
-`select_relay_service`. The selection retains both the semantic class and
-operation family. Apply exact local Relay pins with `accept_selection`, pass
-only `accepted.endpoint_url` to `registry_client.relay.RelayClient`, then use
-native Relay metadata to choose the concrete resource and operation. Discovery
-never invents route arguments.

@@ -5,6 +5,10 @@
     "bregDcatAp": false,
     "reason": "Registry Discovery implements a closed selected-term application profile, not the complete mandatory class and constraint sets of either application profile."
   },
+  "implementationSubset": {
+    "currentServiceKinds": ["evidence"],
+    "publishedProfileHistory": "The unchanged v1alpha1 context, schema, and SHACL resources also describe Relay for historical validation. Current Rust publication, index, query, and client contracts refuse Relay."
+  },
   "standards": [
     {"name": "DCAT", "version": "3", "status": "W3C Recommendation 2024-08-22", "url": "https://www.w3.org/TR/2024/REC-vocab-dcat-3-20240822/"},
     {"name": "DCAT-AP", "version": "3.0.1", "status": "Recommendation targeted for selected alignment", "url": "https://semiceu.github.io/DCAT-AP/releases/3.0.1/"},

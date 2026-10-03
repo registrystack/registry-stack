@@ -163,7 +163,7 @@ impl WireSchema for ServiceRecord {
                 ("serviceId", uri_identifier_schema()),
                 (
                     "serviceKind",
-                    json!({"type": "string", "enum": ["evidence", "relay"]}),
+                    json!({"type": "string", "enum": ["evidence"]}),
                 ),
                 ("title", text_schema()),
                 ("description", text_schema()),
@@ -176,8 +176,14 @@ impl WireSchema for ServiceRecord {
                 ("jurisdictions", service_identifier_list_schema(1)),
                 ("conformsTo", service_identifier_list_schema(1)),
                 ("evidenceTypeIds", service_identifier_list_schema(0)),
-                ("semanticClassIds", service_identifier_list_schema(0)),
-                ("operationFamilyIds", service_identifier_list_schema(0)),
+                (
+                    "semanticClassIds",
+                    bounded_array_schema(uri_identifier_schema(), 0, 0, true),
+                ),
+                (
+                    "operationFamilyIds",
+                    bounded_array_schema(uri_identifier_schema(), 0, 0, true),
+                ),
                 ("originId", identifier_schema()),
                 ("originUrl", public_url_schema()),
                 ("originContentDigest", digest_schema()),
@@ -347,8 +353,8 @@ fn service_parameters() -> Value {
             ("serviceId", uri_identifier_schema(), MAXIMUM_FILTER_VALUES),
             (
                 "serviceKind",
-                json!({"type": "string", "enum": ["evidence", "relay"]}),
-                2,
+                json!({"type": "string", "enum": ["evidence"]}),
+                1,
             ),
             (
                 "jurisdiction",
@@ -358,16 +364,6 @@ fn service_parameters() -> Value {
             ("conformsTo", uri_identifier_schema(), MAXIMUM_FILTER_VALUES),
             (
                 "evidenceType",
-                uri_identifier_schema(),
-                MAXIMUM_FILTER_VALUES,
-            ),
-            (
-                "semanticClass",
-                uri_identifier_schema(),
-                MAXIMUM_FILTER_VALUES,
-            ),
-            (
-                "operationFamily",
                 uri_identifier_schema(),
                 MAXIMUM_FILTER_VALUES,
             ),
@@ -584,7 +580,7 @@ mod tests {
         for parameter in parameters {
             let name = parameter["name"].as_str().unwrap();
             let expected = if name == "serviceKind" {
-                2
+                1
             } else {
                 MAXIMUM_FILTER_VALUES
             };

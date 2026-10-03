@@ -225,7 +225,7 @@ fn accepted_by_rust(contract: &str, document: &Value) -> bool {
 }
 
 #[test]
-fn every_positive_fixture_satisfies_draft_2020_12_and_the_closed_rust_parser() {
+fn current_fixtures_match_rust_while_historical_profile_fixtures_remain_schema_valid() {
     let validators = validators();
 
     for (contract, relative) in [
@@ -266,11 +266,19 @@ fn every_positive_fixture_satisfies_draft_2020_12_and_the_closed_rust_parser() {
             "{} must satisfy the profile Draft 2020-12 schema",
             path.display()
         );
-        assert!(
-            accepted_by_rust("profile", &document),
-            "{} must satisfy the closed profile parser",
-            path.display()
-        );
+        if path.file_name().and_then(|value| value.to_str()) == Some("evidence.jsonld") {
+            assert!(
+                accepted_by_rust("profile", &document),
+                "{} must satisfy the current Evidence-only Rust parser",
+                path.display()
+            );
+        } else {
+            assert!(
+                !accepted_by_rust("profile", &document),
+                "{} is a historical broad-profile oracle and must be refused by current Rust",
+                path.display()
+            );
+        }
     }
 }
 
