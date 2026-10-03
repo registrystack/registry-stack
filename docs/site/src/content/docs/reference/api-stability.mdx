@@ -113,15 +113,13 @@ new commands and flags) are minor-release material and are not breaking.
 
 The promise is backward compatibility: a new binary within a major line reads the wire data,
 config files, manifests, and persisted state written for any earlier release of that line.
-Every release documents a forward state path from its immediate predecessor.
-An upgrade that skips releases follows each sequential hop unless the target release explicitly
-certifies a direct path.
 
-The promise starts at `v0.33.0`. The one exception is v0.32 to v0.33: no adopter ran v0.32, so
-`v0.33.0` shipped without a forward state path from it, and state written by v0.32 or an earlier
-release has no supported upgrade.
+Before 1.0, persisted state has a narrower promise: a release reads only the state its
+immediate predecessor wrote, and documents the forward state path from that predecessor. If you
+run an older release, upgrade one release at a time, and complete each release's upgrade steps
+before you start the next. This release reads state written by `v0.38.0`, and no earlier release.
 
-{/* Evidence: release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR and FORWARD_PATH_EXCEPTION. */}
+{/* Evidence: release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR and check_forward_path(). */}
 
 The reverse is not promised. Relay and Evidence Gateway parse config with
 `deny_unknown_fields`, so a config file that uses keys introduced in a newer release fails to load
@@ -216,18 +214,13 @@ The promise is machine-checked where a checker exists:
   describes, and writes records, review work, and audit entries with them against disposable
   PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
   fails when captured domain data or stored revisions change, other captured views differ, or
-  retained tables lose rows. Base Registry Engine rebuilds and applies a successor before serving; its
-  package-bound ETags may change. Audit
+  retained tables lose rows. Base Registry Engine serves the predecessor's package, then applies an
+  additive successor and serves again; its package-bound ETags may change. Audit
   tables retired by this breaking upgrade must first be preserved in an archive whose row counts
   are checked. Old audit files are preserved separately from the new entry stream. It refuses to
-  start from a release before `v0.33.0`. Scheduling state is not rehearsed: the rehearsal verifies
-  release runtime binaries, and `v0.33.0` through `v0.37.0` shipped the Scheduling runtime only
-  as a container image. Its standalone runtime binary joins from `v0.38.0`.
-  Retiring Scheduling's audit outbox is covered instead by migration 8, which refuses while the
-  outbox holds unpublished rows, and by the operator archiving the old audit file, as
-  [Retention and persistent state](../../operate/retention-and-persistent-state/) describes.
+  start from a release before `v0.38.0`. Scheduling state is not rehearsed.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), and check_forward_path(); crates/registry-scheduling/src/store.rs, AUDIT_WRITER_MIGRATION_VERSION. */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), and check_forward_path(). */}
 
 A change that a gate flags as breaking lands only in a release whose version number permits
 it, together with the deprecation and migration steps required by the

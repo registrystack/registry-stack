@@ -36,9 +36,10 @@ rolling upgrade that mixes releases is not supported:
   process still running the previous package fails readiness until it restarts onto the successor.
   Plan the restart as part of the activation, not after it.
 
-A release promises a forward state path from its immediate predecessor only, starting at
-`v0.33.0`; skip no release without that release's notes certifying the direct path, and expect no
-reverse path. See [Compatibility direction](../../../reference/api-stability/#compatibility-direction).
+Before 1.0, a release reads only the state its immediate predecessor wrote, and there is no
+reverse path. If you run an older release, upgrade one release at a time, and finish this runbook
+for each release before you start the next. See
+[Compatibility direction](../../../reference/api-stability/#compatibility-direction).
 
 {/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
     crates/registry-casework-breg/src/lib.rs, same_release() and PeerVersionMismatch;
@@ -73,22 +74,11 @@ sequence on a restored copy first, as
    it with `bregctl apply --runtime-config FILE --package BUILD/package`, run `bregctl verify --runtime-config
    FILE`, and restart every `breg` process on the new binary; `bregctl status --runtime-config
    FILE` confirms what the database activated. A model change follows as its own successor; see
-   [Activate the successor](../../breg-changes/#activate-the-successor). From a release before
-   the activation ledger, this first `apply` adopts the database as it stands: `package.root`
-   and `--package` must both name the rebuilt package, which must describe the schema the
-   database runs, `plan` reports `activation` `adopted`, the ledger history the earlier release
-   kept is dropped, and the instance claim is carried over, or recorded when the database had
-   none. Every ingestion run the earlier release opened against the running package is rebound
-   to the adopted package and stays writable. Adoption records its own activation id on every
-   import authority a pre-ledger release had already closed, because the revision each was
-   opened under has no activation in the ledger, so those authorities' activation id names the
-   adoption rather than the activation they were opened under. A `package.root` that still names
-   the earlier release's package is refused with path `package.root`. When an `apply` stops
+   [Activate the successor](../../breg-changes/#activate-the-successor). When an `apply` stops
    before it finishes, rerun it with the same `database.roles`: a retry under other roles is
    refused as `apply.resume.roles_differ`, naming the roles the activation started with. A new package applied under `database.roles` other than the ones the active activation serves with is refused as `apply.successor.roles_differ` before maintenance; apply the active package under the new roles first, then the new package. A role change, the active package applied under other `database.roles`, cannot be assessed by `bregctl migration reconcile`: when one stops before it finishes, fix the cause and rerun the same apply, which resumes it. Casework reports each BReg source as unavailable from here until step 5
    finishes.
-5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. From a
-   release before the activation ledger, add `identity.databaseId` to the runtime file. When step
+5. **Upgrade Casework.** Settle pending attempts first, since an upgrade can strand them. When step
    4 changed the `registryRevision` a BReg source serves, check each such source with `caseworkctl
    check PROJECT --against-breg-package DIR --source-id ID`, repin it with `caseworkctl source add
    BREG_PROJECT --project PROJECT --source-id ID --apply`, package the Casework project again, and
@@ -120,9 +110,7 @@ sequence on a restored copy first, as
     adapter, restart Evidence, start the adapter);
     docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx, "Coordinate a breaking
     update"; crates/registry-casework/src/store.rs, StoreError::AttemptPending;
-    crates/registry-breg/src/postgres/interlock.rs, adopt_pre_ledger_database() (ingestion run
-    rebinding, import authority activation ids); crates/registry-breg/src/migration.rs,
-    MigrationError::ResumeRolesDiffer;
+    crates/registry-breg/src/migration.rs, MigrationError::ResumeRolesDiffer;
     crates/registry-bregctl/src/apply_lifecycle.rs, load_active_predecessor_package();
     crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
     lifecycle_failure() for ApplyLifecycleError::CurrentPackage;
