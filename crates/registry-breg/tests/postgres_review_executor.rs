@@ -6382,6 +6382,80 @@ async fn a_scrape_counts_a_claimable_cancellation_as_waiting_review_submission_w
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scrape_ages_an_expired_review_submission_lease_from_its_expiry() {
+    let database = prepare_review_database().await;
+    registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")
+        .await
+        .expect("webhook delivery state");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT SELECT ON registry_internal.registry_webhook_delivery_state TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime webhook state access");
+    // A claim extends the lease without advancing `next_attempt_at`, so a
+    // submission due an hour ago whose lease expired a minute ago has waited
+    // only since its lease expired.
+    let submitting = Uuid::from_u128(0xb5);
+    seed_submission(
+        &database.admin,
+        submitting,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='submitting',attempt_count=1,
+                    lease_until=transaction_timestamp()-interval '60 seconds',
+                    next_attempt_at=transaction_timestamp()-interval '1 hour'
+              WHERE request_id=$1",
+            &[&submitting],
+        )
+        .await
+        .expect("a submission whose lease expired a minute ago");
+    let cancelling = Uuid::from_u128(0xb6);
+    seed_submission(
+        &database.admin,
+        cancelling,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_request_review_submissions
+                SET state='cancelling',withdrawn=true,accepted_binding='{}'::jsonb,
+                    lease_until=transaction_timestamp()-interval '90 seconds',
+                    next_attempt_at=transaction_timestamp()-interval '1 hour'
+              WHERE request_id=$1",
+            &[&cancelling],
+        )
+        .await
+        .expect("a cancellation whose lease expired ninety seconds ago");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    let scrape = scrape_metrics(Arc::new(Metrics::with_pool_for_test(pool.clone()))).await;
+
+    let submission = queue_age(&scrape, "review_submission")
+        .unwrap_or_else(|| panic!("the review submission queue is sampled:\n{scrape}"));
+    assert!(
+        (90.0..1800.0).contains(&submission),
+        "the oldest expired lease has waited about ninety seconds since it expired: {submission}"
+    );
+
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_scrape_counts_an_expired_webhook_lease_as_waiting_delivery_work() {
     let database = prepare_review_database().await;
     registry_platform_hooks::delivery_schema::install(&database.admin, "registry_internal")

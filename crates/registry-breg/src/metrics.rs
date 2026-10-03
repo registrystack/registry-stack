@@ -483,7 +483,10 @@ impl Metrics {
 /// Read every queue age in one bounded, read-only statement. The due
 /// predicates follow each worker's claim, so work scheduled for a later
 /// retry does not count as waiting. A webhook lease that expired is claimable
-/// again, so it has waited since its lease expired.
+/// again, so it has waited since its lease expired. A review submission claim
+/// extends its lease without advancing `next_attempt_at`, so a claimable
+/// submission has waited since the later of the two; `GREATEST` ignores a
+/// NULL lease.
 async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>, ()> {
     let mut client = pool.get().await.map_err(|_| ())?;
     let transaction = client
@@ -513,7 +516,7 @@ async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>,
                                   OR (state.state = 'leased'
                                       AND state.lease_expires_at <= transaction_timestamp())), 0),
                     COALESCE((SELECT EXTRACT(EPOCH FROM transaction_timestamp()
-                                      - MIN(s.next_attempt_at))::float8
+                                      - MIN(GREATEST(s.next_attempt_at, s.lease_until)))::float8
                                 FROM registry_internal.registry_request_review_submissions s
                                WHERE s.state IN ('pending','submitting','uncertain','cancelling')
                                  AND {submission_claimable}), 0),

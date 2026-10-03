@@ -86,8 +86,8 @@
   `worker`, `breg_queue_oldest_pending_age_seconds` by `queue` for webhook
   deliveries, review submissions, and application jobs, and
   `breg_active_package_info` with the `package_digest` this process verified
-  at startup. A webhook delivery whose lease expired counts as waiting from
-  the moment its lease expired. The attachment verification worker's age
+  at startup. A webhook delivery or review submission whose lease expired
+  counts as waiting from the moment its lease expired. The attachment verification worker's age
   keeps growing while a job whose content read or verifier request failed
   waits for its retry. A scrape that cannot read the queues omits every
   queue sample and writes `metrics.queue_sample.failed`. Anyone who reaches the metrics
