@@ -7,11 +7,17 @@
 //
 // Exits non-zero with a descriptive message on any failure.
 
-import { readFile, access, readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { isGeneratedApiDir } from '../src/lib/generated-api-bases.mjs';
+import {
+  checkedDocset,
+  corpusRequirements,
+  isRegularFile,
+  sampleMarkdownFiles,
+} from './check-llms-contract.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const distDir = process.env.DOCS_DIST_DIR
@@ -45,6 +51,7 @@ const HEADER_LINES = DISCOVERY_HEADER.split('\n');
 const docsetsManifest = JSON.parse(
   await readFile(resolve(here, '../src/data/generated/docsets.json'), 'utf8'),
 );
+const docset = checkedDocset(docsetsManifest, process.env);
 const rootDirs = new Set(docsetsManifest.docsets.map((d) => d.path.replace(/^\/+|\/+$/g, '')));
 rootDirs.add(''); // main build root, in case the manifest omits the '/' docset
 
@@ -69,12 +76,7 @@ async function readDist(rel) {
 
 /** @param {string} rel */
 async function exists(rel) {
-  try {
-    await access(resolve(distDir, rel));
-    return true;
-  } catch {
-    return false;
-  }
+  return isRegularFile(resolve(distDir, rel));
 }
 
 /**
@@ -165,19 +167,16 @@ for (let i = 0; i < corpusFiles.length; i += 1) {
   if (corpusPresent[i]) corpusContents.set(corpusFiles[i], await readDist(corpusFiles[i]));
 }
 
-// ---- 2. llms-full.txt contains both product names ----
+// ---- 2. llms-full.txt contains the selected docset's product names ----
 if (corpusPresent[1]) {
   const full = corpusContents.get('llms-full.txt');
-  assert(
-    'llms-full.txt mentions "registry-relay"',
-    /registry.relay/i.test(full),
-    'expected "registry-relay" (case-insensitive) in llms-full.txt',
-  );
-  assert(
-    'llms-full.txt mentions "registry-notary"',
-    /registry.notary/i.test(full),
-    'expected "registry-notary" (case-insensitive) in llms-full.txt',
-  );
+  for (const requirement of corpusRequirements(docset)) {
+    assert(
+      `llms-full.txt mentions "${requirement.label}"`,
+      requirement.pattern.test(full),
+      `expected "${requirement.label}" (case-insensitive) in llms-full.txt`,
+    );
+  }
   // Verify at least one tutorial appears in the full corpus.
   assert(
     'llms-full.txt contains at least one tutorial page',
@@ -237,12 +236,7 @@ for (const page of draftPages) {
 console.log(`  ..  ${draftPages.length} draft pages checked for machine-output leaks`);
 
 // ---- 5. Sample per-page .md files begin with the full discovery header ----
-const sampleFiles = [
-  'explanation/architecture.md',
-  'index.md',
-  'products/registry-relay.md',
-  'tutorials/publish-governed-sqlite-registry.md',
-];
+const sampleFiles = sampleMarkdownFiles(docset);
 
 for (const f of sampleFiles) {
   const fileExists = await exists(f);

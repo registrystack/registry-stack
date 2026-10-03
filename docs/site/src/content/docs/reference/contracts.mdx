@@ -25,6 +25,12 @@ Use this page to find the machine-readable surfaces you can build against: their
 
 A contract is a machine-readable surface that integrators can depend on:
 
+- **OpenAPI document**: describes HTTP routes, request and response shapes, and authentication for a service.
+- **Authoring grammar**: a closed YAML shape an adopter writes and a compiler accepts.
+- **Sealed package format**: the versioned directory a compiler produces and a runtime verifies before it activates.
+- **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
+- **Static discovery bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
+
 Each contract has one owning project. When a contract changes, the owning repo is the source of
 truth. Registry Platform crates provide workspace-internal implementation reuse. Every workspace
 crate is `publish = false`, and crate APIs are not public compatibility contracts.

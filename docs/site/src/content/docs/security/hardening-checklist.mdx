@@ -21,21 +21,120 @@ Use this checklist after product configuration is valid and before exposing a de
 - Use the product's production check and keep the report with the deployment record.
 - Identify every secret owner, source owner, audit owner, and recovery owner.
 - Test recovery with non-production data.
+- Have `evidence check` runnable against the exact revision you intend to serve. Evidence Gateway
+  has no posture endpoint or admin surface. Startup, readiness, and offline checks expose invalid
+  deployment inputs.
 
-## Keys and credentials
+## Keys and custody
 
-- Resolve secrets from the product's supported secret-reference boundary.
-- Restrict secret files and environment injection to the service identity.
-- Give signing, source, and caller credentials separate rotation schedules.
-- Keep previous verification keys only for the documented verification window.
-- Refuse startup when required credentials or trust material cannot be loaded.
+- Configure one active ES256 P-256 Evidence Gateway public JWK with a derived RFC 7638 thumbprint
+  `kid`, plus only the overlap keys needed to verify current assertions. `evidence check` refuses a
+  revoked, malformed, or mismatched active signer.
+- Supply local-assurance private JWKs, HMAC keys, and source credentials through
+  `secret:file/<name>` references below `secretProviders.file.root`. The file provider accepts only
+  regular, non-symlink files owned by the service identity at mode `0400` or `0600`, and checks
+  owner, mode, link count, no-follow behavior, and open-file identity. Keep the secret root
+  operator-only.
+- Prefer the file provider with a secret root dedicated to the deployment. Enable
+  `secretProviders.environment: {}` only for a dedicated, curated process environment. Review each
+  bundle `secret:env/<NAME>` reference because an enabled environment provider can resolve any
+  named variable in that environment. Only `runtime.yaml` can enable a provider.
+- Give the Evidence Gateway audit hash key and subject-binding key independently generated raw key
+  material of at least 32 bytes each. The file provider does not base64-decode them.
+- Rotate an Evidence Gateway signing key by publishing the next public JWK first, then changing the
+  active JWK and pinned Transit key version. Retain the old public key for at least the maximum
+  assertion validity plus allowed clock skew. Follow
+  [Rotate Evidence Gateway signing keys](../../tutorials/rotate-evidence-signing-keys/).
+- Use a workload-local Vault or OpenBao Transit proxy over a Unix socket for production Evidence
+  Gateway signing. Require P-256, signing enabled, non-exportable key material, plaintext backup
+  disabled, and an exact governed public-key match. Local JWK signing is for local assurance. See
+  [Configure Transit signing](../../tutorials/move-evidence-to-production-signing/).
+- Escrow the Base Registry Engine (BReg) Transit key before the first encrypted field goes live. The
+  runtime stores only the wrapped data-encryption key, so losing the Transit key irrecoverably loses
+  every value sealed with it. A health check does not certify escrow.
+- Keep the BReg base64 local-file DEK out of production. Startup permits it only when
+  `identity.databaseInitializationEnvironment` is `local`, and `bregctl doctor` reports the same
+  refusal.
+- Retire or encrypt every backup taken before a BReg field was encrypted. A pre-flip backup holds
+  plaintext for as long as it is retained. See
+  [Field encryption for restricted fields](../../explanation/breg-field-encryption/).
 
-## Network boundary
+{/* Evidence: crates/registry-evidence/src/bundle.rs, validate_secret_root and signing validation;
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::activate,
+    FieldEncryptionService::open_existing, and insert_first_field_key;
+    crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
+    crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
+    crates/registry-bregctl/src/doctor.rs, startup_diagnostic. */}
 
-- Terminate TLS at a reviewed edge where the product deployment guide requires it.
-- Bind internal listeners to private interfaces and restrict direct access.
-- Pin outbound destinations, methods, paths, trust roots, timeouts, and response limits.
-- Keep health probes free of credentials and sensitive source diagnostics.
+## Freeze the Evidence Gateway package and target
+
+- Mount the installed package and its artifacts, the deployment target's `runtime.yaml`, and each
+  named CA bundle read-only and non-writable to the service process. Keep the secret root at mode
+  `0700` or tighter. Keep every bound source extract non-writable too. Evidence Gateway refuses
+  writable deployment inputs before serving.
+- Freeze the package and target before validating or serving them, then validate the frozen bytes:
+
+  ```sh
+  chmod -R a-w "<installed-package>" && chmod 444 "<deployment-target>/runtime.yaml"
+  evidence check --runtime-config "<deployment-target>/runtime.yaml"
+  evidence evaluate --runtime-config "<deployment-target>/runtime.yaml" \
+    --fixture "fixtures/<cases>.yaml"
+  ```
+
+- Review the complete simultaneously enabled bundle as one disclosure surface, including threshold
+  ladders, overlapping categories, more precise regions, jurisdiction variants, coexisting
+  revisions, and relationship combinations. A declared `disclosureGuard` family is an operator
+  attestation, not a semantic classifier.
+- Confirm that no two authority paths cover the same requirement, purpose, and subject tuple.
+  Startup does not detect that overlap; request-time evaluation denies the ambiguous request.
+- Keep `responseFormats` at the signed default unless a reviewed decision widens it. Unsigned output
+  is transport-authenticated convenience and is never later-verifiable evidence.
+
+{/* Evidence: crates/registry-evidence/src/bundle.rs, BundleError::NotImmutable,
+    validate_read_only, validate_secret_root, and map_extract_capture_error. */}
+
+## Audit destination and retention
+
+- Evidence Gateway and Render use the shared audit writer. Its `audit` block selects `file` or
+  `stdout`; a file destination also sets `path`, `rotateBytes` (100 MiB by default), and
+  `retainDays` (90 by default). Put the path on durable storage in a directory owned by the service
+  user and not writable by group or others.
+- Audit is fail-closed. Evidence Gateway durably accepts an access-attempt entry before every source
+  stage and a disclosure-release entry before returning the response. Render accepts its request
+  entry before work and response entry before release. A full or unwritable disk stops those
+  operations instead of degrading to best-effort logging.
+- Run one process per audit path. The writer holds an exclusive `<path>.lock` for its lifetime. Give
+  each replica a separate path, or use `stdout` and collect every stream centrally.
+- After any failed write, the writer refuses later entries until restart. Readiness rechecks the
+  active file, so renaming, truncating, or replacing it under a running process revokes readiness.
+- Rotation renames the active file to `<path>.<sequence>` and removes sealed files older than
+  `retainDays`. Ship each sealed file before local retention deletes it.
+- The log has no hash chain or signature. Ship sealed files or `stdout` to append-only storage the
+  service account cannot change. The products do not prove remote receipt.
+- Before first use of the shared writer, archive older chained audit segments and start with a fresh
+  path so the new retention policy cannot delete the old format unexpectedly.
+- Every Evidence Gateway pseudonym carries `audit.hashKeyVersion`. Raise that version when rotating
+  the audit master, and retain the old master for as long as older pseudonyms must be recomputable.
+
+{/* Evidence: crates/registry-platform-audit/src/lib.rs;
+    crates/registry-evidence/src/server.rs; crates/registry-render/src/server.rs. */}
+
+## Transport and edge
+
+- Terminate TLS and manage certificates at a reviewed reverse proxy or load balancer.
+- Bind Evidence Gateway to loopback, a private IPv4 address, or a unique-local IPv6 address. Its
+  runtime fixes `tlsTermination` to `operator-controlled-upstream` and
+  `trustProxyIdentityHeaders` to `false`; it validates tokens itself.
+- Leave `metricsListener` unset unless needed. When present, bind it to a distinct private address.
+  It serves only `GET /metrics`; the Evidence listener does not serve metrics.
+- Size Evidence Gateway `rateLimits` as per-process, in-memory budgets. N replicas multiply each
+  limit by N, and restart restores the full budget. Set the failed-selector budget deliberately and
+  enforce per-client quotas at the gateway.
+- Keep every Evidence source hop on a private network where possible. Give Evidence Gateway a
+  dedicated source credential scoped to the exact operation the bundle performs.
+- Keep hostname and fixed-origin verification enabled for every Evidence HTTP source. Evidence
+  Gateway ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`, follows no redirect, and
+  has no application proxy setting.
 
 ## Authorization and disclosure
 
@@ -44,19 +143,34 @@ Use this checklist after product configuration is valid and before exposing a de
 - Confirm a denied request reaches no protected source.
 - Confirm configuration cannot widen access through an unknown or ignored field.
 
-## Audit and retention
+## Assume an automated adversary
 
-- Place audit output on durable operator-controlled storage.
-- Treat an unavailable required audit sink as a release-blocking failure.
-- Document retention, access, integrity monitoring, backup, restoration, and deletion.
-- Verify audit records contain identifiers needed for accountability without copying protected values.
+- Take runtime updates on a deliberate cadence. Track advisories against pinned base images and edge
+  components as well as the runtime.
+- Keep the refusal surface uninformative end to end. Do not let the edge add distinguishing error
+  pages, redirects, or timing differences in front of the runtime's closed problem shapes.
+- Rehearse replacement of a governed Evidence bundle. The time to withdraw a disclosure is the
+  deployment pipeline's, so measure it before an incident.
 
-## Package and source integrity
+Evidence Gateway exposes no posture route. Its posture is the exact package and closed runtime file
+it loaded, mounted read-only, with no reload, merge, governed-field override, or fallback. Record
+the package digest and retain the runtime file with the deployment record. One process serves one
+operator-controlled trust domain; mutually distrustful issuers or customers require separate
+deployments, signers, bundles, and audit boundaries.
 
-- Deploy only the reviewed package and record its digest.
-- Keep mutable runtime bindings outside governed packages where the product contract requires it.
-- Restrict source credentials to the exact operations the adapter needs.
-- Test schema or contract drift and confirm the product refuses an incompatible source.
+## Incident response
+
+- Know the [private vulnerability reporting channel](../report-a-vulnerability/) before an incident.
+- For a compromised Evidence signing key, disable provider signing authority, remove its public
+  JWK, add its thumbprint to `signing.revokedKeyIds`, and activate a checked replacement or leave
+  the service unavailable. Restart affected issuers and consumers. Evidence Gateway has no
+  assertion revocation or status feature, so use short validity windows and key denylisting.
+- Rotate a compromised source credential at the source and restart the affected process.
+- Preserve shipped audit copies and copy the entire local audit directory, including sealed files,
+  before retention removes them.
+- A `403 evidence.denied` deliberately does not identify the failed authorization check. Inspect
+  trusted local configuration and the audit refusal phase: audience, matching grant, authority,
+  purpose and subject roles, then response-format permission.
 
 ## Verify
 
@@ -68,6 +182,20 @@ Before handoff, record:
 4. source timeout and size-limit behavior;
 5. backup and restore evidence; and
 6. the rollback trigger and responsible operator.
+
+Also confirm Evidence Gateway readiness rechecks the subject-binding key, signer, pinned audit sink,
+and every source credential. It does not send an evidence-data request, so readiness does not prove
+that a source returns data. Verify a stored assertion offline with independently retained
+expectations, and confirm an audited request reaches the configured durable sink.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Evidence Gateway refuses a non-immutable input | The package, `runtime.yaml`, captured artifact, or CA bundle is writable, or the secret root is reachable by group or other | Freeze the package and target, tighten the secret root to `0700`, and restart |
+| Evidence Gateway refuses an invalid bound source extract | The named extract is writable | Make the extract non-writable and restart |
+| A second Evidence Gateway process reports a locked audit sink | Two processes share one `audit.path` | Use one writer per path or use distinct paths or `stdout` per replica |
+| Evidence Gateway returns `403 evidence.denied` unexpectedly | Audience, grant, authority, purpose, subject, or format authorization failed | Check local configuration in the incident-response order and inspect the audit refusal phase |
 
 ## Next
 

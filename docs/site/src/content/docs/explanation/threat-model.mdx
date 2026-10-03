@@ -20,13 +20,19 @@ governed record boundary described below.
 
 ## Assets
 
-- authoritative registry records and history;
-- subject selectors and source responses;
-- assertion and verification keys;
-- caller and source credentials;
-- governed packages and runtime configuration;
-- audit records; and
-- availability of required service and recovery paths.
+- Authoritative registry records and history.
+- Person-level source data. Evidence reads source data in place and releases only a computed,
+  disclosure-shaped answer; no source row crosses the assertion boundary.
+- Private signing keys. Only public verification material leaves the service, so offline
+  verification requires no protected access.
+- Caller and source credentials, subject selectors, and source responses.
+- Governed packages and runtime configuration.
+- Audit integrity and availability of required service and recovery paths.
+
+Evidence Gateway is a minimum-disclosure assertion service. Registry Platform supplies shared
+security primitives so authentication, HTTP policy, audit, cryptography, and secret handling remain
+reviewable in one place instead of diverging between services. Demo integrations sit outside this
+production boundary and do not establish a production freshness or replay-protection profile.
 
 ## Trust boundaries
 
@@ -39,19 +45,145 @@ governed record boundary described below.
 | Product to audit storage | Value-free records, durable append path, fail-closed behavior where required |
 | Operator to package | Closed schemas, digest verification, reviewed activation and rollback |
 
-## Threats addressed
+## Evidence authentication and source boundaries
 
-The maintained products reject unknown configuration, unsupported algorithms, invalid credentials,
-unauthorized operations, unbounded source responses, unsafe redirects, malformed signed material,
-and package drift. BReg keeps mutations inside compiled operations and audit/history boundaries.
-Evidence authorizes before source access and discloses only declared concepts.
+Evidence Gateway runs one reviewed OIDC bearer profile with one trusted issuer and exact audience,
+token-type, and algorithm allowlists. One configured principal claim is authoritative; it does not
+fall back to `client_id`, `azp`, a proxy header, or a request field. Only operational and discovery
+routes are unauthenticated, and none reveals enabled definitions or requester permissions.
 
-## Residual risks
+The caller names a predefined requirement revision, purpose, and bounded subject selectors. One
+authorization decision binds the requester, requirement, purpose, roles, selector profiles,
+authority, origin tuple, and audience. Partial grants cannot be combined. Possession of a selector
+or a caller-supplied consent reference is lookup input, not authority. Evidence authorizes before
+credential resolution or source access and constructs the released assertion from validated,
+declared concept values.
 
-Operators remain responsible for identity issuance, source correctness, database administration,
-network isolation, key custody, audit retention, backups, monitoring, dependency response, and legal
-authority. A compromised operator or authoritative source can still produce misleading data.
-Availability depends on the operator's infrastructure and recovery practice.
+Evidence reaches data through one of two fixed transports owned by the core:
+
+- A fixed HTTP JSON request pins origin, method, path authority, headers, authentication, TLS,
+  projection, redirect denial, proxy denial, and one request per acquisition stage. Request scripts
+  may prepare only bounded query pairs and at most one JSON body.
+- A reviewed SQL statement runs against a local read-only SQLite extract. It has no origin, network
+  route, database credential, or caller-selected statement. Rust binds a bounded map of scalar
+  values by index, and the runtime caps rows, cells, statement steps, time, response bytes, and
+  concurrency.
+
+Every source response is validated against its governed schema before extraction. Lookup collapses
+to match, no match, or ambiguous; Evidence does not fetch broad candidate sets, follow pages, score
+candidates, or expose counts. Raw source responses are neither persisted nor logged.
+
+{/* Evidence: products/evidence/contracts/bundle.schema.yaml;
+    products/evidence/contracts/source-contract.yaml;
+    products/evidence/contracts/sqlite-extract-source-contract.yaml;
+    products/evidence/contracts/runtime.schema.yaml;
+    crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/source.rs. */}
+
+## Threats the design mitigates
+
+- Secret material in deployment configuration: an HTTP source credential is named by a logical
+  secret reference instead of stored in the bundle. A statement source has no credential by
+  construction. Credential-free HTTP is admitted only for local assurance at a canonical numeric
+  loopback origin.
+- Token forgery: signatures, issuer, audience, token type, and algorithm are checked before token
+  claims are trusted. Route scopes and grants remain governed even when a token is valid.
+- Sender-constrained token replay as bearer: Evidence denies an access token with a
+  proof-of-possession confirmation claim because it validates no sender proof.
+- Privilege escalation: authorization is deny-by-default and requires exactly one complete grant
+  and authority-path match before source access. Reach is never widened by request input.
+- Membership and authorization oracles: no-match, ambiguous, missing-fact, and inconsistent results
+  collapse to one public shape. Authorization refusals collapse to `evidence.denied`. Detailed
+  categories stay in value-free audit.
+- Cross-purpose tracking: subject bindings use a keyed, domain-separated derivation over audience,
+  purpose, role, selector profile, key version, and the complete canonical selector bundle.
+- Error, log, and telemetry leakage: public problems carry stable codes. Selector, source, and
+  disclosed values do not appear in logs or native audit. Metrics are off by default and use a
+  separate private listener with closed labels.
+- Over-collection: callers cannot supply thresholds, expressions, scripts, source fields, paths,
+  headers, relationship types, or response projections. Undeclared concepts and values outside
+  governed type, codelist, cardinality, precision, or size bounds are rejected.
+- Payload substitution: signed flattened JWS is the default. Unsigned output uses a distinct media
+  type and requires permission in both the immutable bundle and matched grant; the strict verifier
+  rejects it.
+- Release without accountability: final response bytes are produced before the disclosure-release
+  audit entry is durably accepted, and only then released.
+- Hot policy mutation and tenant confusion: the runtime has no override, reload, merge, or fallback.
+  One process has one issuer-governance boundary, bundle lifecycle, signer, and audit boundary.
+- SSRF and uncontrolled egress: the fixed HTTP executor owns origin, method, path authority,
+  authentication, TLS, headers, redirect denial, proxy denial, and request count. The statement
+  transport opens one local file and has no network destination an attacker can steer.
+- Hostile or defective reviewed scripts: the script engine has no filesystem, environment, network,
+  process, module, ambient clock, or randomness. Operation ceilings stop runaway execution. A
+  statement script never receives SQL text, an extract path, file handle, or database connection.
+
+**Audit as a control.** Evidence writes a mandatory access-attempt entry before each acquisition
+stage and a disclosure-release entry after signing but before returning the response. A failure
+blocks the corresponding action. Native audit contains reviewed identifiers and decision categories,
+not raw selectors, source values, credentials, tokens, or subject identifiers. A keyed, versioned,
+domain-separated pseudonym covers the canonical selector bundle where correlation is required.
+
+The audit log is not chained or signed, so the writing host can rewrite or delete local entries.
+Tamper evidence and completeness require shipping sealed files or `stdout` to append-only storage.
+One process may write each audit path because the writer takes an exclusive lock. Investigation also
+depends on retaining the pseudonym key and request context.
+
+## The automated adversary
+
+The model assumes every reachable deployment is probed continuously at machine speed. Refusal
+shapes therefore avoid distinguishing signals, and source calls remain fixed by governed
+configuration. Request schemas expose no caller-supplied expression, script, path, header, or
+projection. Parsers and scripts apply size, count, and operation ceilings so one request cannot buy
+unbounded work.
+
+Nightly and merge-queue fuzz smoke covers platform token and API-key parsing, SD-JWT issuance and
+holder-proof input, reviewed SQLite statement parsing, Evidence verification, authoring readers,
+and Manifest YAML and rendered-artifact JSON. It does not cover every request path or every
+presentation path behind an otherwise valid signature.
+
+Human review remains load-bearing under sustained probing. It must cover the whole enabled
+disclosure surface, project semantics, dependency update cadence, and edge rate controls.
+
+## Field encryption draws a boundary inside the database
+
+BReg can store a restricted field as an AES-256-GCM envelope under a data-encryption key wrapped by
+Vault or OpenBao Transit. This protects values from database administrators, replicas, dumps,
+backups, and SQL injection that reaches only ciphertext. It does not protect values from the running
+process or a holder of the Transit credential because both can obtain plaintext.
+
+When the key cannot be unwrapped, entities with encrypted fields answer with HTTP `503`
+`runtime.field_encryption.unavailable` while entities without encrypted fields continue serving.
+Equality lookups use an HMAC-SHA-256 blind index, which deliberately exposes equality, presence,
+and cardinality to a database reader. Plaintext backups taken before encryption remain outside the
+boundary until retired or encrypted.
+
+The implementation uses the FIPS build of AWS-LC with no non-FIPS runtime fallback. Registry Stack
+does not claim certification of itself.
+
+{/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field, open_field,
+    FieldAad, and blind_index_hmac; crates/registry-breg/src/field_encryption.rs,
+    FieldEncryptionService::activate and FieldEncryptionService::open_existing;
+    crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
+    crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable. */}
+
+## Residual risks and operator duties
+
+- Health, readiness, and offline checks do not certify Transit policy or key custody. A
+  local-assurance deployment can be internally consistent without production-grade custody.
+- Combined disclosure remains a human review. Differently named disclosure families can overlap,
+  and rate limits do not make an unsafe bundle safe.
+- Startup does not detect overlapping authority paths. Ambiguity denies at request time but appears
+  as an unexplained refusal.
+- Rate limits are per process and in memory. Replicas multiply budgets and restart resets them,
+  including the failed-selector enumeration defense.
+- Released assertions have no recall, revocation, status list, or presentation-time check. Validity
+  windows and key publication determine how long they verify.
+- The request nonce is echoed correlation data, not replay prevention. Evidence does not enforce
+  uniqueness or consume it.
+- Secret provisioning, key custody and rotation, audit retention, backups, database access,
+  network isolation, TLS, edge quotas, monitoring, dependency response, incident response, source
+  correctness, and legal authority remain operator duties.
+- Project approval remains semantic. Validators cannot decide whether an institution chose the
+  lawful purpose, correct source fields, derivation, or disclosure default.
 
 ## Verification
 

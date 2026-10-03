@@ -16,15 +16,17 @@ const replaySection = spec.match(
 assert.ok(replaySection, 'RS-SEC-G must contain the replay-protection authority section');
 const prose = replaySection.replace(/\s+/g, ' ');
 
-test('RS-SEC-G records the maintained no-replay-state boundary', () => {
+test('RS-SEC-G distinguishes Evidence credential replay from operation receipts', () => {
   assert.match(
     prose,
-    /No maintained Registry Stack resource server holds a replay table, replay reservation, or persistent single-use record/,
+    /Evidence Gateway holds no credential or presentation replay state/,
   );
   assert.match(
     prose,
-    /Replay prevention belongs to the surrounding protocol or issuer that creates and validates a one-time challenge/,
+    /Replay prevention for one-time credentials belongs to the surrounding protocol or issuer that creates and validates a one-time challenge/,
   );
+  assert.match(prose, /Other products may retain operation receipts or replay recovery state under their own contracts/);
+  assert.doesNotMatch(prose, /No maintained Registry Stack resource server holds a replay table/);
   assert.doesNotMatch(replaySection, /^\| Registry /m);
 });
 

@@ -1,6 +1,6 @@
 ---
 title: "RS-SEC-G: Registry family security model"
-description: Cross-cutting authentication, authorization, disclosure, audit, and operator boundaries.
+description: "The cross-cutting security model for the registry stack: shared security primitives, authentication and authorization, verification-key publication, audit, replay protection, and the operator boundary."
 status: draft
 owner: registry-docs
 source_repos:
@@ -22,67 +22,116 @@ audience:
   - specification editor
 ---
 
+This document defines the security model shared across the registry stack: where the security-critical primitives live, how a caller authenticates and is authorized, how a service publishes the keys a verifier needs, what every request that touches person-level data MUST record, how replay decisions remain authoritative, and where the operator's responsibility begins. It is the cross-cutting (general) security specification that the protocol specifications refine for their own surfaces.
+
+It refines the security-relevant invariants of [RS-ARC-G](../rs-arc-g/) Section 5 (specifically REQ-ARC-G-004 and REQ-ARC-G-005) one level of detail down, from architectural invariant to security model. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its security-model form. The wire-level form of these constraints lives in [RS-PR-EVIDENCE](../rs-pr-evidence/); where this document and that protocol specification state the same constraint, this document is the cross-cutting model and the protocol specification is its surface-specific form.
+
+The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2. Defined terms are used per [RS-TERMS](../rs-terms/).
+
 ## Version history
 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
-| 0.7.0 | 2026-10-03 | draft | Removed retired product requirements and retained cross-product security invariants. |
+| 0.1.0 | 2026-06-13 | draft | Initial security model, distilled from the boundary map, the architecture overview, the Registry Relay and the now-removed Registry Notary API references, the Registry Notary signing-key reference, and the two protocol specifications. |
+| 0.1.1 | 2026-06-21 | draft | Clarified key custody, readiness, public error detail, and principal-scoped cache boundaries. |
+| 0.2.0 | 2026-07-07 | draft | Enumerated the full unauthenticated surface in REQ-SEC-G-006 and anchored the evidence section to the enforcing code. |
+| 0.3.0 | 2026-07-13 | draft | Assigned registry source access to Relay and restated Notary authorization and federation gates in terms of compiler-pinned Relay consultations. Those Notary gates are retired as of 0.5.0. |
+| 0.4.0 | 2026-07-19 | draft | Defined the product-owned Relay and Notary replay-protection boundaries, retention references, failure posture, and stale-recovery invariant. The Notary boundary is retired as of 0.5.0. |
+| 0.5.0 | 2026-08-03 | draft | Registry Notary is retired. Removed Section 7 (federation trust) and REQ-SEC-G-010, renumbered the following sections, restated REQ-SEC-G-002, REQ-SEC-G-005, REQ-SEC-G-006, REQ-SEC-G-011, REQ-SEC-G-014, and REQ-SEC-G-015 for Registry Relay, Evidence Gateway, and Registry Mint, and added REQ-SEC-G-016 and REQ-SEC-G-017. |
+| 0.6.0 | 2026-08-07 | draft | Clarified that Evidence Gateway durably records an access attempt before every actual source stage in a closed acquisition. |
+| 0.7.0 | 2026-08-11 | draft | The Relay V1 runtime and its adopter tooling are retired. Restated REQ-SEC-G-002, REQ-SEC-G-004, REQ-SEC-G-005, REQ-SEC-G-006, REQ-SEC-G-009, and REQ-SEC-G-012 for the Relay V2 runtime, rewrote Section 7 around the one replay authority the stack still holds, retired REQ-SEC-G-003, REQ-SEC-G-014, and REQ-SEC-G-015, and added REQ-SEC-G-018. |
+| 0.8.0 | 2026-08-13 | draft | Added Registry Mint's explicit client-secret compatibility path to REQ-SEC-G-016 while retaining asymmetric client assertions as the default and sole method for Evidence and delegated authority. |
+| 0.8.1 | 2026-09-25 | draft | Named audit pseudonym secrets, rather than audit-chain secrets, in REQ-SEC-G-013. |
+| 0.9.0 | 2026-10-03 | draft | Retired the Relay-owned clauses and the Registry Mint requirements REQ-SEC-G-016 and REQ-SEC-G-017. Retained the cross-product security requirements under their original identifiers. |
 
-## 1. Authentication and authorization
+## 1. Scope and references
 
-REQ-SEC-G-001: A protected operation MUST authenticate the caller and complete its authorization
-decision before protected source access or mutation.
+This specification covers the security model that holds across the runtime services:
 
-REQ-SEC-G-006: Unknown, malformed, expired, wrongly issued, or insufficient credentials MUST fail
-closed without disclosing protected source state.
+- The shared security primitives and where they are sourced.
+- Authentication: the caller modes and what each one verifies.
+- Authorization: the scope model and its deny-by-default, scope-before-source posture.
+- Verification-key publication and the public/private key boundary.
+- The audit obligation and its fail-closed posture.
+- Product-owned replay protection: where a replay decision may live, how it is bounded, and what a service that holds none may claim.
+- The transport and error posture, and the outbound-call policy.
+- The operator boundary: what this model leaves to the deployment.
 
-REQ-SEC-G-007: Authorization inputs MUST come from verified credentials, reviewed configuration,
-and governed state rather than an arbitrary caller field.
+This specification does not define:
 
-## 2. Disclosure and audit
+- **Exact configuration schemas, algorithms, and parameters.** Concrete signing algorithms and key sizes, configurable token and cache windows, entropy floors, the precise security-header set, and the precise outbound allow and deny rules are configuration and operational detail, not contract data. For the configurable Evidence surface, see [Configure Evidence Gateway](../../configure/evidence/).
+- **Surface-specific protocol behavior.** How Evidence Gateway applies this model to its routes, request shapes, and error codes belongs to [RS-PR-EVIDENCE](../rs-pr-evidence/).
+- **Key custody and secret provisioning.** How private keys and credentials are stored, injected, and rotated in a deployment (environment, file, hardware module) is an operator responsibility, addressed in Section 9.
+- **Deeper service-internal security mechanisms.** The internal structure of the audit envelope, and of any product replay state beyond the authority, binding, retention, and failure behavior Section 7 states, is reserved for product specifications and operator guidance.
 
-REQ-SEC-G-008: A response MUST NOT disclose fields or concepts outside the product's reviewed
-contract for that operation.
+For the components named here and their boundaries, see [RS-ARC-G](../rs-arc-g/) Section 3 and the [boundary map](../../map/boundaries-and-map/). For the narrative security context, see the [architecture overview](../../explanation/architecture/) and the [Evidence Gateway security model](../../security/evidence/).
 
-REQ-SEC-G-011: HTTP problem responses MUST use the product's documented bounded error contract and
-MUST NOT contain credentials, source values, filesystem paths, or unbounded internal diagnostics.
+## 2. Shared security primitives
 
-REQ-SEC-G-013: Portable artifacts MUST NOT contain private keys, credential secrets, or audit
-pseudonym secrets.
+The registry stack concentrates its security-critical behavior in Registry Platform so that it behaves identically across services and can be reviewed in one place. Registry Platform supplies authentication helpers, OpenID Connect (OIDC) verification, audit envelopes, HTTP security, outbound HTTP policy, cryptography, and Selective Disclosure JWT Verifiable Credential (SD-JWT VC) helpers. Each runtime product owns how those primitives are configured and enforced on its own routes.
 
-REQ-SEC-G-016: A request that requires durable audit MUST fail closed when the audit boundary is
-unavailable.
+REQ-SEC-G-001: A security-critical primitive that must behave identically across runtime services (authentication, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, cryptography, and SD-JWT VC helpers) SHOULD be sourced from Registry Platform rather than reimplemented per service. This is the security-model form of REQ-ARC-G-005, and it keeps cross-service security behavior consistent and auditable in one place.
 
-REQ-SEC-G-018: Principal-scoped responses MUST use cache controls appropriate to their sensitivity.
+## 3. Authentication
 
-## 3. Outbound access
+A runtime service verifies its callers against exactly one issuer, fixed by configuration. The following diagram shows the security pipeline every request follows and the trust inputs that feed it.
 
-Every outbound source request MUST derive its destination, method, path, credentials, transport
-trust, timeout, redirect behavior, and response limits from reviewed product configuration.
+```mermaid
+flowchart LR
+    caller["Caller"]
+    authn["Authenticate:<br/>OIDC access token<br/>(issuer · audience · algorithm · token type · JWKS)"]
+    authz["Authorize:<br/>before source or evaluation work<br/>deny-by-default"]
+    serve["Serve:<br/>protected record or Evidence Gateway assertion"]
+    audit["Audit:<br/>Platform envelope · fail-closed<br/>principal · scopes · request_id · purpose"]
+    caller --> authn --> authz --> serve --> audit
+    keys["Verification keys:<br/>issuer JWKS<br/>(public half only)"] -.-> authn
+```
 
-## 4. Verification-key publication
+The diagram restates the model: a caller presents an access token the service verifies against its one configured issuer, the request is authorized against the scope its target requires before source or evaluation work, the service serves the configured surface, and the request is recorded. Verification keys are published so a verifier can check issued artifacts.
 
-An issuer MUST publish only the public verification material a relying party needs. Private signing
-material remains under operator custody and MUST NOT appear in portable artifacts.
+REQ-SEC-G-002: A runtime service MUST verify caller credentials against exactly one issuer, fixed by configuration at startup, and MUST authenticate every route that returns person-level records or evidence assertions before it produces a response. Evidence Gateway verifies OIDC access tokens against one trusted issuer.
 
-## 5. Audit
+REQ-SEC-G-004: The service MUST delegate token verification to the Registry Platform OIDC primitive. A token MUST be trusted only after its signature is verified against the configured issuer's JSON Web Key Set (JWKS) and its issuer, an accepted audience, a permitted signing algorithm, and, where the service configures one, an accepted token type are checked. The service still owns the scopes its routes require (Section 4). Evidence Gateway derives the caller's identity only from the verified token and never from a proxy-supplied identity header.
 
-Every admitted request that touches protected records or assertions MUST produce the product's
-documented audit records. A product whose contract requires durable audit MUST fail closed when it
-cannot write them.
+## 4. Authorization
 
-## 6. Error and disclosure posture
+Authorization is scope-based and deny-by-default: a caller reaches only what its scopes grant, and the grant is fixed by configuration rather than widened at request time.
 
-Problem responses MUST keep credentials, source values, filesystem paths, and unbounded internal
-diagnostics out of the public response. Principal-scoped responses MUST use cache controls
-appropriate to their sensitivity.
+REQ-SEC-G-005: Authorization MUST be scope-based and deny-by-default. A caller MUST hold the scope its target requires. Evidence Gateway MUST match exactly one configured authority path and MUST enforce the grant it carries before any source read. A caller that lacks a required scope is refused before a protected effect, not after.
+
+REQ-SEC-G-006: A service MUST NOT widen a caller's reach at request time beyond what configuration grants. Every route that returns person-level records or evidence assertions MUST require authentication, and the unauthenticated surface MUST be limited to routes that carry no person-level data:
+
+- liveness and readiness probes;
+- public verification-key discovery through the issuer JWKS;
+- served documentation and discovery metadata: documentation routes, well-known discovery documents, and published JSON Schemas and JSON-LD contexts.
+
+Evidence Gateway exempts only its probes, its OpenAPI document, its issuer JWKS, and its issuer metadata document; the assertion route and the evidence-definition discovery route both require a verified access token.
+
+## 5. Verification-key publication
+
+A verifier needs the issuer's public key to check a signed artifact, and it needs that key without holding a credential of its own. The model therefore separates the published public half from the private signing material, which never leaves the issuer.
+
+REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only the public half through the issuer JWKS. Private key material MUST NOT be published and MUST NOT be required by a verifier. A key that is being rotated out MAY remain published for verification while artifacts it signed are still within their validity, so a verifier can check previously signed artifacts across a rotation. Evidence Gateway signs with exactly one active ES256/P-256 key, identifies service keys by their RFC 7638 thumbprints, and retains a previous public key for at least the maximum assertion validity plus the accepted clock skew.
+
+The approved custody mechanism depends on assurance: local assurance uses a file-backed private JWK, while production and evidence-grade assurance require Vault/OpenBao Transit through a workload-local Unix-socket proxy. See [Configure Transit signing for Evidence Gateway](../../tutorials/move-evidence-to-production-signing/).
+
+Readiness, liveness, and protocol conformance checks show that a service has loaded configuration and can serve the expected protocol surface. They do not certify production-grade private-key custody. A deployment that uses software keys, local JWK files, or demo-generated keys can still be reachable and internally consistent; production custody, rotation, and approval of a key provider remain operator responsibilities under Section 9.
+
+## 6. Audit
+
+Every request that touches person-level data is recorded. Audit is a security control, not best-effort logging: a deployment can require that a request which cannot be recorded does not succeed.
+
+REQ-SEC-G-008: Every request that returns person-level records or evidence assertions MUST be recorded in a Registry Platform audit envelope, capturing at least the caller principal, the scopes exercised, a request identifier, and the `Data-Purpose` value where the caller supplied one. This is the security-model form of REQ-ARC-G-004; it states an invariant a conforming deployment meets, not a claim that every route in a given build has been individually audited.
+
+REQ-SEC-G-009: A deployment MUST be able to run audit fail-closed, so that a request whose audit record cannot be written does not return a successful result. A service MUST NOT silently drop an audit record on the success path. In Evidence Gateway the fail-closed posture is not configurable: one access-attempt record is durable before every actual source stage, the disclosure-release record is durable after signing and before the response is released, and an audit write that cannot be completed fails the request.
 
 ## 7. Replay-protection authority
 
-No maintained Registry Stack resource server holds a replay table, replay reservation, or
-persistent single-use record. A service that keeps no replay state MUST NOT claim to consume a
-credential or prevent its reuse. Replay prevention belongs to the surrounding protocol or issuer
-that creates and validates a one-time challenge.
+Evidence Gateway holds no credential or presentation replay state. Its request-binding
+checks do not consume a credential or prevent its reuse. Other products may retain
+operation receipts or replay recovery state under their own contracts. Replay prevention
+for one-time credentials belongs to the surrounding protocol or issuer that creates and
+validates a one-time challenge.
 
 REQ-SEC-G-018: A service that holds no replay state MUST NOT claim replay prevention or single-use
 enforcement. It MAY validate signatures, expiry, audience, nonce equality, and other request
@@ -90,28 +139,71 @@ bindings, but those checks alone MUST NOT be described as consuming a credential
 
 ## 8. Transport and outbound-call posture
 
-Outbound calls MUST follow the fixed destination, transport trust, redirect, timeout, and response
-bounds in reviewed configuration. Public errors MUST use the product's documented bounded error
-contract.
+Services present a consistent error surface and constrain the calls they make outward.
 
-## 9. Operator boundary
+REQ-SEC-G-011: Error responses MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)), except on a route whose own protocol defines a different error envelope.
 
-The operator owns identity issuance, key custody and rotation, transport termination, network
-policy, audit storage and retention, database administration, monitoring, backup, recovery, and
-incident response.
+REQ-SEC-G-012: A runtime service SHOULD apply the Registry Platform HTTP-security primitive (security response headers) on its served surface, and outbound HTTP calls SHOULD be governed by the Registry Platform outbound-policy primitive. The concrete header set and the outbound allow and deny rules are operational detail (Section 1).
+
+Problem details are a client-facing protocol surface, not an operator diagnostic channel. Stable problem codes and titles belong in responses; raw bearer tokens, private keys, source values, local filesystem paths, and unbounded internal error chains belong in protected operator logs. Principal-scoped responses, including scoped metadata and evidence assertions, are not public cache entries: where a response varies by authenticated principal, scope, purpose, or authorization context, deployments use cache controls appropriate to that sensitivity, such as private or no-store semantics and `Vary: Authorization` where a response is cacheable.
+
+## 9. The operator boundary
+
+The security model ends where the deployment begins. The following are operator responsibilities, not behavior this specification defines: secret and key provisioning, key custody and the rotation schedule, audit retention and storage, tenant isolation, transport termination and certificate management, network rate limiting at the edge, deployment configuration, and incident response. Registry Platform and the runtime services provide the primitives; the operator provisions, configures, and operates them.
+
+REQ-SEC-G-013: An implementation MUST NOT embed secret material (private keys, credential secrets, audit pseudonym secrets) in a portable metadata artifact or in any artifact intended for distribution or inspection. Secrets are provided to a running service by the operator at deployment time.
 
 ## Conformance
 
-An implementation conforms when it satisfies every applicable requirement above.
+A registry stack deployment conforms to this specification when it:
+
+- sources its cross-service security primitives from Registry Platform (REQ-SEC-G-001);
+- verifies caller credentials against one configured issuer and authenticates every assertion- or record-bearing route (REQ-SEC-G-002);
+- verifies OIDC tokens by signature, issuer, audience, permitted algorithm, and configured token type before trusting them (REQ-SEC-G-004);
+- authorizes before source or evaluation work, denies by default, and never widens reach at request time (REQ-SEC-G-005, REQ-SEC-G-006);
+- publishes only public verification keys and keeps private material unpublished (REQ-SEC-G-007);
+- audits every request touching person-level data and can run audit fail-closed (REQ-SEC-G-008, REQ-SEC-G-009);
+- claims no replay, single-use, or freshness protection from a service that holds no replay state (REQ-SEC-G-018);
+- reports errors as problem+json outside route-specific error envelopes, and applies the shared HTTP-security and outbound-policy primitives (REQ-SEC-G-011, REQ-SEC-G-012);
+- keeps secrets out of distributable artifacts and leaves provisioning to the operator (REQ-SEC-G-013).
+
+REQ-SEC-G-010 is retired. It required delegated evaluation to be static-peer only and fully verified before any Relay consultation or claim evaluation. The retired `registry-notary` component held the only delegated-evaluation surface in this stack, so no service here evaluates on behalf of a peer and nothing implements that requirement. Per RS-DOC REQ-DOC-008 the identifier is not reused.
+
+REQ-SEC-G-003 is retired. It required a resource server's static bearer-credential mode to configure a `sha256:` fingerprint rather than the raw bearer secret. That mode shipped only in the retired Relay V1 runtime and its adopter tooling, so no maintained resource server implements the requirement and the identifier is not reused.
+
+REQ-SEC-G-014 and REQ-SEC-G-015 are retired together. They required a persisted replay decision to live in PostgreSQL state owned by the deciding product, forbade two products from sharing replay tables or correctness transactions, required product-owned atomic reservation and completion operations, and required a potentially stale recovery point to stay offline until product recovery rules passed. The retired Relay runtime held the only persisted replay authority in this stack. Evidence Gateway holds no replay state, so nothing implements those requirements. REQ-SEC-G-018 states what a service holding no replay state may claim. Per RS-DOC REQ-DOC-008 the identifiers are not reused.
+
+REQ-SEC-G-016 and REQ-SEC-G-017 are retired together. REQ-SEC-G-016 required a token issuer to authenticate each registered client by its server-selected method, derive authority only from its server-side registry, constrain client-secret compatibility, and return one indistinguishable public authentication failure. REQ-SEC-G-017 required the issuer to enforce single use of an assertion identifier with bounded in-process state, fail closed on saturation, and claim no cross-instance guarantee. Registry Mint is absent from the maintained stack, and no maintained product owns that token-issuer boundary. Per RS-DOC REQ-DOC-008 the identifiers are reserved and MUST NOT be reused.
+
+Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field, nor to OpenID Connect, OAuth 2.0, or any other authentication or authorization framework named in prose. Each cited standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 
 ## Evidence
 
-{/* Evidence: crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/audit.rs;
-    crates/registry-breg/src/access.rs; crates/registry-platform-oidc/src/lib.rs;
-    crates/registry-platform-httpsec/src/lib.rs. */}
+This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
+
+- The [boundary map](../../map/boundaries-and-map/) records that the security primitives (authentication, OIDC, audit envelopes, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers) are owned by Registry Platform and that secret provisioning, audit retention, tenant isolation, deployment configuration, and incident response are operator responsibilities, which Sections 2 and 9 make precise.
+- The [Evidence Gateway API reference](../../reference/apis/registry-evidence/) and [Configure Evidence Gateway](../../configure/evidence/) describe the OIDC trust inputs, per-grant scopes, and unauthenticated probes that Sections 3 and 4 state normatively.
+- The [Evidence Gateway security model](../../security/evidence/) and [Configure Evidence Gateway](../../configure/evidence/) describe JWKS publication, the public/private key boundary, and rotation, which Section 5 states normatively.
+- [RS-PR-EVIDENCE](../rs-pr-evidence/) carries the Evidence surface-level form of the authentication, authorization, key-publication, audit, and error requirements this document generalizes.
+- [RS-ARC-G](../rs-arc-g/) Section 5 holds the architectural invariants (REQ-ARC-G-004, REQ-ARC-G-005) that Sections 2 and 6 refine.
+- The [retention and persistent-state reference](../../operate/retention-and-persistent-state/) records the complete product retention inventory that Section 7 states normatively.
+- The [standards register](../../reference/standards/) records the adoption mode for the standards listed in `standards_referenced`.
+- The enforcing code is inspectable in the workspace: OIDC verification in `crates/registry-platform-oidc`, the Evidence Gateway authenticator in `crates/registry-evidence/src/auth.rs`, authority matching before source work and the unauthenticated-surface allow-list in `crates/registry-evidence/src/server.rs`, the audit envelope in `crates/registry-platform-audit`, Evidence Gateway's fail-closed audit path in `crates/registry-evidence/src/audit.rs`, Base Registry Engine's access and audit boundaries in `crates/registry-breg/src/access.rs` and `crates/registry-breg/src/audit.rs`, and the secret-material rejection lists in `crates/registry-manifest-core`.
+- Evidence Gateway holds no credential or presentation replay state; its request-binding checks do not consume a credential (REQ-SEC-G-018). Other products' operation receipts and recovery state are recorded in the [retention and persistent-state reference](../../operate/retention-and-persistent-state/).
+- The frozen Evidence Gateway Version 1 security invariant matrix (`products/evidence/contracts/security-invariant-matrix.yaml`) records the Evidence Gateway-specific form of the audit-ordering, fail-closed, transport-identity, and nonce invariants that Sections 3, 6, and 7 state at stack level.
+
+{/* Evidence: crates/registry-platform-oidc/src/lib.rs;
+    crates/registry-platform-audit/src/lib.rs;
+    crates/registry-evidence/src/auth.rs;
+    crates/registry-evidence/src/server.rs;
+    crates/registry-evidence/src/audit.rs;
+    crates/registry-breg/src/access.rs;
+    crates/registry-breg/src/audit.rs;
+    crates/registry-manifest-core/src/lib.rs. */}
 
 ## Next
 
-- [RS-ARC-G](../rs-arc-g/)
-- [RS-PR-EVIDENCE](../rs-pr-evidence/)
-- [Threat model](../../explanation/threat-model/)
+- [RS-ARC-G](../rs-arc-g/) places the security model in the registry stack architecture.
+- [RS-PR-EVIDENCE](../rs-pr-evidence/) applies this model to the Evidence Gateway protocol surface.
+- [RS-TERMS](../rs-terms/) defines the security and disclosure vocabulary used here.
+- The [Evidence Gateway security model](../../security/evidence/) is the narrative explanation of authentication, minimum disclosure, and audit.

@@ -26,11 +26,12 @@ keeps the questions those facts answer, caller authorization, minimization,
 signing, and deployment configuration.
 
 At the other edges, Registry Manifest owns portable metadata and DCAT rendering
-and receives a one-way projection, Registry Relay is a separate read-only
-publication boundary, and an operated OAuth issuer issues tokens while a BReg
+and receives a one-way projection, and an operated OAuth issuer issues tokens
+while a BReg
 runtime stays an independent OAuth resource server. Authoring and migration
 authority stay separate: tooling can edit, diff, and check configuration, and
-cannot hold the production migration credential.
+cannot hold the production migration credential. Registry Relay is retired;
+BReg does not inherit its publication contract or serve as a generic replacement.
 
 ## Source neutrality
 
