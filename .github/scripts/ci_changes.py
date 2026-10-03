@@ -47,13 +47,6 @@ SHARDS = {
         "registry-manifest-cli",
         "registry-manifest-core",
     ),
-    "relay-client": (
-        "registry-relay-http-contract",
-        "registry-relay-client",
-        "registry-relay-client-node",
-        "registry-relay-client-py",
-    ),
-    "relay-v2": ("registry-relay-v2", "registry-relayctl"),
     "breg": (
         "registry-breg",
         "registry-breg-client",
@@ -113,8 +106,6 @@ EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
 DISCOVERY_PACKAGES = frozenset(SHARDS["discovery"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
-RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
-RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 BREG_PACKAGES = frozenset(SHARDS["breg"])
 CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
@@ -133,8 +124,6 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
         "registry-casework",
         "registry-discovery",
         "registry-evidence",
-        "registry-relay-v2",
-        "registry-relayctl",
         "registry-render",
         "registry-scheduling",
         "registry-messaging",
@@ -149,10 +138,7 @@ CONFIG_CONFORMANCE_INPUTS = (
     "products/messaging/generated/runtime/*",
 )
 
-# These are the cross-product semantic commitments implemented independently by
-# Base Registry Engine and Relay V2. A change must replay both real product routers,
-# while profile-only tooling and ordinary positive/negative fixtures remain on
-# the identifier/profile gate without widening the Rust matrix.
+# These are Registry Record commitments implemented by Base Registry Engine.
 REGISTRY_RECORD_CROSS_PRODUCT_INPUTS = (
     "products/registry-record/schema/**",
     "products/registry-record/context/**",
@@ -161,7 +147,7 @@ REGISTRY_RECORD_CROSS_PRODUCT_INPUTS = (
 )
 
 # Provider publication is part of the Discovery product contract even though
-# Evidence and Relay own its generation and serving code. Keep this explicit:
+# Evidence owns its generation and serving code. Keep this explicit:
 # a publisher-only change must run the cross-product profile and journey gates
 # without relying on an incidental reverse dev-dependency.
 DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
@@ -177,27 +163,12 @@ DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
     "crates/registry-evidencectl/src/build.rs",
     "crates/registry-evidencectl/src/fixtures.rs",
     "crates/registry-evidencectl/tests/production_build.rs",
-    "crates/registry-relay-http-contract/src/lib.rs",
-    "crates/registry-relay-v2/src/api.rs",
-    "crates/registry-relay-v2/src/artifacts.rs",
-    "crates/registry-relay-v2/src/compiler.rs",
-    "crates/registry-relay-v2/src/contract.rs",
-    "crates/registry-relay-v2/src/model.rs",
-    "crates/registry-relay-v2/src/package.rs",
-    "crates/registry-relay-v2/src/server.rs",
-    "crates/registry-relay-v2/src/tooling.rs",
-    "crates/registry-relay-v2/tests/acceptance_http.rs",
 )
 DISCOVERY_PROVIDER_INPUTS = DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS + (
     "products/evidence/contracts/bundle.schema.yaml",
     "products/evidence/fixtures/acceptance/*/catalog.jsonld",
     "products/evidence/fixtures/acceptance/*/evidence.yaml",
     "products/evidence/generated/registry-evidence.openapi.json",
-    "products/relay-v2/acceptance/*/expected-http.yaml",
-    "products/relay-v2/acceptance/*/registry.yaml",
-    "products/relay-v2/contracts/acceptance-scenario-matrix.yaml",
-    "products/relay-v2/contracts/artifact-inventory.yaml",
-    "products/relay-v2/contracts/generated-baselines.yaml",
 )
 
 # The full reader journey is a Discovery product gate, not only a docs lint.
@@ -210,17 +181,6 @@ DISCOVERY_TUTORIAL_INPUTS = (
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
     "docs/site/src/content/docs/tutorials/publish-and-consume-discovery-index.mdx",
-)
-
-# Every input the Relay V2 tutorial gate replays: the page runner and the page
-# whose frontmatter it replays. The binaries it runs are Relay V2 packages, so
-# package routing already carries their build inputs.
-RELAY_TUTORIAL_INPUTS = (
-    "docs/site/package-lock.json",
-    "docs/site/package.json",
-    "docs/site/scripts/run-tutorial.mjs",
-    "docs/site/scripts/tutorial-runner/**",
-    "docs/site/src/content/docs/tutorials/publish-governed-sqlite-registry.mdx",
 )
 
 # Every input the Evidence tutorial gate replays or is built from: the page
@@ -361,8 +321,6 @@ CLI_REFERENCE_INPUTS = (
         "crates/registry-evidence-oid4vci/src/cli.rs",
     ),
     ("crates/registry-evidencectl/src/**", "crates/registry-evidencectl/src/lib.rs"),
-    ("crates/registry-relay-v2/src/cli.rs", "crates/registry-relay-v2/src/cli.rs"),
-    ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
     ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
     ("crates/registry-breg-mcp/src/cli.rs", "crates/registry-breg-mcp/src/cli.rs"),
     (
@@ -389,9 +347,6 @@ CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 EVIDENCE_BINDING_PACKAGES = frozenset(
     {"registry-evidence-client-node", "registry-evidence-client-py"}
 )
-RELAY_BINDING_PACKAGES = frozenset(
-    {"registry-relay-client-node", "registry-relay-client-py"}
-)
 DISCOVERY_BINDING_PACKAGES = frozenset(
     {"registry-discovery-client-node", "registry-discovery-client-py"}
 )
@@ -407,7 +362,6 @@ MESSAGING_BINDING_PACKAGES = frozenset(
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
-    | RELAY_BINDING_PACKAGES
     | BREG_BINDING_PACKAGES
     | CASEWORK_BINDING_PACKAGES
     | MESSAGING_BINDING_PACKAGES
@@ -638,8 +592,6 @@ def identifier_catalog_inputs(
     inputs = [
         "products/identifiers/**",
         "products/registry-record/**",
-        "crates/registry-relay-v2/examples/audit-event-schema.rs",
-        "crates/registry-relay-v2/src/audit.rs",
     ]
     for index, source in enumerate(problem_sources):
         if not isinstance(source, dict):
@@ -1033,8 +985,6 @@ def classify(
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
                 seeds.update(PLATFORM_PACKAGES)
-            elif path.startswith("products/relay-v2/"):
-                seeds.update(RELAY_V2_PACKAGES)
             elif path.startswith("products/breg/"):
                 seeds.update(BREG_PACKAGES)
             elif path.startswith("products/casework/"):
@@ -1044,7 +994,6 @@ def classify(
             elif path.startswith("products/messaging/"):
                 seeds.update(MESSAGING_PACKAGES)
             elif path.startswith("products/identifiers/"):
-                # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
                 pass
             elif path.startswith("products/registry-record/"):
@@ -1186,24 +1135,6 @@ def classify(
             # suite (scripts/current-docs-release-pins.test.mjs) scans as a
             # current page.
             "docker/README.md",
-            # The two Relay V2 product documents the site publishes through
-            # repo-docs.yaml. Relay V2 generates no docs-site page from crate
-            # source: relayctl compiles a project instead of exposing a schema
-            # catalog, and each deployment generates its own OpenAPI
-            # description.
-            "products/relay-v2/CONCEPT.md",
-            "products/relay-v2/STANDARDS-ALIGNMENT.md",
-            # No page is generated from these files, but scripts/
-            # ops-posture-spec.test.mjs reads them to prove the published
-            # operational claims still match the runtime. A probe route, a
-            # runtime bound, or a healthcheck default can change here and
-            # leave RS-OP-POSTURE stale, and that test is the only thing that
-            # catches it.
-            "crates/registry-relay-v2/src/server.rs",
-            "crates/registry-relay-v2/src/main.rs",
-            "crates/registry-relay-v2/src/contract.rs",
-            "crates/registry-relay-v2/src/startup.rs",
-            "crates/registry-relay-http-contract/src/lib.rs",
         }
         for path in paths
     ) or (
@@ -1291,7 +1222,7 @@ def classify(
                 {
                     "name": shard_name,
                     "packages": selected,
-                    "all_features": shard_name == "relay-v2",
+                    "all_features": False,
                 }
             )
 
@@ -1326,10 +1257,6 @@ def classify(
         or bool(affected & DISCOVERY_PACKAGES)
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
         or any(matches(path, *DISCOVERY_TUTORIAL_INPUTS) for path in paths),
-        "relay_v2_contracts": registry_record_cross_product
-        or bool(affected & RELAY_V2_PACKAGES)
-        or any(matches(path, *RELAY_TUTORIAL_INPUTS) for path in paths),
-        "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
         "breg_contracts": breg_contracts,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "evidence_assurance": evidence_assurance,

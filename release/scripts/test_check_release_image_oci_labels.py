@@ -465,8 +465,8 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
             return subprocess.run(
                 [
                     str(image_builder),
-                    "relay",
-                    "example.invalid/relay:test",
+                    "evidence",
+                    "example.invalid/evidence:test",
                     SOURCE,
                     REVISION,
                     VERSION,
@@ -649,7 +649,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             build_calls = [
                 call for call in read_calls(docker_log) if call[:2] == ["buildx", "build"]
             ]
-            self.assertEqual(24, len(build_calls))
+            self.assertEqual(22, len(build_calls))
             dockerfiles = []
             for call in build_calls:
                 self.assertEqual(["buildx", "build"], call[:2])
@@ -684,19 +684,17 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     str(ROOT / "release/docker/Dockerfile.casework"),
                     str(ROOT / "release/docker/Dockerfile.scheduling"),
                     str(ROOT / "release/docker/Dockerfile.messaging"),
-                    str(ROOT / "release/docker/Dockerfile.relay"),
                 },
                 set(dockerfiles),
             )
             self.assertEqual(
                 4,
                 dockerfiles.count(
-                    str(ROOT / "release/docker/Dockerfile.relay")
+                    str(ROOT / "release/docker/Dockerfile.evidence")
                 ),
             )
             for name in (
                 "discovery",
-                "evidence",
                 "evidence-oid4vci",
                 "registry-render",
                 "breg",
@@ -724,7 +722,6 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     tuple(
                         sorted(
                             (
-                                "relay",
                                 "evidence",
                                 "evidence-oid4vci",
                                 "registry-render",
@@ -765,30 +762,29 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     "correct-casework-first",
                     "correct-scheduling-first",
                     "correct-messaging-first",
-                    "correct-relay-first",
                 },
                 {
                     Path(layout.removeprefix("oci-layout://")).name
                     for layout in inspected_layouts
                 },
             )
-            relay_checks = [
+            evidence_checks = [
                 call
                 for call in python_calls
                 if call
                 and call[0].endswith("check-release-image-oci-labels.py")
                 and len(call) > 1
-                and "correct-relay-first" in call[1]
+                and "correct-evidence-first" in call[1]
                 and "--format-template" not in call
             ]
-            self.assertEqual(1, len(relay_checks))
-            self.assertNotIn("--expected-label", relay_checks[0])
+            self.assertEqual(1, len(evidence_checks))
+            self.assertNotIn("--expected-label", evidence_checks[0])
             comparisons = [
                 call
                 for call in python_calls
                 if call and call[0].endswith("compare-release-image-layouts.py")
             ]
-            self.assertEqual(12, len(comparisons))
+            self.assertEqual(11, len(comparisons))
             self.assertEqual(1, sum("--rootfs-only" in call for call in comparisons))
 
 

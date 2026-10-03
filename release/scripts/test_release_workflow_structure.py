@@ -424,7 +424,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for version in ("0.38.0", "1.0.0"):
             with self.subTest(version=version):
                 self.assertEqual(
-                    module._candidate_image_names("0.37.0")
+                    (module._candidate_image_names("0.37.0") - ({"relay"} if version == "1.0.0" else set()))
                     | {"registry-render", "evidence-oid4vci", "breg-mcp", "breg-review", "messaging"},
                     module._candidate_image_names(version),
                 )
@@ -903,35 +903,16 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertNotIn('test -f "${casework_package}/package.json"', assemble)
 
-    def test_next_release_embeds_and_smokes_relay_installer_aliases(self) -> None:
+    def test_next_release_excludes_retired_relay_installers_and_smokes(self) -> None:
         _, document = workflow("release-candidate.yml")
         assemble = step_run(
             document,
             "assemble",
             "Assemble public payload and validate version-appropriate install inputs",
         )
-        self.assertIn(
-            'relay_installer="relay-${{ needs.validate.outputs.tag }}-install.sh"',
-            assemble,
-        )
-        self.assertIn("crates/registry-relay-v2/install.sh", assemble)
-        self.assertIn(
-            'cp "candidate/bundle-root/${relay_installer}" \\\n'
-            "    candidate/bundle-root/relay-install.sh",
-            assemble,
-        )
-        self.assertIn(
-            'RELAY_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root"',
-            assemble,
-        )
-        self.assertIn('RELAY_INSTALL_DIR="${relay_install_dir}"', assemble)
-        self.assertIn('"${relay_install_dir}/relay" --version', assemble)
-        self.assertIn('"${relay_install_dir}/relayctl" --version', assemble)
-        self.assertIn(
-            '"relayctl-${{ needs.validate.outputs.tag }}-linux-amd64"',
-            assemble,
-        )
-        self.assertIn("relay_patch >= 1", assemble)
+        for retired in ("relay_installer", "registry-relay", "RELAY_INSTALL_DIR", "relayctl-"):
+            self.assertNotIn(retired, assemble)
+        self.assertIn("crates/registry-evidencectl/install.sh", assemble)
 
     def test_builds_and_smokes_stable_native_client_packages(self) -> None:
         text, document = workflow("release-candidate.yml")
@@ -1013,7 +994,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn(
             "crates/registry-evidence-client-node/package-lock.json", cache_key
         )
-        self.assertIn("crates/registry-relay-client-node/package-lock.json", cache_key)
+        self.assertNotIn("registry-relay", cache_key)
         wheel = step_run(document, "clients", "Build Python client wheels")
         self.assertIn("compatibility=linux", wheel)
         self.assertIn("compatibility=manylinux_2_17", wheel)
@@ -1177,7 +1158,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for name in ("Smoke Python client wheels", "Smoke Node client packages"):
             smoke = step_run(document, "clients", name)
             self.assertIn("smoke-${client}-client-package", smoke)
-            self.assertIn("for client in discovery evidence relay", smoke)
+            self.assertIn("for client in discovery evidence", smoke)
         node_smoke = step_run(document, "clients", "Smoke Node client packages")
         self.assertIn("node-root-registry", node_smoke)
         self.assertIn("smoke-registry-client-package.js", node_smoke)
@@ -1250,10 +1231,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "crates/registry-evidence-client-node/package-lock.json",
             str(clients),
         )
-        self.assertIn(
-            "crates/registry-relay-client-node/package-lock.json",
-            str(clients),
-        )
+        self.assertNotIn("registry-relay", str(clients))
         upload = next(
             step
             for step in clients["steps"]
@@ -1271,10 +1249,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("expected-client-assets", assemble)
         self.assertIn("actual-client-assets", assemble)
         self.assertIn("diff -u", assemble)
-        self.assertIn("include_relay_clients=1", assemble)
-        self.assertIn("expected_client_assets=4", assemble)
-        self.assertIn("expected_client_assets=6", assemble)
-        self.assertIn("expected_client_assets=9", assemble)
+        self.assertIn("expected_client_assets=2", assemble)
+        self.assertNotIn("relay-client", assemble)
         self.assertIn('"${platform}" == linux-amd64-glibc', assemble)
         self.assertIn(
             'if [[ "${platform}" == linux-amd64-glibc ]]; then\n'
@@ -1291,12 +1267,11 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "expected_client_assets=$((expected_client_assets + 1))",
             assemble,
         )
-        self.assertIn("relay-client-node-", assemble)
         self.assertIn("discovery-client-node-", assemble)
-        self.assertIn("registrystack-${client}-client-${version}.tgz", assemble)
-        self.assertIn("for client in discovery evidence relay", assemble)
+        self.assertIn("registrystack-evidence-client-${version}.tgz", assemble)
+        self.assertIn("registrystack-discovery-client-${version}.tgz", assemble)
+        self.assertIn("for client in discovery evidence", assemble)
         self.assertIn("client_registry.py validate-dist", assemble)
-        self.assertIn("registry_relay_client-", assemble)
         self.assertIn("registry_discovery_client-", assemble)
         assemble_steps = document["jobs"]["assemble"]["steps"]
         self.assertFalse(
@@ -1315,7 +1290,6 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("registrystack-discovery-client-*.tgz", text)
         self.assertIn("registry_discovery_client-*.whl", text)
         self.assertIn("registrystack-evidence-client-*.tgz", text)
-        self.assertIn("registrystack-relay-client-*.tgz", text)
         seal = step_run(
             document,
             "assemble",
@@ -1329,15 +1303,15 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
     def test_candidate_client_smoke_counts_and_internal_wheel_names(self) -> None:
         _, document = workflow("release-candidate.yml")
         node = step_run(document, "clients", "Smoke Node client packages")
-        count = node.split("expected_addons=4", 1)[1].split('test "$(find', 1)[0]
-        for admitted, expected in (("false", "5"), ("true", "6")):
+        count = node.split("expected_addons=3", 1)[1].split('test "$(find', 1)[0]
+        for admitted, expected in (("false", "4"), ("true", "5")):
             with self.subTest(messaging_in_release=admitted):
                 result = subprocess.run(
                     [
                         "bash",
                         "-c",
                         f"include_casework=1\nmessaging_in_release={admitted}\n"
-                        f"expected_addons=4{count}\nprintf '%s' \"${{expected_addons}}\"",
+                        f"expected_addons=3{count}\nprintf '%s' \"${{expected_addons}}\"",
                     ],
                     capture_output=True,
                     text=True,
@@ -1348,7 +1322,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         stem = python.split('wheel_stem="registry_${client}_client"', 1)[1].split(
             'wheel="${wheel_stem}', 1
         )[0]
-        for product in ("breg", "casework", "messaging", "discovery", "evidence", "relay"):
+        for product in ("breg", "casework", "messaging", "discovery", "evidence"):
             with self.subTest(product=product):
                 result = subprocess.run(
                     [
@@ -2223,6 +2197,31 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("PYPI_TOKEN", text)
 
 
+    def test_client_publication_matrices_preserve_historical_relay_only(self) -> None:
+        _, document = workflow("release.yml")
+        candidate = step_run(document, "verify", "Verify binding, candidate, and attestations")
+        for variable, field in (("client_registry_matrix", "client"), ("client_registry_pypi_matrix", "include")):
+            program = candidate.split(f'{variable}="$(\n', 1)[1].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+            for version, expected in (
+                ("0.22.0", ["evidence", "relay"]),
+                ("0.23.0", ["discovery", "evidence", "relay"]),
+                ("0.26.0", ["discovery", "evidence", "relay"]),
+                ("0.26.1", ["stack"]),
+                ("0.38.0", ["stack"]),
+                ("0.39.0", ["stack"]),
+            ):
+                with self.subTest(matrix=variable, version=version):
+                    result = subprocess.run(
+                        [sys.executable, "-c", program, version], cwd=ROOT,
+                        env={**os.environ, "PYTHONPATH": str(ROOT / "release/scripts")},
+                        capture_output=True, text=True, check=True,
+                    )
+                    selected = json.loads(result.stdout)[field]
+                    if field == "include":
+                        selected = [entry["client"] for entry in selected]
+                    self.assertEqual(expected, selected)
+
+
 class MirrorBuildkitWorkflowStructureTest(unittest.TestCase):
     def test_is_dispatch_only_with_narrow_scopes_and_a_single_mirror_job(self) -> None:
         text, document = workflow("mirror-buildkit.yml")
@@ -2374,7 +2373,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "relay",
                 "scheduling",
             ],
-            "v1.0.0": [
+            "v0.39.0": [
                 "breg",
                 "breg-mcp",
                 "breg-review",
@@ -2384,10 +2383,10 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "evidence-oid4vci",
                 "messaging",
                 "registry-render",
-                "relay",
                 "scheduling",
             ],
         }
+        cases["v1.0.0"] = list(cases["v0.39.0"])
         manifests = {}
         for tag, image_names in cases.items():
             with self.subTest(tag=tag):

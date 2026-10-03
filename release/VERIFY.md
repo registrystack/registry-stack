@@ -164,7 +164,9 @@ manifest="registry-stack-${tag}-release-manifest.json"
 jq -e --arg tag "${tag}" '
   ($tag | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") |
     {major: (.major | tonumber), minor: (.minor | tonumber)}) as $version |
-  (if ($version.major > 0 or $version.minor >= 38)
+  (if ($version.major > 0 or $version.minor >= 39)
+   then ["breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "scheduling"]
+   elif $version.minor >= 38
    then ["breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "relay", "scheduling"]
    elif $version.minor >= 33
    then ["breg", "casework", "discovery", "evidence", "relay", "scheduling"]
@@ -198,6 +200,8 @@ Registry Engine joins at `v0.26.0`, Registry Casework joins at `v0.30.0`,
 and Registry Scheduling joins at `v0.33.0`. The citizen MCP gateway and review
 page (`breg-mcp` and `breg-review`), Registry Messaging, Registry Render, and
 the separate Evidence OID4VCI adapter image join at `v0.38.0`.
+Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
+omit it from the image and payload rosters.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
 `RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
 `release/scripts/release_roster.py` own these boundaries. v0.38.0 also adds the

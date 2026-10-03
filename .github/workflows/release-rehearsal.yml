@@ -462,7 +462,6 @@ jobs:
           cache-dependency-path: |
             crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
-            crates/registry-relay-client-node/package-lock.json
             crates/registry-breg-client-node/package-lock.json
             crates/registry-casework-client-node/package-lock.json
             crates/registry-messaging-client-node/package-lock.json
@@ -488,7 +487,7 @@ jobs:
           if (( major > 0 || minor > 26 || (minor == 26 && patch >= 1) )); then
             unified_client=1
           fi
-          clients=(discovery evidence relay)
+          clients=(discovery evidence)
           if [[ "${unified_client}" -eq 1 ]]; then
             clients+=(breg casework)
           fi

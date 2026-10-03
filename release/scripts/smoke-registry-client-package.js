@@ -3,21 +3,16 @@
 
 const assert = require('node:assert');
 const client = require('@registrystack/client');
-const { breg, casework, discovery, evidence, relay } = client;
+const { breg, casework, discovery, evidence } = client;
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
 assert.strictEqual(typeof breg.verifyWebhookDelivery, 'function');
 assert.strictEqual(typeof discovery.DiscoveryClient, 'function');
 assert.strictEqual(typeof evidence.EvidenceClient, 'function');
-assert.strictEqual(typeof relay.RelayClient, 'function');
 assert.strictEqual(typeof casework.CaseworkClient, 'function');
 
 assert.ok(new breg.BaseRegistryClient({
   baseUrl: 'https://registry.invalid',
-  authorization: { static: 'placeholder-token' },
-}));
-assert.ok(new relay.RelayClient({
-  baseUrl: 'https://relay.invalid',
   authorization: { static: 'placeholder-token' },
 }));
 assert.ok(new casework.CaseworkClient({ baseUrl: 'https://casework.invalid' }));

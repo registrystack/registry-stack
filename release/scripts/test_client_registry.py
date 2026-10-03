@@ -79,7 +79,7 @@ class ClientRegistryTest(unittest.TestCase):
         self.module = load_module()
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.directory = Path(self.temporary_directory.name)
-        self.version = "1.2.3"
+        self.version = "0.38.0"
         self.client = "relay"
         self._write_distribution(self.client)
 
@@ -147,6 +147,7 @@ class ClientRegistryTest(unittest.TestCase):
         self.module.validate_distribution(self.directory, self.version, "relay")
 
     def test_validates_the_unified_distribution_with_all_native_bindings(self) -> None:
+        self.version = "0.39.0"
         self._write_distribution("stack")
         self.module.validate_distribution(self.directory, self.version, "stack")
         platform = self.module.npm_tarballs(
@@ -161,9 +162,15 @@ class ClientRegistryTest(unittest.TestCase):
                 "package/discovery-client.darwin-arm64.node",
                 "package/evidence-client.darwin-arm64.node",
                 "package/messaging-client.darwin-arm64.node",
-                "package/relay-client.darwin-arm64.node",
             ],
         )
+
+    def test_current_release_refuses_standalone_relay_packages(self) -> None:
+        self.version = "0.39.0"
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError, "Relay client packages are retired"
+        ):
+            self.module.validate_distribution(self.directory, self.version, "relay")
 
     def test_published_0_29_validation_keeps_the_historical_roster(self) -> None:
         self.version = "0.29.0"
@@ -371,11 +378,11 @@ class ClientRegistryTest(unittest.TestCase):
             )
         }
         self.assertIn(
-            "registry_relay_client-1.2.3-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "registry_relay_client-0.38.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
             names,
         )
         self.assertIn(
-            "registry_relay_client-1.2.3-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+            "registry_relay_client-0.38.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
             names,
         )
         self.assertFalse(any("abi3-linux_" in name for name in names))
@@ -497,7 +504,7 @@ class BindOptionalDependenciesTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.version = "1.2.3"
+        self.version = "0.38.0"
         self.client = "relay"
         self.definition = self.module.client_definition(self.client)
         self.package_json = self.directory / "package.json"
@@ -640,7 +647,6 @@ class CheckedInClientManifestTest(unittest.TestCase):
         roots = {
             "discovery": repo / "crates/registry-discovery-client-node",
             "evidence": repo / "crates/registry-evidence-client-node",
-            "relay": repo / "crates/registry-relay-client-node",
             "casework": repo / "crates/registry-casework-client-node",
             "messaging": repo / "crates/registry-messaging-client-node",
             "stack": repo / "crates/registry-stack-client-node",
@@ -669,7 +675,7 @@ class ClientReadmeInstallTest(unittest.TestCase):
         )
         # Six products have Rust, Node and Python coverage, and both unified
         # facades remain present.
-        self.assertEqual(14, len(found), found)
+        self.assertEqual(12, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:
@@ -692,13 +698,11 @@ class ClientReadmeInstallTest(unittest.TestCase):
             "registry-breg-client-node": "@registrystack/client",
             "registry-discovery-client-node": "@registrystack/client",
             "registry-evidence-client-node": "@registrystack/client",
-            "registry-relay-client-node": "@registrystack/client",
             "registry-messaging-client-node": "@registrystack/client",
             "registry-breg-client-py": "registry-stack-client",
             "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",
             "registry-evidence-client-py": "registry-stack-client",
-            "registry-relay-client-py": "registry-stack-client",
             "registry-messaging-client-py": "registry-stack-client",
         }
         for readme in self.readmes():

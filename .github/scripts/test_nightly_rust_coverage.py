@@ -35,8 +35,6 @@ class NightlyCoverageTests(unittest.TestCase):
             "discovery": "discovery",
             "platform": "platform",
             "manifest": "manifest-unit",
-            "relay-client": "relay-client",
-            "relay-v2": "relay-v2",
             "breg": "breg",
             "casework": "casework",
             "scheduling": "scheduling",
@@ -54,7 +52,7 @@ class NightlyCoverageTests(unittest.TestCase):
                 self.assertEqual(entry["features"], "")
                 self.assertEqual(
                     entry["all_features"],
-                    str(entry["name"] in {"platform", "relay-v2"}).lower(),
+                    str(entry["name"] == "platform").lower(),
                 )
 
     def test_plan_validates_locked_metadata_and_appends_github_output(self) -> None:
@@ -127,7 +125,7 @@ class NightlyCoverageTests(unittest.TestCase):
                         subprocess.run(["bash", "-c", script], env=env, check=True)
                     commands = [json.loads(line) for line in log.read_text().splitlines()]
                     packages = [arg for package in SHARDS[entry["name"]] for arg in ("-p", package)]
-                    features = ["--all-features"] if entry["name"] in {"platform", "relay-v2"} else []
+                    features = ["--all-features"] if entry["name"] == "platform" else []
                     self.assertEqual(commands, [
                         ["llvm-cov", "clean", "--workspace"],
                         ["llvm-cov", "--locked", *packages, *features, "--no-report"],

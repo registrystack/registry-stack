@@ -16,7 +16,7 @@ It produces, into `--output-dir`:
 Prerequisites this script does not perform:
 
   * the Node bindings selected for this version, built for this platform from
-    `crates/registry-{discovery,evidence,relay,breg,casework,messaging}-client-node`:
+    `crates/registry-{discovery,evidence,breg,casework,messaging}-client-node`:
     `npm ci && npm run build:debug` (or `npm run build` for a release build)
     For a release at version 0.33.0 or later on macOS, set the package's
     compatibility floor before every native build:
@@ -32,7 +32,7 @@ readable form of the recipe.
 
 Python wheels use the release profile by default. `--python-profile ci` opts
 into the workspace's cheaper CI profile for installed-package tutorial checks;
-it still assembles all six bindings with the same platform and package layout.
+it still assembles all five bindings with the same platform and package layout.
 
 The checked-in `crates/registry-stack-client-node/package.json` is never
 modified: the optional platform dependencies bind in a staging copy, because
@@ -68,7 +68,7 @@ import client_registry
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework", "messaging")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging")
 NODE_PRODUCTS = PRODUCTS
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 # BReg and Casework publish no standalone wheel, so their internal wheels use
@@ -76,7 +76,6 @@ MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 WHEEL_STEMS = {
     "discovery": "registry_discovery_client",
     "evidence": "registry_evidence_client",
-    "relay": "registry_relay_client",
     "breg": "registry_breg_client_native",
     "casework": "registry_casework_client_native",
     "messaging": "registry_messaging_client_native",

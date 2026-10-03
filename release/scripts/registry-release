@@ -104,10 +104,6 @@ NODE_CLIENT_RELEASE_SURFACES = (
         "@registrystack/evidence-client",
     ),
     (
-        "crates/registry-relay-client-node",
-        "@registrystack/relay-client",
-    ),
-    (
         "crates/registry-breg-client-node",
         "@registrystack/breg-client-native",
     ),
@@ -130,11 +126,6 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
         "crates/registry-evidence-client-py",
         "registry-evidence-client",
         "evidence-client-sdk",
-    ),
-    (
-        "crates/registry-relay-client-py",
-        "registry-relay-client",
-        "relay-client-sdk",
     ),
     (
         "crates/registry-breg-client-py",
@@ -209,9 +200,13 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
     if parsed_version is not None:
         artifact_names = set(artifacts)
         expected_inventory = set(RELAY_V2_ARTIFACT_INVENTORY)
+        if not release_roster.relay_in_release(parsed_version):
+            expected_inventory.difference_update({"relay", "relayctl"})
         if parsed_version >= release_candidate.MINT_RETIREMENT_VERSION:
             expected_inventory.remove("mint")
-        if parsed_version >= RELAY_INSTALLER_MINIMUM_VERSION:
+        if parsed_version >= RELAY_INSTALLER_MINIMUM_VERSION and release_roster.relay_in_release(
+            parsed_version
+        ):
             expected_inventory.add("relay-installer")
         if parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION:
             expected_inventory.add("registry-docs")
@@ -230,7 +225,9 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
                 {"registry-client-node", "registry-client-python"}
             )
         else:
-            if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
+            if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION and release_roster.relay_in_release(
+                parsed_version
+            ):
                 expected_inventory.update({"relay-client-node", "relay-client-python"})
             if parsed_version >= (0, 23, 0):
                 expected_inventory.update({"discovery-client-node", "discovery-client-python"})

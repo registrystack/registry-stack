@@ -17,7 +17,7 @@ from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
-PRODUCTS = ("discovery", "evidence", "relay", "breg", "casework", "messaging")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging")
 TAG = "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 
 
@@ -203,8 +203,8 @@ class AssembleRegistryClientWheelTest(TestCase):
         # build. Native extension loading remains covered by the package smoke.
         import_script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from registry_client import discovery, evidence, relay, breg, casework, messaging; "
-            "print(discovery.PRODUCT, evidence.PRODUCT, relay.PRODUCT, breg.PRODUCT, casework.PRODUCT, messaging.PRODUCT)"
+            "from registry_client import discovery, evidence, breg, casework, messaging; "
+            "print(discovery.PRODUCT, evidence.PRODUCT, breg.PRODUCT, casework.PRODUCT, messaging.PRODUCT)"
         )
         imported = subprocess.run(
             [
@@ -216,7 +216,7 @@ class AssembleRegistryClientWheelTest(TestCase):
         self.assertEqual(imported.returncode, 0, imported.stderr)
         self.assertEqual(
             imported.stdout.strip(),
-            "discovery evidence relay breg casework messaging",
+            "discovery evidence breg casework messaging",
         )
 
     def test_unified_and_legacy_distributions_never_own_the_same_path(self) -> None:

@@ -172,6 +172,7 @@ jobs:
           if len(matches) != 1:
               raise SystemExit(f"expected one release manifest for {version}")
           artifacts = matches[0].get("artifacts", {})
+          parsed_version = release_roster.parse_version(version)
           binary_names = {
               "discovery": "discovery",
               "discoveryctl": "discoveryctl",
@@ -191,10 +192,12 @@ jobs:
               "schedulingctl": "schedulingctl",
               "messaging": "messaging",
               "messagingctl": "messagingctl",
-              "relay": "relay",
-              "relayctl": "relayctl",
           }
-          if release_roster.scheduling_binary_in_release(release_roster.parse_version(version)):
+          # Historical repeatability still compares the immutable Relay bytes,
+          # while current manifests cannot reintroduce them.
+          if release_roster.relay_in_release(parsed_version):
+              binary_names.update({"relay": "relay", "relayctl": "relayctl"})
+          if release_roster.scheduling_binary_in_release(parsed_version):
               binary_names["scheduling"] = "scheduling"
           for artifact, asset in sorted(binary_names.items()):
               if artifact in artifacts:

@@ -42,8 +42,6 @@ CORE_ARGS = [
     "--release",
     "--locked",
     "-p",
-    "registry-relayctl",
-    "-p",
     "registry-evidence",
     "-p",
     "registry-evidencectl",
@@ -372,6 +370,30 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             calls = [json.loads(line) for line in log.read_text().splitlines()]
         return result, output, calls
 
+    def retained_builder_roster(
+        self, version: str, *groups: str, nightly_tag: str | None = None
+    ) -> list[str]:
+        rosters = MODULE.rosters(version, nightly_tag)
+        return [
+            asset
+            for group in groups
+            for asset in rosters[group]
+            if not asset.startswith("relayctl-")
+        ]
+
+    def add_historical_relay_fixture(
+        self, core: Path, version: str, nightly_tag: str | None = None
+    ) -> str:
+        roster = MODULE.rosters(version, nightly_tag)["core"]
+        relayctl = next(name for name in roster if name.startswith("relayctl-"))
+        path = core / "platform" / relayctl
+        path.write_bytes(f"immutable historical {relayctl} fixture\n".encode())
+        path.chmod(0o644 if relayctl.endswith(".tar.gz") else 0o755)
+        (core / "SHA256SUMS").write_text(
+            "".join(f"{digest(core / 'platform' / name)}  {name}\n" for name in roster)
+        )
+        return relayctl
+
     def test_nightly_groups_merge_with_full_identity_and_review_only_metadata(
         self,
     ) -> None:
@@ -392,6 +414,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             )
             self.assertIn(f"nightly_tag={nightly_tag}\n", metadata)
             shards[group] = shard
+        self.add_historical_relay_fixture(shards["core"], version, nightly_tag)
 
         output = self.root / "nightly-merged"
         result = subprocess.run(
@@ -445,12 +468,9 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([CORE_ARGS, BREG_ARGS, BREGCTL_ARGS, CASEWORK_RUNTIME_ARGS, CASEWORKCTL_ARGS], calls)
         self.assertEqual(
-            [
-                *MODULE.rosters(VERSION)["core"],
-                *MODULE.rosters(VERSION)["breg"],
-                *MODULE.rosters(VERSION)["bregctl"],
-                *MODULE.rosters(VERSION)["casework"],
-            ],
+            self.retained_builder_roster(
+                VERSION, "core", "breg", "bregctl", "casework"
+            ),
             [line.split("  ", 1)[1] for line in (output / "SHA256SUMS").read_text().splitlines()],
         )
 
@@ -492,6 +512,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         casework_result, casework, _ = self.build("casework")
         for result in (all_result, core_result, breg_result, bregctl_result, casework_result):
             self.assertEqual(0, result.returncode, result.stderr)
+        relayctl = self.add_historical_relay_fixture(core, VERSION)
         merged = self.root / "merged"
         MODULE.merge(
             version=VERSION,
@@ -505,7 +526,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         )
         expected = sorted(path.name for path in (all_output / "platform").iterdir())
         self.assertEqual(
-            sorted(expected),
+            sorted([*expected, relayctl]),
             sorted(path.name for path in (merged / "platform").iterdir()),
         )
         for name in expected:
@@ -524,6 +545,16 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         self.assertNotIn(
             "mint-v0.31.0-macos-arm64",
             MODULE.rosters("0.31.0")["core"],
+        )
+
+    def test_relayctl_is_retired_only_from_v0_39_0(self) -> None:
+        self.assertIn(
+            "relayctl-v0.38.0-macos-arm64.tar.gz",
+            MODULE.rosters("0.38.0")["core"],
+        )
+        self.assertNotIn(
+            "relayctl-v0.39.0-macos-arm64.tar.gz",
+            MODULE.rosters("0.39.0")["core"],
         )
 
     def test_pre_breg_version_produces_and_merges_an_exact_empty_shard(self) -> None:
@@ -551,12 +582,16 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         self.assertEqual("", (breg / "SHA256SUMS").read_text())
         self.assertEqual("", (bregctl / "SHA256SUMS").read_text())
         self.assertEqual("", (casework / "SHA256SUMS").read_text())
-        # Historical recovery still requires the Mint bytes built by the old
-        # release source. Current builders omit them; supply immutable fixture
-        # bytes here so this tests the historical merger rather than rebuilding Mint.
-        legacy_mint = core / "platform" / f"mint-v{version}-macos-arm64"
-        legacy_mint.write_bytes(b"historical Mint fixture\n")
-        legacy_mint.chmod(0o755)
+        # Historical recovery still requires bytes built by the old release
+        # source. Current builders omit them; supply immutable fixture bytes so
+        # this tests the historical merger rather than rebuilding retired code.
+        for name in (
+            f"mint-v{version}-macos-arm64",
+            f"relayctl-v{version}-macos-arm64",
+        ):
+            legacy = core / "platform" / name
+            legacy.write_bytes(f"historical {name} fixture\n".encode())
+            legacy.chmod(0o755)
         (core / "SHA256SUMS").write_text("".join(
             f"{digest(core / 'platform' / name)}  {name}\n"
             for name in MODULE.rosters(version)["core"]
@@ -633,13 +668,14 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             all_calls,
         )
         rosters = MODULE.rosters(OPERATOR_TOOL_VERSION)
-        expected = [
-            *rosters["core"],
-            *rosters["breg"],
-            *rosters["bregctl"],
-            *rosters["casework"],
-            *rosters["scheduling"],
-        ]
+        expected = self.retained_builder_roster(
+            OPERATOR_TOOL_VERSION,
+            "core",
+            "breg",
+            "bregctl",
+            "casework",
+            "scheduling",
+        )
         self.assertEqual(
             expected,
             [
@@ -654,6 +690,9 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             )
             self.assertEqual(0, result.returncode, result.stderr)
             shards[group] = shard
+        relayctl = self.add_historical_relay_fixture(
+            shards["core"], OPERATOR_TOOL_VERSION
+        )
         without_scheduling = self.root / "tools-merged-without-scheduling"
         with self.assertRaisesRegex(
             MODULE.ShardError, "scheduling shard is required from version 0.36.0"
@@ -682,7 +721,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             output=merged,
         )
         self.assertEqual(
-            sorted(expected),
+            sorted([*expected, relayctl]),
             sorted(path.name for path in (merged / "platform").iterdir()),
         )
         for name in expected:
@@ -712,7 +751,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         self.assertNotEqual(0, wrong.returncode)
         self.assertEqual([CORE_ARGS], wrong_calls)
         self.assertEqual(
-            "relayctl\n", (self.root / "wrong-version-smoke.log").read_text()
+            "evidence\n", (self.root / "wrong-version-smoke.log").read_text()
         )
         self.assertFalse(wrong_output.exists())
 
@@ -734,12 +773,9 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             [CORE_ARGS, BREG_ARGS, BREGCTL_ARGS, CASEWORK_RUNTIME_ARGS, CASEWORKCTL_ARGS],
             calls,
         )
-        expected = [
-            *MODULE.rosters(ARCHIVE_VERSION)["core"],
-            *MODULE.rosters(ARCHIVE_VERSION)["breg"],
-            *MODULE.rosters(ARCHIVE_VERSION)["bregctl"],
-            *MODULE.rosters(ARCHIVE_VERSION)["casework"],
-        ]
+        expected = self.retained_builder_roster(
+            ARCHIVE_VERSION, "core", "breg", "bregctl", "casework"
+        )
         self.assertEqual(
             expected,
             [
@@ -782,6 +818,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             )
             self.assertEqual(0, result.returncode, result.stderr)
             shards[group] = shard
+        relayctl = self.add_historical_relay_fixture(shards["core"], ARCHIVE_VERSION)
         merged = self.root / "archive-merged"
         MODULE.merge(
             version=ARCHIVE_VERSION,
@@ -794,7 +831,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             output=merged,
         )
         self.assertEqual(
-            sorted(expected),
+            sorted([*expected, relayctl]),
             sorted(path.name for path in (merged / "platform").iterdir()),
         )
         for name in expected:
@@ -878,6 +915,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
                     .read_text()
                     .splitlines(),
                 )
+        self.add_historical_relay_fixture(shards["core"], version)
         merged = self.root / "services-merged"
         MODULE.merge(
             version=version,

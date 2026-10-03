@@ -1,7 +1,7 @@
 # 1.0 Release Readiness
 
-This document tracks the evidence that Registry Relay and Evidence are
-ready for a stable release. "Stable" means both semver API stability
+This document tracks the evidence that Evidence is ready for a stable release.
+"Stable" means both semver API stability
 commitments and a production security posture suitable for government
 deployments that self-host the stack.
 
@@ -33,7 +33,6 @@ trust boundaries, and the guarantees each product claims against a hostile
 client, plus where those guarantees could leak (logs, error messages, audit
 records, caches, timing).
 
-- [ ] Relay threat model written and reviewed.
 - [ ] Evidence threat model written and reviewed.
 - [ ] Attack checklist derived from the threat models (drives section 4).
 
@@ -46,9 +45,8 @@ write.
 - [x] Inventory of standards and specification claims across docs and specs.
       Evidence: [`standards-claims-inventory.md`](notes/standards-claims-inventory.md).
 - [ ] Per-claim evidence recorded (conformance run, test vectors, or interop).
-- [ ] OpenID conformance evidence for supported surfaces. The retired Relay V1
-      OIDC smoke is no longer a release gate; its historical report remains
-      evidence only. Relay V2 conformance is owned by its product contracts.
+- [ ] OpenID conformance evidence for supported surfaces. Retired Relay reports
+      remain historical evidence only.
 - [ ] OpenCRVS and DHIS2 project-authored integration proof (#72). The prior
       integration packet was Notary-specific and was retired on 2026-08-03.
       No current Relay or Evidence interoperability claim replaces it.
@@ -60,14 +58,12 @@ section is about challenging it.
 
 - [ ] Maintainer adversarial review of the load-bearing crates:
       `registry-platform-sdjwt`, `registry-platform-crypto`,
-      `registry-platform-authcommon`, Relay V2 authorization enforcement, and
-      Evidence assertion evaluation and signing.
+      `registry-platform-authcommon` and Evidence assertion evaluation and signing.
 - [ ] Negative-path test coverage mapped against the attack checklist;
       gaps closed with tests that assert denial and correct audit records.
       Mapping evidence: [`negative-path-coverage-map.md`](notes/negative-path-coverage-map.md).
 - [ ] cargo-fuzz targets for manifest and artifact parsers (#26).
-- [ ] cargo-fuzz targets for token, assertion, Relay consultation, and script
-      adapter parse boundaries.
+- [ ] cargo-fuzz targets for token, assertion, and script adapter parse boundaries.
 - [ ] Data-minimization leak review across logs, error paths, audit records,
       and caches (maintainer work; #176 is the known open case).
 

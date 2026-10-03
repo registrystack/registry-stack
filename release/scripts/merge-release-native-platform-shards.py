@@ -68,12 +68,13 @@ def rosters(version: str, nightly_tag: str | None = None) -> dict[str, list[str]
     parsed = tuple(int(part) for part in match.groups())
     tag = nightly_tag or f"v{version}"
     core = [
-        f"relayctl-{tag}-{ASSET}",
         f"evidence-{tag}-{ASSET}",
         f"evidencectl-{tag}-{ASSET}",
         f"mint-{tag}-{ASSET}",
         f"evidence-oid4vci-{tag}-{ASSET}",
     ]
+    if release_roster.relay_in_release(parsed):
+        core.insert(0, f"relayctl-{tag}-{ASSET}")
     if parsed >= MINT_RETIREMENT_VERSION:
         core.remove(f"mint-{tag}-{ASSET}")
     breg = []
