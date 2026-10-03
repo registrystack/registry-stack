@@ -1539,10 +1539,14 @@ The change removes the steps that upgraded, converted, or specifically
 refused state written by builds older than v0.38.0: the webhook delivery
 table upgrades in `crates/registry-platform-hooks/src/delivery_schema.rs`,
 the legacy review data refusals and table upgrades in the registry's internal
-schema install, and the retired spellings `bregctl` still recognized. It
-touches data minimization (the raw handler answer), deployment defaults (what
-schema install does to an existing database), and release provenance (the
-release image and the upgrade rehearsal).
+schema install, the retired spellings `bregctl` still recognized, the
+adoption of a database from before the activation ledger, the retired audit
+table guard, the older catalog fingerprint, and the package, project, and
+runtime shapes only earlier releases wrote. It touches data minimization (the
+raw handler answer), audit integrity (the retired audit tables), deployment
+defaults (what schema install, startup, and `apply` do to an existing
+database), authorization (what the client reads as a request-field grant),
+and release provenance (the release image and the upgrade rehearsal).
 
 ### Threat
 
@@ -1559,6 +1563,23 @@ release image and the upgrade rehearsal).
 4. A release image ships without `bregctl`, or an upgrade is rehearsed from a
    release the promise does not cover, and the release evidence claims an
    upgrade path that was never exercised.
+5. A database holding registry state this release does not recognise is
+   served, planned, or applied over as though the ledger recorded it, now
+   that it is no longer adopted (BREG-SEC-122).
+6. Rows in the retired `registry_internal.registry_audit` and
+   `registry_audit_head` tables are discarded, or kept and ignored, without
+   the operator's acknowledgement, now that `apply` no longer guards them.
+7. A database whose managed catalog has drifted from the package passes
+   verification under the fingerprint the package does not carry.
+8. A shape only an earlier release wrote is read with a filled-in default
+   that grants more than the shape said: a compiled permission target with
+   no `operation` or `source`, served metadata with no
+   `readableRequestFields`, version 1 prepared lifecycle evidence, a
+   `package/v1` manifest, or a predecessor governed model with missing
+   temporal value kinds.
+9. A removed project or runtime key carrying deployment identity or package
+   trust is accepted, or its refusal echoes the value it carried
+   (BREG-SEC-01).
 
 ### Enforcement and defaults
 
@@ -1592,6 +1613,32 @@ release image and the upgrade rehearsal).
   `check-debian13-images.py` marks the tool required. `rehearse-upgrade.py`
   refuses a start before `FORWARD_PATH_FLOOR` (v0.38.0) before any download
   or container starts.
+- The kernel's state shape is read from the PostgreSQL catalog before
+  startup, `bregctl status`, `bregctl plan`, or `bregctl apply` reads or
+  writes registry state. A shape this release does not recognise is
+  `UnrecognizedDatabase`, one generic refusal that names no recorded value.
+  Startup binds no listener, and status, plan, and apply change nothing. A
+  database an earlier release adopted keeps its `adopted` ledger row and
+  `registry_pre_ledger_package_positions`, which v0.38.0 state still needs.
+- Schema install has dropped the retired audit tables since v0.35.0, so no
+  database v0.38.0 served holds them and the guard could no longer trigger on
+  predecessor state. `apply` takes no acknowledgement and has no
+  `apply.audit.retired_rows_present` refusal.
+- Catalog verification computes the named-column fingerprint only and
+  compares it with the package's. This narrows what startup and the
+  successor check accept. Drift refusal is unchanged.
+- Package read is strict. A `package/v1` manifest is an integrity refusal, a
+  compiled permission target must carry `operation` and `source`, and a
+  predecessor governed model is read exactly as v0.38.0 wrote it. The client
+  refuses served metadata whose operation omits `readableRequestFields`
+  instead of reading it as an empty grant, and refuses version 1 prepared
+  lifecycle evidence. Every one of these refuses where it filled in.
+- The removed project keys are refused by the strict source shape and the
+  removed runtime keys by `deny_unknown_fields`, as `runtime_config.document`.
+  Environment substitution runs before that refusal, so a `${VAR}` in a
+  removed key is resolved first; the refusal names the field and never the
+  value. `breg --config` is refused by the argument parser with exit status 2
+  and does not echo the path.
 
 ### Tests
 
@@ -1624,6 +1671,34 @@ release image and the upgrade rehearsal).
    `test_main_refuses_an_earlier_start_before_any_download_or_container`.
    `release/scripts/test_check_debian13_images.py`:
    `test_required_operator_tools_cannot_be_optional`.
+5. `crates/registry-breg/tests/postgres_migration.rs`:
+   `real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing`
+   (BREG-NEG-122).
+   `crates/registry-breg/tests/postgres_startup.rs`:
+   `startup_refuses_an_unrecognised_registry_state_and_writes_nothing`.
+6. No test remains for the retired audit guard: its subject is gone. The
+   install-twice tests in item 1 hold the schema install it relied on.
+7. `crates/registry-breg/tests/postgres_package/fingerprint.rs`:
+   `package_fingerprint_starts_refuses_drift_and_upgrades_without_rewriting_package_bytes`.
+8. `crates/registry-breg/tests/immediate_action_compiler.rs`:
+   `permission_targets_without_discriminators_are_refused`.
+   `crates/registry-breg/tests/postgres_package.rs`:
+   `predecessor_package_refuses_temporal_bindings_without_a_value_kind`,
+   `predecessor_package_refuses_temporal_scope_fields`.
+   `crates/registry-breg-client/tests/write_http_boundary.rs`:
+   `prepared_lifecycle_recovers_original_apply_after_action_disappears`
+   (asserts version 1 evidence is refused).
+   `crates/registry-breg-client/tests/metadata_contract.rs`:
+   `request_metadata_grants_are_retained_and_required_on_every_operation`.
+   `crates/registry-breg/tests/startup_ordering.rs`:
+   `a_refused_package_keeps_the_cause_that_refused_it`.
+9. `crates/registry-breg/tests/compiler_contract.rs`:
+   `deployment_identity_keys_in_the_project_are_refused_as_unknown_fields`
+   (BREG-NEG-01).
+   `crates/registry-breg/tests/runtime_config.rs`:
+   `unknown_package_keys_are_refused_as_document_errors_without_their_value`.
+   `crates/registry-breg-mcp/src/config.rs`:
+   `retired_config_keys_are_refused_as_unknown_fields`.
 
 ### Accepted residuals
 
@@ -1644,3 +1719,15 @@ release image and the upgrade rehearsal).
   a refusal at install that names the cause. Install has refused such data
   and rebuilt the four-state check since v0.36.0, whose apply every database
   v0.38.0 can serve has been through, so such a database holds none.
+- **A leftover retired audit table is no longer dropped.** A database that
+  v0.38.0 left in maintenance by its retired-audit refusal, and that was
+  never applied again under v0.38.0, keeps the tables. Catalog verification
+  then refuses the database, because the tables are not in the package's
+  managed catalog. The operator finishes the v0.38.0 apply first.
+- **Pre-ledger support is kept where v0.38.0 state needs it.**
+  `registry_pre_ledger_package_positions`, the `adopted` plan kind, and the
+  sha256 package fingerprint stay, because a database v0.38.0 adopted has
+  them. They are removed in the release after this one.
+- **The authored `temporal.scopeFields` key stays accepted.** Predecessor
+  rehearsal recompiles the v0.38.0 package's own sources, which may carry the
+  key, so removing it would refuse a supported upgrade.

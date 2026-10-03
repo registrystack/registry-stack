@@ -52,6 +52,53 @@
     `data.import.checkpoint.refused`, where it was
     `data.import.checkpoint.legacy`. Start the import again with a fresh
     checkpoint path.
+  - A database that holds registry tables but no activation ledger is no
+    longer adopted. Startup, `bregctl status`, `bregctl plan`, and `bregctl
+    apply` refuse it with one generic refusal and change nothing. The codes
+    are `status.database.unrecognized` and `apply.database.unrecognized`.
+    Upgrade it one release at a time through v0.38.0 first. A database that
+    v0.38.0 or an earlier release already adopted is unaffected.
+  - `bregctl apply --acknowledge-retired-audit-discard` and the refusal code
+    `apply.audit.retired_rows_present` are removed. Schema install has dropped
+    the retired audit tables since v0.35.0, so a v0.38.0 database no longer
+    holds them.
+  - Catalog verification accepts only the named-column fingerprint. A package
+    carrying the older physical-column fingerprint no longer starts or
+    upgrades. Rebuild it with a current `bregctl package`.
+  - A `package/v1` package is refused as an integrity failure
+    (`*.package.integrity_refused`). The dedicated `legacy_format` refusal
+    that named `bregctl package` is gone. Rebuild the package with a current
+    `bregctl package`.
+  - The removed project keys no longer have dedicated `*.removed`
+    diagnostics. They are refused as `source.shape.invalid` (JSON) or
+    `source.yaml.invalid` (YAML), naming the unknown field. The keys are
+    `package.environment`, `package.instanceId`, `package.sequence`,
+    `manifestProjection.dataset`, `manifestProjection.dataService`,
+    `accessProfiles[].grants`, `entities[].events`, and
+    `extendEntities[].events`.
+  - The removed runtime configuration keys `package.trustAnchorPath`,
+    `activeRevision`, `activeSequence`, and `compilerSourceRevision` are
+    refused as `runtime_config.document`, naming the unknown field, where they
+    were `runtime_config.package_key_removed`. A `${VAR}` reference in one of
+    them is substituted before the refusal.
+  - `breg --config FILE` fails with the standard unexpected-argument error
+    (exit status 2). Use `--runtime-config`.
+  - `breg-mcp` refuses `resourceServer.jwks` and `audit.maximumFileBytes` with
+    the generic unknown-field error and no longer names their replacements.
+  - A package whose compiled action permission target lacks `operation` or
+    `source` is refused when it is read. v0.38.0 writes both on every target.
+  - `BRegPreparedLifecycle::from_slice` refuses version 1 prepared lifecycle
+    evidence. Prepare the lifecycle again with a current client.
+  - The Base Registry Engine client refuses served metadata whose operation
+    omits `readableRequestFields`, where it treated that as an empty grant.
+  - A package whose compiled model or query inventory serializes a temporal
+    `scopeFields` is refused on a strict load. No release since v0.36.0 writes
+    one. The authored `temporal.scopeFields` key stays accepted and deprecated
+    in this release.
+  - A predecessor package whose query temporal bindings lack `valueKind`, or
+    whose compiled model or query inventory carries a temporal `scopeFields`,
+    is refused with a derivation error. Rebuild and activate it with v0.38.0
+    before you upgrade.
 - Derived SQL now accepts only explicitly reviewed raw PostgreSQL grammar
   nodes (#1841). `JSON_VALUE` and `JSON_EXISTS` remain available for scalar
   structured-field access; `JSON_QUERY`, `JSON_TABLE`, `XMLTABLE`, SQL/JSON
