@@ -25,7 +25,7 @@ pub(crate) fn patch_module_locks(bytes: &[u8], locks: &[ModuleLockSource]) -> Op
     }
     let source = source_lines(bytes)?;
     let mut lines = source.lines;
-    let modules = mapping(&lines, 0, lines.len(), "modules")?;
+    let modules = mapping(&lines, "modules")?;
     let item_indent = modules.indent + 2;
     let item_starts = (modules.start + 1..modules.end)
         .filter(|index| {
@@ -124,22 +124,17 @@ fn render_lines(lines: Vec<String>, trailing_newline: bool) -> String {
 
 /// The top-level block mapping `key` opens, or `None` when it is absent,
 /// duplicated, or written in flow style.
-fn mapping(lines: &[String], start: usize, end: usize, key: &str) -> Option<Block> {
-    let indent = if start == 0 {
-        0
-    } else {
-        indentation(&lines[start - 1]) + 2
-    };
-    let key_line = find_key(lines, start, end, indent, key)??;
-    if !line_value(&lines[key_line], indent, key)
+fn mapping(lines: &[String], key: &str) -> Option<Block> {
+    let key_line = find_key(lines, 0, lines.len(), 0, key)??;
+    if !line_value(&lines[key_line], 0, key)
         .is_some_and(|value| value.is_empty() || value.starts_with('#'))
     {
         return None;
     }
     Some(Block {
         start: key_line,
-        end: key_value_end(lines, key_line, end),
-        indent,
+        end: key_value_end(lines, key_line, lines.len()),
+        indent: 0,
     })
 }
 
