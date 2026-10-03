@@ -4151,13 +4151,6 @@ fn data_lifecycle_failure(
             DiagnosticArtifact::DataCheckpoint,
             SuggestedAction::VerifyDataCheckpoint,
         ),
-        DataLifecycleError::LegacyImportCheckpoint => (
-            format!("{prefix}.checkpoint.legacy"),
-            "checkpoint",
-            "the data checkpoint predates ingestion runs and cannot be resumed safely: resending its committed items under a new run id would duplicate mutations; start a new import with a fresh checkpoint path",
-            DiagnosticArtifact::DataCheckpoint,
-            SuggestedAction::VerifyDataCheckpoint,
-        ),
         DataLifecycleError::ImportRunBlocked(Some(BRegIngestionBlockedReason::ActivePackageChanged)) => (
             format!("{prefix}.ingestion_run.blocked"),
             "ingestionRun",

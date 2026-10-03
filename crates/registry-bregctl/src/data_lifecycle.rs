@@ -43,9 +43,6 @@ const MAX_TOKEN_BYTES: u64 = 64 * 1024;
 const MAX_CHECKPOINT_BYTES: u64 = 1024 * 1024;
 const DATA_HTTP_USER_AGENT: &str = "bregctl-data";
 const DATA_STATE_API_VERSION: &str = "registry.registrystack.org/bregctl-data/v2";
-/// The state apiVersion the raw batch protocol wrote: a sidecar that names no
-/// ingestion run. It is kept only to refuse such a sidecar by name.
-const DATA_STATE_API_VERSION_V1: &str = "registry.registrystack.org/bregctl-data/v1";
 const IMPORT_STATE_KIND: &str = "BRegctlDataImportState";
 const MAX_ATOMIC_WRITE_TEMP_ATTEMPTS: usize = 16;
 /// The longest output tail a resuming export discards. The export appends one
@@ -65,10 +62,6 @@ pub(crate) enum DataLifecycleError {
     Input,
     Output,
     Checkpoint,
-    /// The import sidecar predates ingestion runs and names no run to resume.
-    /// Resuming its committed items under a new run id would duplicate
-    /// mutations, so it is refused rather than upgraded.
-    LegacyImportCheckpoint,
     /// The ingestion run is blocked and refuses further chunks. The reason is
     /// the one the run state names, absent only when the run could not be
     /// re-read after the refusal.
@@ -1252,15 +1245,6 @@ fn read_import_state(
     let bytes = read_bounded_entry(entry, MAX_CHECKPOINT_BYTES)
         .map_err(|_| DataLifecycleError::Checkpoint)?;
     let value = parse_json_strict(&bytes).map_err(|_| DataLifecycleError::Checkpoint)?;
-    // A v1 sidecar predates ingestion runs: it carries committed progress but
-    // names no run, so its committed items cannot be resumed, only redone under
-    // a fresh run id, which would duplicate mutations. Refuse it by name
-    // before any binding is read.
-    if value.get("apiVersion").and_then(serde_json::Value::as_str)
-        == Some(DATA_STATE_API_VERSION_V1)
-    {
-        return Err(DataLifecycleError::LegacyImportCheckpoint);
-    }
     let state: ImportState =
         serde_json::from_value(value).map_err(|_| DataLifecycleError::Checkpoint)?;
     if state.api_version != DATA_STATE_API_VERSION
@@ -2496,14 +2480,14 @@ mod tests {
     }
 
     #[test]
-    fn a_v1_sidecar_is_refused_without_a_request_and_without_rendering_values() {
+    fn an_unknown_sidecar_version_is_refused_without_a_request_and_without_rendering_values() {
         let input = import_input();
         let (plan, inspected) = import_plan_and_inspected(&input);
         let directory = test_directory("ingestion-v1-sidecar");
         let checkpoint_path = directory.join("import.checkpoint.json");
         let state_path = import_state_path(&checkpoint_path);
         let legacy = json!({
-            "apiVersion": DATA_STATE_API_VERSION_V1,
+            "apiVersion": "registry.registrystack.org/bregctl-data/v1",
             "kind": IMPORT_STATE_KIND,
             "packageRevision": PACKAGE,
             "schemaFingerprint": SCHEMA,
@@ -2524,16 +2508,16 @@ mod tests {
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
         let error = match load_or_start_ingestion(&drive, destinations) {
             Err(error) => error,
-            Ok(_) => panic!("a v1 sidecar is refused rather than resumed"),
+            Ok(_) => panic!("an unknown sidecar version is refused rather than resumed"),
         };
         let requests = handle.join().unwrap();
 
-        assert!(matches!(error, DataLifecycleError::LegacyImportCheckpoint));
+        assert!(matches!(error, DataLifecycleError::Checkpoint));
         let rendered = format!("{error:?}");
         assert!(!rendered.contains("SECRET-CANARY"));
         assert!(!rendered.contains(PACKAGE));
-        // The refusal happens before any network use and before any binding
-        // is read, and the sidecar is left untouched.
+        // The refusal happens before any network use, and the sidecar is left
+        // untouched.
         assert!(requests.is_empty());
         assert_eq!(fs::read(&state_path).unwrap(), legacy_bytes);
         assert!(!checkpoint_path.exists());
