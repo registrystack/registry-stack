@@ -679,66 +679,34 @@ fn ingestion_problem(error: IngestionServiceError) -> Response {
         IngestionServiceError::RequestInvalid => invalid_request(),
         IngestionServiceError::PreconditionFailed => precondition_failed(),
         IngestionServiceError::NotFound => concealed(),
-        IngestionServiceError::ProfileMismatch => catalogue_problem(
-            crate::problem::ProblemCode::IngestionProfileMismatch,
-            StatusCode::FORBIDDEN,
-        ),
-        IngestionServiceError::RunNotOpen => catalogue_problem(
-            crate::problem::ProblemCode::IngestionRunNotOpen,
-            StatusCode::CONFLICT,
-        ),
-        IngestionServiceError::RunBlocked => catalogue_problem(
-            crate::problem::ProblemCode::IngestionRunBlocked,
-            StatusCode::CONFLICT,
-        ),
-        IngestionServiceError::ChunkMismatch => catalogue_problem(
-            crate::problem::ProblemCode::IngestionChunkMismatch,
-            StatusCode::CONFLICT,
-        ),
-        IngestionServiceError::ReceiptErased => catalogue_problem(
-            crate::problem::ProblemCode::IngestionReceiptErased,
-            StatusCode::GONE,
-        ),
-        IngestionServiceError::Unavailable => fixed_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "service.unavailable",
-            "The Registry mutation service is unavailable.",
-        ),
+        IngestionServiceError::ProfileMismatch => {
+            fixed_problem(ProblemCode::IngestionProfileMismatch)
+        }
+        IngestionServiceError::RunNotOpen => fixed_problem(ProblemCode::IngestionRunNotOpen),
+        IngestionServiceError::RunBlocked => fixed_problem(ProblemCode::IngestionRunBlocked),
+        IngestionServiceError::ChunkMismatch => fixed_problem(ProblemCode::IngestionChunkMismatch),
+        IngestionServiceError::ReceiptErased => fixed_problem(ProblemCode::IngestionReceiptErased),
+        IngestionServiceError::Unavailable => fixed_problem(ProblemCode::ServiceUnavailable),
     }
-}
-
-/// The registered problem one ingestion code answers under: the catalogue's
-/// own status, code, and published sentence, asserted to stay in lockstep.
-fn catalogue_problem(code: crate::problem::ProblemCode, status: StatusCode) -> Response {
-    debug_assert_eq!(
-        code.status(),
-        status.as_u16(),
-        "the ingestion problem catalogue drifted from its registered status"
-    );
-    fixed_problem(status, code.code(), code.description())
 }
 
 /// The problem one ingestion refusal inside the ordinary batch path answers
 /// under. The codes, statuses, and sentences are the catalogue's own.
 pub(super) fn batch_refusal_problem(refusal: crate::mutation::IngestionRefusal) -> Response {
     match refusal {
-        crate::mutation::IngestionRefusal::RunNotOpen => catalogue_problem(
-            crate::problem::ProblemCode::IngestionRunNotOpen,
-            StatusCode::CONFLICT,
-        ),
-        crate::mutation::IngestionRefusal::ChunkMismatch => catalogue_problem(
-            crate::problem::ProblemCode::IngestionChunkMismatch,
-            StatusCode::CONFLICT,
-        ),
+        crate::mutation::IngestionRefusal::RunNotOpen => {
+            fixed_problem(ProblemCode::IngestionRunNotOpen)
+        }
+        crate::mutation::IngestionRefusal::ChunkMismatch => {
+            fixed_problem(ProblemCode::IngestionChunkMismatch)
+        }
         crate::mutation::IngestionRefusal::BindingChanged
-        | crate::mutation::IngestionRefusal::AuthorityClosed => catalogue_problem(
-            crate::problem::ProblemCode::IngestionRunBlocked,
-            StatusCode::CONFLICT,
-        ),
-        crate::mutation::IngestionRefusal::ReceiptErased => catalogue_problem(
-            crate::problem::ProblemCode::IngestionReceiptErased,
-            StatusCode::GONE,
-        ),
+        | crate::mutation::IngestionRefusal::AuthorityClosed => {
+            fixed_problem(ProblemCode::IngestionRunBlocked)
+        }
+        crate::mutation::IngestionRefusal::ReceiptErased => {
+            fixed_problem(ProblemCode::IngestionReceiptErased)
+        }
     }
 }
 

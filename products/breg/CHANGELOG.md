@@ -53,6 +53,10 @@
   still cause coverage rebaselining to refuse. Rebuild affected pre-1.0
   development databases before using history snapshots or coverage rebaselining.
 
+- Review-completion callback authentication refusals now return the registered
+  `401 authentication.refused` problem and its catalogue type, title, and
+  detail instead of the undocumented
+  `review_completion.authentication_refused` code.
 - An immediate action whose selected effects write fields that a locale
   collation orders differently from byte order, such as `award-number` and
   `awarded-by` under `en_US.utf8`, no longer answers
