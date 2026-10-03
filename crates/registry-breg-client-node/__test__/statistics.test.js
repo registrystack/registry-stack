@@ -55,8 +55,10 @@ test('statistics methods preserve route, representation, status and caller key',
         response.setHeader('vary', 'authorization, accept');
       }
       const body = request.headers.accept === 'text/csv' ? 'period,periodStart,periodEnd,value,status\r\n' : '{"ok":true}';
-      if (request.method !== 'POST' && !request.url.includes('/releases?')) {
-        response.setHeader('repr-digest', `sha-256=:${createHash('sha256').update(body).digest('base64')}:`);
+      if (!request.url.includes('/digest-missing/')
+          && (request.method === 'POST' || !request.url.includes('/releases?'))) {
+        const representedBody = request.url.includes('/digest-mismatch/') ? '{"wrong":true}' : body;
+        response.setHeader('repr-digest', `sha-256=:${createHash('sha256').update(representedBody).digest('base64')}:`);
       }
       response.end(body);
     });
@@ -73,8 +75,10 @@ test('statistics methods preserve route, representation, status and caller key',
     await client.statisticsLatestRelease('enrolments', '2025-01', 'final', 'reader', 'json');
     await client.statisticsReleaseVersion('enrolments', '2025-01', 7, 'reader', 'csv');
     await client.statisticsReleaseSeries('enrolments', '2025-01', '2025-02', 'any', 'reader', 'json');
-    await client.statisticsPublish('enrolments', '2025-01', 'final', 'publisher', 'caller-owned-key');
-    await client.statisticsWithdraw('enrolments', '2025-01', 7, 'disclosure-risk', 'publisher', 'caller-owned-key');
+    const publish = await client.statisticsPublish('enrolments', '2025-01', 'final', 'publisher', 'caller-owned-key');
+    const withdraw = await client.statisticsWithdraw('enrolments', '2025-01', 7, 'disclosure-risk', 'publisher', 'caller-owned-key');
+    assert.match(publish.reprDigest, /^sha-256=:/);
+    assert.match(withdraw.reprDigest, /^sha-256=:/);
     assert.equal(requests[0].url, '/v1/statistics/enrolments:live?from=2025-01&to=2025-02&accessProfile=analyst');
     assert.equal(requests[1].url, '/v1/statistics/enrolments:live?from=2025-01');
     assert.equal(requests[2].url, '/v1/statistics/enrolments:live?to=2025-02');
@@ -85,6 +89,24 @@ test('statistics methods preserve route, representation, status and caller key',
     const count = requests.length;
     await assert.rejects(client.statisticsReleaseVersion('enrolments', '2025-01', 0), error => error.kind === 'invalid_request');
     assert.equal(requests.length, count);
+
+    const maximumCursor = 'c'.repeat(10_978);
+    await client.statisticsReleases('d'.repeat(64), 10, maximumCursor, 'p'.repeat(64));
+    const afterMaximumCursor = requests.length;
+    await assert.rejects(
+      client.statisticsReleases('d'.repeat(64), 10, `${maximumCursor}c`, 'p'.repeat(64)),
+      error => error.kind === 'invalid_request',
+    );
+    assert.equal(requests.length, afterMaximumCursor);
+
+    await assert.rejects(
+      client.statisticsPublish('digest-missing', '2025-01', 'final', 'publisher', 'digest-missing-key'),
+      error => error.kind === 'protocol' && error.code === 'representation_digest',
+    );
+    await assert.rejects(
+      client.statisticsWithdraw('digest-mismatch', '2025-01', 7, 'source-data-error', 'publisher', 'digest-mismatch-key'),
+      error => error.kind === 'protocol' && error.code === 'representation_digest',
+    );
 
     await assert.rejects(client.statisticsLive('missing'), error => error.kind === 'not_found' && error.code === 'resource.not_found');
     await assert.rejects(

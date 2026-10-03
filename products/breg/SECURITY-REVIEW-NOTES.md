@@ -1623,6 +1623,12 @@ audit response. JSON representation
 digests cover exact response bytes; CSV digests cover the CSV representation.
 Both are sent with no-store cache policy.
 
+Maintained clients verify and retain representation digests for live, release,
+and series documents, and successful publication and withdrawal responses.
+Version selectors must fit a positive signed 64-bit integer before credentials
+or I/O. Release listing clients accept the complete envelope the server's
+cursor codec can issue, while retaining a fixed size bound.
+
 Anonymous refusals return before authenticated refusal auditing, preventing
 unauthenticated requests from filling that journal or observing sink health.
 Authenticated unknown datasets and ungranted profiles enter refusal auditing;
@@ -1649,6 +1655,10 @@ a refused terminal with no release or idempotency rows; unmatched-route tests
 verify method classification without recording caller-controlled values. The facility
 workflow executes publication and JSON/CSV series reads through native CLI and
 HTTP clients with separate access profiles.
+`registry-breg-client/tests/statistics_http_boundary.rs` verifies complete
+continuation propagation, version bounds before credentials or I/O, and
+refusal of missing or mismatched publication and withdrawal digests. Native
+Node and Python tests exercise the same client decisions.
 
 ### Accepted residuals
 

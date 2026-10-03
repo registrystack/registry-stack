@@ -1502,7 +1502,13 @@ impl BaseRegistryClient {
         let builder = self.authorize(builder, Credential::Optional).await?;
         let response = self.transport.send(builder).await?;
         let (wire, representation_digest) = self
-            .statistics_wire(response, media_type, representation_digest_required)
+            .statistics_wire(
+                response,
+                StatusCode::OK,
+                media_type,
+                representation_digest_required,
+                false,
+            )
             .await?;
         if media_type == APPLICATION_JSON {
             crate::strict_json::from_slice(&wire.body)
@@ -1521,15 +1527,27 @@ impl BaseRegistryClient {
     async fn statistics_wire(
         &self,
         response: Response,
+        expected_status: StatusCode,
         requested_media: &str,
         representation_digest_required: bool,
+        mutation: bool,
     ) -> Result<(BRegWire, Option<BRegRepresentationDigest>), BaseRegistryClientError> {
         let status = response.status();
-        if status != StatusCode::OK {
+        if status != expected_status {
+            if status.is_success() {
+                return Err(BaseRegistryClientError::protocol(
+                    status.as_u16(),
+                    BRegProtocolFailure::Status,
+                    breg_trace_id(status, response.headers()).ok(),
+                ));
+            }
             return Err(breg_problem(response, &self.transport).await);
         }
         let headers = response.headers().clone();
         let trace_id = breg_trace_id(status, &headers)?;
+        if mutation {
+            validate_mutation_cache_headers(status, &headers, &trace_id)?;
+        }
         let media_type =
             statistics_response_media_type(&headers, requested_media).ok_or_else(|| {
                 BaseRegistryClientError::protocol(
@@ -1542,6 +1560,13 @@ impl BaseRegistryClient {
             return Err(etag_failure(status, trace_id));
         }
         let link = breg_response_link(status, &headers, &trace_id)?;
+        if mutation && link.is_some() {
+            return Err(BaseRegistryClientError::protocol(
+                status.as_u16(),
+                BRegProtocolFailure::ProfileLink,
+                Some(trace_id),
+            ));
+        }
         if breg_response_location(status, &headers, &trace_id)?.is_some() {
             return Err(BaseRegistryClientError::protocol(
                 status.as_u16(),
@@ -1605,11 +1630,17 @@ impl BaseRegistryClient {
             .body(body);
         let builder = self.authorize(builder, Credential::Optional).await?;
         let response = self.transport.send(builder).await?;
-        let wire = self.bound_json_wire(response, expected_status).await?;
+        let (wire, representation_digest) = self
+            .statistics_wire(response, expected_status, APPLICATION_JSON, true, true)
+            .await?;
         crate::strict_json::from_slice(&wire.body)
             .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
         Ok(BRegComplete {
-            value: BRegRawDocument::new(wire.media_type, wire.body),
+            value: BRegRawDocument::with_representation_digest(
+                wire.media_type,
+                wire.body,
+                representation_digest,
+            ),
             metadata: wire.metadata,
         })
     }

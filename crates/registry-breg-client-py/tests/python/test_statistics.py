@@ -79,8 +79,11 @@ class StatisticsTests(unittest.TestCase):
                 if self.command == "POST":
                     self.send_header("cache-control", "no-store")
                     self.send_header("vary", "authorization, accept")
-                elif "/releases?" not in self.path:
-                    digest = base64.b64encode(hashlib.sha256(body).digest()).decode()
+                if "/digest-missing/" not in self.path and (
+                    self.command == "POST" or "/releases?" not in self.path
+                ):
+                    represented_body = b'{"wrong":true}' if "/digest-mismatch/" in self.path else body
+                    digest = base64.b64encode(hashlib.sha256(represented_body).digest()).decode()
                     self.send_header("repr-digest", f"sha-256=:{digest}:")
                 self.send_header("content-length", str(len(body)))
                 self.end_headers()
@@ -115,8 +118,14 @@ class StatisticsTests(unittest.TestCase):
         self.client.statistics_latest_release("enrolments", "2025-01", "final", access_profile="reader")
         self.client.statistics_release_version("enrolments", "2025-01", 7, access_profile="reader", format="csv")
         self.client.statistics_release_series("enrolments", "2025-01", "2025-02", "any", access_profile="reader")
-        self.client.statistics_publish("enrolments", "2025-01", "final", "publisher", "caller-owned-key")
-        self.client.statistics_withdraw("enrolments", "2025-01", 7, "disclosure-risk", "publisher", "caller-owned-key")
+        publish = self.client.statistics_publish(
+            "enrolments", "2025-01", "final", "publisher", "caller-owned-key"
+        )
+        withdraw = self.client.statistics_withdraw(
+            "enrolments", "2025-01", 7, "disclosure-risk", "publisher", "caller-owned-key"
+        )
+        self.assertTrue(publish["repr_digest"].startswith("sha-256=:"))
+        self.assertTrue(withdraw["repr_digest"].startswith("sha-256=:"))
         self.assertEqual(self.requests[0][1], "/v1/statistics/enrolments:live?from=2025-01&to=2025-02&accessProfile=analyst")
         self.assertEqual(self.requests[1][1], "/v1/statistics/enrolments:live?from=2025-01")
         self.assertEqual(self.requests[2][1], "/v1/statistics/enrolments:live?to=2025-02")
@@ -127,6 +136,44 @@ class StatisticsTests(unittest.TestCase):
         with self.assertRaises(BaseRegistryClientError):
             self.client.statistics_release_version("enrolments", "2025-01", 0)
         self.assertEqual(len(self.requests), count)
+
+        maximum_cursor = "c" * 10_978
+        self.client.statistics_releases(
+            "d" * 64, top=10, skip_token=maximum_cursor, access_profile="p" * 64
+        )
+        after_maximum_cursor = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError):
+            self.client.statistics_releases(
+                "d" * 64, top=10, skip_token=maximum_cursor + "c", access_profile="p" * 64
+            )
+        self.assertEqual(len(self.requests), after_maximum_cursor)
+
+        for version_call in (
+            lambda: self.client.statistics_release_version(
+                "enrolments", "2025-01", 2**63
+            ),
+            lambda: self.client.statistics_withdraw(
+                "enrolments", "2025-01", 2**63, "source-data-error",
+                "publisher", "too-large-version-key"
+            ),
+        ):
+            before_version_call = len(self.requests)
+            with self.assertRaises(BaseRegistryClientError):
+                version_call()
+            self.assertEqual(len(self.requests), before_version_call)
+
+        with self.assertRaises(BaseRegistryClientError) as missing_digest:
+            self.client.statistics_publish(
+                "digest-missing", "2025-01", "final", "publisher", "digest-missing-key"
+            )
+        self.assertEqual(missing_digest.exception.code, "representation_digest")
+
+        with self.assertRaises(BaseRegistryClientError) as mismatched_digest:
+            self.client.statistics_withdraw(
+                "digest-mismatch", "2025-01", 7, "source-data-error",
+                "publisher", "digest-mismatch-key"
+            )
+        self.assertEqual(mismatched_digest.exception.code, "representation_digest")
 
         with self.assertRaises(BaseRegistryClientError) as missing:
             self.client.statistics_live("missing")

@@ -12,7 +12,9 @@ use crate::{
 pub const STATISTICS_JSON_MEDIA_TYPE: &str = "application/json";
 pub const STATISTICS_CSV_MEDIA_TYPE: &str = "text/csv";
 const MAX_PERIOD_CODE_BYTES: usize = 10;
-const MAX_SKIP_TOKEN_BYTES: usize = 2_048;
+// CursorCodec emits base64url without padding over one version byte, a 24-byte
+// nonce, at most 8 KiB of plaintext, and a 16-byte authentication tag.
+const MAX_SKIP_TOKEN_BYTES: usize = ((1_usize + 24 + 8 * 1024 + 16) * 4).div_ceil(3);
 const MAX_RELEASE_PAGE_SIZE: u16 = 100;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -151,7 +153,7 @@ impl BaseRegistryClient {
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         validate_dataset(dataset)?;
         validate_period(period)?;
-        if version == 0 {
+        if version == 0 || version > i64::MAX as u64 {
             return Err(invalid("the statistics release version is invalid"));
         }
         let pairs = access_profile_query(access_profile)?;
@@ -233,7 +235,7 @@ impl BaseRegistryClient {
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
         validate_dataset(dataset)?;
         validate_period(period)?;
-        if version == 0 {
+        if version == 0 || version > i64::MAX as u64 {
             return Err(invalid("the statistics release version is invalid"));
         }
         let pairs = access_profile_query(Some(access_profile))?;

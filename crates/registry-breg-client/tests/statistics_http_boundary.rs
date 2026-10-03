@@ -1,5 +1,7 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
 use axum::extract::State;
 use axum::http::{Request, Response, StatusCode};
@@ -11,6 +13,7 @@ use registry_breg_client::{
     BRegReleaseSelection, BRegReleaseStatus, BRegStatisticsFormat, BRegWithdrawalReason,
     BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, StaticToken,
 };
+use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
@@ -18,6 +21,7 @@ use url::Url;
 
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+const MAX_SERVER_ISSUED_CURSOR_BYTES: usize = ((1_usize + 24 + 8 * 1024 + 16) * 4).div_ceil(3);
 
 #[derive(Clone, Debug)]
 struct Captured {
@@ -123,7 +127,19 @@ async fn handler(
     }
 
     let publish = method == "POST" && uri.ends_with("/versions?accessProfile=publisher");
-    let response_body = if accept == "text/csv" {
+    let release_list =
+        method == "GET" && (uri.ends_with("/releases") || uri.contains("/releases?"));
+    let response_body = if release_list {
+        serde_json::to_vec(&json!({
+            "items": [],
+            "pageInfo": {
+                "hasMore": !uri.contains("$skiptoken"),
+                "nextCursor": (!uri.contains("$skiptoken"))
+                    .then(|| "A".repeat(MAX_SERVER_ISSUED_CURSOR_BYTES)),
+            }
+        }))
+        .unwrap()
+    } else if accept == "text/csv" {
         b"period,periodStart,periodEnd,value,status\r\n2025-01,2025-01-01,2025-02-01,5,rounded\r\n"
             .to_vec()
     } else {
@@ -153,7 +169,8 @@ async fn handler(
         response
             .headers_mut()
             .insert("vary", "authorization, accept".parse().unwrap());
-    } else if !uri.contains("/releases?") && !uri.contains("missing-digest") {
+    }
+    if !release_list && !uri.contains("missing-digest") {
         let digest_body = if uri.contains("bad-digest") {
             b"different bytes".as_slice()
         } else {
@@ -179,7 +196,43 @@ async fn handler(
     response
 }
 
+#[tokio::test]
+async fn statistics_releases_accepts_the_complete_server_cursor_envelope() {
+    let (client, captured) = client().await;
+    let dataset = "d".repeat(64);
+    let profile = "p".repeat(64);
+    let page = client
+        .statistics_releases(&dataset, Some(1), None, Some(&profile))
+        .await
+        .unwrap();
+    let document: serde_json::Value = serde_json::from_slice(page.value.as_bytes()).unwrap();
+    let cursor = document["pageInfo"]["nextCursor"].as_str().unwrap();
+    assert_eq!(cursor.len(), MAX_SERVER_ISSUED_CURSOR_BYTES);
+
+    client
+        .statistics_releases(&dataset, Some(1), Some(cursor), Some(&profile))
+        .await
+        .unwrap();
+    let requests_before_refusal = captured.lock().unwrap().len();
+    assert!(client
+        .statistics_releases(
+            &dataset,
+            Some(1),
+            Some(&"A".repeat(MAX_SERVER_ISSUED_CURSOR_BYTES + 1)),
+            Some(&profile),
+        )
+        .await
+        .is_err());
+    assert_eq!(captured.lock().unwrap().len(), requests_before_refusal);
+}
+
 async fn client() -> (BaseRegistryClient, Arc<Mutex<Vec<Captured>>>) {
+    client_with_provider(Arc::new(StaticToken::new("client-token").unwrap())).await
+}
+
+async fn client_with_provider(
+    token: Arc<dyn TokenProvider>,
+) -> (BaseRegistryClient, Arc<Mutex<Vec<Captured>>>) {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -192,11 +245,21 @@ async fn client() -> (BaseRegistryClient, Arc<Mutex<Vec<Captured>>>) {
         .await
         .unwrap();
     });
-    let token = Arc::new(StaticToken::new("client-token").unwrap());
     let config =
         BaseRegistryClientConfig::new(Url::parse(&format!("http://{address}/tenant")).unwrap())
             .with_token_provider(token);
     (BaseRegistryClient::new(config).unwrap(), captured)
+}
+
+#[derive(Debug)]
+struct CountingToken(AtomicUsize);
+
+#[async_trait]
+impl TokenProvider for CountingToken {
+    async fn bearer_token(&self) -> Result<BearerToken, TokenError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        BearerToken::new("client-token")
+    }
 }
 
 #[tokio::test]
@@ -235,7 +298,7 @@ async fn statistics_reads_map_every_route_query_and_media_type() {
         .statistics_release_version(
             "enrolments",
             "2025-01",
-            7,
+            i64::MAX as u64,
             Some("reader"),
             BRegStatisticsFormat::Csv,
         )
@@ -269,7 +332,10 @@ async fn statistics_reads_map_every_route_query_and_media_type() {
     );
     assert_eq!(
         requests[3].uri,
-        "/tenant/v1/statistics/enrolments/releases/2025-01/versions/7?accessProfile=reader"
+        format!(
+            "/tenant/v1/statistics/enrolments/releases/2025-01/versions/{}?accessProfile=reader",
+            i64::MAX
+        )
     );
     assert_eq!(requests[3].accept, "text/csv");
     assert_eq!(version.value.media_type(), "text/csv; charset=utf-8");
@@ -467,7 +533,7 @@ async fn statistics_refuses_missing_repeated_or_mismatched_representation_digest
 async fn statistics_mutations_preserve_key_body_and_success_status() {
     let (client, captured) = client().await;
     let key = BRegIdempotencyKey::parse("caller-owned-key-123").unwrap();
-    client
+    let published = client
         .statistics_publish(
             "enrolments",
             "2025-01",
@@ -477,17 +543,19 @@ async fn statistics_mutations_preserve_key_body_and_success_status() {
         )
         .await
         .unwrap();
-    client
+    let withdrawn = client
         .statistics_withdraw(
             "enrolments",
             "2025-01",
-            7,
+            i64::MAX as u64,
             BRegWithdrawalReason::DisclosureRisk,
             "publisher",
             &key,
         )
         .await
         .unwrap();
+    assert!(published.value.representation_digest().is_some());
+    assert!(withdrawn.value.representation_digest().is_some());
     let requests = captured.lock().unwrap();
     assert_eq!(requests[0].method, "POST");
     assert_eq!(
@@ -499,13 +567,57 @@ async fn statistics_mutations_preserve_key_body_and_success_status() {
         Some("caller-owned-key-123")
     );
     assert_eq!(requests[0].body, br#"{"status":"final"}"#);
-    assert_eq!(requests[1].uri, "/tenant/v1/statistics/enrolments/releases/2025-01/versions/7/withdrawal?accessProfile=publisher");
+    assert_eq!(
+        requests[1].uri,
+        format!(
+            "/tenant/v1/statistics/enrolments/releases/2025-01/versions/{}/withdrawal?accessProfile=publisher",
+            i64::MAX
+        )
+    );
     assert_eq!(requests[1].body, br#"{"reason":"disclosure-risk"}"#);
 }
 
 #[tokio::test]
+async fn statistics_mutations_require_matching_representation_digests() {
+    let (client, _) = client().await;
+    let key = BRegIdempotencyKey::parse("caller-owned-key-123").unwrap();
+    for error in [
+        client
+            .statistics_publish(
+                "missing-digest",
+                "2025-01",
+                BRegReleaseStatus::Final,
+                "publisher",
+                &key,
+            )
+            .await
+            .unwrap_err(),
+        client
+            .statistics_withdraw(
+                "bad-digest",
+                "2025-01",
+                7,
+                BRegWithdrawalReason::SourceDataError,
+                "publisher",
+                &key,
+            )
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::RepresentationDigest,
+                ..
+            }
+        ));
+    }
+}
+
+#[tokio::test]
 async fn invalid_statistics_arguments_fail_before_token_or_io() {
-    let (client, captured) = client().await;
+    let token = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let (client, captured) = client_with_provider(token.clone()).await;
     assert!(client
         .statistics_live("Bad Dataset", None, None, None, BRegStatisticsFormat::Json,)
         .await
@@ -515,8 +627,31 @@ async fn invalid_statistics_arguments_fail_before_token_or_io() {
         .await
         .is_err());
     assert!(client
+        .statistics_release_version(
+            "enrolments",
+            "2025-01",
+            i64::MAX as u64 + 1,
+            None,
+            BRegStatisticsFormat::Json,
+        )
+        .await
+        .is_err());
+    let key = BRegIdempotencyKey::parse("caller-owned-key-123").unwrap();
+    assert!(client
+        .statistics_withdraw(
+            "enrolments",
+            "2025-01",
+            i64::MAX as u64 + 1,
+            BRegWithdrawalReason::DisclosureRisk,
+            "publisher",
+            &key,
+        )
+        .await
+        .is_err());
+    assert!(client
         .statistics_releases("enrolments", Some(101), None, None)
         .await
         .is_err());
+    assert_eq!(token.0.load(Ordering::SeqCst), 0);
     assert!(captured.lock().unwrap().is_empty());
 }
