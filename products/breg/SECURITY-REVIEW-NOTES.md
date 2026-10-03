@@ -1592,7 +1592,11 @@ dependencies are extracted from the reviewed raw SQL
 syntax tree and closed transitively. Publisher visibility must be independent
 of its caller on every entity in that closure, with an operation that installs
 an ordinary SELECT policy on each dependency. The compiler checks that operation
-set and includes it in the definition digest. Anonymous profiles, encrypted
+set and includes it in the definition digest. The digest also binds the types
+and mappings of processing fields and the source columns read by their derived
+SQL, so an unchanged expression cannot keep old releases visible after its
+input definitions change. Unrelated field definitions do not enter the digest.
+Anonymous profiles, encrypted
 processing fields, and consent-gated count grants are refused.
 
 Publication computes one ended period under the current package binding and
@@ -1625,6 +1629,12 @@ Both are sent with no-store cache policy.
 
 Maintained clients verify and retain representation digests for live, release,
 and series documents, and successful publication and withdrawal responses.
+Every successful statistics response must carry the declared no-store and
+authorization/accept cache policy; read and mutation responses use the same
+validation. The CLI binds mutation success to the requested dataset and period:
+publication also matches status and a positive version without withdrawal
+metadata, while withdrawal matches the version and reason. Nullable snapshot
+bookmarks remain valid.
 Version selectors must fit a positive signed 64-bit integer before credentials
 or I/O. Period selectors must be canonical year, quarter, month, or day codes
 with valid Gregorian dates and an exclusive end in the four-digit year domain.
@@ -1645,7 +1655,8 @@ still follows the runtime's actual default admission rules.
 
 `compiler_statistics.rs` exercises typed count admission, publisher dependency
 closure, period models, generated contracts, definition digests, and grant
-changes. `statistics.rs` verifies calendar periods, zero filling and margins,
+changes. Referenced field types and derived SQL input definitions are bound,
+while unrelated field changes preserve the digest. `statistics.rs` verifies calendar periods, zero filling and margins,
 checked arithmetic, suppression, independent rounding, canonical bytes, and
 CSV escaping. The PostgreSQL statistics tests verify exact runtime privileges,
 atomic withdrawal, unexpected grants and altered withdrawal functions, and the
@@ -1660,8 +1671,10 @@ workflow executes publication and JSON/CSV series reads through native CLI and
 HTTP clients with separate access profiles.
 `registry-breg-client/tests/statistics_http_boundary.rs` verifies complete
 continuation propagation, version and calendar bounds before credentials or I/O, and
-refusal of missing or mismatched publication and withdrawal digests. Native
-Node and Python tests exercise the same client decisions.
+refusal of missing or mismatched publication and withdrawal digests, and
+missing or incorrect cache headers on JSON, CSV, and listing reads. Native
+Node and Python tests exercise the same client decisions. CLI lifecycle tests
+refuse mismatched release identities and operation-specific response headers.
 
 ### Accepted residuals
 

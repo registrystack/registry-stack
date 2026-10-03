@@ -14417,6 +14417,103 @@ mod tests {
     }
 
     #[test]
+    fn statistics_mutations_refuse_success_for_another_release() {
+        use base64::Engine as _;
+        use reqwest::StatusCode;
+        use sha2::Digest as _;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let directory = TestDirectory::create();
+        let token_file = directory.path.join("statistics-success-token");
+        fs::write(&token_file, "statistics-success-token-canary").unwrap();
+        let cases = [
+            (
+                false,
+                StatusCode::CREATED,
+                json!({
+                    "dataset": "other-population",
+                    "period": "2025-01",
+                    "version": 1,
+                    "status": "final",
+                    "snapshot": null,
+                    "computedAt": "2026-10-03T00:00:00Z",
+                    "packageDigest": format!("sha256:{}", "1".repeat(64)),
+                    "definitionDigest": format!("sha256:{}", "2".repeat(64)),
+                    "contentDigest": format!("sha256:{}", "3".repeat(64)),
+                }),
+            ),
+            (
+                true,
+                StatusCode::OK,
+                json!({
+                    "dataset": "population",
+                    "period": "2025-01",
+                    "version": 1,
+                    "status": "final",
+                    "snapshot": null,
+                    "computedAt": "2026-10-03T00:00:00Z",
+                    "packageDigest": format!("sha256:{}", "1".repeat(64)),
+                    "definitionDigest": format!("sha256:{}", "2".repeat(64)),
+                    "contentDigest": format!("sha256:{}", "3".repeat(64)),
+                }),
+            ),
+        ];
+
+        for (withdraw, status, document) in cases {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let body = serde_json::to_vec(&document).unwrap();
+            let digest =
+                base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(&body));
+            let response = format!(
+                "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nVary: authorization, accept\r\nRepr-Digest: sha-256=:{digest}:\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status.as_u16(),
+                status.canonical_reason().unwrap(),
+                body.len(),
+                String::from_utf8(body).unwrap()
+            );
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = vec![0; 8192];
+                let count = stream.read(&mut request).unwrap();
+                assert!(String::from_utf8_lossy(&request[..count])
+                    .starts_with("POST /v1/statistics/population/releases/2025-01/versions"));
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+            let error = if withdraw {
+                statistics_lifecycle::withdraw(StatisticsWithdrawRequest {
+                    breg_url: &url,
+                    access_token_file: &token_file,
+                    dataset: "population",
+                    period: "2025-01",
+                    version: 1,
+                    reason: registry_breg_client::BRegWithdrawalReason::ComputationError,
+                    profile: "publisher",
+                    idempotency_key: "statistics-response-binding",
+                })
+                .unwrap_err()
+            } else {
+                statistics_lifecycle::publish(StatisticsPublishRequest {
+                    breg_url: &url,
+                    access_token_file: &token_file,
+                    dataset: "population",
+                    period: "2025-01",
+                    status: registry_breg_client::BRegReleaseStatus::Final,
+                    profile: "publisher",
+                    idempotency_key: "statistics-response-binding",
+                })
+                .unwrap_err()
+            };
+            server.join().unwrap();
+            assert!(matches!(error, StatisticsLifecycleError::Response));
+        }
+    }
+
+    #[test]
     fn statistics_withdraw_refuses_zero_version_in_the_parser() {
         assert!(Cli::try_parse_from([
             "bregctl",

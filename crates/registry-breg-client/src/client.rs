@@ -1545,9 +1545,7 @@ impl BaseRegistryClient {
         }
         let headers = response.headers().clone();
         let trace_id = breg_trace_id(status, &headers)?;
-        if mutation {
-            validate_mutation_cache_headers(status, &headers, &trace_id)?;
-        }
+        validate_mutation_cache_headers(status, &headers, &trace_id)?;
         let media_type =
             statistics_response_media_type(&headers, requested_media).ok_or_else(|| {
                 BaseRegistryClientError::protocol(

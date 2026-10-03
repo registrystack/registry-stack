@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use pg_query::protobuf::{
@@ -19,6 +20,8 @@ pub(crate) struct DerivedSqlDependencies {
     pub source_relations: BTreeSet<String>,
     pub uses_evaluation_date: bool,
 }
+
+pub(crate) type DerivedSourceColumns = BTreeMap<String, BTreeSet<String>>;
 
 /// Extract dependency metadata from SQL which has already passed
 /// [`validate_derived_sql`]. Compilation only calls this after validation
@@ -48,6 +51,31 @@ pub(crate) fn derived_sql_dependencies(sql: &[u8]) -> DerivedSqlDependencies {
         }
     }
     dependencies
+}
+
+/// Resolve the stored source columns read by SQL which has already passed
+/// [`validate_derived_sql`]. This reuses the validator's lexical scopes so
+/// aliases, correlated subqueries, and shadowing bind to the same source
+/// relation at digest compilation as they do at admission.
+pub(crate) fn derived_sql_source_columns(
+    sql: &[u8],
+    source_columns: &BTreeMap<String, BTreeSet<String>>,
+) -> DerivedSourceColumns {
+    const VALIDATED: &str = "derived SQL was validated before its source-column inventory";
+    let text = std::str::from_utf8(sql).expect(VALIDATED);
+    let parsed = pg_query::parse(text).expect(VALIDATED);
+    let Some(PgNode::SelectStmt(select)) = root_node(&parsed) else {
+        panic!("{VALIDATED}");
+    };
+    let dependencies = RefCell::new(BTreeMap::new());
+    assert!(validate_select_columns(
+        select,
+        source_columns,
+        &BTreeMap::new(),
+        &[],
+        &dependencies,
+    ));
+    dependencies.into_inner()
 }
 
 pub(crate) fn validate_derived_sql(
@@ -320,11 +348,13 @@ fn no_wildcard(node: &PgNodeWrapper) -> bool {
 struct RelationBinding {
     qualifiers: Vec<Vec<String>>,
     columns: BTreeSet<String>,
+    source_columns: DerivedSourceColumns,
 }
 
 #[derive(Clone, Default)]
 struct QueryScope {
     qualified: BTreeMap<Vec<String>, BTreeSet<String>>,
+    qualified_source_columns: BTreeMap<Vec<String>, DerivedSourceColumns>,
     relations: Vec<RelationBinding>,
 }
 
@@ -340,6 +370,9 @@ impl QueryScope {
                 {
                     return None;
                 }
+                scope
+                    .qualified_source_columns
+                    .insert(qualifier.clone(), binding.source_columns.clone());
             }
             scope.relations.push(binding);
         }
@@ -351,7 +384,13 @@ fn valid_column_references(
     select: &SelectStmt,
     source_columns: &BTreeMap<String, BTreeSet<String>>,
 ) -> bool {
-    validate_select_columns(select, source_columns, &BTreeMap::new(), &[])
+    validate_select_columns(
+        select,
+        source_columns,
+        &BTreeMap::new(),
+        &[],
+        &RefCell::new(BTreeMap::new()),
+    )
 }
 
 fn validate_select_columns(
@@ -359,6 +398,7 @@ fn validate_select_columns(
     source_columns: &BTreeMap<String, BTreeSet<String>>,
     inherited_ctes: &BTreeMap<String, BTreeSet<String>>,
     outer_scopes: &[QueryScope],
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> bool {
     let mut ctes = inherited_ctes.clone();
     if let Some(with) = &select.with_clause {
@@ -373,7 +413,7 @@ fn validate_select_columns(
             else {
                 return false;
             };
-            if !validate_select_columns(query, source_columns, &ctes, outer_scopes) {
+            if !validate_select_columns(query, source_columns, &ctes, outer_scopes, dependencies) {
                 return false;
             }
             let Some(columns) = select_output_columns(query, &cte.aliascolnames) else {
@@ -385,9 +425,14 @@ fn validate_select_columns(
 
     let mut bindings = Vec::new();
     for node in &select.from_clause {
-        let Some(mut next) =
-            collect_from_bindings(node, source_columns, &ctes, outer_scopes, &bindings)
-        else {
+        let Some(mut next) = collect_from_bindings(
+            node,
+            source_columns,
+            &ctes,
+            outer_scopes,
+            &bindings,
+            dependencies,
+        ) else {
             return false;
         };
         bindings.append(&mut next);
@@ -402,7 +447,7 @@ fn validate_select_columns(
     if !select.target_list.iter().all(|target| {
         target.node.as_ref().is_some_and(|node| {
             matches!(node, PgNode::ResTarget(target) if validate_optional_expression(
-                target.val.as_deref(), source_columns, &ctes, &scopes, &no_aliases
+                target.val.as_deref(), source_columns, &ctes, &scopes, &no_aliases, dependencies
             ))
         })
     }) || !validate_optional_expression(
@@ -411,24 +456,28 @@ fn validate_select_columns(
         &ctes,
         &scopes,
         &no_aliases,
+        dependencies,
     ) || !validate_optional_expression(
         select.having_clause.as_deref(),
         source_columns,
         &ctes,
         &scopes,
         &no_aliases,
+        dependencies,
     ) || !validate_optional_expression(
         select.limit_offset.as_deref(),
         source_columns,
         &ctes,
         &scopes,
         &no_aliases,
+        dependencies,
     ) || !validate_optional_expression(
         select.limit_count.as_deref(),
         source_columns,
         &ctes,
         &scopes,
         &no_aliases,
+        dependencies,
     ) {
         return false;
     }
@@ -446,10 +495,24 @@ fn validate_select_columns(
         .iter()
         .chain(&select.group_clause)
         .all(|node| {
-            validate_sql92_expression(node, source_columns, &ctes, &scopes, &output_aliases)
+            validate_sql92_expression(
+                node,
+                source_columns,
+                &ctes,
+                &scopes,
+                &output_aliases,
+                dependencies,
+            )
         })
         && select.sort_clause.iter().all(|node| {
-            validate_sql92_expression(node, source_columns, &ctes, &scopes, &output_aliases)
+            validate_sql92_expression(
+                node,
+                source_columns,
+                &ctes,
+                &scopes,
+                &output_aliases,
+                dependencies,
+            )
         })
 }
 
@@ -459,6 +522,7 @@ fn validate_sql92_expression(
     ctes: &BTreeMap<String, BTreeSet<String>>,
     scopes: &[QueryScope],
     output_aliases: &BTreeSet<String>,
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> bool {
     // Plain DISTINCT is represented by a null placeholder; DISTINCT ON
     // entries carry the expressions that need scope validation.
@@ -477,7 +541,14 @@ fn validate_sql92_expression(
     ) {
         return true;
     }
-    validate_expression(node, source_columns, ctes, scopes, &BTreeSet::new())
+    validate_expression(
+        node,
+        source_columns,
+        ctes,
+        scopes,
+        &BTreeSet::new(),
+        dependencies,
+    )
 }
 
 fn collect_from_bindings(
@@ -486,6 +557,7 @@ fn collect_from_bindings(
     ctes: &BTreeMap<String, BTreeSet<String>>,
     outer_scopes: &[QueryScope],
     preceding: &[RelationBinding],
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> Option<Vec<RelationBinding>> {
     match node.node.as_ref()? {
         PgNode::RangeVar(range) => {
@@ -507,8 +579,14 @@ fn collect_from_bindings(
             } else {
                 vec![vec![range.relname.clone()]]
             };
+            let source_columns = if source_qualifier {
+                BTreeMap::from([(range.relname.clone(), columns.clone())])
+            } else {
+                BTreeMap::new()
+            };
             Some(vec![RelationBinding {
                 qualifiers,
+                source_columns,
                 columns,
             }])
         }
@@ -524,7 +602,7 @@ fn collect_from_bindings(
             if range.lateral && !preceding.is_empty() {
                 nested_outer.push(QueryScope::from_bindings(preceding.to_vec())?);
             }
-            if !validate_select_columns(query, source_columns, ctes, &nested_outer) {
+            if !validate_select_columns(query, source_columns, ctes, &nested_outer, dependencies) {
                 return None;
             }
             let alias_columns = range
@@ -540,6 +618,7 @@ fn collect_from_bindings(
             Some(vec![RelationBinding {
                 qualifiers,
                 columns,
+                source_columns: BTreeMap::new(),
             }])
         }
         PgNode::JoinExpr(join) => {
@@ -549,6 +628,7 @@ fn collect_from_bindings(
                 ctes,
                 outer_scopes,
                 preceding,
+                dependencies,
             )?;
             let mut visible_to_right = preceding.to_vec();
             visible_to_right.extend(left.iter().cloned());
@@ -558,6 +638,7 @@ fn collect_from_bindings(
                 ctes,
                 outer_scopes,
                 &visible_to_right,
+                dependencies,
             )?;
             let mut joined = left.clone();
             joined.extend(right.iter().cloned());
@@ -569,10 +650,21 @@ fn collect_from_bindings(
                 ctes,
                 &join_scopes,
                 &BTreeSet::new(),
+                dependencies,
             ) {
                 return None;
             }
             if let Some(alias) = &join.alias {
+                let source_columns = left
+                    .iter()
+                    .chain(&right)
+                    .flat_map(|binding| binding.source_columns.iter())
+                    .fold(BTreeMap::new(), |mut all, (relation, fields)| {
+                        all.entry(relation.clone())
+                            .or_insert_with(BTreeSet::new)
+                            .extend(fields.iter().cloned());
+                        all
+                    });
                 let columns = left
                     .drain(..)
                     .chain(right.drain(..))
@@ -581,6 +673,7 @@ fn collect_from_bindings(
                 Some(vec![RelationBinding {
                     qualifiers: vec![vec![alias.aliasname.clone()]],
                     columns,
+                    source_columns,
                 }])
             } else {
                 left.append(&mut right);
@@ -620,8 +713,18 @@ fn validate_optional_expression(
     ctes: &BTreeMap<String, BTreeSet<String>>,
     scopes: &[QueryScope],
     output_aliases: &BTreeSet<String>,
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> bool {
-    node.is_none_or(|node| validate_expression(node, source_columns, ctes, scopes, output_aliases))
+    node.is_none_or(|node| {
+        validate_expression(
+            node,
+            source_columns,
+            ctes,
+            scopes,
+            output_aliases,
+            dependencies,
+        )
+    })
 }
 
 fn validate_expressions(
@@ -630,10 +733,18 @@ fn validate_expressions(
     ctes: &BTreeMap<String, BTreeSet<String>>,
     scopes: &[QueryScope],
     output_aliases: &BTreeSet<String>,
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> bool {
-    nodes
-        .iter()
-        .all(|node| validate_expression(node, source_columns, ctes, scopes, output_aliases))
+    nodes.iter().all(|node| {
+        validate_expression(
+            node,
+            source_columns,
+            ctes,
+            scopes,
+            output_aliases,
+            dependencies,
+        )
+    })
 }
 
 fn validate_json_value_expression(
@@ -642,6 +753,7 @@ fn validate_json_value_expression(
     ctes: &BTreeMap<String, BTreeSet<String>>,
     scopes: &[QueryScope],
     output_aliases: &BTreeSet<String>,
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> bool {
     validate_optional_expression(
         value.raw_expr.as_deref(),
@@ -649,12 +761,14 @@ fn validate_json_value_expression(
         ctes,
         scopes,
         output_aliases,
+        dependencies,
     ) && validate_optional_expression(
         value.formatted_expr.as_deref(),
         source_columns,
         ctes,
         scopes,
         output_aliases,
+        dependencies,
     )
 }
 
@@ -664,13 +778,32 @@ fn validate_expression(
     ctes: &BTreeMap<String, BTreeSet<String>>,
     scopes: &[QueryScope],
     output_aliases: &BTreeSet<String>,
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> bool {
-    let optional =
-        |node| validate_optional_expression(node, source_columns, ctes, scopes, output_aliases);
-    let many = |nodes| validate_expressions(nodes, source_columns, ctes, scopes, output_aliases);
+    let optional = |node| {
+        validate_optional_expression(
+            node,
+            source_columns,
+            ctes,
+            scopes,
+            output_aliases,
+            dependencies,
+        )
+    };
+    let many = |nodes| {
+        validate_expressions(
+            nodes,
+            source_columns,
+            ctes,
+            scopes,
+            output_aliases,
+            dependencies,
+        )
+    };
     match node.node.as_ref() {
-        Some(PgNode::ColumnRef(column)) => node_strings(&column.fields)
-            .is_some_and(|names| resolve_column_reference(&names, scopes, output_aliases)),
+        Some(PgNode::ColumnRef(column)) => node_strings(&column.fields).is_some_and(|names| {
+            resolve_column_reference(&names, scopes, output_aliases, dependencies)
+        }),
         Some(PgNode::AConst(_) | PgNode::CaseTestExpr(_)) => true,
         Some(PgNode::AExpr(expression)) => {
             optional(expression.lexpr.as_deref()) && optional(expression.rexpr.as_deref())
@@ -697,14 +830,27 @@ fn validate_expression(
             optional(link.testexpr.as_deref())
                 && link.subselect.as_deref().is_some_and(|query| {
                     matches!(query.node.as_ref(), Some(PgNode::SelectStmt(select)) if
-                        validate_select_columns(select, source_columns, ctes, scopes))
+                    validate_select_columns(
+                        select,
+                        source_columns,
+                        ctes,
+                        scopes,
+                        dependencies,
+                    ))
                 })
         }
         Some(PgNode::SortBy(sort)) => optional(sort.node.as_deref()),
         Some(PgNode::List(list)) => many(&list.items),
         Some(PgNode::JsonFuncExpr(function)) => {
             function.context_item.as_deref().is_none_or(|value| {
-                validate_json_value_expression(value, source_columns, ctes, scopes, output_aliases)
+                validate_json_value_expression(
+                    value,
+                    source_columns,
+                    ctes,
+                    scopes,
+                    output_aliases,
+                    dependencies,
+                )
             }) && optional(function.pathspec.as_deref())
                 && many(&function.passing)
                 && function
@@ -717,7 +863,14 @@ fn validate_expression(
                     .is_none_or(|behavior| optional(behavior.expr.as_deref()))
         }
         Some(PgNode::JsonArgument(argument)) => argument.val.as_deref().is_none_or(|value| {
-            validate_json_value_expression(value, source_columns, ctes, scopes, output_aliases)
+            validate_json_value_expression(
+                value,
+                source_columns,
+                ctes,
+                scopes,
+                output_aliases,
+                dependencies,
+            )
         }),
         _ => false,
     }
@@ -727,6 +880,7 @@ fn resolve_column_reference(
     names: &[String],
     scopes: &[QueryScope],
     output_aliases: &BTreeSet<String>,
+    dependencies: &RefCell<DerivedSourceColumns>,
 ) -> bool {
     let Some((column, qualifier)) = names.split_last() else {
         return false;
@@ -742,11 +896,19 @@ fn resolve_column_reference(
             if scope.qualified.contains_key(&vec![column.clone()]) {
                 return false;
             }
-            if scope
+            let matching = scope
                 .relations
                 .iter()
-                .any(|relation| relation.columns.contains(column))
-            {
+                .filter(|relation| relation.columns.contains(column))
+                .collect::<Vec<_>>();
+            if !matching.is_empty() {
+                for relation in matching {
+                    record_source_column_dependencies(
+                        dependencies,
+                        &relation.source_columns,
+                        column,
+                    );
+                }
                 return true;
             }
         }
@@ -754,10 +916,32 @@ fn resolve_column_reference(
     }
     for scope in scopes.iter().rev() {
         if let Some(columns) = scope.qualified.get(qualifier) {
-            return columns.contains(column);
+            let found = columns.contains(column);
+            if found {
+                if let Some(source_columns) = scope.qualified_source_columns.get(qualifier) {
+                    record_source_column_dependencies(dependencies, source_columns, column);
+                }
+            }
+            return found;
         }
     }
     false
+}
+
+fn record_source_column_dependencies(
+    dependencies: &RefCell<DerivedSourceColumns>,
+    source_columns: &DerivedSourceColumns,
+    column: &str,
+) {
+    let mut dependencies = dependencies.borrow_mut();
+    for (relation, columns) in source_columns {
+        if columns.contains(column) {
+            dependencies
+                .entry(relation.clone())
+                .or_default()
+                .insert(column.to_owned());
+        }
+    }
 }
 
 fn valid_ast(parsed: &pg_query::ParseResult, known_relations: &BTreeSet<&str>) -> bool {
@@ -1081,6 +1265,84 @@ mod tests {
             BTreeSet::from(["household".to_owned(), "member".to_owned()])
         );
         assert!(dependencies.uses_evaluation_date);
+    }
+
+    #[test]
+    fn source_column_inventory_uses_validated_alias_and_nested_scopes() {
+        let source_columns = BTreeMap::from([
+            (
+                "household".to_owned(),
+                BTreeSet::from(["id".to_owned(), "active".to_owned(), "name".to_owned()]),
+            ),
+            (
+                "member".to_owned(),
+                BTreeSet::from(["id".to_owned(), "active".to_owned(), "name".to_owned()]),
+            ),
+        ]);
+        let dependencies = derived_sql_source_columns(
+            b"WITH selected AS (SELECT h.id AS id FROM registry_source.household h WHERE h.name IS NOT NULL) SELECT s.id, (SELECT h.active FROM registry_source.member h WHERE h.id = s.id) AS member_active FROM selected s",
+            &source_columns,
+        );
+
+        assert_eq!(
+            dependencies,
+            BTreeMap::from([
+                (
+                    "household".to_owned(),
+                    BTreeSet::from(["id".to_owned(), "name".to_owned()]),
+                ),
+                (
+                    "member".to_owned(),
+                    BTreeSet::from(["active".to_owned(), "id".to_owned()]),
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn source_column_inventory_handles_join_aliases_and_lateral_correlation() {
+        let source_columns = BTreeMap::from([
+            (
+                "household".to_owned(),
+                BTreeSet::from(["id".to_owned(), "name".to_owned()]),
+            ),
+            (
+                "member".to_owned(),
+                BTreeSet::from(["active".to_owned(), "household_id".to_owned()]),
+            ),
+        ]);
+        let joined = derived_sql_source_columns(
+            b"SELECT joined.name AS name, joined.active AS active FROM (registry_source.household h JOIN registry_source.member m ON m.household_id = h.id) AS joined",
+            &source_columns,
+        );
+        assert_eq!(
+            joined,
+            BTreeMap::from([
+                (
+                    "household".to_owned(),
+                    BTreeSet::from(["id".to_owned(), "name".to_owned()]),
+                ),
+                (
+                    "member".to_owned(),
+                    BTreeSet::from(["active".to_owned(), "household_id".to_owned()]),
+                ),
+            ])
+        );
+
+        let lateral = derived_sql_source_columns(
+            b"SELECT h.id AS id, selected.active AS active FROM registry_source.household h LEFT JOIN LATERAL (SELECT m.active AS active FROM registry_source.member m WHERE m.household_id = h.id) selected ON true",
+            &source_columns,
+        );
+        assert_eq!(
+            lateral,
+            BTreeMap::from([
+                ("household".to_owned(), BTreeSet::from(["id".to_owned()])),
+                (
+                    "member".to_owned(),
+                    BTreeSet::from(["active".to_owned(), "household_id".to_owned()]),
+                ),
+            ])
+        );
     }
 
     #[test]

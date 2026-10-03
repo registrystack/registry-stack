@@ -168,8 +168,9 @@ refuses a subsequent provisional release for the same definition. Latest
 reads skip withdrawn versions. `status=final` selects only final releases.
 
 A definition digest covers everything that can affect the true or published
-cells: unit, population, period, dimensions and codes, derived definitions,
-publisher visibility on every source dependency, and disclosure parameters.
+cells: unit, population, period, dimensions and codes, the definitions of
+referenced fields and derived SQL inputs, publisher visibility on every source
+dependency, and disclosure parameters.
 Reader and live grants and `firstPeriod` do not change it. Read eligibility
 uses the active definition digest, so versions from another definition remain
 stored but are unavailable until that exact definition is active again.

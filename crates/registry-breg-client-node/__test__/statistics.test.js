@@ -50,9 +50,11 @@ test('statistics methods preserve route, representation, status and caller key',
       response.statusCode = request.method === 'POST' && request.url.endsWith('/versions?accessProfile=publisher') ? 201 : 200;
       response.setHeader('content-type', request.headers.accept === 'text/csv' ? 'text/csv; charset=utf-8' : request.headers.accept);
       response.setHeader('traceparent', traceparent);
-      if (request.method === 'POST') {
-        response.setHeader('cache-control', 'no-store');
-        response.setHeader('vary', 'authorization, accept');
+      if (!request.url.includes('/cache-control-missing')) {
+        response.setHeader('cache-control', request.url.includes('/cache-control-wrong') ? 'private' : 'no-store');
+      }
+      if (!request.url.includes('/vary-missing')) {
+        response.setHeader('vary', request.url.includes('/vary-wrong') ? 'accept' : 'authorization, accept');
       }
       const body = request.headers.accept === 'text/csv' ? 'period,periodStart,periodEnd,value,status\r\n' : '{"ok":true}';
       if (!request.url.includes('/digest-missing/')
@@ -104,6 +106,15 @@ test('statistics methods preserve route, representation, status and caller key',
       error => error.kind === 'invalid_request',
     );
     assert.equal(requests.length, afterCanonicalPeriods);
+
+    for (const read of [
+      () => client.statisticsLive('cache-control-missing'),
+      () => client.statisticsLive('vary-wrong', null, null, null, 'csv'),
+      () => client.statisticsReleases('vary-missing', 10),
+      () => client.statisticsReleases('cache-control-wrong', 10),
+    ]) {
+      await assert.rejects(read(), error => error.kind === 'protocol' && error.code === 'cache_policy');
+    }
 
     const maximumCursor = 'c'.repeat(10_978);
     await client.statisticsReleases('d'.repeat(64), 10, maximumCursor, 'p'.repeat(64));

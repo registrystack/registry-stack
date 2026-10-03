@@ -246,6 +246,7 @@ pub(super) fn compile(
                 entities,
                 entity_ids: &dependency_entities,
                 relation_ids: &used_relations,
+                referenced_fields: &referenced_fields,
                 population_field_bindings: &population_field_bindings,
             },
             releases.as_ref().map(|release| release.publisher.as_str()),
@@ -911,6 +912,7 @@ struct DefinitionDependencies<'a> {
     entities: &'a BTreeMap<String, CompiledEntity>,
     entity_ids: &'a BTreeSet<String>,
     relation_ids: &'a BTreeSet<String>,
+    referenced_fields: &'a BTreeSet<String>,
     population_field_bindings: &'a BTreeMap<String, String>,
 }
 
@@ -934,21 +936,71 @@ fn definition_digest(
         request_visibility: serde_json::Value,
         access_requirement_row_boundaries: serde_json::Value,
     }
+    let unit = &dependencies.entities[&source.unit];
+    let source_columns = dependencies
+        .entities
+        .values()
+        .map(|entity| {
+            (
+                entity.source_relation.sql_name.clone(),
+                std::iter::once(entity.canonical_id.sql_name.clone())
+                    .chain(entity.source_relation.stored_fields.iter().map(|field_id| {
+                        entity
+                            .stored_fields
+                            .iter()
+                            .find(|field| field.logical.id == *field_id)
+                            .expect("compiled source relation names only stored fields")
+                            .logical
+                            .sql_name
+                            .clone()
+                    }))
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let referenced_field_definitions = dependencies
+        .referenced_fields
+        .iter()
+        .filter_map(|field_id| {
+            compiled_field_definition(unit, field_id)
+                .map(|definition| (field_id.as_str(), definition))
+        })
+        .collect::<BTreeMap<_, _>>();
     let derived = dependencies
         .relation_ids
         .iter()
         .filter_map(|relation_id| {
-            dependencies.entities[&source.unit]
-                .derived_relations
-                .get(relation_id)
-                .map(|relation| {
-                    json!({
-                        "id": relation.id,
-                        "sqlSha256": relation.sql_sha256,
-                        "sourceEntities": relation.source_entities,
-                        "usesEvaluationDate": relation.uses_evaluation_date,
-                    })
+            unit.derived_relations.get(relation_id).map(|relation| {
+                let source_field_definitions = crate::derived_sql::derived_sql_source_columns(
+                    &relation.sql_bytes,
+                    &source_columns,
+                )
+                .into_iter()
+                .filter_map(|(relation_name, fields)| {
+                    let entity = dependencies
+                        .entities
+                        .values()
+                        .find(|entity| entity.source_relation.sql_name == relation_name)?;
+                    let definitions = fields
+                        .iter()
+                        .filter_map(|sql_name| {
+                            source_field_definition(entity, sql_name)
+                                .map(|(field_id, definition)| (field_id.to_owned(), definition))
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    Some((entity.id.clone(), definitions))
                 })
+                .collect::<BTreeMap<_, _>>();
+                json!({
+                    "id": relation.id,
+                    "keyField": relation.key_field,
+                    "execution": relation.execution,
+                    "sqlSha256": relation.sql_sha256,
+                    "sourceEntities": relation.source_entities,
+                    "sourceFieldDefinitions": source_field_definitions,
+                    "usesEvaluationDate": relation.uses_evaluation_date,
+                })
+            })
         })
         .collect::<Vec<_>>();
     let visibility = publisher
@@ -990,6 +1042,7 @@ fn definition_digest(
         "unit": source.unit,
         "population": source.population,
         "populationFieldBindings": dependencies.population_field_bindings,
+        "referencedFieldDefinitions": referenced_field_definitions,
         "period": period_definition,
         "dimensions": dimensions,
         "disclosure": disclosure,
@@ -998,6 +1051,64 @@ fn definition_digest(
     });
     let bytes = canonicalize_json(&value).expect("statistical dataset definition canonicalizes");
     super::sha256_hex(&bytes)
+}
+
+fn compiled_field_definition(entity: &CompiledEntity, field_id: &str) -> Option<serde_json::Value> {
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.id == field_id)
+        .map(|field| {
+            json!({
+                "kind": "stored",
+                "sqlName": field.logical.sql_name,
+                "type": field.logical.field_type,
+                "required": field.required,
+                "pattern": entity.fields[&field.logical.id].pattern.as_ref(),
+            })
+        })
+        .or_else(|| {
+            entity.derived_fields.get(field_id).map(|field| {
+                json!({
+                    "kind": "derived",
+                    "sqlName": field.logical.sql_name,
+                    "type": field.logical.field_type,
+                    "derivation": field.derivation_id,
+                })
+            })
+        })
+}
+
+fn source_field_definition<'a>(
+    entity: &'a CompiledEntity,
+    sql_name: &str,
+) -> Option<(&'a str, serde_json::Value)> {
+    if entity.canonical_id.sql_name == sql_name {
+        return Some((
+            entity.canonical_id.id.as_str(),
+            json!({
+                "kind": "canonicalId",
+                "sqlName": entity.canonical_id.sql_name,
+                "type": entity.canonical_id.field_type,
+            }),
+        ));
+    }
+    entity
+        .stored_fields
+        .iter()
+        .find(|field| field.logical.sql_name == sql_name)
+        .map(|field| {
+            (
+                field.logical.id.as_str(),
+                json!({
+                    "kind": "stored",
+                    "sqlName": field.logical.sql_name,
+                    "type": field.logical.field_type,
+                    "required": field.required,
+                    "pattern": entity.fields[&field.logical.id].pattern.as_ref(),
+                }),
+            )
+        })
 }
 
 fn unique_profiles(

@@ -162,13 +162,25 @@ async fn handler(
     response
         .headers_mut()
         .insert("traceparent", TRACEPARENT.parse().unwrap());
-    if method == "POST" {
-        response
-            .headers_mut()
-            .insert("cache-control", "no-store".parse().unwrap());
-        response
-            .headers_mut()
-            .insert("vary", "authorization, accept".parse().unwrap());
+    if !uri.contains("cache-control-missing") {
+        response.headers_mut().insert(
+            "cache-control",
+            if uri.contains("cache-control-wrong") {
+                "private".parse().unwrap()
+            } else {
+                "no-store".parse().unwrap()
+            },
+        );
+    }
+    if !uri.contains("vary-missing") {
+        response.headers_mut().insert(
+            "vary",
+            if uri.contains("vary-wrong") {
+                "accept".parse().unwrap()
+            } else {
+                "authorization, accept".parse().unwrap()
+            },
+        );
     }
     if !release_list && !uri.contains("missing-digest") {
         let digest_body = if uri.contains("bad-digest") {
@@ -581,6 +593,43 @@ async fn statistics_refuses_missing_repeated_or_mismatched_representation_digest
             error,
             BaseRegistryClientError::Protocol {
                 failure: BRegProtocolFailure::RepresentationDigest,
+                ..
+            }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn statistics_reads_require_the_exact_private_cache_policy() {
+    let (client, _) = client().await;
+    for error in [
+        client
+            .statistics_live(
+                "cache-control-missing",
+                None,
+                None,
+                None,
+                BRegStatisticsFormat::Json,
+            )
+            .await
+            .unwrap_err(),
+        client
+            .statistics_live("vary-wrong", None, None, None, BRegStatisticsFormat::Csv)
+            .await
+            .unwrap_err(),
+        client
+            .statistics_releases("vary-missing", Some(10), None, None)
+            .await
+            .unwrap_err(),
+        client
+            .statistics_releases("cache-control-wrong", Some(10), None, None)
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::CachePolicy,
                 ..
             }
         ));

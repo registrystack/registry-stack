@@ -716,6 +716,150 @@ fn definition_digest_binds_population_api_names_to_logical_fields() {
 }
 
 #[test]
+fn definition_digest_binds_referenced_stored_field_definitions() {
+    let mut baseline_source = source();
+    baseline_source["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({
+                "id":"score","type":"int64","required":true,"classification":"internal"
+            }),
+            json!({
+                "id":"unused-score","type":"int64","required":true,
+                "classification":"internal"
+            }),
+        ]);
+    for profile in [0_usize, 1] {
+        for member in ["readableFields", "filterableFields"] {
+            baseline_source["accessProfiles"][profile]["permissions"][0][member]
+                .as_array_mut()
+                .unwrap()
+                .extend([json!("score"), json!("unused-score")]);
+        }
+    }
+    baseline_source["statisticalDatasets"][0]["population"] = json!("score eq 1");
+    let baseline = compile(&baseline_source).expect("integer population compiles");
+    let baseline_digest = &baseline.statistical_datasets()["records-by-category"].definition_digest;
+
+    let mut changed_type_source = baseline_source.clone();
+    changed_type_source["entities"][0]["fields"][5] = json!({
+        "id":"score","type":"text","maxLength":20,"required":true,
+        "classification":"internal"
+    });
+    let changed_type = compile(&changed_type_source).expect("reviewable text successor compiles");
+    assert_ne!(
+        baseline_digest,
+        &changed_type.statistical_datasets()["records-by-category"].definition_digest,
+        "a compiled type change for a population field starts a new release series"
+    );
+
+    #[cfg(feature = "runtime")]
+    assert!(
+        compiled_registry_change_set(&baseline, &changed_type, "sha256:before")
+            .changes
+            .iter()
+            .any(|change| {
+                change.code == CompiledRegistryChangeCode::FieldTypeChanged
+                    && change.class == CompiledRegistryChangeClass::DestructiveOrIrreversible
+            })
+    );
+
+    let mut unrelated_type_source = baseline_source;
+    unrelated_type_source["entities"][0]["fields"][6] = json!({
+        "id":"unused-score","type":"decimal","precision":10,"scale":2,"required":true,
+        "classification":"internal"
+    });
+    let unrelated_type =
+        compile(&unrelated_type_source).expect("unreferenced decimal successor compiles");
+    assert_eq!(
+        baseline_digest,
+        &unrelated_type.statistical_datasets()["records-by-category"].definition_digest,
+        "an unrelated field definition does not hide the current release series"
+    );
+}
+
+#[test]
+fn definition_digest_binds_derived_output_and_exact_source_field_definitions() {
+    let mut baseline_source = source();
+    baseline_source["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({
+                "id":"amount","type":"int64","required":true,"classification":"internal"
+            }),
+            json!({
+                "id":"unused-amount","type":"int64","required":true,
+                "classification":"internal"
+            }),
+        ]);
+    baseline_source["entities"][0]["derived"] = json!([{
+        "id":"statistics-score","sql":"sql/statistics.sql","key":"id",
+        "fields":[{
+            "id":"score","type":"int64","classification":"internal"
+        }]
+    }]);
+    for profile in [0_usize, 1] {
+        for member in ["readableFields", "filterableFields"] {
+            baseline_source["accessProfiles"][profile]["permissions"][0][member]
+                .as_array_mut()
+                .unwrap()
+                .extend([json!("score"), json!("amount"), json!("unused-amount")]);
+        }
+    }
+    baseline_source["statisticalDatasets"][0]["population"] = json!("score eq 1");
+    let sql = "SELECT r.id AS id, CASE WHEN r.amount > 1 THEN 2 ELSE 0 END AS score FROM registry_source.record r";
+    let baseline =
+        compile_with_sql(&baseline_source, sql).expect("derived integer population compiles");
+    let baseline_dataset = &baseline.statistical_datasets()["records-by-category"];
+    let baseline_relation = &baseline.entities()["record"].derived_relations["statistics-score"];
+
+    let mut changed_output_source = baseline_source.clone();
+    changed_output_source["entities"][0]["derived"][0]["fields"][0] = json!({
+        "id":"score","type":"text","maxLength":20,
+        "classification":"internal"
+    });
+    let changed_output = compile_with_sql(&changed_output_source, sql)
+        .expect("derived text output successor compiles");
+    assert_eq!(
+        baseline_relation.sql_sha256,
+        changed_output.entities()["record"].derived_relations["statistics-score"].sql_sha256
+    );
+    assert_ne!(
+        baseline_dataset.definition_digest,
+        changed_output.statistical_datasets()["records-by-category"].definition_digest,
+        "a referenced derived output declaration starts a new release series"
+    );
+
+    let mut changed_source_type = baseline_source.clone();
+    changed_source_type["entities"][0]["fields"][5] = json!({
+        "id":"amount","type":"decimal","precision":10,"scale":2,"required":true,
+        "classification":"internal"
+    });
+    let changed_source_type = compile_with_sql(&changed_source_type, sql)
+        .expect("derived source type successor compiles");
+    assert_ne!(
+        baseline_dataset.definition_digest,
+        changed_source_type.statistical_datasets()["records-by-category"].definition_digest,
+        "a stored field read by derived SQL starts a new release series"
+    );
+
+    let mut unrelated_source_type = baseline_source;
+    unrelated_source_type["entities"][0]["fields"][6] = json!({
+        "id":"unused-amount","type":"decimal","precision":10,"scale":2,"required":true,
+        "classification":"internal"
+    });
+    let unrelated_source_type = compile_with_sql(&unrelated_source_type, sql)
+        .expect("unreferenced derived source type successor compiles");
+    assert_eq!(
+        baseline_dataset.definition_digest,
+        unrelated_source_type.statistical_datasets()["records-by-category"].definition_digest,
+        "an unrelated source field does not hide the current release series"
+    );
+}
+
+#[test]
 fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
     let mut value = source();
     value["entities"][0]["fields"]

@@ -76,9 +76,14 @@ class StatisticsTests(unittest.TestCase):
                     "text/csv; charset=utf-8" if self.headers["accept"] == "text/csv" else self.headers["accept"],
                 )
                 self.send_header("traceparent", TRACEPARENT)
-                if self.command == "POST":
-                    self.send_header("cache-control", "no-store")
-                    self.send_header("vary", "authorization, accept")
+                if "/cache-control-missing" not in self.path:
+                    cache_control = (
+                        "private" if "/cache-control-wrong" in self.path else "no-store"
+                    )
+                    self.send_header("cache-control", cache_control)
+                if "/vary-missing" not in self.path:
+                    vary = "accept" if "/vary-wrong" in self.path else "authorization, accept"
+                    self.send_header("vary", vary)
                 if "/digest-missing/" not in self.path and (
                     self.command == "POST" or "/releases?" not in self.path
                 ):
@@ -156,6 +161,16 @@ class StatisticsTests(unittest.TestCase):
             with self.assertRaises(BaseRegistryClientError):
                 invalid_period_call()
         self.assertEqual(len(self.requests), after_canonical_periods)
+
+        for invalid_cache_read in (
+            lambda: self.client.statistics_live("cache-control-missing"),
+            lambda: self.client.statistics_live("vary-wrong", format="csv"),
+            lambda: self.client.statistics_releases("vary-missing", top=10),
+            lambda: self.client.statistics_releases("cache-control-wrong", top=10),
+        ):
+            with self.assertRaises(BaseRegistryClientError) as cache_error:
+                invalid_cache_read()
+            self.assertEqual(cache_error.exception.code, "cache_policy")
 
         maximum_cursor = "c" * 10_978
         self.client.statistics_releases(
