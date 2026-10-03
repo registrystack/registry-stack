@@ -37,8 +37,6 @@ export const expectedBinaries = [
   'messaging',
   'messagingctl',
   'registry-render',
-  'relay',
-  'relayctl',
   'scheduling',
   'schedulingctl',
 ];
@@ -66,7 +64,6 @@ const groups = [
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },
-  { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
   { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },
   { title: 'Registry Render', binaries: ['registry-render'] },
@@ -548,7 +545,7 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
   const lines = [
     frontmatter(
       'Command-line interfaces',
-      'Generated command references for Registry Relay and Evidence binaries.',
+      'Generated command references for Registry Stack binaries.',
       reviewMetadata,
     ),
     '',

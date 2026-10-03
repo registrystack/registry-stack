@@ -30,18 +30,6 @@ Registry Stack does not promise backports to an earlier minor.
 
 The rest of the lifecycle policy is designed to make rolling forward cheap:
 
-- Within a major line, upgrades are backward compatible per the
-  [compatibility promise](../../reference/api-stability/). Relay, Evidence Gateway, and Registry
-  Manifest have no migrated state, so moving to the fixed release needs no migration step for
-  them. Base Registry Engine, Casework, and Scheduling each own migrated PostgreSQL state; moving
-  to the fixed release for one of them can require running the migration command its release notes
-  name (`bregctl apply`, `caseworkctl apply`, or `schedulingctl apply`). Before 1.0, a release
-  reads only the state its immediate predecessor wrote, so upgrade one release at a time.
-- Patch releases contain fixes only, so a security patch is a minimal, low-risk step.
-- The [revision replacement procedure](../../operate/relay/) documents the manual abort and
-  post-acceptance recovery boundary. Operators verify and exercise the exact candidate package
-  before traffic admission.
-
 What this means for an institution: plan to apply patch releases of your deployed line
 promptly. A deployment pinned to an old minor does not receive fixes in place; the fix is
 always in a newer release.
@@ -84,4 +72,4 @@ within 5 business days.
 
 - [Report a vulnerability](../report-a-vulnerability/)
 - [API stability and versioning](../../reference/api-stability/)
-- [Operate Relay](../../operate/relay/)
+- [Upgrade and retire](../../operate/advanced/upgrade-and-retire/)

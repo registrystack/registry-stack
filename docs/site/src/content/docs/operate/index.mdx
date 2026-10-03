@@ -1,148 +1,19 @@
 ---
-title: Prepare the operator handoff
-description: Receive a sealed Registry Relay package, bind it to local deployment inputs, and replace complete revisions without gaining hidden authority.
+title: Operator handoff
+description: Prepare a Registry Stack deployment for its operators.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-08"
-doc_type: reference
+last_reviewed: "2026-10-03"
+doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-The authoring environment is disposable.
-What crosses into a deployment is one sealed package, one matching SQLite
-source, and one reviewed change report.
-The operator binds those to local paths, keys, issuers, and limits, and can
-change none of the meaning inside them.
+Before handing a retained Registry Stack product to operators, use that product's deployment guide
+to record its configuration revision, external dependencies, credentials, audit destination,
+health checks, backup scope, upgrade procedure, and rollback boundary.
 
-## Handoff sequence
-
-| Stage | Command | Result owner |
-| --- | --- | --- |
-| Classify the change | `relayctl diff <previous> <current>` | Registry Authority reviewer |
-| Prove governance | `relayctl check <project> --production` | Data publisher |
-| Replay fixtures | `relayctl test <project>` | Data publisher |
-| Seal the revision | `relayctl package <project> --output <dir>` | Data publisher |
-| Bind the deployment | `runtime.yaml` | Deployment operator |
-| Run | `relay serve --runtime-config <file>` | Deployment operator |
-| Confirm | `GET /health` and `GET /ready` | Deployment operator |
-
-Packaging recompiles the project under the production profile, so a package
-cannot be produced from a revision that would fail `check --production`.
-Generation and packaging never start a service or resolve a secret. Packaging
-does open each bound source read-only to observe its structure, and refuses when
-a binding cannot be observed.
-
-## Obtain the runtime
-
-The installer installs the Linux amd64 `relay` and `relayctl` binaries together:
-
-```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
-```
-
-The installer verifies both downloaded binaries against the release
-`SHA256SUMS` before anything reaches the install directory, installs both or
-neither, and refuses any other platform rather than guessing. It does not
-verify release authenticity.
-The signed checksum chain that does, and the checks behind it, are recorded in
-[OpenSSF and release trust](../security/openssf-evidence/).
-Replace `| bash` with `| less` to read the installer before you run it on a host
-you operate.
-For a higher-assurance installation, follow the release verification procedure in
-`release/VERIFY.md` at the tag you install,
-`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`, where `<tag>` is the tag of the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest). Then rerun the installer with `RELAY_ASSET_DIR`
-pointing at the verified directory.
-`RELAY_INSTALL_DIR` selects the install directory; the default is
-`~/.local/bin`.
-
-To evaluate the latest successfully published build from protected `main`, use
-the source installer and select the nightly channel:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-relay-v2/install.sh | bash -s -- --channel nightly
-```
-
-Pin a known nightly build by replacing the channel selection with
-`--build '<tag>'`. A failed nightly build leaves the channel on its last
-successful build, and an unsupported platform makes the installer exit without
-changing the install directory. The [nightly release channel](https://github.com/registrystack/registry-stack/blob/main/release/NIGHTLY.md)
-lists the supported toolsets and platforms, explains the build tag, and gives
-the provenance verification procedure.
-
-{/* Evidence: crates/registry-relay-v2/install.sh; release/NIGHTLY.md;
-    .github/workflows/nightly-release.yml. */}
-
-Each release publishes the container image `ghcr.io/registrystack/relay:<tag>`, built on
-distroless nonroot. It exposes port 8080, runs `relay serve --runtime-config
-/etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
-
-`relayctl` also ships for each platform in
-[platform support](../explanation/known-limitations/#platform-support).
-The Linux assets are the plain `relayctl-<tag>-linux-amd64` and
-`relayctl-<tag>-linux-arm64` executables. Starting with v0.33.0,
-`relayctl-<tag>-macos-arm64.tar.gz` contains the macOS executable, its shared AWS-LC-FIPS
-libraries, and third-party notices. Extract the complete macOS bundle into one private directory
-and keep its contents together. Releases through v0.32.0 retain their plain macOS binary assets.
-Take the applicable asset directly when the combined installer does not support the target
-platform, or build it from source.
-Operators who prefer to place `relay` themselves take the
-`relay-<tag>-linux-amd64` asset the same way.
-
-{/* Evidence: crates/registry-relay-v2/install.sh;
-    release/scripts/release_candidate.py, _relay_v2_payload_inventory;
-    release/scripts/macos_fips_packaging.py, archive_macos_fips_binary. */}
-
-## Record operator-owned inputs
-
-Before the first activation, record:
-
-- The package directory, its package digest, and the contract revision it seals
-- The SQLite source path and the source profile the package already chose
-- The token issuer identity, discovery URL, audience, and accepted algorithms,
-  or the decision that the deployment is fully anonymous
-- The audit destination and path, its rotation and retention settings, and where sealed files
-  are shipped for append-only storage
-- The cursor integrity key reference and maximum cursor age
-- The listener address, the TLS termination point, and the limits and quotas
-- The Unix service identity that owns every trusted path
-
-Relay resolves secrets through `secret:env/<NAME>` or `secret:file/<name>`
-references in `runtime.yaml`, where `<name>` is a single flat lowercase
-filename under the declared `secretProviders.file.root`. Secret values never belong in the package, and the
-package never travels with the database.
-
-## The package proves integrity, not authenticity
-
-The package digest is the SHA-256 digest of the package's `SHA256SUMS`, which
-lists the digest of every other file, and `package.expectedDigest` pins it.
-It detects a modified or truncated package. It is not a signature, and Registry
-Relay does not sign packages or responses.
-Authenticity is whatever the institution's transfer, storage, and access
-controls make it, so treat the package like any other trusted deployment
-artifact.
-
-At startup `relay serve` re-derives the compiled registry and the entire
-artifact set from the governed files inside the package and requires
-byte-for-byte equality before it activates.
-On Unix it also refuses symbolic links and group-writable or world-writable
-components in the runtime and package paths; on other platforms that check fails
-closed and the service does not start.
-
-## Use the operations guidance
-
-- [Operate Registry Relay](relay/) for sources, issuers, audit, limits, and
-  revision replacement
-- [Retention and persistent state](retention-and-persistent-state/) for what
-  each product keeps and what an operator must preserve
-- [Advanced operations](advanced/) for cross-product credential, trust, and
-  runtime-inspection procedures
-
-## Next
-
-- [Understand generated files](../generated-artifacts/)
-- [Review the security guidance](../security/)
-- [Report a vulnerability](../security/report-a-vulnerability/)
+Continue with the [operations overview](advanced/) and the product-specific pages linked from its
+documentation section.

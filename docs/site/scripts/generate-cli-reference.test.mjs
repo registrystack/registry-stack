@@ -47,10 +47,10 @@ function command(name, parent = null, subcommands = []) {
 
 function fixtureCatalog() {
   const binaries = expectedBinaries.map((name) => command(name));
-  const relayctl = binaries.find((binary) => binary.name === 'relayctl');
-  const tooling = command('tooling', 'relayctl');
-  tooling.subcommands.push(command('editor', 'relayctl tooling'));
-  relayctl.subcommands.push(tooling);
+  const evidencectl = binaries.find((binary) => binary.name === 'evidencectl');
+  const tooling = command('tooling', 'evidencectl');
+  tooling.subcommands.push(command('editor', 'evidencectl tooling'));
+  evidencectl.subcommands.push(tooling);
   return {
     schema_version: schemaVersion,
     source_version: '0.21.0',
@@ -76,18 +76,18 @@ test('renders one linked page for every nested public command', () => {
   assert.ok(pages.has('breg.mdx'));
   assert.ok(pages.has('bregctl.mdx'));
   assert.match(pages.get('index.mdx'), /Base Registry Engine/u);
-  assert.ok(pages.has('relayctl.mdx'));
-  assert.ok(pages.has('relayctl/tooling.mdx'));
-  assert.ok(pages.has('relayctl/tooling/editor.mdx'));
-  assert.match(pages.get('index.mdx'), /\.\/relayctl\//u);
-  assert.match(pages.get('relayctl.mdx'), /\.\/tooling\//u);
-  assert.match(pages.get('relayctl/tooling.mdx'), /\.\/editor\//u);
-  assert.match(pages.get('relayctl/tooling/editor.mdx'), /\| `-h, --help` \|/u);
-  assert.match(pages.get('relayctl.mdx'), /\{\/\* Generated from Clap/u);
-  assert.match(pages.get('relayctl.mdx'), /status: draft\ndraft: true/u);
-  assert.match(pages.get('relayctl.mdx'), /last_reviewed: "unreviewed"/u);
-  assert.match(pages.get('relayctl.mdx'), /source version `0\.21\.0`/u);
-  assert.doesNotMatch(pages.get('relayctl.mdx'), /<!--/u);
+  assert.ok(pages.has('evidencectl.mdx'));
+  assert.ok(pages.has('evidencectl/tooling.mdx'));
+  assert.ok(pages.has('evidencectl/tooling/editor.mdx'));
+  assert.match(pages.get('index.mdx'), /\.\/evidencectl\//u);
+  assert.match(pages.get('evidencectl.mdx'), /\.\/tooling\//u);
+  assert.match(pages.get('evidencectl/tooling.mdx'), /\.\/editor\//u);
+  assert.match(pages.get('evidencectl/tooling/editor.mdx'), /\| `-h, --help` \|/u);
+  assert.match(pages.get('evidencectl.mdx'), /\{\/\* Generated from Clap/u);
+  assert.match(pages.get('evidencectl.mdx'), /status: draft\ndraft: true/u);
+  assert.match(pages.get('evidencectl.mdx'), /last_reviewed: "unreviewed"/u);
+  assert.match(pages.get('evidencectl.mdx'), /source version `0\.21\.0`/u);
+  assert.doesNotMatch(pages.get('evidencectl.mdx'), /<!--/u);
 });
 
 test('wraps a docset-gated product group of the index in a DocsetProduct region', () => {
@@ -123,8 +123,8 @@ test('wraps the Base Registry Engine citizen gateway group of the index in a Doc
 
 test('renders required groups and conditional requirements', () => {
   const catalog = fixtureCatalog();
-  const relayctl = catalog.binaries.find((binary) => binary.name === 'relayctl');
-  relayctl.constraints.push(
+  const evidencectl = catalog.binaries.find((binary) => binary.name === 'evidencectl');
+  evidencectl.constraints.push(
     {
       kind: 'required_exactly_one',
       when: null,
@@ -146,7 +146,7 @@ test('renders required groups and conditional requirements', () => {
       arguments: ['--left', '--right'],
     },
   );
-  const page = renderCatalog(catalog, fixtureReviewMetadata()).get('relayctl.mdx');
+  const page = renderCatalog(catalog, fixtureReviewMetadata()).get('evidencectl.mdx');
   assert.match(page, /Exactly one of `--left`, `--right` is required\./u);
   assert.match(page, /One or more of `--scope`, `--role` are required\./u);
   assert.match(page, /`--right` is present \| `--detail` is required\./u);
@@ -157,13 +157,13 @@ test('renders required groups and conditional requirements', () => {
 
 test('renders repeatable option cardinality', () => {
   const catalog = fixtureCatalog();
-  const relayctl = catalog.binaries.find((binary) => binary.name === 'relayctl');
-  relayctl.options.push({
+  const evidencectl = catalog.binaries.find((binary) => binary.name === 'evidencectl');
+  evidencectl.options.push({
     ...argument('--attribute-column <COLUMN>'),
     repeatable: true,
   });
 
-  const page = renderCatalog(catalog, fixtureReviewMetadata()).get('relayctl.mdx');
+  const page = renderCatalog(catalog, fixtureReviewMetadata()).get('evidencectl.mdx');
   assert.match(page, /\| `--attribute-column <COLUMN>` \| No \| Yes \|/u);
   assert.match(page, /\| Option \| Always required \| Repeatable \|/u);
 });
@@ -214,13 +214,13 @@ test('requires human review of content while retaining its original source prove
     () => validateReviewMetadata({ ...reviewed, reviewed_catalog_sha256: 'a'.repeat(64) }, bumped),
     /does not cover the current command catalog digest/u,
   );
-  const page = renderCatalog(bumped, reviewed).get('relayctl.mdx');
+  const page = renderCatalog(bumped, reviewed).get('evidencectl.mdx');
   assert.match(page, /status: current/u);
   assert.match(page, /last_reviewed: "2026-08-13"/u);
   assert.match(page, /source version `0\.22\.0`/u);
   assert.ok(page.includes(catalogDigest(bumped)));
   assert.doesNotMatch(page, /^draft: true$/mu);
-  assert.match(renderCatalog(bumped, { ...reviewed, status: 'draft' }).get('relayctl.mdx'), /^draft: true$/mu);
+  assert.match(renderCatalog(bumped, { ...reviewed, status: 'draft' }).get('evidencectl.mdx'), /^draft: true$/mu);
 });
 
 test('every public catalog content change invalidates review, including version-like help', () => {
@@ -246,11 +246,11 @@ test('every public catalog content change invalidates review, including version-
     binary => { binary.arguments.push(argument('<FILE>')); },
     binary => { binary.constraints.push({ kind: 'required_exactly_one', when: null, arguments: ['--left', '--right'] }); },
     binary => { binary.subcommands[0].subcommands[0].about = 'Nested help'; },
-    binary => { binary.subcommands.push(command('extra', 'relayctl')); },
+    binary => { binary.subcommands.push(command('extra', 'evidencectl')); },
   ];
   for (const mutate of mutations) {
     const changed = structuredClone(catalog);
-    mutate(changed.binaries.find(binary => binary.name === 'relayctl'));
+    mutate(changed.binaries.find(binary => binary.name === 'evidencectl'));
     assert.notEqual(contentDigest(changed), contentDigest(catalog));
     assert.throws(() => validateReviewMetadata(metadata, changed), /current command content/u);
   }
@@ -297,16 +297,16 @@ test('writes deterministic pages and detects local output drift', async () => {
     );
     await generateCliReference(docsRoot, root, { execute });
     await generateCliReference(docsRoot, root, { check: true, execute });
-    const relayctl = join(
+    const evidencectl = join(
       docsRoot,
-      'src/content/docs/reference/cli/relayctl.mdx',
+      'src/content/docs/reference/cli/evidencectl.mdx',
     );
-    await writeFile(relayctl, 'stale\n', 'utf8');
+    await writeFile(evidencectl, 'stale\n', 'utf8');
     await assert.rejects(
       generateCliReference(docsRoot, root, { check: true, execute }),
       /is stale/u,
     );
-    assert.match(await readFile(relayctl, 'utf8'), /stale/u);
+    assert.match(await readFile(evidencectl, 'utf8'), /stale/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

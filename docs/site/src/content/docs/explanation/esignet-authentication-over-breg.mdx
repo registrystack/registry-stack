@@ -259,8 +259,8 @@ through the provider's Go interface, and the host refuses to start with no verif
 
 Version 0.3.0 draws its lines deliberately:
 
-- **BReg only.** The provider reads from a Base Registry Engine registry. Reading through Registry
-  Relay is deferred, and Evidence Gateway is not involved: an eSignet login is an authentication,
+- **BReg only.** The provider reads from a Base Registry Engine registry. Other registry sources
+  are deferred, and Evidence Gateway is not involved: an eSignet login is an authentication,
   not a signed minimum-disclosure assertion.
 - **No production challenge delivery.** Sending one-time codes over SMS or email, enrollment,
   wallet-based login, and identity assurance levels are out of scope. Deployments bring their own

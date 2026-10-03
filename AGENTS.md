@@ -4,13 +4,11 @@ This is the Registry Stack monorepo: registry-facing services over the data
 institutions already hold and the registries they do not hold yet. Pre-1.0;
 APIs and deployment contracts may change.
 
-Six independent runtime products are relevant:
+Five independent runtime products are relevant:
 
 - **Base Registry Engine** compiles a declared registry project into a
   PostgreSQL-backed writable registry: schema, REST API, per-profile
   permissions, revision history, and audit journal.
-- **Registry Relay** exposes protected, scoped, read-only HTTP APIs over
-  existing sources.
 - **Evidence** returns signed, minimum-disclosure assertions from fixed
   requests to authoritative sources.
 - **Registry Casework** gives authorized human teams a coordinated inbox over
@@ -24,8 +22,8 @@ Six independent runtime products are relevant:
   an operator-configured provider, and reports what is known about delivery.
 
 The products compose without merging their boundaries. Evidence may use a Base
-Registry Engine route or a Relay-protected API as a fixed HTTP source and
-inherits neither one's authorization. Casework may present source-owned work
+Registry Engine route or another bounded HTTP endpoint as a fixed source and
+inherits none of that source's authorization. Casework may present source-owned work
 from a Base Registry Engine through its adapter, while current source
 visibility and action authority remain with that registry. Registry Scheduling
 may publish bookable supply for work another product governs, and another
@@ -55,9 +53,9 @@ not. The composition happens through the public CLI of the other product,
 never through a crate dependency: `registry-evidencectl` does not depend on
 `registry-breg` or `registry-bregctl`.
 
-Registry Manifest describes sources portably; Relay is its consumer in code
-and `registry-platform-*` crates are shared primitives. `relayctl` is Relay
-adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
+Registry Manifest describes sources portably; BReg and `registry-manifest-cli`
+consume its model and renderers. `registry-platform-*` crates are shared
+primitives, and `registry-evidencectl` is Evidence adopter tooling.
 
 `registry-evidence-oid4vci` is a supporting service in the same sense, not a
 runtime product of its own: it delivers Evidence credentials to a wallet over
@@ -73,7 +71,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | Area | Owns |
 |---|---|
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
-| `crates/registry-discovery-profile` | Closed provider-publication profile shared by Evidence and Relay |
+| `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
 | `crates/registry-discovery-client-node` | Node.js binding for `registry-discovery-client`, via napi-rs |
 | `crates/registry-discovery-client-py` | Python binding for `registry-discovery-client`, via PyO3 |
@@ -101,7 +99,7 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-messaging` | PostgreSQL-backed Messaging runtime and the `messaging` binary |
 | `crates/registry-messagingctl` | Messaging operator tooling and the `messagingctl` binary |
 | `crates/registry-messaging-client` | Bounded Rust Messaging client over the runtime's HTTP contract |
-| `crates/registry-record` | Product-neutral Registry Record v1 response DTOs shared by the Base Registry Engine and Relay clients |
+| `crates/registry-record` | Product-neutral Registry Record v1 response DTOs used by the Base Registry Engine clients |
 | `crates/registry-render` | Registry Render: governed, byte-stable PDF documents from registry data, rendered with Typst, and the `registry-render` binary |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
 | `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
@@ -115,15 +113,9 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-evidence-authoring` | The authoring form: the single implementation of the model an adopter writes and the checks it must satisfy, shared by adopter tooling |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
-| `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Relay V2 and Evidence |
-| `crates/registry-relay-v2` | Contract-compiled Relay V2 runtime and the `relay` binary |
-| `crates/registry-relay-http-contract` | Stable HTTP wire contract shared by the Relay V2 runtime and its clients |
-| `crates/registry-relay-client` | Canonical bounded Rust client for Registry Relay V2 |
-| `crates/registry-relay-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
-| `crates/registry-relay-client-py` | Internal PyO3 binding used to assemble the unified Python client |
-| `crates/registry-relayctl` | Relay V2 adopter tooling and the `relayctl` binary |
+| `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Evidence |
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
-| `crates/registry-language-server` | Editor language server for Registry Stack product authoring documents, hosted for adopters by `evidencectl` and `relayctl`; product navigation rules add no runtime dependencies |
+| `crates/registry-language-server` | Editor language server for Evidence authoring documents, hosted for adopters by `evidencectl`; product navigation rules add no runtime dependencies |
 | `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
@@ -135,14 +127,9 @@ Before editing crates in these areas, also read the owning guide:
 - `registry-discovery*`: `products/discovery/AGENTS.md`
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
 - `registry-platform-*`: `products/platform/AGENTS.md`
-- `registry-relay*`: `products/relay-v2/AGENTS.md`
 - `registry-evidence*` and `registry-language-server`: `products/evidence/AGENTS.md`
 - product clients, their language bindings, `registry-record`, and
   `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
-
-Relay V2 is implemented by `registry-relay-v2` and `registry-relayctl`. Its
-approved contracts, coequal acceptance projects, and gates live under
-`products/relay-v2`.
 
 Base Registry Engine is implemented by `registry-breg` and `registry-bregctl`.
 Its approved contracts, acceptance journeys, quickstart, generated examples, and
@@ -218,7 +205,7 @@ under `products/messaging`. Messaging owns rendering, its dispatch queue,
 provider calls, receipts, attempt history, payload retention, and its audit
 journal. Why and when to send, who the recipient is, and consent to be
 contacted stay with the caller's source of record. No Messaging crate reaches
-a BReg, Casework, Scheduling, Evidence, or Relay crate, and no product crate
+a BReg, Casework, Scheduling, or Evidence crate, and no product crate
 reaches the Messaging runtime or `messagingctl`: products reach Messaging over
 its public HTTP contract like any external caller, and the
 dependency-direction gate enforces that on the whole forward closure.
@@ -230,32 +217,22 @@ client never reaches the runtime.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
-`registry-discovery-profile` is the narrow shared publication contract that
-Evidence and Relay depend on; it contains no runtime, source access, trust, or
-native-client behavior. Discovery fetches only an operator-approved origin
-list during an offline build, serves one immutable index, and leaves endpoint
-trust plus native Evidence or Relay invocation to the relying application.
+`registry-discovery-profile` is the narrow publication contract Evidence
+implements; it contains no runtime, source access, trust, or native-client
+behavior. Its published v1alpha1 resources remain historically capable of
+describing Relay, while current Rust parsing and publication accept only the
+Evidence subset. Discovery fetches only an operator-approved origin list during
+an offline build, serves one immutable index, and leaves endpoint trust plus
+native Evidence invocation to the relying application.
 The Rust, Node.js, and Python Discovery clients must preserve that boundary:
 they may search, resolve, validate, and persist inert exact selections, but
 must never turn catalog metadata into trust or credentials.
 
-Relay V2 editor support uses the shared in-memory authoring compiler in
-`registry-relay-v2`; the language server must not observe SQLite or source
-values. Regenerate the committed editor schemas from the strict Rust types,
-never by hand:
-
-```bash
-cargo run -p registry-relay-v2 --features schema --example authoring-schema -- \
-  --output crates/registry-relayctl/schemas/authoring
-products/relay-v2/scripts/check-authoring-schema.sh
-```
-
 ## Evidence product boundary
 
-Evidence is its own minimum-disclosure assertion product, not a Relay mode.
-Evidence may consume a Relay-protected API through its ordinary fixed HTTP
-source contract, but it does not inherit Relay's authorization or policy
-model. Evidence serializes the same stateless assertion as a signed flattened
+Evidence is a minimum-disclosure assertion product. It may consume a protected
+API through its ordinary fixed HTTP source contract, but it does not inherit
+that source's authorization or policy model. Evidence serializes the same stateless assertion as a signed flattened
 JWS or, under its own frozen profile, as an SD-JWT VC response. The latter is a
 second encoding of one response, never a credential lifecycle.
 
@@ -281,8 +258,8 @@ the frozen Version 1 runtime contract and adds no Evidence semantics of its own.
 are covered by the same source-product and domain neutrality checks as the
 runtime.
 
-`registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
-like `relayctl` is for the rest of the stack. It sits outside the frozen
+`registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime.
+It sits outside the frozen
 Version 1 runtime contract: it generates key material, starts incomplete
 OpenAPI authoring workspaces, writes the project-local editor schema mappings
 an adopter's YAML tooling reads, and drives fixture runs for complete
@@ -294,8 +271,7 @@ request preparation and offline response verification. It links
 sentences the command line already reports. It adds no Evidence semantics of
 its own. Its source is covered by the same source-product and domain neutrality
 checks as the runtime, and so is the language server's in full: every line of
-that crate ships inside `evidencectl`, and the modules its Relay half and its
-Evidence half share are where a term would leak from one into the other.
+that crate ships inside `evidencectl`.
 
 `registry-evidence-authoring` is the library beside `evidencectl` holding the
 single implementation of the authoring form: the model an adopter writes, the
@@ -367,8 +343,7 @@ Root CI's `rust` job runs `cargo fmt --check`, `cargo check --locked
 --workspace --all-targets`, `cargo clippy --workspace --all-targets --
 -D warnings`, `cargo test --locked --workspace`, the full `cargo deny check`
 (advisories included; unresolvable RUSTSEC advisories carry scoped ignores in
-`deny.toml` with review triggers), and the Relay V2 product contract check
-(`products/relay-v2/scripts/check-contracts.sh`). cargo-deny needs v0.19+
+`deny.toml` with review triggers). cargo-deny needs v0.19+
 to parse this `deny.toml`; CI pins 0.19.8.
 
 Evidence-specific contracts, source neutrality, and verifier portability:
@@ -559,7 +534,7 @@ that still resolves in the pull request, not a rewritten or squashed SHA.
 ## Rules that bite
 
 - Every commit needs a DCO sign-off: `git commit -s`.
-- Commit subjects: imperative mood; `feat(relay):` and `feat(evidence):` style
+- Commit subjects: imperative mood; `feat(breg):` and `feat(evidence):` style
   prefixes are the norm for product-scoped changes.
 - History may be rewritten during review (session commits get squashed). In
   durable docs, cite only commits reachable from pushed `main`, and prefer

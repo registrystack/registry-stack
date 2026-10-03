@@ -1,146 +1,33 @@
 ---
 title: Error and status code reference
-description: The closed RFC 9457 problem set Relay returns, with each code's status, title, and detail, and where the Evidence Gateway error contract is documented.
+description: Where to find the maintained problem contracts for Registry Stack HTTP products.
 status: current
 owner: registry-docs
 source_repos:
-  - registry-relay
   - registry-evidence
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-10-03"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack HTTP surfaces use product-specific error contracts. This page carries Relay's set in
-full and points to the Evidence Gateway and OID4VCI supporting-service contracts.
-
-## Relay
-
-Relay returns errors as RFC 9457 problem details with the media type `application/problem+json`.
-The set is closed: `ProblemCode` in `crates/registry-relay-http-contract/src/lib.rs` has 26 variants,
-and the HTTP boundary can return nothing else.
-
-### Response shape
-
-Every problem body carries exactly six members, and no operation adds a seventh.
-
-| Member | Value |
-| --- | --- |
-| `type` | `https://id.registrystack.org/problems/registry-relay/<code with dots replaced by slashes>` |
-| `title` | The fixed title for the code |
-| `status` | The HTTP status, repeated in the response status line |
-| `detail` | The fixed detail sentence for the code |
-| `code` | The stable code string |
-| `traceId` | The 32-character W3C Trace Context trace identifier for this request |
-
-Every problem response also carries `Content-Type: application/problem+json` and
-`Cache-Control: no-store`. The two `401` codes add `WWW-Authenticate: Bearer realm="registry-relay"`.
-The two `429` codes add `Retry-After: 60`.
-
-Branch on `code` and `status`. Do not parse the `type` URI path: it exists to identify and document
-the problem type.
-
-`traceId` comes from the request's `traceparent` header when that header parses, and from a
-server-created context when it does not. Relay always removes a caller-supplied `tracestate` and
-never reflects it, so vendor state cannot round-trip through the error boundary.
-
-### Problem codes
-
-Unlike a taxonomy that varies its status by operation, each Relay code maps to exactly one status.
-
-| Code | Status | Title | Detail |
-| --- | --- | --- | --- |
-| `consultation.invalid_request` | 400 | Consultation request is invalid | the consultation request is invalid |
-| `aggregate-data.invalid_request` | 400 | Aggregate data request is invalid | the aggregate data request is invalid |
-| `request.fields_invalid` | 400 | Field selection is invalid | field selection is invalid |
-| `filter.unknown_field` | 400 | Filter is not declared | filter is not declared for this operation |
-| `filter.invalid_value` | 400 | Filter value is invalid | filter value is invalid |
-| `query.cursor_invalid` | 400 | Cursor is invalid | cursor is invalid for this query |
-| `request.access_profile_invalid` | 400 | Access profile selection is invalid | access profile selection is invalid |
-| `auth.missing_credential` | 401 | Bearer access token is required | a bearer access token is required |
-| `auth.invalid_credential` | 401 | Bearer access token is invalid | bearer access token validation failed |
-| `consultation.denied` | 403 | Consultation is not permitted | the consultation is not permitted |
-| `aggregate-data.denied` | 403 | Aggregate data access is not permitted | aggregate data access is not permitted |
-| `resource.not_found` | 404 | Requested resource was not found | the requested resource was not found |
-| `consultation.unresolved` | 404 | Requested record was not resolved | the requested record was not resolved |
-| `format.unsupported` | 406 | Requested format is not supported | the requested format is not supported |
-| `internal.payload_too_large` | 413 | Request body is too large | request body exceeds the configured limit |
-| `consultation.response_too_large` | 413 | Consultation response is too large | the consultation response exceeds the configured limit |
-| `aggregate-data.too_large` | 413 | Aggregate data request is too broad | the aggregate data request exceeds its observation limit |
-| `internal.uri_too_long` | 414 | Request URI is too long | request URI exceeds the configured limit |
-| `request.media_type_unsupported` | 415 | Request media type is not supported | request body must use application/json |
-| `consultation.rate_limited` | 429 | Consultation quota is exhausted | the consultation quota is exhausted |
-| `aggregate-data.rate_limited` | 429 | Aggregate data quota is exhausted | the aggregate data quota is exhausted |
-| `internal.unhandled` | 500 | Request could not be served | the request could not be served |
-| `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable |
-| `audit.unavailable` | 503 | Required audit is unavailable | required audit is unavailable |
-| `service.not_ready` | 503 | Service is not ready | the service is not ready |
-| `internal.timeout` | 504 | Request timed out | request exceeded the configured timeout |
-
-### Reading the set
-
-The `consultation.*` codes cover record reads, lookups, and searches. The `aggregate-data.*` codes
-cover the SDMX data and structure routes. The pairs are deliberate: a consultation and an aggregate
-data request that fail the same way still carry different codes, so a caller can tell which surface
-refused without inspecting the path.
-
-Four distinctions are worth knowing before writing client code.
-
-- `resource.not_found` means the path does not name anything this caller may reach.
-  `consultation.unresolved` means a known consultation did not resolve exactly one record. It also
-  covers an invalid record identifier rejected before a source query, so callers must not infer
-  that source execution occurred. A caller
-  that is authenticated but not entitled to a resource gets the same `resource.not_found` as a
-  caller asking for a resource that was never declared, so the code cannot be used to probe what
-  exists. The exception is deliberate: an anonymous caller asking for something whose class has any
-  protected operation gets `auth.missing_credential` first, so a legitimate client is told to
-  authenticate rather than told the path is wrong.
-- `auth.invalid_credential` collapses every token validation failure into one answer: expiry,
-  signature, issuer, audience, unknown key, and disallowed algorithm are indistinguishable to the
-  caller.
-- `filter.unknown_field` fires when a filter is not declared for the operation being called, not
-  when a column is absent from the source. The compiled contract decides what a caller may filter on,
-  so an undeclared filter and a nonexistent column look the same.
-- The three `413` codes separate an oversized request from an oversized answer.
-  `internal.payload_too_large` is about the request body, `consultation.response_too_large` is about
-  the record answer, and `aggregate-data.too_large` is about the observation count an SDMX request
-  would return.
-
-### Startup failures are not problems
-
-Relay compiles and verifies its sealed package and checks initial readiness before binding its
-listener. A failure at that stage is not an HTTP problem: the process writes a bounded operational
-record on standard error and exits. After serving begins, `/ready` can answer `service.not_ready` if
-readiness is later lost. There is no startup-only code namespace in the problem set. See
-[Operate Relay](../../operate/relay/) for what those startup records look like.
+Registry Stack HTTP products own their error contracts. Use the product reference that matches the
+service you call instead of assuming codes or response shapes carry across products.
 
 ## Evidence Gateway
 
-Evidence Gateway has its own closed problem set, documented at
-[Evidence Gateway problem types](../evidence-problems/). That page is the single place the set is written
-down. The runtime-owned generator reproduces the committed schema and OpenAPI artifacts under CI;
-the frozen `products/evidence/contracts/problem-contract.yaml` is maintained separately.
-
-Evidence Gateway type URIs use
-`https://id.registrystack.org/problems/registry-evidence/<code-path>`, where
-the dotted `code` is written with slashes in the URI path.
-Every problem body has exactly `type`, `title`, `status`, `detail`, `code`, and
-`traceId` members. Its static, value-free detail and public trace identifier
-never disclose subject data, source diagnostics, or the server-minted audit
-identifier.
+[Evidence Gateway problem types](../evidence-problems/) is the maintained reference for the
+Gateway's closed problem set. The runtime-owned generator reproduces its committed schema and
+OpenAPI artifacts under CI.
 
 ## Evidence OID4VCI supporting service
 
-The OID4VCI delivery service has its own closed protocol error vocabulary in the
-[committed v0.21.0 OpenAPI artifact](https://github.com/registrystack/registry-stack/blob/v0.21.0/products/evidence/generated/registry-evidence-oid4vci.openapi.json).
+The OID4VCI delivery service has its own protocol error vocabulary in the
+[committed OpenAPI artifact](https://github.com/registrystack/registry-stack/blob/main/products/evidence/generated/registry-evidence-oid4vci.openapi.json).
 Framework-level refusals that never enter the protocol handler can intentionally use `text/plain`.
 
-## Source
+## Retired Relay codes
 
-The Relay catalog is `ProblemCode` in `crates/registry-relay-http-contract/src/lib.rs`. Runtime
-serialization and response headers are in `crates/registry-relay-v2/src/problem.rs`; trace handling
-is `TraceContext` in `crates/registry-platform-httpsec/src/server.rs`.
-
-The codes this page points at rather than repeating are transcribed on their own pages from
-`crates/registry-evidence/src/problem.rs` with `products/evidence/contracts/problem-contract.yaml` (Evidence Gateway).
+Registry Relay and its problem-code catalog were retired in Registry Stack 0.39.0. Existing
+integrations can use the immutable 0.38.0 documentation while planning a replacement. See the
+[Relay retirement decision](../../decisions/registry-relay-retirement-2026-10-03/).

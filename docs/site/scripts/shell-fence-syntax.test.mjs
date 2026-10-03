@@ -10,8 +10,6 @@ const releaseExerciseReadme = resolve(import.meta.dirname, '../../../release/exe
 // on the site, so they belong to this gate even though they live outside
 // src/content/docs.
 const owningSourceDocs = [
-  resolve(import.meta.dirname, '../../../products/relay-v2/CONCEPT.md'),
-  resolve(import.meta.dirname, '../../../products/relay-v2/STANDARDS-ALIGNMENT.md'),
   resolve(import.meta.dirname, '../../../products/manifest/docs/validate-and-render.md'),
 ];
 

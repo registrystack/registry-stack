@@ -1,522 +1,60 @@
 ---
-title: Known limitations and non-guarantees
-description: The canonical, linked inventory of what Registry Stack does not yet do or guarantee, so you know exactly where the boundaries are before committing.
-status: draft
+title: Known limitations
+description: Current product and deployment limits that adopters must account for.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-relay
-  - registry-manifest
+  - registry-breg
   - registry-evidence
-  - solmara-lab
-last_reviewed: "2026-08-11"
-doc_type: explanation
+  - registry-manifest
+last_reviewed: "2026-10-03"
+doc_type: reference
 locale: en
-standards_referenced:
-  - oid4vci
-  - sd-jwt-vc
-  - cccev
-  - odrl
-  - sdmx
-  - geojson
-  - ogc-api-features
-  - ogc-api-records
-  - ogc-api-edr
-  - fhir-r4
+standards_referenced: []
 ---
 
-You already know what Registry Stack is for: answer a question about a record without sharing the
-underlying record.
-This page answers a different question (*what does Registry Stack not yet do or guarantee?*) by
-giving you, in one place, the list of boundaries.
+Registry Stack is pre-1.0 Beta software for self-hosted institutional pilots.
 
-## What this page is and how to use it
+## Product maturity
 
-This is the canonical inventory of current limitations and non-guarantees across the whole stack.
-Each entry states the boundary plainly and links to where it is discussed in depth, so the rest of
-the documentation can point here whenever it says "this is not X."
+- Interfaces may change before 1.0. Keep clients and deployments on compatible releases.
+- Operators must supply production identity, networking, secret storage, monitoring, backup, and
+  incident response.
+- Generated checks establish contract consistency. They do not certify legal compliance,
+  accessibility, source correctness, or institutional authority.
 
-Each protocol and data-model specification carries its own limitations section; this hub collects
-those and links to them so you can read any one in full context.
+## Base Registry Engine
 
-Three things are out of scope here, and each is a link instead:
+Base Registry Engine (BReg) has these current operational limits:
 
-- Why a given limit exists: read the relevant specification.
-- Whether it will change: see the project roadmap (`ROADMAP.md` in the repository root).
-  This page describes current behavior only.
-- How to work around a limit: mitigations are not covered here.
-  Follow the linked specification for each boundary, and see `release/VERIFY.md` in the repository
-  for release verification.
+- BReg requires PostgreSQL and owns the records it stores.
+- Model changes, data migration, backup, restoration, and retention require explicit operator plans.
+- Authorization depends on correct identity-provider claims and reviewed access profiles.
 
-Use this page as a checklist before you commit.
+## Evidence Gateway
 
-## Everything here is draft
+- Evidence Gateway answers predefined requirements. It is not a general query or policy engine.
+- A signed assertion proves what the configured service asserted, not that the authoritative source
+  was correct.
+- OID4VCI support has its own bounded profile and does not provide a general wallet.
+- Source and assertion keys require operator-managed rotation and recovery.
 
-Every governing specification (architecture, security, protocol, and data-model) is currently at
-lifecycle status `draft`: under development or review, not `current` (in force).
-The contracts these limitations are stated against are themselves not yet finalized.
+## Registry Manifest and Discovery
 
-Registry Stack is a pre-1.0 technical release for evaluation, integration pilots, and public
-review.
-It is not a production support commitment and carries no hosted service-level agreement.
+- Manifest output is descriptive and static. It neither serves records nor authorizes access.
+- Current Discovery runtime and clients support Evidence providers only.
+- Published Discovery v1alpha1 profile resources remain historically broad. Operators must rebuild
+  mixed pre-retirement indexes before serving them with a current runtime.
 
-Two things follow.
-First, the behaviors and boundaries here may change as the specifications move toward `current`.
-Second, aligning with an external standard is not the same as conforming to it: speaking the shape
-of OIDC, OAuth 2.0, SD-JWT VC, CCCEV, or the rest does not certify conformance to any of them.
-The [standards register](../../reference/standards/) records how each one is actually adopted.
+## Product removal
 
-## Platform support
+Registry Relay ended with version 0.38.0 and is absent from 0.39.0. No maintained component replaces
+its generic SQLite publication, SDMX, or JSON-FG surfaces. See the
+[retirement decision](../../decisions/registry-relay-retirement-2026-10-03/).
 
-This is the one place the documentation states which platforms carry an artifact; every install
-block links here instead of repeating a list that drifts.
+## Related
 
-The table describes the release roster from `v0.31.0`. Registry Mint was published through
-`v0.30.0`; that immutable release archive retains its original binary and image roster.
-
-| Artifact | Linux amd64 | Linux arm64 | macOS Apple Silicon |
-| --- | --- | --- | --- |
-| `breg` and `bregctl` | Published | Published | Published |
-| `casework` and `caseworkctl` | Published | Published | Published |
-| `schedulingctl` (from `v0.36.0`) | Published | Published | Published |
-| `evidence` and `evidencectl` | Published | Published | Published |
-| `evidence-oid4vci` | Published | Published | Published |
-| `relayctl` | Published | Published | Published |
-| `relay` | Published | None | None |
-| `discovery` and `registry-manifest` | Published | None | None |
-| `scheduling` | Published | None | None |
-| Container images (`breg`, `casework`, `discovery`, `evidence`, `relay`, `scheduling`) | Published | None | None |
-| Client packages (`@registrystack/client`, `registry-stack-client`) | Published | Published | Published |
-
-- No Windows, and no macOS on Intel: no binary, image, or client package targets either one, and
-  nothing is tested under WSL. Each installer names the platforms it accepts and refuses anything
-  else before it downloads.
-- Standalone Linux binaries, including the CLI tools, link the GNU C library dynamically and require
-  glibc 2.35 or newer. The installers reject detected musl hosts, including Alpine, and glibc
-  versions below 2.35 before downloading. The Python client wheels are `manylinux_2_17`; no
-  `musllinux` wheel is published.
-- On supported container hosts, the container alternative is limited to the published service
-  images listed above. Each image is `linux/amd64`, and no multi-architecture index is published,
-  so an arm64 host runs one under emulation.
-- For standalone executables, installer scripts, plain Linux binaries, and the v0.33.0-or-later
-  macOS arm64 bundles are the only distribution channels. Each macOS bundle keeps one executable
-  with its shared AWS-LC-FIPS libraries and notices. There is no Homebrew formula, no
-  `cargo binstall` target, no apt, apk, yum, or Nix package, and no winget or Scoop package.
-
-{/* Evidence: crates/registry-breg/install.sh; crates/registry-evidencectl/install.sh;
-    crates/registry-relay-v2/install.sh; release/docker/Dockerfile.builder;
-    release/scripts/build-release-binaries.sh; release/scripts/build-release-image.sh;
-    release/scripts/release_candidate.py, OPERATOR_TOOL_MINIMUM_VERSION;
-    release/scripts/macos_fips_packaging.py, archive_macos_fips_binary;
-    crates/registry-stack-client-node/npm/linux-arm64-gnu/package.json. */}
-
-## Base Registry Engine limits
-
-Base Registry Engine serves one governed registry from a PostgreSQL database it owns, under a
-package an operator activates deliberately. What it asks of a deployment is in
-[What you need to run Base Registry Engine](../../operate/breg-requirements/); what follows is what
-the product does not do.
-
-- PostgreSQL only: the store is a PostgreSQL database with the `btree_gist` extension installed,
-  plus PostGIS where the registry declares spatial fields. There is no SQLite, other SQL engine,
-  file, or HTTP source, and no adapter layer to add one.
-- Audit is outside PostgreSQL: each process writes its own file or stdout stream. A crash after a
-  mutation commits can leave a request entry without its response. Revision history still records
-  the change; external append-only storage supplies audit tamper evidence and completeness. An
-  operation with no idempotent replay, such as creating an ingestion run, answers unavailable
-  without its result when its response entry is refused; the caller recovers by listing the
-  committed state.
-- Every production change is a package: a one-line access widening goes through `check`,
-  `test` against a schema-test database, `package`, and `apply`. No runtime
-  administration API edits access rules, record shapes, or webhook destinations, and nothing hot
-  reloads.
-- No backup, and no restore: no command takes or restores one. Recovery from an activation that
-  `migration reconcile` cannot resolve is your own PostgreSQL backup, and a destructive migration
-  must name a backup artifact that the tooling validates but never creates.
-- Erasure runs one way and stops early: `history erase` has no dry run and no undo, and refuses
-  more than 10,000 revisions in one transaction. `history rebaseline`, the only way to restore
-  snapshot coverage after an erasure, verifies every live row in one transaction and holds writes
-  to every entity table until it commits.
-- No request-rate limit: the runtime enforces operator-set timeouts and connection-pool bounds,
-  but no rate limit of its own. A registry that admits anonymous reads belongs behind an upstream
-  limiter.
-- No committed performance figure: the load-test harness asks whether a profile holds on your
-  hardware. Neither it nor this documentation states a supported throughput or latency.
-- The runtime configuration grammar is `registry.registrystack.org/breg-runtime/v1alpha1`, and
-  v0.26.0 is the product's first release. The pre-1.0 boundary is stated in
-  [API stability and versioning](../../reference/api-stability/).
-- Nothing deploys it for you: a release carries the two binaries and one container image. There is
-  no Helm chart, Compose file, operator, or hosted offering, and the quickstart's use of Docker is
-  a loopback development path rather than a deployment pattern.
-
-Encrypted restricted fields carry their own limits, described with the model in
-[Field encryption for restricted fields](../breg-field-encryption/):
-
-- Change-request flows cannot target an encrypted field: the compiler refuses it, so a restricted
-  field that must flow through review cannot be encrypted yet.
-- One key version is active at a time: envelope key rotation is Phase 2, and a registry stays on
-  the key version it enabled with.
-- The flip-on migration requires an authored history choice, written exactly as
-  `history: erase-and-rebaseline` or `history: retain-plaintext-history`. There is no implicit
-  default, and tooling may only recommend. `retain-plaintext-history` is an explicit risk
-  acceptance that does not satisfy the database-read guarantee, because pre-flip revision snapshots
-  keep plaintext. `erase-and-rebaseline` can destroy record history beyond the encrypted field, and
-  the preflight report states the affected record and revision counts before confirmation.
-- Retained plaintext backups are the operator's precondition: backups taken before the flip stay
-  plaintext, and Phase 1 ships no tooling to retire or encrypt them.
-- Blind indexes leak equality, presence, and cardinality to a database reader, by design; the
-  indexed value itself stays sealed.
-
-{/* Evidence: crates/registry-breg/src/postgres/roles.rs, verify_postgis;
-    crates/registry-breg/src/postgres/catalog.rs, verify_btree_gist;
-    crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
-    crates/registry-breg/src/history_migration.rs, MAX_HISTORY_MIGRATION_COMMIT_MEMBERS;
-    crates/registry-breg/src/runtime_config.rs, RUNTIME_CONFIG_API_VERSION and OperationalTimeouts;
-    crates/registry-bregctl/src/lib.rs, ApplyArgs; products/breg/loadtest/README.md;
-    products/breg/README.md; crates/registry-breg/src/change_request.rs,
-    change_request.effect.field_encrypted; crates/registry-breg/src/request_prepare.rs,
-    refuse_encrypted_participation() and verify_candidate();
-    crates/registry-breg/src/migration_plan.rs, ReviewedFieldEncryptionHistory and
-    validate_descriptor_shape(); crates/registry-breg/src/field_encryption_backfill.rs,
-    FieldEncryptionBackfillPreflightReport and MAX_NAMED_DUPLICATE_RECORDS;
-    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::blind_index();
-    crates/registry-platform-crypto/src/field_encryption.rs, blind_index_hmac() and
-    derive_field_index_key(). */}
-
-## Evidence Gateway limits
-
-Evidence Gateway releases one stateless assertion per request under a frozen Version 1 contract.
-Read the full context in the [Evidence Gateway protocol](../../spec/rs-pr-evidence/) and the
-[Evidence Gateway security model](../../security/evidence/).
-
-- A serialization, not a credential lifecycle: enabling the SD-JWT VC response format adds an
-  encoding of the same assertion. There is no issuance session, status list, revocation, credential
-  offer, or OID4VCI endpoint of any kind, and `/.well-known/jwt-vc-issuer` publishes no
-  per-requester or per-requirement information. A released assertion stays verifiable until its
-  declared validity expires; nothing recalls it.
-- No expiry beyond `validUntil`: whoever holds a credential and, under the holder-bound mode, the
-  matching private key can use it until that instant passes. Evidence Gateway cannot learn that a
-  credential leaked and cannot withdraw one.
-- The request nonce is not replay protection: every request carries one canonical 32-byte random
-  nonce that is echoed into the payload and never stored, uniqueness-checked, or exposed to
-  authorization, rate limits, scripts, source requests, logs, metrics, traces, or audit. It is
-  uninterpreted correlation data, never a subject binding, identifier, or freshness proof. It
-  becomes a freshness check only for a verifier that independently retained the value it sent.
-- Unsigned output is not evidence: the unsigned JSON format is releasable only where the immutable
-  bundle and the one matched grant both name it. The envelope is self-identifying with a fixed
-  schema, type, integrity marker, warning, and exact vendor media type, carries no JWS member, and
-  the strict verifier rejects it. Treat it as transport-authenticated convenience, never as
-  something a third party can verify later.
-- CCCEV is an alignment, not conformance: the payload field names map to CCCEV 2.2.0 as a frozen
-  semantic reference with Evidence Gateway-specific extensions. No JSON-LD envelope is emitted and no
-  conformance to CCCEV is claimed.
-- Disclosure families are an attestation, not a classifier: the runtime rejects two simultaneously
-  enabled requirements that declare the same `disclosureGuard` family, but a declared family is a
-  reviewed operator assertion. Nothing detects that two differently labelled families are
-  semantically equivalent, so the combined-bundle disclosure review stays an operator duty.
-- No cumulative disclosure budget: Evidence Gateway has no application database and persists no selector,
-  source, evidence, or response data, so nothing tracks cumulative disclosure across repeated or
-  overlapping requests. Native rate controls are uniform per principal, tracked per process in
-  in-process memory, bounded at 100,000 tracked keys, multiplied by replica count, and reset to
-  full by a restart. Per-client quotas are a gateway responsibility.
-- One trust domain per process: the authentication profile admits exactly one token issuer and one
-  set of claim names. Mutually distrustful issuers or customers, or one issuer whose clients carry
-  the same authority under different claim names, require a second deployment with its own bundle,
-  signer, and audit boundary.
-- Bearer tokens only: a token carrying a proof-of-possession confirmation claim is denied rather
-  than accepted as an ordinary bearer, because Evidence Gateway validates no sender proof. An authorization
-  server that binds tokens to DPoP keys or client certificates must issue Evidence Gateway clients unbound
-  tokens.
-- No hot reload, no admin surface, Unix targets only: there is no runtime upload, editor, approval
-  API, hot reload, merge, mutation, governed-field override, or fallback path. Any change is a new
-  reviewed revision and a restart. Version 1 supports Unix targets.
-- Startup does not detect overlapping authority: exactly one authority path may match a request,
-  and zero paths and two or more paths both deny. Startup validation does not detect two paths
-  covering the same requirement, purpose, and subject tuple, so that misconfiguration surfaces at
-  request time as a refusal rather than at deployment time.
-- Readiness does not prove a source returns data: neither startup nor readiness sends an
-  evidence-data request or probes a source data endpoint. A ready service is one whose credentials,
-  trust bindings, signing provider, and audit sink resolved, not one whose sources are answering.
-- FHIR compatibility uses an adapter: the frozen v1 fixed-source contract accepts
-  `application/json` and `application/graphql-response+json`, not the formal
-  `application/fhir+json` media type. Evidence Gateway does not implement FHIR search, pagination,
-  subscriptions, or profile conformance. A local read-through adapter can request and validate
-  FHIR JSON while exposing the bounded result as ordinary JSON to Evidence Gateway. Credential-free
-  source access remains restricted to an exact numeric-loopback HTTP origin under local assurance;
-  deployment requires a reviewed authenticated HTTPS source or adapter.
-  {/* Evidence: products/evidence/contracts/source-contract.yaml response_media_types and
-  url_security; crates/registry-evidence/src/source.rs response_media_type. */}
-- Two deliberately narrow signing modes: local assurance uses a file-backed private JWK;
-  production and evidence-grade assurance use Vault/OpenBao Transit through a workload-local
-  Unix-socket proxy. There is no PKCS#11 adapter, cloud-KMS abstraction, provider registry, or
-  plugin system.
-
-### Two subject binding modes, two different limits
-
-A requirement in the immutable bundle declares which mode it issues under. The vocabulary is closed
-at two values and carries no default: a requirement that declares nothing issues audience-scoped
-assertions, and no caller input selects a mode.
-
-| Boundary | `audience-scoped` (absence of a declaration) | `holder-bound` (declared per requirement) |
-| --- | --- | --- |
-| Subject binding scope | The audience taken from the authenticated context | The RFC 7638 thumbprint of the holder key the caller supplied |
-| Cross-verifier use | None. The assertion is meaningful to the one relying party it names | Deliberate. One credential is presentable to several verifiers, and the holder decides which |
-| Holder key | Optional, echoed into `cnf`, verified by nothing | Required, and `cnf` is required in the credential |
-| Possession proof | None at any point | A key-binding JWT the relying party verifies at presentation |
-| Correlation across verifiers | Prevented by the service | Delegated to the holder, who chooses which key to reuse and where |
-| Response formats | Signed JWS, SD-JWT VC, or the unsigned envelope, as permitted | Narrowed to the SD-JWT VC serialization and its batch envelope |
-| Value forms | All twelve | Ten forms; the two entity-reference forms are refused, because both take the audience as a derivation input |
-| Contract status | Frozen Version 1 | Frozen, and every negative test the profile names resolves to an executable test |
-
-- The audience-scoped holder key is unverified: a request may carry an optional `holderKey` that is
-  echoed into the `cnf` member. Under this mode Evidence Gateway issues no holder key, binds none,
-  and verifies none, so `cnf` is a caller-supplied convenience for whatever presentation layer the
-  operator runs elsewhere.
-- Audience-scoped assertions are not multi-verifier: the subject identifier is an audience-scoped
-  pseudonym, so the same person requested for a different audience yields a different identifier.
-  Purpose is an input to every subject binding and audit pseudonym as well, so one subject is not
-  linkable across purposes. This is deliberate, and it means an audience-scoped assertion is not a
-  general-purpose credential a holder presents to several verifiers.
-- A holder-bound credential accepts cross-verifier correlation: the binding no longer takes the
-  audience as an input, so the same holder key, trust domain, purpose, subject role, selector
-  profile, and selector values yield the same binding for every caller and every verifier. Holder
-  key reuse is the correlator, and Evidence Gateway can neither prevent nor detect it. The declared
-  purpose is a low-cardinality attribute disclosed to every verifier the credential reaches, and the
-  binding is a persistent pseudonym for that whole tuple: repeating the same request with the same
-  key returns the same binding.
-- Batch issuance reduces linkability; it does not remove it: a holder-bound release may carry one
-  member per distinct holder key under a ceiling the bundle declares, so a holder presenting a
-  different member to each verifier hands them no shared subject binding. What it removes is the
-  deterministic key-based link, not linkability in general: the members still share an issuance
-  timestamp, purpose, requirement, Evidence Type, configuration revision, and disclosed values. The
-  issuer knows one requester submitted those keys together.
-- The holder-bound audit pseudonym is stable across issuances: it omits the audience, so repeated
-  issuance for the same subject records the same pseudonym. That is a deliberate accountability
-  property, stated rather than hidden.
-- Presentation-time audience is verifier-asserted: the relying party puts the audience and nonce in
-  its own challenge, and neither is issuer-signed. No issuance record names the verifier a
-  holder-bound credential later reached.
-
-### What verifying a presentation does and does not prove
-
-- A verified key-binding JWT proves the presenter held the private key of the credential's
-  confirmation key when that JWT was signed, over exactly the presented bytes, for the audience and
-  nonce the relying party chose. It proves nothing else.
-- A valid issuer signature alone does not prove possession. A presentation whose issuer signature
-  verifies and whose key binding does not is rejected, never reported as an issuer-only success.
-- Nonce equality is not nonce consumption: the same presentation bytes verify again, and again,
-  against the same stateless policy. RFC 9901 section 7.3 places the challenge lifecycle in the
-  surrounding protocol, so issuing a challenge, retaining it, and retiring it belong to the relying
-  party. This is not replay prevention, and no Evidence Gateway surface performs replay prevention.
-- The relying party cannot derive a subject binding under either mode: the derivation is keyed by a
-  deployment secret it does not hold. Expected subject bindings are pinned from independent trusted
-  state, exactly as they are for an audience-scoped assertion. An expected holder key thumbprint is
-  an optional extra expectation for a pre-established holder, not what proves possession.
-- Wallet compatibility is unclaimed: full SD-JWT VC and OID4VCI conformance are not claimed, and no
-  test in this repository covers a wallet storing or presenting an Evidence Gateway credential.
-  The pinned OID4VCI runner covers sanitized metadata and wire shapes, service-side key binding,
-  and independent presentation verification. Its opt-in upstream half runs focused source tests at
-  exact Inji revisions, not Android or iOS user-interface or device automation.
-
-## Stack-wide boundaries at a glance
-
-These boundaries cut across components.
-
-- No source mutation, no event stream: Registry Relay does not write back to or otherwise mutate
-  source registry data, and it has no event-stream backend. Evidence Gateway reads its fixed sources
-  read-only as well, and persists nothing it read.
-- Aggregate data is not a privacy budget: Relay's aggregate-data routes return the compiled
-  statistical observations, but provide no built-in longitudinal privacy budget and do not track
-  cumulative disclosure across repeated or overlapping queries.
-  Do not describe an aggregate route as privacy-budgeted unless a separate deployed control
-  provides that protection.
-- A published manifest grants nothing: Publishing a dataset, policy, or evidence offering in a
-  discovery artifact grants no access, enforces nothing, and asserts no fact about a live record.
-  Discovery metadata is not a trust anchor: a published manifest does not bind a consumer to trust
-  a JWKS endpoint or a service host.
-  Trust bootstrap stays in the consumer's local policy.
-- Solmara Lab and its hosted instance are demonstrations, not infrastructure: Solmara Lab is a
-  separately maintained adopter demo that uses generated synthetic data and demo configuration.
-  It is not a formal Registry Stack product and provides no production deployment guidance.
-  Any hosted instance of Solmara Lab is likewise a demonstration, not production infrastructure:
-  it carries no uptime or data-retention commitment.
-
-For the rationale behind each of these, follow the linked specifications in each section.
-
-## Registry Relay limits
-
-Registry Relay compiles a reviewed registry contract into a fixed set of read-only operations over
-a read-only SQLite source. It is deliberately narrow, and most of what follows is a consequence of
-that narrowness rather than an unfinished feature. Its boundaries are covered in depth in the
-[Registry Relay protocol](../../spec/rs-pr-relay/) and in
-[governed registry publication](../governed-registry-publication/).
-
-### What Relay cannot read
-
-- SQLite only: a source is a SQLite database file. There is no CSV, XLSX, Parquet, PostgreSQL,
-  other SQL engine, HTTP, or API source, and no adapter, connector, or driver layer to add one.
-  Publishing from any other system means producing a SQLite file first.
-- Two source profiles, both read-only: `snapshot` pins a file that must be immutable to the
-  process, and `live-read-only` binds a file by device and inode. There is no third profile, no
-  refresh mode, no materialization, no generation, and no recovery group.
-- Reviewed views only: Relay observes only the SQL views in a source schema, so a resource cannot
-  bind to a raw table. This is a real safety property, but it also means adopting Relay requires
-  authoring views, and a source that exposes only tables is not yet ready to publish.
-- No freshness semantics: a response carries no observation time, and nothing bounds how stale the
-  underlying file may be. A snapshot is as current as the operator's own procedure for producing
-  it.
-
-### What Relay cannot do
-
-- No write path of any kind: no create, update, delete, provisioning, or registration surface. The
-  route set contains exactly one `POST`, and it carries a JSON selector body for a read.
-- No evidence and no signatures: Relay issues no assertion, no credential, and no signature. A
-  Relay response is authenticated by the transport and by the deployment the caller reached, and by
-  nothing that survives being forwarded. Signed, minimum-disclosure answers are Evidence Gateway's
-  job.
-- No notification and no access transparency: there is no webhook, subscription, event stream, or
-  data-subject access-history surface.
-- No identity federation: Relay verifies tokens from exactly one configured issuer. It brokers no
-  trust between issuers, discovers no peers, and evaluates nothing on another deployment's behalf.
-- No scripting: the runtime executes only statements the compiler produced. There is no embedded
-  script engine, no expression language, and no user-supplied transform. Exactly two response
-  transforms exist, both fixed: a partial string reveal that replaces the hidden part with `***`,
-  and a date reduced to `year` or `year-month` precision.
-- No external policy enforcement: no policy decision point, no [ODRL](../../reference/standards/)
-  term enforcement, no policy discovery, no attribute-release profile, and no crosswalk runtime.
-  Registry Manifest can publish a policy reference, and nothing in this stack evaluates it.
-- No administrative surface: no admin listener, no posture endpoint, no reload route, no metrics
-  endpoint, and no configuration apply path. A change to what a deployment serves is a new package
-  and a restart.
-- Relay does not own the manifest: Relay evaluates no claims, issues no credentials, and does not
-  own or version the metadata manifest format, which belongs to Registry Manifest.
-
-### What the guarantees do not cover
-
-- A package is verified, not authenticated: the package digest is a SHA-256 integrity digest over
-  the package's `SHA256SUMS`. Startup re-runs the compiler and the artifact generator and requires
-  byte-for-byte equality, which detects drift and tampering. It cannot distinguish a legitimate
-  package from a well-formed forgery, because nothing signs a package. Package provenance rests on
-  the delivery path and the filesystem ownership checks, not on the format.
-- Snapshot immutability is an operator duty: Relay refuses a writable snapshot file and detects a
-  replaced or altered one, but cannot exclude a privileged writer that changes bytes and restores
-  them between two verifications. Put a snapshot on a read-only mount.
-- Quotas are per process and in memory: the configured requests-per-minute and burst budgets are a
-  token bucket per compiled operation, held in one process's memory. Running N replicas multiplies
-  every budget by N, and a restart resets each bucket. Treat them as an availability control.
-- Aggregate data is not privacy-budgeted: compiled statistical datasets return the observations
-  they declare and track no cumulative disclosure across repeated or overlapping queries. Do not
-  describe a Relay aggregate as privacy-budgeted unless a separate deployed control provides that
-  protection.
-- Minimization is per operation, not per caller: an operation returns the properties its disclosure
-  profile declares, identically for every caller authorized to invoke it. Showing one audience less
-  means compiling a second operation, not configuring the runtime.
-- Readiness does not prove a useful deployment: `/ready` reports that the audit sink, the SQLite
-  source, and the issuer key set resolved. It re-checks each source's schema fingerprint but reads
-  no row data, so it proves nothing about whether a view returns rows.
-- The unsupported-capability list is a hard-coded declaration: the capability inventory a
-  deployment serves reports `unsupportedFamilies` from a list compiled into the binary, currently
-  `provisioning`, `evidence`, `write`, `notification`, `access-transparency`, and
-  `identity-federation`, plus `aggregate-data` when the contract declares no statistical dataset.
-  It is an honest statement of this build's scope, not a computed capability negotiation, and only
-  two families are ever advertised as supported: `consultation` and `aggregate-data`.
-  {/* Evidence: the literal vector and the conditional aggregate-data insertion,
-       crates/registry-relay-v2/src/artifacts.rs:1659-1669; the two supported family strings,
-       :1596 and :1630. */}
-
-### Platform and packaging
-
-- One authentication mode, one issuer, one algorithm: OIDC bearer only. The issuer profile accepts
-  exactly one algorithm from `EdDSA`, `ES256`, or `RS256`, and exactly the `at+jwt` token type.
-  There is no static-credential mode, no API key, and no second issuer. A deployment needing two
-  mutually distrustful issuers needs two deployments.
-- Unix only, and it fails closed: Relay refuses to start on a non-Unix target, because its package
-  and runtime trust checks depend on Unix ownership and sticky-directory semantics that have no
-  equivalent there.
-- One published platform: the `relay` binary and its installer target Linux amd64 alone, while
-  `relayctl` carries all three platforms. [Platform support](#platform-support) holds the matrix
-  for the whole stack.
-- The installer checks integrity, not authenticity: it verifies the downloaded binaries against
-  `SHA256SUMS` and states plainly that it performs no authenticity check. Use the release
-  verification procedure for that.
-
-### Standards scope
-
-- SDMX is a narrow aligned subset: the aggregate-data routes speak an aligned subset of SDMX REST
-  2.2.2, not the whole standard.
-- Geospatial output is CRS84 points only, requested through `Accept: application/geo+json` with a
-  `formatProfile` of `rfc7946` or `jsonfg`. Relay is explicitly not conformant to OGC API Features,
-  OGC API Records, OGC API EDR, CQL2, or tiles, and has no adapter for any of them.
-- The OpenAPI document is per deployment: Relay generates its OpenAPI 3.1.0 description from the
-  compiled contract, so there is no fixed product-level Relay OpenAPI contract to integrate
-  against. The public document is served at `GET /openapi.json`; the full document stays inside the
-  package for operators.
-
-## Data-model limits (Manifest)
-
-These limits concern what the manifest configuration loader does and does not enforce.
-Read them in full in the [Manifest data model](../../spec/rs-dm-manifest/).
-
-- Manifests describe; they do not enforce: The portable metadata layer only describes: publishing in a discovery artifact grants no access and asserts no fact about a live record. Trust bootstrap stays in the consumer's local policy.
-- Rendered standards artifacts are well-formed, not certified: Manifest rendering emits standards-shaped artifacts but does not validate them against external standard bodies: a rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard.
-- Vocabulary influence is not vocabulary emission: PROV-O is a design influence only: provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD. No standalone SKOS artifact is published yet (only embedded SKOS-shaped nodes), and CPSV-AP has no Relay runtime metadata route.
-
-## Security-model operator boundary
-
-A healthy, reachable, internally consistent deployment is not the same as a production-secure one.
-Read the full security boundary in the [security model](../../spec/rs-sec-g/).
-
-- Health checks do not certify key custody: Readiness, liveness, and protocol-conformance checks
-  do not certify production-grade private-key custody.
-  A deployment using software keys, local JWK files, or demo-generated keys can be reachable and
-  internally consistent yet not production-secure.
-  Custody, rotation, and key-provider approval remain operator responsibilities.
-- Many guarantees are the operator's to provide: Secret and key provisioning, key custody and
-  rotation schedule, audit retention and storage, tenant isolation, transport termination, edge
-  rate limiting, deployment configuration, and incident response are operator responsibilities,
-  not behaviors the stack guarantees.
-- Audit retention is not audit completeness: the local audit log of Evidence, Relay, Render,
-  Base Registry Engine, Casework, and Scheduling is not chained or signed, so it provides no
-  cryptographic tamper evidence for retained history. A running writer detects external changes to
-  its active file and fails closed, while each runtime deletes sealed files after `retainDays`.
-  None of them ships sealed history for you;
-  tamper evidence and completeness come only from the append-only storage the operator ships audit
-  entries to.
-- Demo and template code is not a production profile: Demo helper code and generated workflow
-  snippets are integration examples, not a production freshness or replay-protection profile, and
-  must not be relied on for freshness, expiry, or replay protection.
-
-## Supply-chain and release limits
-
-These concern how releases are signed and what that signing currently covers.
-
-- Partial release signing: One keyless cosign bundle authenticates the public
-  `SHA256SUMS` inventory, and GitHub artifact attestations authenticate the
-  candidate manifest and bundle.
-  OCI image signatures are not yet published, and Git version tags are not yet
-  cryptographically signed (GPG, SSH, or Sigstore).
-  The `v0.8.0` prerelease was published before release-asset signing and does not currently
-  include cosign signatures.
-- Identifier publication is asynchronous: `registry-stack` generates the active identifier
-  catalog, while the separate `registrystack-id` repository imports and deploys a pinned catalog.
-  The public resolver can lag until a publisher update is merged and deployed. The current importer
-  rejects a kind change only while the identifier remains in its active catalog; it retains no
-  permanent tombstone after removal. Publication synchronization and permanent URI-kind history are
-  tracked in [registry-stack issue #636](https://github.com/registrystack/registry-stack/issues/636).
-
-For how to verify what *is* signed, see the release verification guidance in `release/VERIFY.md`
-in the repository.
-
-## Where to go next
-
-- Why a given limit exists: the rationale and trade-offs live in each specification's own
-  limitations section: [RS-PR-EVIDENCE](../../spec/rs-pr-evidence/),
-  [RS-PR-RELAY](../../spec/rs-pr-relay/), and [RS-DM-MANIFEST](../../spec/rs-dm-manifest/).
-  For the security and architecture boundaries, read [RS-SEC-G](../../spec/rs-sec-g/) and
-  [RS-ARC-G](../../spec/rs-arc-g/).
-- How each external standard is actually adopted: the [standards
-  register](../../reference/standards/) records the adoption mode for every standard named across
-  the stack.
-- What might change: the project roadmap (`ROADMAP.md` in the repository root).
-  This page does not track it.
-- How to verify what is signed: release verification lives in `release/VERIFY.md` in the repository.
+- [Production hardening checklist](../../security/hardening-checklist/)
+- [Support window](../../security/support-window/)
+- [API stability and versioning](../../reference/api-stability/)

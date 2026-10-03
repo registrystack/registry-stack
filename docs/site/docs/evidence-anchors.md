@@ -43,7 +43,7 @@ npm run check:evidence-anchors -- --strict-line-refs
 ```
 
 Several files sharing a directory may use brace syntax, such as
-`crates/registry-relay-v2/src/{api,startup}.rs`. Each expanded file must exist.
+`crates/registry-evidence/src/{api,startup}.rs`. Each expanded file must exist.
 
 A bare filename beside a cited path is prose when it does not resolve. This
 allows references to adopter-created configuration or generated package files

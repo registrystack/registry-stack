@@ -1,0 +1,63 @@
+---
+title: Registry Relay retirement decision
+description: Why Registry Relay was retired, what support ended, and which bounded Registry Stack capabilities remain.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-10-03"
+doc_type: decision
+locale: en
+standards_referenced: []
+---
+
+Registry Stack retired Registry Relay on 2026-10-03.
+Version 0.38.0 is the last numbered release that includes the `relay` runtime,
+`relayctl`, and the Relay client namespaces.
+Version 0.39.0 is the first numbered release without them.
+
+{/* Evidence: release/scripts/release_roster.py defines the numbered-release
+    product boundary; the v0.38.0 release manifest retains Relay. */}
+
+## Why Relay was retired
+
+Relay compiled a reviewed contract into protected, read-only HTTP operations
+over SQLite data.
+It also carried Relay-specific classification, disclosure, semantic, statistical, JSON-FG, and
+client contracts, including cacheable public snapshots.
+
+Maintaining those contracts as a separate runtime imposed more implementation,
+deployment, and operational work than the supported pilots justified.
+Registry Stack deliberately removed that capability instead of moving Relay
+internals into another product.
+No replacement SDMX or JSON-FG service is introduced by this decision.
+
+## What remains
+
+Choose a retained capability according to the result you need:
+
+- Use Base Registry Engine for governed records and record APIs owned by a
+  PostgreSQL-backed registry.
+- Use Evidence Gateway for signed, minimum-disclosure assertions obtained from
+  fixed HTTP or SQLite sources.
+- Use Registry Manifest to generate portable metadata and host its output as
+  static files.
+
+These capabilities do not reproduce Relay's contract, routes, policy model, or
+wire formats.
+There is no automatic migration from a Relay project.
+An operator must choose a retained design for each consumer and source.
+
+Registry Discovery continues to publish the existing v1alpha1 profile
+resources for historical compatibility, but current tools accept only Evidence
+service descriptions and selections.
+Before upgrading, remove Relay origins from a mixed index and rebuild and
+repackage the index.
+
+## Support boundary
+
+Use the v0.38.0 documentation and artifacts only when maintaining a pinned
+Relay deployment during migration.
+Published documentation archives and release artifacts remain unchanged.
+Current source and numbered releases beginning with 0.39.0 do not contain Relay binaries, clients,
+installers, images, or authoring tools. The latest published 0.38.0 release remains unchanged.

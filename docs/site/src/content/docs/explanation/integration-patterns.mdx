@@ -1,412 +1,56 @@
 ---
 title: Integration patterns
-description: How Registry Stack wires in behind exchange layers, workflow engines, and domain registry platforms, and the standards each surface speaks.
+description: Supported ways to combine maintained Registry Stack products with institutional systems.
 status: current
 owner: registry-docs
 source_repos:
-  - registry-stack
-  - registry-manifest
-  - registry-relay
+  - registry-breg
   - registry-evidence
-last_reviewed: "2026-08-21"
+  - registry-manifest
+  - registry-discovery
+last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
-standards_referenced:
-  - dcat
-  - bregdcat-ap
-  - cpsv-ap
-  - cccev
-  - shacl
-  - skos
-  - json-schema
-  - json-ld
-  - odrl
-  - openapi
-  - sd-jwt-vc
-  - ogc-api-records
-  - ogc-api-features
-  - ogc-api-edr
-  - geojson
-  - json-fg
-  - sdmx
-  - govstack-digital-registries
-  - fhir-r4
+standards_referenced: []
 ---
 
-Registry Stack is the registry-facing surface that sits behind systems already in a delivery
-stack. This page describes the technical wiring for each neighbor: what the neighbor owns, what
-Registry Stack adds, and the conditions under which a Registry Stack surface belongs in the path.
-For how the registry family relates to the wider ecosystem, see the
-[ecosystem page](https://registrystack.org/ecosystem/).
+Choose the smallest product boundary that answers the integration need.
 
-Two runtime surfaces can appear in an integration path.
-Registry Relay publishes a governed read-only HTTP API over SQLite sources an institution
-already holds: the operations, the readable columns, and the shape of every response are fixed by
-a contract reviewed before the service starts, not by a query the caller writes.
-Evidence Gateway answers one predefined requirement about one set of subjects with a signed
-assertion carrying the answer rather than the record.
-A requirement is what the tutorials call a question: the same object, written as
-`questions/<name>.yaml` by an author and called a requirement once `evidencectl` has compiled it.
-A deployment supplies a compatible OAuth issuer for the short-lived access tokens each protected
-surface verifies.
-The patterns that follow describe Relay and Evidence Gateway.
+## Governed system of record
 
-## Country evidence mesh
+Use Base Registry Engine (BReg) when the institution needs to create, update, review, and audit
+records in a PostgreSQL-backed registry. Applications call BReg's own record API. Casework can coordinate
+review while BReg retains mutation authority.
 
-At country scale, the same two surfaces can sit next to several domain platforms.
-Each authority keeps custody of its own data and exposes a bounded output; consuming systems such
-as a business-registration portal or environmental permitting system receive answers and do not become raw-record
-readers.
+## Bounded evidence
 
-Which surface fits depends first on what the caller needs back, and then on what the authority
-holds:
+Use Evidence Gateway when a relying service needs a signed answer to a predefined question. Configure
+one fixed source request, bounded derivation, entitlement, and output contract. The relying service
+verifies the assertion and makes its own decision.
 
-- Where the caller needs a governed read over the records themselves, **Registry Relay** serves
-  them as a read-only API, which requires the authoritative data to already sit in a SQLite
-  database or in a SQLite extract the authority can produce. Relay opens that file in place,
-  read-only, and holds no upstream credential because it makes no upstream call.
-- Where the caller needs one signed answer rather than the records, **Evidence Gateway** returns
-  only the values a reviewed requirement declares, and reaches its source over either of two
-  coequal transports. A domain platform with its own API, such as a business register or facility directory, is read over a fixed HTTP JSON request to a fixed origin. A SQLite extract the
-  authority publishes is read directly, by one reviewed SQL statement against a read-only file
-  mounted beside the process, with no origin, credential, or network hop involved.
-  {/* Evidence: "A fixed source request reaches its source over one of two coequal transports",
-      products/evidence/CONCEPT.md; the statement transport has no origin, no credential, and no
-      network path, `transport_absences` in
-      products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
+## Static metadata publication
 
-Business registration, environmental permitting, and public-organisation systems each keep their own
-authoritative store either way; neither surface copies the record into a central store.
+Use Registry Manifest when an integrator needs portable catalog, schema, service, policy, or
+evidence-offering metadata. Render and host the artifacts as static files. Metadata describes the
+service but does not grant access.
 
-The two products are authored by two separate tools, `relayctl` and `evidencectl`, and neither
-compiles a description of the other.
-A country mesh is therefore a deployment arrangement that an architecture review holds together,
-not an artifact any tool in this stack emits or validates.
+## Provider discovery
 
-{/* TODO[evidence]: the figure previously here (public/images/registry-country-evidence-mesh.svg)
-    is pulled rather than re-captioned, because its Registry Relay box reads "Keeps source
-    credentials and returns only reviewed typed outputs". Relay V2 holds no source credential and
-    makes no outbound source request: crates/registry-relay-v2/src/contract.rs declares
-    SourceProfile with exactly two variants, Snapshot and LiveReadOnly, both SQLite. Restoring
-    honest alt text is not possible while the drawn label is false, so the diagram needs a redraw
-    before it returns. */}
+Use Registry Discovery to publish a curated index of Evidence Gateway descriptions. The application
+searches, explicitly selects, validates, and locally accepts a provider before constructing the
+native Evidence client.
 
-## Evidence Gateway to action boundary
+## Workflow orchestration
 
-Every combined integration follows the same ownership boundary.
-Registry Relay owns one reviewed contract over the read-only SQLite sources it declares, and the
-governed read surface compiled from it.
-Evidence Gateway owns the predefined requirement, evidence authorization, acquisition against its
-own fixed sources, and the declared disclosure that requirement carries.
-The evidence consumer determines how the evidence is used, and the decision owner remains
-accountable for requirements, decisions, workflow, and action.
+Workflow engines such as OpenFn can call maintained product APIs. Keep credentials and product
+policy in the owning boundary. A workflow may coordinate calls, but it does not become the
+authorization source or system of record.
 
-For example, a licensing authority can answer whether a professional licence is active through a
-configured Evidence Gateway requirement. The licence register remains the system of record, and
-Evidence Gateway reads it through its own fixed source contract. A business registration service
-can consume that answer alongside its own requirements and application state. That service owns
-the registration decision and follow-up, not Evidence Gateway.
-Relay is not required in that path: it makes no outbound source request.
-This is an example of the ownership boundary, not a supplied registration workflow.
-
-The reviewed contract keeps a positive fact, its negative, an absent value, no match, ambiguity,
-and source failure distinct. Missing evidence is not a negative fact. Offline synthetic fixtures
-are the deterministic acceptance path for both products: `relayctl test` runs a Relay project's
-fixture cases through the same kernel the server uses, offline, and neither tool provides a
-live-test mode or an external deployed-system compatibility runner.
-An operator can exercise a deployed API with a standard HTTP client and
-owner-maintained credentials as separate interoperability evidence.
-
-Evidence Gateway has no general policy engine and no eligibility or workflow engine. A requirement whose
-answer restates a decision an authoritative source already made must say so in its review
-documentation, and Evidence Gateway does not recompute that decision.
-
-{/* Evidence: products/evidence/fixtures/acceptance/professional-licence/;
-    products/evidence/contracts/README.md; crates/registry-relay-v2/src/contract.rs. */}
-
-## Domain registry platforms
-
-A business-registration system, an environmental-permit system, or a public-organisation
-directory can own the authoritative records for its domain.
-
-These platforms own storage, business rules, correction workflows, user interfaces, and a runtime
-API for their domain.
-Registry Stack adds standardized metadata description, governed read-only operations over source
-data, minimum-disclosure evidence responses, and audit records.
-The [connect your data guide](../../configure/) is the entry point;
-[Configure Relay](../../configure/relay/) is the reference for a Relay deployment's own files.
-
-One SQLite database can serve more than one governed operation without being copied.
-The contract names the views and columns each operation may read, and every operation reads
-through the same read-only connection.
-Relay opens that database under one of two declared source profiles: `snapshot`, for an immutable
-extract that must not change underneath the service, or `live-read-only`, for a database the
-authority keeps writing to through its own application.
-Either way Relay opens it read-only and binds to the exact file it validated at startup.
-
-The reviewed contract carries the meaning: registry identity, resources, operations, access
-profiles, and disclosure.
-Deployment-local facts, including where the database file actually is, stay in `runtime.yaml` and
-never enter the reviewed contract, so the same contract can be reviewed once and deployed in
-staging and production without editing it.
-
-{/* Evidence: the SourceProfile enum declares the two variants SourceProfile::Snapshot and
-    SourceProfile::LiveReadOnly, and the
-    RelayRuntime struct carries sources, package path, listener, issuer, audit sink, limits, and
-    quotas, and nothing that can add or widen a resource, operation, access profile, or disclosure
-    decision, both in crates/registry-relay-v2/src/contract.rs. */}
-
-Wire Registry Stack in alongside a domain platform when:
-
-- The platform does not yet publish standards-shaped catalog, service, schema, policy, or evidence-offering metadata.
-- Callers need an answer in a declared form (a boolean, a reviewed code, a bucket) rather than full
-  records.
-- A read path is needed for callers that must not be granted direct database access.
-
-## Exact subjects, one question at a time
-
-A Relay named lookup resolves one record from one exact conjunction.
-The contract declares that lookup's selectors by name, each bound to one exact source column with a
-declared type and optional byte bounds and codelist, and bounds the request body in bytes.
-A request must supply exactly the declared set: an extra selector or a missing one is refused
-before any source access rather than silently ignored, so a caller cannot widen or narrow the
-conjunction to probe.
-Relay returns one resolved record or a single indistinguishable unresolved outcome.
-It returns no candidates, no scores, no rankings, and no matching explanation, so an exact lookup
-is not record matching and cannot be used as one.
-The compiler also reports a contextual review finding when a lookup's selectors are classified more
-restrictively than the properties its access profile discloses, because such a lookup would let a
-caller confirm a value it is not permitted to read.
-
-Evidence Gateway keeps the same exact-subject discipline for each evaluation.
-A singular request names one requirement and carries one selector per declared subject role, at most
-eight roles. Its closed acquisition is either one fixed source request or one fixed search followed,
-only after a unique schema-valid match, by one fixed fetch. The latter has a hard two-request ceiling
-and does not allow response-led routing or general multi-source fulfillment.
-
-`POST /v1/evidence/batch` groups between one and sixteen ordered audience-scoped evaluations that
-share one requirement and purpose. Each item carries its own complete subject-role set and request
-nonce. Evidence Gateway validates and authorizes every item before source access, then returns one
-ordered `evidence` or `evidence_not_available` result per item. Each available result contains its
-own signed flattened JSON Web Signature (JWS). Any failure other than an ordinary unavailable
-outcome aborts the complete request without releasing a partial response.
-
-The request-batch route is distinct from holder-bound issuance batching on `POST /v1/evidence`.
-Request batching evaluates several subject sets. Holder-bound issuance batching performs one
-subject evaluation and emits one credential per presented holder key.
-A lookup still resolves to exactly one match, no match, or ambiguity, and Evidence Gateway never
-surfaces or chooses between candidates.
-
-{/* Evidence: the LookupRequestBody and SelectorDefinition structs,
-    crates/registry-relay-v2/src/contract.rs; parse_selectors() refuses a body whose selector
-    count differs from the declared set, crates/registry-relay-v2/src/api.rs;
-    crates/registry-relay-v2/src/identification.rs:832-855
-    raises classification.context.selector_more_restrictive_than_disclosure as a contextual review
-    finding, which is a review signal rather than a hard compile refusal;
-    products/evidence/contracts/request.schema.yaml,
-    products/evidence/contracts/request-batch.schema.yaml,
-    products/evidence/contracts/request-batch-response.schema.yaml,
-    products/evidence/contracts/source-contract.yaml, and
-    products/evidence/contracts/README.md. */}
-
-## Sources read where they live
-
-Registry Relay's source model is deliberately the narrowest thing that can still serve a registry:
-local SQLite databases, each opened read-only and read in place. A contract may declare more than
-one, and each resource binds to exactly one of them.
-
-There is no source adaptation layer to configure, because there is nothing to adapt.
-Relay does not fetch from an HTTP source, read a spreadsheet, connect to PostgreSQL, run a
-scripting runtime, or hold a credential for any upstream system.
-Its only outbound traffic is OpenID Connect discovery and JWKS retrieval for verifying the tokens
-its own callers present.
-A source is one of two declared profiles, `snapshot` or `live-read-only`, and both are SQLite.
-
-That closes an entire class of integration question, and it moves the corresponding work upstream:
-if the authoritative data is not in SQLite, producing an extract is the institution's job, done
-with its own tooling under its own change control, before Relay is involved.
-The cost is real and worth naming.
-The benefit is that the reviewable surface is a file and a contract, with no request-time
-acquisition path to audit.
-
-Earlier Relay releases did compile source access from a plan with HTTP, scripted, and snapshot
-capabilities, with compiled credential providers behind it.
-None of that survives in V2.
-If you are reading an integration guide that describes source scripts, same-origin call budgets, or
-API-key placement for Relay, it describes the retired runtime.
-See [Known limitations](../known-limitations/) for the full list of what went with it.
-
-{/* Evidence: the SourceProfile enum declares exactly SourceProfile::Snapshot and
-    SourceProfile::LiveReadOnly, and the
-    RelayRuntime struct's RuntimeSource accepts a source only as a path, both in
-    crates/registry-relay-v2/src/contract.rs; the crate holds no HTTP source client. Read-only
-    opening is enforced in crates/registry-platform-sqlite (SQLITE_OPEN_READ_ONLY |
-    SQLITE_OPEN_URI | SQLITE_OPEN_NO_MUTEX in schema.rs:131-133 and statement.rs:494-496). */}
-
-Evidence Gateway keeps its own source model, and it is a different one: one fixed source request
-reached over either of two coequal transports, with bounded reviewed Rhai around it.
-An HTTP JSON source states a fixed origin and resolves a compiled credential for it, except
-under the `none` authentication kind, which only a `local` assurance bundle may declare and
-only at a canonical numeric-loopback HTTP origin with an explicit non-zero port.
-A statement source states no origin and resolves no credential at all: it runs one reviewed SQL
-statement against a read-only SQLite extract file the runtime mounts beside the process.
-The two products do not share that machinery, and Evidence does not inherit Relay's authorization
-model.
-The distinction between the two products is not which storage each can reach, because both can read
-a SQLite extract. It is what each does with the source: Relay serves the properties a compiled
-disclosure profile declares, unsigned, and Evidence Gateway returns a signed assertion carrying only
-the values a reviewed requirement declares.
-
-{/* Evidence: "A fixed source request reaches its source over one of two coequal transports",
-    products/evidence/CONCEPT.md; Evidence holds no database credential for the statement
-    transport, and there is no connection string, secret reference, or authentication kind,
-    `transport_absences` in products/evidence/contracts/sqlite-extract-source-contract.yaml
-    (frozen); the `none` authentication kind requires a canonical numeric-loopback HTTP origin
-    with an explicit non-zero port, validate_local_unauthenticated_source_origin,
-    crates/registry-evidence/src/config.rs. */}
-
-## Evidence Gateway with a fixed authoritative source
-
-Use this pattern when an institution wants a minimum-disclosure answer over data in an
-authoritative system. Evidence Gateway reaches that system over one of its two coequal source
-transports, and the reviewed bundle fixes the whole request either way.
-For an HTTP JSON source it fixes the origin, which a production bundle must state as HTTPS, plus
-the path authority, method, authentication, projection, schemas, and bounded scripts.
-For a statement source it fixes the one reviewed SQL statement, the result columns that statement
-declares, the parameter bindings it declares, the schemas, and the bounded scripts, and there is no
-origin, credential, or redirect policy to fix because the transport opens one local extract file.
-The caller cannot select or redirect the source either way.
-
-{/* Evidence: the closed `transport` tag selecting http-json or sqlite-extract, the baseUrl pattern
-    pair admitting an http numeric-loopback origin only when a source's authentication kind is
-    none, and the statement source's one bundle-relative statement file with its declared result
-    columns and parameter bindings, products/evidence/contracts/bundle.schema.yaml (frozen); the
-    statement transport's absent origin, credential, and redirect policy, `transport_absences` in
-    products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
-
-Request batches use the same closed sources. Sequential item evaluation is available without extra
-source configuration. An operator can enable the optional `source-batch` capability in both the
-governed bundle and runtime for an eligible fixed-path HTTP source with reviewed `prepare_batch`
-and `extract_batch` scripts. That option changes the number of physical source calls, not the
-request, authorization, disclosure, signing, or audit contract. Once an optimized call begins, a
-failure does not retry through sequential fanout.
-
-The caller's access token and the source credential serve different boundaries:
-
-- The caller holds a short-lived access token for Evidence Gateway from the deployment's configured
-  OAuth issuer.
-- Where the authoritative source is an HTTP JSON one, Evidence Gateway holds its own compiled
-  credential for it, in every bundle a production or evidence-grade deployment may load. The caller
-  never sees it and cannot influence which credential is resolved. A statement source holds no
-  credential at all, because it opens a local read-only extract file and reaches no origin.
-  {/* Evidence: Evidence holds no database credential for the statement transport, and there is no
-      connection string, secret reference, or authentication kind, `transport_absences` in
-      products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
-
-Registry Relay is not part of this request path. If the institution also operates Relay, it is a
-separate protected-read product with its own source, callers, authorization, and audit trail.
-
-There is one composition where they do meet, and it runs one way only.
-A Relay-served API is an ordinary protected HTTP endpoint, so Evidence Gateway can consume it
-through the same fixed HTTP source contract it uses for any other authoritative system.
-That is a deployment choice made in an Evidence bundle, not a feature either product declares:
-Relay does not know it is being read by Evidence, and Evidence does not inherit Relay's
-authorization decisions.
-The maintained protected-read reference project is written to be product-neutral for exactly that
-reason: it targets any protected read that projects fields, filters to an exact reference, and
-signals whether a page is complete, and Relay is only the worked example.
-
-{/* Evidence: products/evidence/reference/request-adapter/deployment-projects/
-    protected-read-evidence/. The project is source-product neutral and documents the bounded
-    protected-read properties Evidence needs, not a Relay route shape. */}
-
-## Workflow engines
-
-Examples: [Camunda](https://camunda.com/), [Flowable](https://www.flowable.com/), and other
-casework or process orchestration engines. For [OpenFn](https://www.openfn.org/), maintained
-adaptors wrap the Registry Stack clients; see [Automate registry workflows with
-OpenFn](../openfn-adaptors/).
-
-Workflow engines own process state, task assignment, timers, branching, retries, escalation, and
-history.
-Registry Stack adds a stable registry contract that workflow steps can call, without learning
-source tables, raw SQL, or full records.
-
-Wire Registry Stack in alongside a workflow engine when:
-
-- A workflow step needs an authoritative fact (a status, a boolean, a reviewed code) as an
-  input to the workflow engine's own decision.
-- A workflow step needs a signed, independently verifiable assertion rather than an internal
-  service result.
-- Generated workflow connectors must not depend on source schema details.
-
-## Exchange layers
-
-Examples: [X-Road](https://x-road.global/), GovStack-style reference exchanges, and
-country-specific interoperability layers.
-
-X-Road and Registry Stack solve complementary parts of a secure data-exchange architecture.
-See [Operate Registry Relay](../../operate/relay/) for what sits between the exchange layer and a
-Relay process, including the fact that Relay serves plain HTTP and expects transport security to be
-terminated in front of it.
-
-Exchange layers own participant onboarding, message transport, mutual trust, routing, addressing,
-and cross-institution policy.
-Registry Stack adds the registry-facing surface that sits behind the exchange layer: which records
-exist, which properties are readable under which access profile, and what evidence can be
-requested.
-
-Wire Registry Stack in behind an exchange layer when:
-
-- The exchange layer handles network trust but the registry endpoint still needs its own scope and
-  purpose checks, per-response disclosure limits, and an audit record of what was released.
-- An exchange-forwarded request needs a minimized evidence response rather than a copied record.
-
-## Public-service platforms
-
-Examples: citizen portals, casework systems, service catalogue platforms.
-
-These platforms own the user journey: forms, case queues, notifications, payments, channels.
-Registry Stack adds the narrow registry-facing surface those journeys can call: governed read
-operations, evidence responses, published metadata, and audit records.
-
-Wire Registry Stack in alongside a service platform when:
-
-- A service platform needs a registry answer during delivery but must not pull the full record.
-- A service catalogue needs to discover an evidence offering before integration.
-
-## Standards each surface speaks
-
-Each integration surface involves a different set of standards.
-The claim level differs per standard (some surfaces emit a standard, others map to or
-compare against it); the [standards register](../../reference/standards/) is the
-authoritative list of claim levels and per-project evidence.
-
-| Integration surface | Relevant standards |
-| --- | --- |
-| Static catalog and service discovery (Registry Manifest) | DCAT, BRegDCAT-AP, CPSV-AP, OGC API Records, SHACL, JSON Schema, JSON-LD, ODRL, SKOS-shaped codelists |
-| Governed read API (Registry Relay) | OpenAPI, JSON Schema, SHACL, JSON-LD, GeoJSON, JSON-FG, SDMX (a profiled read subset), GovStack Digital Registries |
-| Minimum-disclosure assertions (Evidence Gateway) | OpenAPI, CCCEV, SD-JWT VC, JSON Schema |
-
-Relay's row is a list of what it emits or serves, not a conformance claim.
-It is explicitly **not** conformant to OGC API Features, OGC API Records, or OGC API EDR: it serves
-RFC 7946 GeoJSON and the bounded JSON-FG profile as response serializations of its own governed
-records, with no OGC API route, collection, or conformance class.
-Its SDMX binding is a narrow aligned read subset of SDMX REST 2.2.2, not full SDMX conformance or
-certification.
-
-{/* Evidence: the Relay row now agrees with src/data/standards.yaml. The register drops
-    registry-relay from dcat, bregdcat-ap, ogc-api-records, and odrl, and records
-    ogc-api-features, ogc-api-edr, fhir-r4, and sp-dci at compares_against with no user, because
-    each was a Relay V1 surface and none is generated by crates/registry-relay-v2 (the required
-    artifact list in artifacts.rs covers OpenAPI, JSON Schema, SHACL, and JSON-LD only). */}
-
-{/* TODO[evidence]: the Evidence Gateway row is still ahead of the register, and the fix is outside
-    this page's ownership. Only sd-jwt-vc lists registry-evidence in used_by, so the OpenAPI,
-    CCCEV, and JSON Schema entries in that row carry no per-project claim level there. */}
+{/* Evidence: crates/registry-breg/src/api/mod.rs; crates/registry-evidence/src/server.rs;
+    crates/registry-manifest-core/src/lib.rs; crates/registry-discovery-client/src/selection.rs. */}
 
 ## Next
 
-- [Architecture overview](../architecture/)
-- [Standards register](../../reference/standards/)
-- [Boundaries and map](../../map/boundaries-and-map/)
+- [Architecture](../architecture/)
+- [OpenFn adaptors](../openfn-adaptors/)
+- [Registry Stack client API](../../reference/client-api/)

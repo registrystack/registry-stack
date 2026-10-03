@@ -64,7 +64,7 @@ test('current docs stay under /dev/ while the newest published release is the re
   const readmeLines = new Set(readme.split(/\r?\n/));
   assert.equal(
     readmeLines.has(
-      '| Serve a governed read-only API over a registry you hold | [Publish a governed SQLite registry](https://docs.registrystack.org/dev/tutorials/publish-governed-sqlite-registry/) |',
+      '| Serve governed record APIs from PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |',
     ),
     true,
   );

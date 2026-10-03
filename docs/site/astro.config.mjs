@@ -14,7 +14,7 @@ import { discoveryHeaderForBase } from './src/lib/page-markdown.ts';
 import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { flattenSidebarGroups } from './src/lib/sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
-import { buildRelayV2RetirementRedirects } from './src/lib/relay-v2-retirement-redirects.mjs';
+import { buildRelayRetirementRedirects } from './src/lib/relay-retirement-redirects.mjs';
 import { omittedCliBinaries, productRoutes, remarkDocsetProducts } from './src/lib/docset-products.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
@@ -237,7 +237,7 @@ export default defineConfig({
   // to their new homes so old links and search results keep resolving.
   redirects: {
     ...buildNotaryRetirementRedirects(currentDocsetRedirect),
-    ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
+    ...buildRelayRetirementRedirects(currentDocsetRedirect),
     ...caseworkRedirects(hasCasework, currentDocsetRedirect),
     ...schedulingRedirects(hasScheduling, currentDocsetRedirect),
     ...messagingRedirects(hasMessaging, currentHasMessaging, currentDocsetRedirect),
@@ -259,35 +259,27 @@ export default defineConfig({
     // Deploy group; a first visit chooses a product before it plans a deployment.
     '/start/evaluate-evidence/': internalRedirect('/operate/evidence-requirements/'),
     '/start/evaluate-breg/': internalRedirect('/operate/breg-requirements/'),
-    // One client package ships all four namespaces, so one reference page
-    // documents them; the two per-product pages it absorbed keep resolving.
-    '/reference/relay-client-api/': internalRedirect('/reference/client-api/'),
+    // One client package documents the retained namespaces in one reference.
     '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
-    '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
+    '/journeys/spreadsheet-protected-api/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
     '/journeys/instance-openapi/': internalRedirect('/reference/apis/'),
-    '/journeys/bounded-http/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
-    '/journeys/bounded-multi-call-script/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
-    '/journeys/exact-snapshot/': internalRedirect('/configure/'),
-    '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
+    '/journeys/bounded-http/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
+    '/journeys/bounded-multi-call-script/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
+    '/journeys/exact-snapshot/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
+    '/journeys/product-input-lifecycle/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
     // Retired first-call and source-review routes enter the supported local path.
-    '/start/your-first-call/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
+    '/start/your-first-call/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
     '/start/test-current-source-revision/': internalRedirect('/'),
-    // Retired lab tutorials land on the homepage or the Evidence Gateway
-    // overview. The historical Solmara workflow used an obsolete Relay source
-    // path and is no longer published as current guidance.
+    // Retired lab tutorials land on the homepage or the Relay retirement record.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/'),
-    '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/evidence-quickstart/'),
     '/tutorials/query-a-spatial-registry-from-qgis/': internalRedirect('/start/breg-quickstart/'),
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
-    // Retired advanced tutorials land on current task, explanation, or
-    // reference entry points. The Relay V1 authoring tutorials are retired by
-    // buildRelayV2RetirementRedirects above.
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
-    '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/configure/'),
+    '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
@@ -315,11 +307,6 @@ export default defineConfig({
     '/capabilities/certify-evidence/': internalRedirect('/explanation/architecture/'),
     '/capabilities/audit-and-operate/': internalRedirect('/explanation/architecture/'),
     '/capabilities/inspect-published-artifacts/': internalRedirect('/explanation/architecture/'),
-    // Hand-authored projects/* -> pulled products/* (internal)
-    '/projects/registry-relay/': internalRedirect('/products/registry-relay/'),
-    '/projects/registry-relay/run-locally/': internalRedirect('/products/registry-relay/'),
-    '/projects/registry-relay/authorize-callers/': internalRedirect('/configure/relay/'),
-    '/projects/registry-relay/reference/': internalRedirect('/configure/relay/'),
     // Retired project routes redirect only when a current replacement exists.
     // Solmara Lab is an external adopter, not a Registry Stack product.
     '/projects/registry-lab/demo-flow/': internalRedirect('/'),
@@ -337,7 +324,7 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation for Registry Stack: publish existing records with Registry Relay, answer bounded questions with Evidence Gateway, or build a writable registry with the Base Registry Engine source preview.',
+      description: 'Documentation for Registry Stack: answer bounded questions with Evidence Gateway, build a writable registry with Base Registry Engine, and publish portable registry metadata.',
       // Historical archives keep their sealed search posture. A new released
       // archive is built once on the release runner and carries its exact
       // Pagefind output into production.
@@ -352,7 +339,7 @@ export default defineConfig({
         // Released archives carry their machine-readable corpus into the
         // canonical root. Historical archives retain their sealed output.
         ...(isHistoricalArchiveBuild ? [] : [starlightLlmsTxt({
-          description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay, Evidence Gateway, and the Base Registry Engine source preview.',
+          description: 'Documentation for Registry Stack tutorials, product docs, explanations, and API references.',
           details: discoveryHeaderForBase(base),
           exclude: ['reference/apis/**'],
           promote: ['index*', 'explanation/**'],
@@ -365,9 +352,6 @@ export default defineConfig({
         // which runs before any build. The generated routes live alongside the
         // hand-authored narrative pages (reference/apis/registry-*), which link
         // into them; old /api/*.html links are preserved by redirects above.
-        // Relay is not registered here: Relay V2 compiles its OpenAPI per
-        // deployment from the adopter's own registry contract and serves it at
-        // GET /openapi.json, so there is no product-level document to pin.
         starlightOpenAPI([
           {
             base: 'reference/apis/evidence',
@@ -501,36 +485,6 @@ export default defineConfig({
             // API wrapper would add a disclosure without helping navigation.
             ...openAPISidebarGroups.slice(0, 1),
             { label: 'Security model', slug: 'security/evidence' },
-          ],
-        },
-        {
-          label: 'Registry Relay',
-          collapsed: true,
-          items: [
-            { label: 'Overview', slug: 'configure' },
-            { label: 'Governed publication', slug: 'explanation/governed-registry-publication' },
-            { label: 'Publish a SQLite registry', slug: 'tutorials/publish-governed-sqlite-registry' },
-            {
-              label: 'Author a project',
-              collapsed: true,
-              items: [
-                { label: 'Project configuration', slug: 'configure/relay' },
-                { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
-                { label: 'Validate a project', slug: 'verify' },
-              ],
-            },
-            {
-              label: 'Use from applications',
-              collapsed: true,
-              items: [
-                { label: 'Query with Python', slug: 'tutorials/query-relay-client' },
-                { label: 'Client API reference', slug: 'reference/client-api' },
-                { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
-              ],
-            },
-            { label: 'Run a deployment', slug: 'operate/relay' },
-            { label: 'relayctl workflows', slug: 'reference/relayctl' },
-            { label: 'Operational posture', slug: 'spec/rs-op-posture' },
           ],
         },
         {
@@ -710,6 +664,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
+            { label: 'Static metadata publication', slug: 'explanation/publishing-pipeline' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
             { label: 'Records stay home', slug: 'explanation/records-stay-home' },
             { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
@@ -721,7 +676,7 @@ export default defineConfig({
               label: 'Decisions',
               collapsed: true,
               items: [
-                { label: 'Relay V1 retirement', slug: 'decisions/relay-v1-and-registryctl-retirement-2026-08-11' },
+                { label: 'Registry Relay retirement', slug: 'decisions/registry-relay-retirement-2026-10-03' },
                 { label: 'Registry Notary retirement', slug: 'decisions/notary-retirement-2026-08-03' },
               ],
             },
@@ -757,19 +712,12 @@ export default defineConfig({
                 { label: 'Terms', slug: 'spec/rs-terms' },
                 { label: 'Architecture', slug: 'spec/rs-arc-g' },
                 { label: 'Evidence Gateway protocol', slug: 'spec/rs-pr-evidence' },
-                { label: 'relayctl contract', slug: 'spec/rs-pr-relayctl' },
-                { label: 'Relay protocol', slug: 'spec/rs-pr-relay' },
                 { label: 'Security model', slug: 'spec/rs-sec-g' },
                 { label: 'Portable metadata model', slug: 'spec/rs-dm-manifest' },
               ],
             },
             // Flatten the generated Diataxis categories here: product and
             // page are enough context inside Reference.
-            {
-              label: 'Registry Relay',
-              collapsed: true,
-              items: flattenSidebarGroups(generatedProduct('Relay').items),
-            },
             {
               label: 'Registry Manifest',
               collapsed: true,
