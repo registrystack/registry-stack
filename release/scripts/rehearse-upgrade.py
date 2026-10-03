@@ -319,13 +319,6 @@ def row_count_losses(before: dict[str, int], after: dict[str, int],
 
 # Only these audit tables retire in this transition. Business tables always
 # remain subject to the ordinary row-preservation comparison.
-#
-# Scheduling's scheduling_audit_outbox also retires (its migration 8 drops
-# it), but it is deliberately absent: this script verifies and runs release
-# binaries, and v0.33.0 and v0.34.0 shipped Scheduling only as a container
-# image, so no Scheduling leg exists to archive and count it. That retirement
-# is covered by migration 8 refusing an undrained outbox and by the operator
-# archiving the old audit file; an image-driven leg is tracked separately.
 RETIRED_AUDIT_TABLES = {
     "casework": ("public.casework_audit_outbox",),
 }
