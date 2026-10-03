@@ -30,7 +30,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "a8d8c58eb9f2eb10db68b26c9e285a11fa3f531d98bab19ecab52e2a37e4b17f"
+        "sha256": "a3f450f6903b1d00818c05818c5276c04f0996e0df8f5a65bc11437b820a7c28"
       }
     },
     {
@@ -43,7 +43,7 @@
       "description": "The declared Evidence dependency could not be accepted.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "action.evidence_failed",
@@ -62,7 +62,7 @@
       "description": "The action handler could not produce an accepted result.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "action.handler_failed",
@@ -81,7 +81,7 @@
       "description": "The action was refused by a declared business rule.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "action.refused",
@@ -100,7 +100,7 @@
       "description": "The bearer credential is missing or refused.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "authentication.refused",
@@ -119,7 +119,7 @@
       "description": "The idempotency key is bound to another request.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "idempotency.conflict",
@@ -138,7 +138,7 @@
       "description": "The chunk does not match the expected next chunk.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "ingestion.chunk_mismatch",
@@ -157,7 +157,7 @@
       "description": "The selected access profile does not match the run's bound profile.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "ingestion.profile_mismatch",
@@ -176,7 +176,7 @@
       "description": "The stored receipt of the chunk was erased.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "ingestion.receipt_erased",
@@ -195,7 +195,7 @@
       "description": "The ingestion run is blocked and refuses further chunks.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "ingestion.run_blocked",
@@ -214,7 +214,7 @@
       "description": "The ingestion run is not open for this transition.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "ingestion.run_not_open",
@@ -233,7 +233,7 @@
       "description": "The lookup did not resolve exactly one record.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "lookup.unresolved",
@@ -252,7 +252,7 @@
       "description": "The mutation conflicts with current state.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "mutation.conflict",
@@ -271,7 +271,7 @@
       "description": "The mutation precondition failed.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "precondition.failed",
@@ -290,7 +290,7 @@
       "description": "The mutation precondition is required.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "precondition.required",
@@ -309,7 +309,7 @@
       "description": "The query cursor is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "query.cursor_invalid",
@@ -328,7 +328,7 @@
       "description": "The query request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "query.invalid",
@@ -347,7 +347,7 @@
       "description": "The request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "request.invalid",
@@ -366,7 +366,7 @@
       "description": "The change-request planner refused the submission, naming the failure kind.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "request.plan_refused",
@@ -385,7 +385,7 @@
       "description": "The request timed out.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "request.timeout",
@@ -404,7 +404,7 @@
       "description": "The requested resource was not found.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "resource.not_found",
@@ -423,7 +423,7 @@
       "description": "The Registry field-encryption service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "runtime.field_encryption.unavailable",
@@ -442,7 +442,7 @@
       "description": "Registry runtime is not ready.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "runtime.not_ready",
@@ -461,7 +461,7 @@
       "description": "The Registry mutation service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "service.unavailable",
@@ -480,7 +480,7 @@
       "description": "The Registry data service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "source.unavailable",
@@ -499,7 +499,7 @@
       "description": "The request media type is not supported.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "a1a1640628a5fdf95767f82c347f90bf38af9c30867882ad0bdd18eb3601a28a"
+        "sha256": "523c98ef73c3d019578606ec6e62ee1537014a28a856fa897b389d4b4003e918"
       },
       "problem": {
         "code": "unsupported.media_type",
@@ -2143,500 +2143,6 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/problems/registry-relay/aggregate-data/denied",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Aggregate data access is not permitted",
-      "description": "aggregate data access is not permitted",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "aggregate-data.denied",
-        "httpStatuses": [
-          403
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/aggregate-data/invalid_request",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Aggregate data request is invalid",
-      "description": "the aggregate data request is invalid",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "aggregate-data.invalid_request",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/aggregate-data/rate_limited",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Aggregate data quota is exhausted",
-      "description": "the aggregate data quota is exhausted",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "aggregate-data.rate_limited",
-        "httpStatuses": [
-          429
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/aggregate-data/too_large",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Aggregate data request is too broad",
-      "description": "the aggregate data request exceeds its observation limit",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "aggregate-data.too_large",
-        "httpStatuses": [
-          413
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/audit/unavailable",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Required audit is unavailable",
-      "description": "required audit is unavailable",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "audit.unavailable",
-        "httpStatuses": [
-          503
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/auth/invalid_credential",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Bearer access token is invalid",
-      "description": "bearer access token validation failed",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "auth.invalid_credential",
-        "httpStatuses": [
-          401
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/auth/missing_credential",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Bearer access token is required",
-      "description": "a bearer access token is required",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "auth.missing_credential",
-        "httpStatuses": [
-          401
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/consultation/denied",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Consultation is not permitted",
-      "description": "the consultation is not permitted",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "consultation.denied",
-        "httpStatuses": [
-          403
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/consultation/invalid_request",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Consultation request is invalid",
-      "description": "the consultation request is invalid",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "consultation.invalid_request",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/consultation/rate_limited",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Consultation quota is exhausted",
-      "description": "the consultation quota is exhausted",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "consultation.rate_limited",
-        "httpStatuses": [
-          429
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/consultation/response_too_large",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Consultation response is too large",
-      "description": "the consultation response exceeds the configured limit",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "consultation.response_too_large",
-        "httpStatuses": [
-          413
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/consultation/unresolved",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Requested record was not resolved",
-      "description": "the requested record was not resolved",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "consultation.unresolved",
-        "httpStatuses": [
-          404
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/filter/invalid_value",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Filter value is invalid",
-      "description": "filter value is invalid",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "filter.invalid_value",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/filter/unknown_field",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Filter is not declared",
-      "description": "filter is not declared for this operation",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "filter.unknown_field",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/format/unsupported",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Requested format is not supported",
-      "description": "the requested format is not supported",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "format.unsupported",
-        "httpStatuses": [
-          406
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/internal/payload_too_large",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Request body is too large",
-      "description": "request body exceeds the configured limit",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "internal.payload_too_large",
-        "httpStatuses": [
-          413
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/internal/timeout",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Request timed out",
-      "description": "request exceeded the configured timeout",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "internal.timeout",
-        "httpStatuses": [
-          504
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/internal/unhandled",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Request could not be served",
-      "description": "the request could not be served",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "internal.unhandled",
-        "httpStatuses": [
-          500
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/internal/uri_too_long",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Request URI is too long",
-      "description": "request URI exceeds the configured limit",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "internal.uri_too_long",
-        "httpStatuses": [
-          414
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/query/cursor_invalid",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Cursor is invalid",
-      "description": "cursor is invalid for this query",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "query.cursor_invalid",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/request/access_profile_invalid",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Access profile selection is invalid",
-      "description": "access profile selection is invalid",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "request.access_profile_invalid",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/request/fields_invalid",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Field selection is invalid",
-      "description": "field selection is invalid",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "request.fields_invalid",
-        "httpStatuses": [
-          400
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/request/media_type_unsupported",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Request media type is not supported",
-      "description": "request body must use application/json",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "request.media_type_unsupported",
-        "httpStatuses": [
-          415
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/resource/not_found",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Requested resource was not found",
-      "description": "the requested resource was not found",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "resource.not_found",
-        "httpStatuses": [
-          404
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/service/not_ready",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Service is not ready",
-      "description": "the service is not ready",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "service.not_ready",
-        "httpStatuses": [
-          503
-        ]
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/problems/registry-relay/source/unavailable",
-      "kind": "problem",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Authoritative source is unavailable",
-      "description": "the authoritative source is unavailable",
-      "source": {
-        "path": "crates/registry-relay-http-contract/src/lib.rs",
-        "sha256": "9ea2dfbcd06be6f5c81bd2a09811f420df9120ee9133f03f95b07a65f99483d4"
-      },
-      "problem": {
-        "code": "source.unavailable",
-        "httpStatuses": [
-          503
-        ]
-      }
-    },
-    {
       "uri": "https://id.registrystack.org/problems/registry-scheduling/authentication/refused",
       "kind": "problem",
       "status": "active",
@@ -3389,60 +2895,6 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha2",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v2alpha2",
-      "owner": "relay-v2",
-      "title": "Registry Relay value-free audit line",
-      "description": "Relay V2 generated public JSON Schema.",
-      "source": {
-        "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "5f9d6394417be55723166817453b88cee86d91451a85a8ade8ed0f43c2d6342b"
-      },
-      "artifact": {
-        "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha2.json",
-        "sha256": "9d0415eb366a78ceb109b26b9204f139ecdddfa114de66bd13fd98a1b7a5f62a",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/registry-relay/authoring/registry.v2alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v2alpha1",
-      "owner": "relay-v2",
-      "title": "Relay V2 governed Registry contract",
-      "description": "Relay V2 authoring JSON Schema.",
-      "source": {
-        "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "c030917d19b1f50c8d2b41fc7b2ef4fb07b803b5fa98ffd971f5c964f491f7e5"
-      },
-      "artifact": {
-        "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "c030917d19b1f50c8d2b41fc7b2ef4fb07b803b5fa98ffd971f5c964f491f7e5",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/registry-relay/authoring/runtime.v2alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v2alpha1",
-      "owner": "relay-v2",
-      "title": "Relay V2 deployment binding",
-      "description": "Relay V2 authoring JSON Schema.",
-      "source": {
-        "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "e789f3f61af4d7527e0a309ee7512a40f984096abe031a205398c14d5f2c452c"
-      },
-      "artifact": {
-        "path": "crates/registry-relayctl/schemas/authoring/runtime.schema.json",
-        "sha256": "e789f3f61af4d7527e0a309ee7512a40f984096abe031a205398c14d5f2c452c",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
       "uri": "https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3461,71 +2913,6 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/vocab/codelist",
-      "kind": "vocabulary-term",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Codelist",
-      "description": "Relay V2 Registry Core predicate binding a controlled property to its codelist.",
-      "source": {
-        "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/vocab/coordinateReferenceSystem",
-      "kind": "vocabulary-term",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Coordinate reference system",
-      "description": "Relay V2 Registry Core predicate identifying a spatial property's coordinate reference system.",
-      "source": {
-        "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/vocab/core/",
-      "kind": "vocabulary",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Registry Relay core vocabulary",
-      "description": "Vocabulary base for Relay V2 Registry Core semantic predicates.",
-      "source": {
-        "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/vocab/geometryType",
-      "kind": "vocabulary-term",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Geometry type",
-      "description": "Relay V2 Registry Core predicate identifying a spatial property's geometry type.",
-      "source": {
-        "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/vocab/handling",
-      "kind": "vocabulary",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Registry Relay handling vocabulary",
-      "description": "Ordered Relay V2 technical handling levels: public, internal, confidential, and restricted.",
-      "source": {
-        "path": "products/relay-v2/CONCEPT.md",
-        "sha256": "ee3a1f88f87331e3601469ae7f23ecd0c3249168d2f6d199de8250892b24dccc"
-      }
-    },
-    {
       "uri": "https://id.registrystack.org/vocab/registry-record/",
       "kind": "vocabulary",
       "status": "active",
@@ -3536,19 +2923,6 @@
       "source": {
         "path": "products/registry-record/context/registry-record-v1.jsonld",
         "sha256": "9b8bf452538214d8559b4e8034446bfade37b5f409cfeaaace650a567423be71"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/vocab/sourceRequired",
-      "kind": "vocabulary-term",
-      "status": "active",
-      "compatibilityLine": "relay-v2",
-      "owner": "relay-v2",
-      "title": "Source required",
-      "description": "Relay V2 Registry Core predicate indicating whether a source value is required.",
-      "source": {
-        "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "563740f4b7d7582a8c1f80756d52137915b85cd349e19ce5ab272d1d791234ca"
       }
     }
   ]

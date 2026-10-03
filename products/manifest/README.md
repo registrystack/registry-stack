@@ -6,7 +6,7 @@ Release label: pre-1.0 technical release for evaluation and integration pilots.
 
 Registry Manifest is the commons contract and schema kernel for registry
 metadata. It is a portable set of Rust crates for modeling, validating, and
-rendering standards-facing registry metadata without running Registry Relay.
+rendering standards-facing registry metadata without running a service.
 
 It owns metadata manifests, compiled metadata models, validation, vocabulary prefix expansion, and pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL, JSON Schema Draft 2020-12, form JSON Schema, OGC API Records item collections, policy documents, evidence-offering metadata, and embedded SKOS-shaped codelist metadata.
 
@@ -97,7 +97,7 @@ scripts/check-contract-kernel.sh
 ```
 
 Consumer manifests can be passed as arguments. Each file is validated and
-published into `target/contract-kernel/` so Relay and adopter demos can
+published into `target/contract-kernel/` so adopter demos can
 exercise the same schema and renderer contract before a commons release:
 
 ```sh
@@ -156,7 +156,7 @@ authentication, authorization, purpose handling, and audit behavior.
 ## Boundary
 
 Registry Manifest must stay portable. `registry-manifest-core` must not depend on
-Registry Relay, Axum, DataFusion, Postgres, auth, audit,
+Axum, DataFusion, Postgres, auth, audit,
 observability, runtime row access, secret handling, `utoipa`, or `clap`.
 
-Registry Relay may publish these artifacts over HTTP and scope them for callers, but those runtime concerns stay outside this repository.
+Another service may publish these artifacts over HTTP and scope them for callers, but those runtime concerns stay outside this repository.

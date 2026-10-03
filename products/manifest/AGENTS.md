@@ -7,8 +7,8 @@ Manifest owns the portable metadata model, validation, compilation, prefix
 expansion, and standards-facing renderers. `registry-manifest-core` remains
 independent of service runtimes, row access, authentication, audit, secrets,
 HTTP serving, and CLI frameworks. The CLI owns file handling and static
-publication. Relay and BReg own caller authorization and safe publication
-projections; Manifest metadata grants no runtime access.
+publication. BReg and other consuming services own caller authorization and
+safe publication projections; Manifest metadata grants no runtime access.
 
 Use the [core README](../../crates/registry-manifest-core/README.md),
 [reference](docs/reference.md), and affected compiler/renderer tests for model
@@ -35,7 +35,7 @@ cargo run --locked -p registry-manifest-cli -- validate-profiles products/manife
 ```
 
 Renderer changes need representative golden-output coverage. Shared model
-changes also need affected Relay or BReg publication checks. The broader
+changes also need affected BReg publication checks. The broader
 `products/manifest/scripts/check-contract-kernel.sh` runs a workspace suite;
 use it when that breadth is justified. External ITB/SEMIC validation is opt-in
 under [its documented claim boundary](docs/itb-semic-validation.md).

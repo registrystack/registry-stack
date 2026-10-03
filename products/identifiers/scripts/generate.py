@@ -19,14 +19,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PRODUCT_ROOT = REPO_ROOT / "products" / "identifiers"
 SOURCE_CONFIG = PRODUCT_ROOT / "contracts" / "catalog-source.json"
 GENERATED_CATALOG = PRODUCT_ROOT / "generated" / "catalog.v1.json"
-GENERATED_AUDIT_SCHEMA = (
-    PRODUCT_ROOT
-    / "generated"
-    / "artifacts"
-    / "registry-relay"
-    / "audit-event"
-    / "v2alpha2.json"
-)
 REFERENCE_URI_RE = re.compile(
     r"https://id\.registrystack\.org/[^\s<>{}\"'`\\]+"
 )
@@ -656,31 +648,6 @@ def generate_problem_catalog(
     )
 
 
-def generate_audit_schema(repo_root: Path, output: Path) -> None:
-    environment = os.environ.copy()
-    environment.setdefault("CARGO_INCREMENTAL", "0")
-    environment.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
-    environment.setdefault("CARGO_PROFILE_TEST_DEBUG", "0")
-    subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--locked",
-            "--quiet",
-            "-p",
-            "registry-relay-v2",
-            "--example",
-            "audit-event-schema",
-            "--",
-            "--output",
-            str(output),
-        ],
-        cwd=repo_root,
-        env=environment,
-        check=True,
-    )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     destination = parser.add_mutually_exclusive_group()
@@ -708,19 +675,6 @@ def main() -> None:
         print("Registry Stack identifier reference closure is complete.")
         return
     with tempfile.TemporaryDirectory(prefix="registry-identifiers-") as temp:
-        generated_audit_schema = Path(temp) / "audit-event.v2alpha2.json"
-        generate_audit_schema(REPO_ROOT, generated_audit_schema)
-        if args.write:
-            GENERATED_AUDIT_SCHEMA.parent.mkdir(parents=True, exist_ok=True)
-            GENERATED_AUDIT_SCHEMA.write_bytes(generated_audit_schema.read_bytes())
-        elif (
-            not GENERATED_AUDIT_SCHEMA.is_file()
-            or GENERATED_AUDIT_SCHEMA.read_bytes() != generated_audit_schema.read_bytes()
-        ):
-            raise CatalogError(
-                "generated Relay V2 audit event schema is stale; run with --write"
-            )
-
         problem_catalogs: dict[str, Path] = {}
         for index, source in enumerate(
             load_source_config(SOURCE_CONFIG)["problemSources"]
