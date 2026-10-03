@@ -111,7 +111,7 @@ new commands and flags) are minor-release material and are not breaking.
 
 ## Compatibility direction
 
-The promise is backward compatibility: a new binary within a major line reads the wire data,
+From 1.0, the promise is backward compatibility: a new binary within a major line reads the wire data,
 config files, manifests, and persisted state written for any earlier release of that line.
 
 Before 1.0, persisted state has a narrower promise: a release reads only the state its
@@ -218,7 +218,8 @@ The promise is machine-checked where a checker exists:
   additive successor and serves again; its package-bound ETags may change. Audit
   tables retired by this breaking upgrade must first be preserved in an archive whose row counts
   are checked. Old audit files are preserved separately from the new entry stream. It refuses to
-  start from a release before `v0.38.0`. Scheduling state is not rehearsed.
+  start from a release before `v0.38.0`. Scheduling state is not rehearsed: the rehearsal has no
+  Scheduling leg.
 
 {/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), and check_forward_path(). */}
 

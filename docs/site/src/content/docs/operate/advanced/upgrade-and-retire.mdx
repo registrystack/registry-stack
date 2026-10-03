@@ -98,9 +98,7 @@ sequence on a restored copy first, as
    destination bindings until its hook deliveries drain. Add `identity.databaseId` to the runtime
    file when it has none, run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
    FILE` with the new binary, then start `scheduling`; `schedulingctl status --runtime-config
-   FILE` confirms what the database activated. From a release before the activation ledger, the
-   first `apply` adopts the database and backfills the retained policy document, and the runtime
-   refuses to start until it has.
+   FILE` confirms what the database activated.
 8. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
    Stack client at the same release before it calls the upgraded runtimes.
 
