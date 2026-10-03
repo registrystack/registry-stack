@@ -732,7 +732,8 @@ gh workflow run release-upgrade-rehearsal.yml \
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
 earliest release this source reads state from, `v0.38.0`, and the script
 refuses to start from any earlier release rather than skipping the check.
-Scheduling state is not rehearsed; a Scheduling leg is tracked separately.
+Scheduling state is not rehearsed: `PRODUCTS` in the script names no
+Scheduling leg.
 
 Messaging joins the rehearsal from `v0.38.0`.
 `MESSAGING_FIRST_RELEASE` in `release/scripts/release_roster.py` owns that
@@ -1147,6 +1148,13 @@ dependencies and `Cargo.lock`, the native client packages and generated
 loaders, the lockfiles in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, the VS Code and
 Zed extension manifests and lockfiles in `EDITOR_RELEASE_SURFACE_PATHS`, and
 the committed OpenAPI documents.
+The same PR moves the upgrade promise to the release just published, which no
+check holds equal to the workspace version: set `FORWARD_PATH_FLOOR` in
+`release/scripts/rehearse-upgrade.py` to that release, move the tags
+`release/scripts/test_rehearse_upgrade.py` asserts on either side of it, and
+restate it where this file's rehearsal section and
+`docs/site/src/content/docs/reference/api-stability.mdx` name the release this
+source reads state from.
 The release is closed only once this PR and the
 documentation promotion below have merged. The one exception is a next
 release already in preparation when `verify-public` passes: its release PR
