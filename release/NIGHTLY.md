@@ -184,13 +184,29 @@ requires the successful protected-main CI run for that same commit. It skips a
 source commit already recorded as a successful nightly instead of publishing a
 second identity for unchanged source.
 
-Nightly image publication rejects High, Critical, or unknown vulnerability
-severities and rejects a vulnerability database more than three days old. The
-nightly policy does not reuse advisory exceptions approved for a numbered
-release because the reviewed release bytes and the nightly bytes differ. A
-finding can therefore block publication until the finding is fixed or a
-separately reviewed nightly policy is implemented. The workflow has no bypass
-input, and a first run is not guaranteed to publish.
+Nightly image publication rejects an unknown vulnerability severity and a
+vulnerability database more than three days old. It rejects a High or Critical
+finding unless the reviewed release baseline for that image,
+`release/security/<image>-advisory-baseline.json`, holds a current exception for
+the same vulnerability, package, and installed version at the same severity, and
+the scanner reports no fix. An exception is current from its review date through
+its expiry date, both read as UTC dates. The check refuses a High or Critical
+finding the scanner reports more than once, and one that does not name its
+vulnerability, package, and installed version.
+
+The release advisory checker loads the baseline. A baseline it cannot load
+blocks that image, including when the scan has no High or Critical finding. An
+image with no baseline file has no reviewed exceptions.
+
+A nightly reuses the reviewed decision about a package version, not the proof a
+numbered release requires. A release also proves that its candidate image has
+the reviewed layers, process contract, and file digests. The nightly bytes
+differ from the reviewed release bytes, so that proof cannot hold for a nightly
+image and the nightly check does not claim it. A new finding, a changed package
+version, a changed severity, an available fix, or an expired exception blocks
+publication until the finding is fixed or the release baseline is reviewed
+again. The workflow has no bypass input, and a first run is not guaranteed to
+publish.
 
 For a normal run:
 

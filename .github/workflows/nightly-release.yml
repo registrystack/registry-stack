@@ -334,7 +334,8 @@ jobs:
             SYFT_FILE_METADATA_SELECTION=all SYFT_FILE_METADATA_DIGESTS=sha256 \
               syft "${reference}" -o "spdx-json=reports/${name}.sbom.spdx.json"
             grype "${reference}" -o json > "reports/${name}.grype.json"
-            python3 release/scripts/nightly_release.py check-scan "reports/${name}.grype.json"
+            python3 release/scripts/nightly_release.py check-scan "reports/${name}.grype.json" \
+              --baseline "release/security/${name}-advisory-baseline.json"
             cp "dist/images/${name}.digest" "reports/${name}.digest"
           done
       - name: Retain available scan evidence, including failures

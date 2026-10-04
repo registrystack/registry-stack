@@ -108,7 +108,11 @@ class NightlyWorkflowTest(unittest.TestCase):
         self.assertNotIn(":nightly", self.text)
         self.assertNotIn("npm publish", self.text)
         self.assertNotIn("pypi", self.text)
-        self.assertIn("nightly_release.py check-scan", self.text)
+        self.assertIn(
+            'nightly_release.py check-scan "reports/${name}.grype.json" \\\n'
+            '              --baseline "release/security/${name}-advisory-baseline.json"',
+            self.text,
+        )
         self.assertIn("nightly_release.py smoke", self.text)
 
     def test_failed_publication_reuses_successful_producer_artifacts(self):
