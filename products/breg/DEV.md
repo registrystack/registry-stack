@@ -24,7 +24,7 @@ The project path defaults to the current directory, as it does for every other
 detach a resident supervisor. They return only after
 PostgreSQL, ThunderID, schema-test rehearsal, package activation, BReg readiness and
 explicit seed creation succeed. Default loopback ports are BReg `8090`, issuer
-`8091` and PostgreSQL `55432`. Override them on the first start with
+`8091` and PostgreSQL `15432`. Override them on the first start with
 `--breg-port`, `--issuer-port` and `--database-port`. A restart retains the
 original ports and clients-file location. Conflicting ports are refused.
 

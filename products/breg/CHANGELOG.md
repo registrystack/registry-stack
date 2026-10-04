@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: `bregctl dev` takes PostgreSQL loopback port 15432 on a first
+  start, where it took 55432. On Linux an outgoing loopback connection could
+  take 55432 as its own source port, and a first start then refused the port as
+  occupied although nothing listened on it (#1870). A session that already
+  started keeps the port it retained. Anything that connects to a new session's
+  database by the old default needs the new port, or `--database-port 55432` on
+  the first start.
+
 - BREAKING: before 1.0, a release reads only the state its immediate
   predecessor wrote. This release reads state written by v0.38.0 and nothing
   older. If you run an older release, upgrade one release at a time and finish

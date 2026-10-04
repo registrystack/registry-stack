@@ -1459,6 +1459,20 @@ fn a_retained_state_of_another_version_is_invalid_without_mutation() {
 }
 
 #[test]
+fn default_ports_lie_below_the_source_port_range() {
+    for port in [
+        DEFAULT_BREG_PORT,
+        DEFAULT_ISSUER_PORT,
+        DEFAULT_DATABASE_PORT,
+    ] {
+        assert!(
+            port < FIRST_SOURCE_PORT,
+            "an outgoing connection can take default port {port} as its source port"
+        );
+    }
+}
+
+#[test]
 fn occupied_and_ambiguous_ports_are_refused() {
     assert!(ports(1, 1, 2).is_err());
     assert!(ports(0, 2, 3).is_err());

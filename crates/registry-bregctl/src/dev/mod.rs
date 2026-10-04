@@ -50,6 +50,16 @@ const IMAGE: &str =
 const SPATIAL_IMAGE: &str =
     "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6";
 const LABEL: &str = "org.registrystack.bregctl.dev-owner";
+/// Loopback ports a first start takes when no flag names one. Each lies below
+/// `FIRST_SOURCE_PORT`, so no outgoing connection on the machine can hold one
+/// as its own source port and have the start refuse it as occupied.
+const DEFAULT_BREG_PORT: u16 = 8090;
+const DEFAULT_ISSUER_PORT: u16 = 8091;
+const DEFAULT_DATABASE_PORT: u16 = 15432;
+/// The lowest port an operating system takes as the source of an outgoing
+/// connection: Linux starts at 32768, macOS and Windows at 49152.
+#[cfg(test)]
+const FIRST_SOURCE_PORT: u16 = 32768;
 /// Refusal for a project that never started. Reporting a stopped session
 /// would claim owned services were stopped when none were ever created.
 const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check the project path, or start one with bregctl dev";
@@ -166,7 +176,7 @@ struct StartArgs {
     /// Immutable local candidate issuer image ID on first start; retained for restarts.
     #[arg(long, value_parser = candidate_issuer_image)]
     issuer_image: Option<String>,
-    /// PostgreSQL loopback port on first start (default 55432; retained for restarts).
+    /// PostgreSQL loopback port on first start (default 15432; retained for restarts).
     #[arg(long)]
     database_port: Option<u16>,
     #[arg(long, hide = true)]
@@ -969,12 +979,12 @@ fn start(args: StartArgs) -> Result<Value> {
             breg_port: args
                 .breg_port
                 .or(previous.map(|s| s.breg_port))
-                .unwrap_or(8090),
+                .unwrap_or(DEFAULT_BREG_PORT),
             issuer_port: args
                 .issuer_port
                 .or(issuer_owner.as_ref().map(|owner| owner.issuer_port))
                 .or(previous.map(|s| s.issuer_port))
-                .unwrap_or(8091),
+                .unwrap_or(DEFAULT_ISSUER_PORT),
             issuer_project,
             issuer_owner: issuer_owner.as_ref().map(|owner| owner.owner.clone()),
             issuer_image: args
@@ -985,7 +995,7 @@ fn start(args: StartArgs) -> Result<Value> {
             database_port: args
                 .database_port
                 .or(previous.map(|s| s.database_port))
-                .unwrap_or(55432),
+                .unwrap_or(DEFAULT_DATABASE_PORT),
             requires_postgis: compiled.ddl().requires_postgis,
             webhook_port: None,
             clients_file,
