@@ -116,12 +116,6 @@ model {
     description 'Uses the same bounded request and HTTP machinery without making a relying-party verification decision. It is restricted to holder-bound definition discovery and issuance for a delivery front end that forwards Evidence-signed bytes unchanged.'
     link https://github.com/registrystack/registry-stack/blob/main/crates/registry-evidence-client/src/client.rs 'Non-verifying client boundary'
   }
-  evidenceRelay = external 'Registry Relay' {
-    #optional
-    technology 'Optional fixed HTTP source'
-    description 'Can expose a protected read-only API that Evidence calls as an ordinary fixed source. Relay and Evidence enforce separate caller identities, authorization and audit boundaries.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-relay-v2/src/lib.rs 'Relay runtime boundary'
-  }
   evidenceDiscovery = external 'Registry Discovery' {
     #optional
     technology 'Optional immutable index runtime'
@@ -169,7 +163,6 @@ model {
   evidence.acquisition .call evidence.audit 'Records durable access gate before each physical read'
   evidence.acquisition .call evidenceHttpSource 'Executes a fixed authorized request'
   evidence.acquisition .call evidenceSqliteExtract 'Reads through one reviewed statement'
-  evidence.acquisition .call evidenceRelay 'Optionally reads a protected fixed route'
   evidence.acquisition .call evidence.scripts 'Prepares requests, extracts facts and runs declared derivation'
   evidence.scripts .call evidence.assertions 'Returns only declared typed values'
   evidence.assertions .call evidenceVerifier 'Uses the shared payload and format contract'

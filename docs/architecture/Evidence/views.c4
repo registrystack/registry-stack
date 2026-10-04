@@ -119,13 +119,13 @@ views {
       The SDKs call Evidence and verify through the portable verifier. An application may
       search Registry Discovery first, but its accepted selection is inert metadata: the
       application still establishes trust, credentials and native Evidence invocation.
-      Evidence can use Relay, BReg or another HTTPS API only as a fixed independently
+      Evidence can use BReg or another HTTPS API only as a fixed independently
       authorized source; each product retains its own access and audit boundary. BReg\'s
       reverse trial integration is a separate relying-party call. Authenticated
       requester-scoped definitions reveal complete authorized request shapes, while the
       public provider advertisement and JWKS grant neither access nor key trust.
     '''
-    include application, taskAgent, issuer, evidence, evidenceClient, evidenceVerifier, evidenceDiscovery, evidenceRelay, evidenceHttpSource, evidenceSqliteExtract, evidenceTransitSigner, evidenceLocalSigningKey, breg
+    include application, taskAgent, issuer, evidence, evidenceClient, evidenceVerifier, evidenceDiscovery, evidenceHttpSource, evidenceSqliteExtract, evidenceTransitSigner, evidenceLocalSigningKey, breg
     include taskAgent with { navigateTo evidence_task_assertion }
     global predicate evidence_application
     exclude breg -> issuer
