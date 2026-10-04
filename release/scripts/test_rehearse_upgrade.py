@@ -728,20 +728,22 @@ class StateComparisonTest(unittest.TestCase):
 
 
 class AuditUpgradeTest(unittest.TestCase):
-    def test_archives_every_old_segment_before_a_fresh_stream(self) -> None:
+    def test_counts_every_segment_of_one_stream(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            audit = root / "audit"
-            audit.mkdir()
+            audit = Path(temporary)
             for name in ("evidence.jsonl", "evidence.jsonl.00000001"):
                 (audit / name).write_text('{"old":true}\n')
-            (audit / "other.jsonl").write_text("keep")
-            archive = root / "archive"
-            self.assertEqual(MODULE.archive_audit_files(audit, "evidence.jsonl", archive), 2)
-            self.assertEqual(MODULE.audit_record_count(archive, "evidence.jsonl"), 2)
-            self.assertEqual(sorted(path.name for path in audit.iterdir()), ["other.jsonl"])
+            (audit / "other.jsonl").write_text('{"other":true}\n')
+            self.assertEqual(MODULE.audit_record_count(audit, "evidence.jsonl"), 2)
 
-    def test_fresh_stream_requires_valid_response_envelopes(self) -> None:
+    def test_a_stream_must_keep_the_previous_records_and_gain_the_new_ones(self) -> None:
+        self.assertEqual(MODULE.audit_stream_losses("Evidence", 2, 4, 2), [])
+        self.assertEqual(MODULE.audit_stream_losses("Evidence", 2, 5, 2), [])
+        for before, after in ((0, 2), (2, 3), (2, 2), (2, 0)):
+            with self.subTest(before=before, after=after):
+                self.assertEqual(len(MODULE.audit_stream_losses("Evidence", before, after, 2)), 1)
+
+    def test_the_stream_requires_valid_response_envelopes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / "evidence.jsonl"

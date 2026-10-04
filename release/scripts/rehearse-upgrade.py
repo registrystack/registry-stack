@@ -317,17 +317,6 @@ def audit_paths(directory: Path, name: str) -> list[Path]:
                   and (path.name == name or re.fullmatch(re.escape(name) + r"\.[0-9]+", path.name)))
 
 
-def archive_audit_files(directory: Path, name: str, archive: Path) -> int:
-    private_directory(archive)
-    paths = audit_paths(directory, name)
-    for path in paths:
-        destination = archive / path.name
-        if destination.exists():
-            raise RehearsalError("audit archive destination already exists")
-        path.rename(destination)
-    return len(paths)
-
-
 def audit_record_count(directory: Path, name: str, *, schema: str | None = None) -> int:
     count = 0
     for path in audit_paths(directory, name):
@@ -348,6 +337,16 @@ def audit_record_count(directory: Path, name: str, *, schema: str | None = None)
                 raise RehearsalError("audit stream contains an invalid current envelope")
             count += 1
     return count
+
+
+def audit_stream_losses(product: str, before: int, after: int, written: int) -> list[str]:
+    """Name an audit stream that lost the previous release's records, or that
+    the upgraded runtime did not continue with at least `written` records."""
+
+    if before == 0 or after < before + written:
+        return [f"the {product} audit stream held {before} records before the upgrade and "
+                f"{after} after it, where the upgraded runtime writes at least {written}"]
+    return []
 
 
 def breg_view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -1419,8 +1418,8 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     finally:
         service.stop()
     before_counts = postgres.row_counts("casework")
+    records_before = audit_record_count(casework.audit, "casework.ndjson")
 
-    archived_files = archive_audit_files(casework.audit, "casework.ndjson", work / "audit-archive")
     activation = casework.activate(new, seeded)
     losses = row_count_losses(before_counts, postgres.row_counts("casework"))
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
@@ -1432,12 +1431,15 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     finally:
         service.stop()
     losses += row_count_losses(before_counts, postgres.row_counts("casework"))
+    records_after = audit_record_count(casework.audit, "casework.ndjson")
+    losses += audit_stream_losses("Casework", records_before, records_after, 1)
     new.run_json("caseworkctl", "--format", "json", "check", str(casework.project))
 
     report["casework"] = {
         "reviewRequests": len(requests),
         "tables": len(before_counts),
-        "auditFilesArchived": archived_files,
+        "auditRecordsBefore": records_before,
+        "auditRecordsAfter": records_after,
         "activationId": activation["activationId"],
         "activatedOnUpgrade": activation["activationId"] != seeded,
         "viewDifferences": differences,
@@ -1630,7 +1632,7 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
 
 
 # ---------------------------------------------------------------------------
-# Evidence: sign a response, archive the old stream, upgrade, inspect new entries.
+# Evidence: sign a response, upgrade, sign again, inspect the audit stream.
 
 
 EVIDENCE_KID = "upgrade-rehearsal-evidence-issuer"
@@ -1827,8 +1829,6 @@ def rehearse_evidence(work: Path, keys: Keys, tls: Path, old: Side, new: Side,
         finally:
             service.stop()
         records_before = audit_record_count(evidence.audit, "evidence.jsonl")
-        archive = work / "audit-archive"
-        archive_audit_files(evidence.audit, "evidence.jsonl", archive)
 
         evidence.upgrade(new)
         new.run("evidence", *check)
@@ -1840,21 +1840,16 @@ def rehearse_evidence(work: Path, keys: Keys, tls: Path, old: Side, new: Side,
                 "GET", f"http://127.0.0.1:{evidence.port}/.well-known/evidence/jwks.json")
         finally:
             service.stop()
-        fresh_records = audit_record_count(evidence.audit, "evidence.jsonl", schema="registry.evidence.audit/v2")
-        archived_records = audit_record_count(archive, "evidence.jsonl")
-        records_after = archived_records + fresh_records
+        records_after = audit_record_count(evidence.audit, "evidence.jsonl",
+                                           schema="registry.evidence.audit/v2")
     finally:
         evidence.stop()
 
-    losses = []
-    if records_before == 0 or archived_records != records_before or fresh_records < 2:
-        losses.append("the archived audit stream was not preserved or the upgraded request wrote fewer than two entries")
+    losses = audit_stream_losses("Evidence", records_before, records_after, 2)
     differences = view_differences({"jwks": jwks}, {"jwks": jwks_after})
     report["evidence"] = {
         "auditRecordsBefore": records_before,
         "auditRecordsAfter": records_after,
-        "freshAuditRecords": fresh_records,
-        "archivedAuditRecords": archived_records,
         "viewDifferences": differences,
         "rowLosses": losses,
     }
