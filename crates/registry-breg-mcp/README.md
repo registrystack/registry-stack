@@ -222,7 +222,8 @@ gets `429` with `Retry-After`.
 reach: building a bearer or static token from text, swapping one onto a client,
 writing a bearer header out of a token, building an HTTP client beside the
 registry client, lifecycle actions, tombstones, batch writes, governed actions
-and their target conditions, attachments, and ingestion. It also disallows
+and their target conditions, attachments, ingestion, and statistical release
+publication and withdrawal. It also disallows
 `BaseRegistryClientConfig::with_token_provider` everywhere but one wrapper,
 `outbound::delegated`, which takes nothing but the per-call exchange.
 `products/breg/scripts/check-mcp-gateway-boundary.sh` runs the lints, fails when

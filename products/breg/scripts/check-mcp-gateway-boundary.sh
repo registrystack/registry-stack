@@ -233,7 +233,7 @@ RUST
 lint_probe transport
 
 # Each write surface no tool offers, through an aliased import: tombstone,
-# batch, governed action, attachments, and ingestion.
+# batch, governed action, attachments, ingestion, and statistical releases.
 cat >"$probe/tombstone.rs" <<'RUST'
 use registry_breg_client::BaseRegistryClient as Registry;
 
@@ -360,6 +360,38 @@ RUST
 
 lint_probe ingestion
 
+cat >"$probe/statistics.rs" <<'RUST'
+use registry_breg_client::BaseRegistryClient as Registry;
+
+pub async fn publish(
+    registry: &Registry,
+    dataset: &str,
+    period: &str,
+    status: registry_breg_client::BRegReleaseStatus,
+    key: &registry_breg_client::BRegIdempotencyKey,
+) -> bool {
+    registry
+        .statistics_publish(dataset, period, status, "profile", key)
+        .await
+        .is_ok()
+}
+
+pub async fn withdraw(
+    registry: &Registry,
+    dataset: &str,
+    period: &str,
+    reason: registry_breg_client::BRegWithdrawalReason,
+    key: &registry_breg_client::BRegIdempotencyKey,
+) -> bool {
+    registry
+        .statistics_withdraw(dataset, period, 1, reason, "profile", key)
+        .await
+        .is_ok()
+}
+RUST
+
+lint_probe statistics
+
 # The read the gateway makes, through the same alias shapes. A lint that refused
 # it would be argued down to nothing well before it ever caught anybody.
 cat >"$probe/read.rs" <<'RUST'
@@ -394,6 +426,8 @@ verdicts=(
   'refuses|ingestion|an ingestion run opened|disallowed method `registry_breg_client::BaseRegistryClient::create_ingestion_run`'
   'refuses|ingestion|an ingestion chunk submitted|disallowed method `registry_breg_client::BaseRegistryClient::submit_ingestion_chunk`'
   'refuses|ingestion|an ingestion run cancelled|disallowed method `registry_breg_client::BaseRegistryClient::cancel_ingestion_run`'
+  'refuses|statistics|a statistical release published|disallowed method `registry_breg_client::BaseRegistryClient::statistics_publish`'
+  'refuses|statistics|a statistical release withdrawn|disallowed method `registry_breg_client::BaseRegistryClient::statistics_withdraw`'
   'allows|read|a record read, which is what the gateway does|disallowed method `registry_breg_client::BaseRegistryClient::get_record`'
 )
 
