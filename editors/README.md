@@ -105,13 +105,15 @@ an integration once from the repository root:
 ```
 
 The installer verifies a CLI's version and embedded language server without reading or changing a
-project. It tries matching `evidencectl` copies on PATH, and a candidate that
-fails either check does not stop the one behind it. VS Code is packaged and installed into the active profile. Pass
+project. It checks the first `evidencectl` on `PATH` and stops with an error when that copy
+does not match this checkout or carries no language server. VS Code is packaged and installed into the active profile. Pass
 `--profile <existing-name>` to select another VS Code profile. The local VSIX records the verified
 CLI path, so an already-running VS Code process does not need to inherit the installer's `PATH`.
 Zed is compiled, then requires the command-palette selection that its CLI cannot perform.
 At startup both launchers check that a CLI still matches the extension version,
-including the matching `-dev` version, and skip older candidates.
+including the matching `-dev` version. VS Code skips a copy that does not match and tries the
+next `evidencectl` on `PATH`. Zed checks the first `evidencectl` on `PATH` and reports an error
+when it does not match.
 
 The installer does not trust a project or approve a development extension. Those decisions stay
 with the user. Pass `--open <existing-directory>` only as a convenience to open a directory after
@@ -142,19 +144,44 @@ mappings. Run it again after changing the authoring project's shape.
 
 ## Local end-to-end smoke test
 
-Use Evidence's maintained editor journey from an authored project with a named
-source, question, and selector profile. Configure it with:
+Run the commands in this section from the repository root. They create a disposable Evidence
+starter outside the checkout, so the diagnostic checks below cannot modify a tracked project.
 
 ```console
-evidencectl tooling editor /path/to/evidence-project
+export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
+export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
+evidencectl --version
+evidencectl init "$REGISTRY_STACK_SMOKE_PROJECT" --transport sqlite-extract --profile local
+evidencectl tooling editor "$REGISTRY_STACK_SMOKE_PROJECT"
 ```
 
-Follow the installation instructions for [VS Code](vscode/README.md#install-and-launch)
-or [Zed](zed/README.md#install-and-launch). In a question, Go to Definition on its
-source or selector-profile name must open the authored definition. Find References
-must include the question. Temporarily use a nonexistent source name and confirm
-that the Evidence diagnostic appears; restore the name and confirm it clears.
-The editor indexes reviewed metadata only and performs no source request.
+Keep that terminal open so the two variables remain available. Then follow the editor-specific
+installation and launch instructions:
+
+- [VS Code](vscode/README.md#install-and-launch)
+- [Zed](zed/README.md#install-and-launch)
+
+### Expected behavior
+
+Use the following checks in either editor:
+
+1. Confirm the Registry Stack language-server output or log says that the project was indexed.
+2. In `questions/record-status.yaml`, invoke **Go to Definition** on `record-status` in the
+   question's `source: {ref: record-status}` binding. It must open `sources/record-status.yaml`.
+3. Invoke **Find References** on that same name. Results must include the question's binding.
+4. Invoke **Go to Definition** on `record-reference-v1` in `profile: record-reference-v1`. It
+   must open `selectors/record-reference-v1.yaml`.
+5. Search workspace symbols for `record`. Results must include the `record-status` question, the
+   `record-status` source, and the `record-reference-v1` selector profile. The document outline
+   for `questions/record-status.yaml` must list the question and its `condition_satisfied`
+   answer.
+6. Temporarily change the question's source reference to `ref: missing-source`. The editor must
+   report `Unknown source reference 'missing-source'`. Restore `record-status` and confirm that
+   the diagnostic clears.
+
+The YAML language server may report additional schema or syntax diagnostics. Semantic
+diagnostics identify their product in the source, such as `evidence` or `breg`. The editor
+indexes authored documents only and performs no source request.
 
 ### Automated checks
 
