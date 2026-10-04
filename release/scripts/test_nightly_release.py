@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import importlib.util
+import io
 import json
 import os
 import re
@@ -26,6 +28,8 @@ merge_shards = importlib.util.module_from_spec(_merge_spec)
 _merge_spec.loader.exec_module(merge_shards)
 
 SHA = "a" * 40
+# Marks a scanner field the report leaves out.
+ABSENT = object()
 BASE = "0.39.0"
 TAG = f"v{BASE}-nightly.20261002.{SHA}"
 
@@ -62,6 +66,88 @@ class NightlyTest(unittest.TestCase):
                 }
             },
         }
+
+    def exception(self, reviewed=-1, expires=1, **fields):
+        """Return a release advisory exception reviewed relative to today.
+
+        The live Evidence baseline supplies the runtime the exception binds to,
+        so the nightly reads the format a release reviews. The finding and its
+        dates belong to the test.
+        """
+        checker = nightly.advisory_checker()
+        runtime = self.live_baseline()["runtime"]
+        today = dt.datetime.now(dt.timezone.utc).date()
+        assertion = {
+            "kind": "whole_image_fingerprint_equals",
+            "reference_image_digest": "sha256:" + "1" * 64,
+            "reference_source_revision": "2" * 40,
+            "reference_provenance": "local_reproduction",
+            "runtime_definition_digest": runtime["definition_digest"],
+            "files": [
+                {"path": "/usr/local/bin/evidence", "sha256": "sha256:" + "3" * 64}
+            ],
+        }
+        assertion["definition_digest"] = checker.definition_digest(assertion)
+        return {
+            "vulnerability_id": "CVE-2026-0001",
+            "package": "libexample1",
+            "installed_version": "1.2-3",
+            "severity": "High",
+            "status": "accepted_risk",
+            "owner": "@maintainers",
+            "rationale": "Reviewed for the nightly advisory tests.",
+            "reviewed_at": (today + dt.timedelta(days=reviewed)).isoformat(),
+            "expires_at": (today + dt.timedelta(days=expires)).isoformat(),
+            "invalidation_triggers": sorted(checker.REQUIRED_INVALIDATION_TRIGGERS),
+            "runtime_definition_digest": runtime["definition_digest"],
+            "component_layer_id": runtime["application_layer_ids"][0],
+            "exposure_assertion": assertion,
+            **fields,
+        }
+
+    def live_baseline(self):
+        return json.loads(
+            (
+                nightly.ROOT / "release/security/evidence-advisory-baseline.json"
+            ).read_text()
+        )
+
+    def baseline(self, *exceptions, **changes):
+        """Write a release baseline holding the given exceptions."""
+        baseline = self.live_baseline()
+        baseline["exceptions"] = list(exceptions)
+        baseline.update(changes)
+        path = self.root / "baseline.json"
+        path.write_text(json.dumps(baseline))
+        return path
+
+    def reviewed_scan(self, exception, copies=1, **changes):
+        """Write a scan reporting the excepted finding, with the given changes."""
+        finding = {
+            "id": exception["vulnerability_id"],
+            "package": exception["package"],
+            "version": exception["installed_version"],
+            "severity": "High",
+            "fix": {"versions": [], "state": "not-fixed"},
+            **changes,
+        }
+        match = {
+            "vulnerability": {
+                "id": finding["id"],
+                "severity": finding["severity"],
+                "fix": finding["fix"],
+            },
+            "artifact": {"name": finding["package"], "version": finding["version"]},
+        }
+        if finding["fix"] is ABSENT:
+            del match["vulnerability"]["fix"]
+        if "artifact" in finding:
+            match["artifact"] = finding["artifact"]
+        report = self.scan()
+        report["matches"] = [match] * copies
+        path = self.root / "scan.json"
+        path.write_text(json.dumps(report))
+        return path
 
     def payload(self):
         # Mirror the directories the workflow's prepare job passes to assemble:
@@ -319,6 +405,157 @@ class NightlyTest(unittest.TestCase):
                 self.assertRaises(nightly.NightlyError),
             ):
                 nightly.check_scan(report)
+
+    def test_nightly_admits_a_finding_the_release_baseline_reviewed(self):
+        exception = self.exception()
+        baseline = self.baseline(exception)
+        report = self.reviewed_scan(exception)
+        nightly.check_scan(report, baseline)
+        nightly.check_scan(
+            self.reviewed_scan(exception, fix={"versions": [], "state": "wont-fix"}),
+            baseline,
+        )
+        for unreviewed in (None, self.root / "absent-advisory-baseline.json"):
+            with (
+                self.subTest(baseline=unreviewed),
+                self.assertRaisesRegex(
+                    nightly.NightlyError,
+                    r"scan\.json.*without a current release review: "
+                    r"CVE-2026-0001 in libexample1 1\.2-3",
+                ),
+            ):
+                nightly.check_scan(report, unreviewed)
+        today_only = self.exception(reviewed=0, expires=0)
+        nightly.check_scan(self.reviewed_scan(today_only), self.baseline(today_only))
+        lowercase = self.exception(severity="critical")
+        nightly.check_scan(
+            self.reviewed_scan(lowercase, severity="Critical"), self.baseline(lowercase)
+        )
+
+    def test_nightly_refuses_a_finding_the_review_does_not_cover(self):
+        exception = self.exception()
+        baseline = self.baseline(exception)
+        for change in (
+            {"id": "CVE-2026-0000"},
+            {"package": "another-package"},
+            {"version": "1.2-4"},
+            {"severity": "Critical"},
+            {"fix": {"versions": ["9.9.9"], "state": "fixed"}},
+            {"fix": {"versions": [], "state": "fixed"}},
+            {"fix": {"versions": ["9.9.9"], "state": "not-fixed"}},
+            {"fix": {"versions": [], "state": "unknown"}},
+            {"fix": {"versions": None, "state": "not-fixed"}},
+            {"fix": {"state": "not-fixed"}},
+            {"fix": None},
+            {"fix": ABSENT},
+        ):
+            with (
+                self.subTest(change=change),
+                self.assertRaisesRegex(
+                    nightly.NightlyError, "without a current release review"
+                ),
+            ):
+                nightly.check_scan(self.reviewed_scan(exception, **change), baseline)
+
+    def test_nightly_refuses_a_finding_reported_more_than_once(self):
+        exception = self.exception()
+        with self.assertRaisesRegex(
+            nightly.NightlyError, "CVE-2026-0001 in libexample1 1.2-3 more than once"
+        ):
+            nightly.check_scan(
+                self.reviewed_scan(exception, copies=2), self.baseline(exception)
+            )
+
+    def test_nightly_refuses_a_malformed_finding(self):
+        exception = self.exception()
+        baseline = self.baseline(exception)
+        for change in (
+            {"id": ["CVE-2026-0001"]},
+            {"id": None},
+            {"package": None},
+            {"version": 3},
+            {"artifact": None},
+            {"artifact": ["libexample1", "1.2-3"]},
+            {"fix": {"versions": [], "state": ["not-fixed"]}},
+            {"fix": ["not-fixed"]},
+        ):
+            with (
+                self.subTest(change=change),
+                self.assertRaisesRegex(
+                    nightly.NightlyError, "without a current release review"
+                ),
+            ):
+                nightly.check_scan(self.reviewed_scan(exception, **change), baseline)
+
+    def test_nightly_refuses_an_expired_or_future_dated_review(self):
+        current = self.exception(vulnerability_id="CVE-2026-0002")
+        for reviewed, expires in ((-2, -1), (1, 2)):
+            exception = self.exception(reviewed=reviewed, expires=expires)
+            baseline = self.baseline(exception, current)
+            with self.subTest(reviewed=reviewed, expires=expires):
+                nightly.check_scan(self.reviewed_scan(current), baseline)
+                with self.assertRaisesRegex(
+                    nightly.NightlyError, "without a current release review"
+                ):
+                    nightly.check_scan(self.reviewed_scan(exception), baseline)
+
+    def test_nightly_refuses_a_baseline_the_release_checker_cannot_load(self):
+        exception = self.exception()
+        report = self.root / "scan.json"
+        report.write_text(json.dumps(self.scan()))
+        for exceptions, changes, message in (
+            ((exception,), {"version": 3}, "unsupported baseline version: 3"),
+            ((exception, exception), {}, "duplicate advisory exception identity"),
+        ):
+            baseline = self.baseline(*exceptions, **changes)
+            stderr = io.StringIO()
+            with (
+                self.subTest(message=message),
+                contextlib.redirect_stderr(stderr),
+                self.assertRaises(SystemExit),
+            ):
+                nightly.check_scan(report, baseline)
+            self.assertIn(message, stderr.getvalue())
+
+    def test_each_image_is_checked_against_its_own_release_baseline(self):
+        directories, images = self.payload()
+        with patch.object(nightly, "check_scan") as check_scan:
+            nightly.assemble(self.plan, directories, images, self.root / "public")
+        self.assertEqual(
+            [call.args for call in check_scan.call_args_list],
+            [
+                (
+                    images / f"{name}.grype.json",
+                    nightly.ROOT
+                    / "release/security"
+                    / f"{name}-advisory-baseline.json",
+                )
+                for name in nightly.image_names(BASE)
+            ],
+        )
+        for name in nightly.image_names(BASE):
+            self.assertTrue(
+                (
+                    nightly.ROOT / "release/security" / f"{name}-advisory-baseline.json"
+                ).is_file(),
+                name,
+            )
+
+    def test_check_scan_command_reads_the_named_baseline(self):
+        exception = self.exception()
+        baseline = self.baseline(exception)
+        report = self.reviewed_scan(exception)
+        with patch.object(
+            sys, "argv", ["nightly", "check-scan", str(report), "--baseline", str(baseline)]
+        ):
+            self.assertEqual(nightly.main(), 0)
+        stderr = io.StringIO()
+        with (
+            patch.object(sys, "argv", ["nightly", "check-scan", str(report)]),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertEqual(nightly.main(), 1)
+        self.assertIn(exception["vulnerability_id"], stderr.getvalue())
 
     def test_channel_compare_and_swap_refuses_stale_builder(self):
         record = self.record | {"assets": [], "images": {}}

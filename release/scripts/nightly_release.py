@@ -7,6 +7,7 @@ import argparse
 import base64
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -356,7 +357,48 @@ def plan(output: Path) -> None:
         )
 
 
-def check_scan(path: Path) -> None:
+def advisory_checker():
+    """Load the release advisory checker, which only the scan needs."""
+
+    spec = importlib.util.spec_from_file_location(
+        "check_advisory_baselines", SCRIPT_DIR / "check-advisory-baselines.py"
+    )
+    checker = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = checker
+    spec.loader.exec_module(checker)
+    return checker
+
+
+def reviewed_advisories(baseline: Path | None) -> dict[tuple[str, str, str], str]:
+    """Return the severity each current release advisory exception was reviewed at.
+
+    The release advisory checker loads the baseline, so a baseline it cannot
+    load is refused here. An exception outside its review dates is left out.
+    """
+
+    if baseline is None or not baseline.is_file():
+        return {}
+    checker = advisory_checker()
+    today = dt.datetime.now(dt.timezone.utc).date()
+    return {
+        checker.exception_key(exception): str(exception["severity"])
+        for exception in checker.baseline_exceptions(checker.load_baseline(baseline))
+        if checker.parse_date(exception["reviewed_at"], "reviewed_at")
+        <= today
+        <= checker.parse_date(exception["expires_at"], "expires_at")
+    }
+
+
+def check_scan(path: Path, baseline: Path | None = None) -> None:
+    """Refuse a stale scan, an unknown severity, or an unreviewed finding.
+
+    A High or Critical finding passes only while the image's release advisory
+    baseline holds a current exception for the same vulnerability, package and
+    installed version at the same severity, and the scanner reports no fix. A
+    finding the scanner reports twice, or without those three names, is refused.
+    """
+
+    reviewed = reviewed_advisories(baseline)
     report = json.loads(path.read_text())
     matches = report.get("matches")
     if not isinstance(matches, list):
@@ -370,16 +412,39 @@ def check_scan(path: Path) -> None:
     )
     if not dt.timedelta(0) <= age <= dt.timedelta(days=3):
         raise NightlyError("scanner database must be current within three days")
+    seen = set()
     for match in matches:
         severity = match.get("vulnerability", {}).get("severity")
         if severity not in {"Negligible", "Low", "Medium", "High", "Critical"}:
             raise NightlyError(
                 "scanner finding has an unknown severity and needs review"
             )
-        if severity in {"High", "Critical"}:
+        if severity not in {"High", "Critical"}:
+            continue
+        vulnerability = match["vulnerability"]
+        artifact = match.get("artifact")
+        if not isinstance(artifact, dict):
+            artifact = {}
+        key = (vulnerability.get("id"), artifact.get("name"), artifact.get("version"))
+        finding = f"{key[0]} in {key[1]} {key[2]}"
+        fix = vulnerability.get("fix")
+        unfixed = (
+            all(isinstance(part, str) for part in key)
+            and isinstance(fix, dict)
+            and fix.get("versions") == []
+            and fix.get("state") in ("not-fixed", "wont-fix")
+        )
+        if not unfixed or str(reviewed.get(key, "")).casefold() != severity.casefold():
             raise NightlyError(
-                "nightly has a high or critical advisory; fix or review it before publication"
+                f"{path.name}: nightly has a high or critical advisory without a "
+                f"current release review: {finding}; fix it or review it in the "
+                "image's release advisory baseline"
             )
+        if key in seen:
+            raise NightlyError(
+                f"{path.name}: scanner reported {finding} more than once"
+            )
+        seen.add(key)
 
 
 def assemble(
@@ -471,7 +536,10 @@ def assemble(
         image_references[name] = reference.replace(f"/{name}-candidate@", f"/{name}@")
         for suffix in ("grype.json", "sbom.spdx.json"):
             shutil.copy2(images / f"{name}.{suffix}", output / f"{name}.{suffix}")
-        check_scan(images / f"{name}.grype.json")
+        check_scan(
+            images / f"{name}.grype.json",
+            ROOT / "release" / "security" / f"{name}-advisory-baseline.json",
+        )
     assets = [
         {"name": path.name, "sha256": digest(path)} for path in sorted(output.iterdir())
     ]
@@ -750,7 +818,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("plan").add_argument("--output", required=True, type=Path)
-    subparsers.add_parser("check-scan").add_argument("report", type=Path)
+    scan_parser = subparsers.add_parser("check-scan")
+    scan_parser.add_argument("report", type=Path)
+    scan_parser.add_argument("--baseline", type=Path)
     assemble_parser = subparsers.add_parser("assemble")
     assemble_parser.add_argument("--plan", required=True, type=Path)
     assemble_parser.add_argument("--binaries", required=True, type=Path, nargs="+")
@@ -765,7 +835,7 @@ def main() -> int:
         if args.command == "plan":
             plan(args.output)
         elif args.command == "check-scan":
-            check_scan(args.report)
+            check_scan(args.report, args.baseline)
         elif args.command == "assemble":
             assemble(args.plan, args.binaries, args.images, args.output)
         elif args.command == "smoke":
