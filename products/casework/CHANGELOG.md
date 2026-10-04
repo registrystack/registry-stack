@@ -26,6 +26,12 @@
     that carries no `version`, before any source request, where it read such
     evidence as an earlier format. Every release has written `version` 1, so
     no retained attempt is affected.
+  - `caseworkctl dev` refuses retained dev state from a Mint-era session as
+    invalid retained state, without the Mint guidance, and leaves it
+    untouched. Stop that session with the release that wrote it, or move
+    `.casework/dev` aside, then start a fresh session.
+  - Dev state that lacks `binaries`, `sources`, or `borrowedScopes` is refused
+    as invalid. Start a fresh session.
 
 - Empty source-backed inbox views over a source reconciled within the larger
   of twice its `reconciliationIntervalMilliseconds` and 2 minutes return

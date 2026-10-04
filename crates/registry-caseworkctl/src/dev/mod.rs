@@ -257,14 +257,11 @@ struct State {
     status: Status,
     casework_port: u16,
     issuer_port: u16,
-    #[serde(default)]
     issuer_project: Option<PathBuf>,
-    #[serde(default)]
     issuer_owner: Option<String>,
     database_port: u16,
     clients_file: PathBuf,
     source_digest: String,
-    #[serde(default)]
     resource: Option<String>,
     /// Every local client with the access profile it binds and that profile's
     /// role, recorded so the report needs no second reading of the project.
@@ -281,17 +278,13 @@ struct State {
     directory_revision: i64,
     directory_teams: usize,
     /// Installed prerequisites this session resolved, keyed by command name.
-    #[serde(default)]
     binaries: BTreeMap<String, Binary>,
     /// Why the detached supervisor stopped, recorded so the terminal that
     /// asked for the start can report it. The supervisor writes both its
     /// streams to a private log, so this is the only path a refusal has back
     /// to the owner.
-    #[serde(default)]
     failure: Option<String>,
-    #[serde(default)]
     sources: BTreeMap<String, SourceSession>,
-    #[serde(default)]
     borrowed_scopes: BTreeMap<String, Vec<String>>,
 }
 
@@ -299,7 +292,6 @@ struct State {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceSession {
     project: PathBuf,
-    #[serde(default)]
     binding: Option<SourceBinding>,
 }
 
@@ -551,13 +543,7 @@ fn clients_file(
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
     let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
-    let shape: Value = serde_json::from_slice(&bytes)
-        .context("retained dev state is invalid; preserve it for inspection")?;
-    if shape["version"] == 1 || shape.get("mint_port").is_some() || shape.get("mintPort").is_some()
-    {
-        bail!("this retained session uses Mint; stop it with the matching older CLI and keep its state, then create a separate project directory for the current issuer");
-    }
-    let state: State = serde_json::from_value(shape)
+    let state: State = serde_json::from_slice(&bytes)
         .context("retained dev state is invalid; preserve it for inspection")?;
     if state.version != 2
         || state.root() != root
