@@ -169,7 +169,7 @@ Install from the verified directory so the installer does not download another
 copy. For Evidence, run the downloaded immutable installer:
 
 ```sh
-EVIDENCECTL_ASSET_DIR="$PWD" bash "./evidence-${tag}-install.sh"
+EVIDENCECTL_ASSET_DIR="$PWD" bash "./evidencectl-${tag}-install.sh"
 ```
 
 Use the asset-directory variable from the installer table for another toolset.
