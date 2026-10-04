@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -290,6 +289,10 @@ def plan(output: Path) -> None:
         raise NightlyError(
             "main advanced before selection; dispatch again from current main"
         )
+    # Imported here because the native arm64 builder imports this module under
+    # the runner's Python 3.10, which has no tomllib; only the plan reads TOML.
+    import tomllib
+
     with (ROOT / "Cargo.toml").open("rb") as handle:
         version = tomllib.load(handle)["workspace"]["package"]["version"]
     today = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
