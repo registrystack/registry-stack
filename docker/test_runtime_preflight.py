@@ -26,13 +26,9 @@ def load_module():
     return module
 
 
-def service(product: str) -> dict[str, object]:
-    audit = {
-        "evidence": "/var/lib/registry-evidence",
-        "relay": "/var/lib/relay/audit",
-    }[product]
+def service(name: str) -> dict[str, object]:
     return {
-        "image": f"ghcr.io/registrystack/{product}@sha256:{DIGEST}",
+        "image": f"ghcr.io/registrystack/evidence@sha256:{DIGEST}",
         "user": "65532:65532",
         "read_only": True,
         "cap_drop": ["ALL"],
@@ -47,11 +43,11 @@ def service(product: str) -> dict[str, object]:
             }
         ],
         "volumes": [
-            {"type": "bind", "target": f"/etc/{product}", "read_only": True},
+            {"type": "bind", "target": "/etc/registry-evidence", "read_only": True},
             {
                 "type": "volume",
-                "source": f"{product}-audit",
-                "target": audit,
+                "source": f"{name}-audit",
+                "target": "/var/lib/registry-evidence",
                 "read_only": False,
             },
             {
@@ -66,7 +62,7 @@ def service(product: str) -> dict[str, object]:
 def deployment(services: dict[str, dict[str, object]]) -> dict[str, object]:
     return {
         "services": services,
-        "volumes": {f"{product}-audit": {} for product in services},
+        "volumes": {f"{name}-audit": {} for name in services},
     }
 
 
@@ -101,7 +97,7 @@ class RuntimePreflightTest(unittest.TestCase):
             "--service",
             "evidence=evidence",
             "--service",
-            "relay=relay",
+            "evidence=evidence-secondary",
         ]
 
     def run_main(
@@ -134,13 +130,13 @@ class RuntimePreflightTest(unittest.TestCase):
             result = self.module.main(self.argv if argv is None else argv)
         return result, stdout.getvalue(), stderr.getvalue(), run
 
-    def test_all_products_use_native_checks_after_complete_static_preflight(
+    def test_all_services_use_native_checks_after_complete_static_preflight(
         self,
     ) -> None:
         document = deployment(
             {
                 "evidence": service("evidence"),
-                "relay": service("relay"),
+                "evidence-secondary": service("evidence-secondary"),
             }
         )
         result, stdout, stderr, run = self.run_main(document)
@@ -164,11 +160,13 @@ class RuntimePreflightTest(unittest.TestCase):
             ],
             calls[0],
         )
-        self.assertIn("--require-runtime-dependencies", calls[1])
-        self.assertEqual("check", calls[2][-5])
         self.assertEqual("evidence", calls[1][calls[1].index("--no-deps") + 1])
-        self.assertEqual("relay", calls[2][calls[2].index("--no-deps") + 1])
+        self.assertEqual(
+            "evidence-secondary", calls[2][calls[2].index("--no-deps") + 1]
+        )
         for call in run.call_args_list[1:]:
+            self.assertEqual("check", call.args[0][-6])
+            self.assertIn("--require-runtime-dependencies", call.args[0])
             self.assertIn("--no-deps", call.args[0])
             self.assertEqual(["docker", "compose", "--file", "-"], call.args[0][:4])
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stdout"])
@@ -188,21 +186,21 @@ class RuntimePreflightTest(unittest.TestCase):
         document = deployment(
             {
                 "evidence": service("evidence"),
-                "relay": service("relay"),
+                "evidence-secondary": service("evidence-secondary"),
             }
         )
         result, _, stderr, run = self.run_main(document)
         self.assertEqual(0, result, stderr)
         calls = [call.args[0] for call in run.call_args_list]
-        for index, product in enumerate(("evidence", "relay"), start=1):
-            with self.subTest(product=product):
-                prefix = self.module.AUDIT_PREFIXES[product]
+        prefix = self.module.AUDIT_PREFIXES["evidence"]
+        for index, name in enumerate(("evidence", "evidence-secondary"), start=1):
+            with self.subTest(service=name):
                 self.assertEqual(
                     ["--require-audit-under", prefix], calls[index][-2:]
                 )
                 persistent = [
                     volume
-                    for volume in document["services"][product]["volumes"]
+                    for volume in document["services"][name]["volumes"]
                     if volume["type"] in ("volume", "bind")
                     and not volume["read_only"]
                 ]
@@ -213,14 +211,14 @@ class RuntimePreflightTest(unittest.TestCase):
         # mounted writable at the conventional audit prefix. Only the product
         # can see that its configured sink resolves somewhere ephemeral instead,
         # and it refuses the containment assertion the adapter passed in.
-        document = deployment({"relay": service("relay")})
+        document = deployment({"evidence": service("evidence")})
         argv = [
             "--compose-file",
             "compose.yaml",
             "--env-file",
             "operator.env",
             "--service",
-            "relay=relay",
+            "evidence=evidence",
         ]
         result, stdout, stderr, run = self.run_main(
             document, native_returncode=1, argv=argv
@@ -232,7 +230,7 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertNotIn("sensitive", stderr)
         calls = [call.args[0] for call in run.call_args_list]
         self.assertEqual(
-            ["--require-audit-under", self.module.AUDIT_PREFIXES["relay"]],
+            ["--require-audit-under", self.module.AUDIT_PREFIXES["evidence"]],
             calls[1][-2:],
         )
 
@@ -381,23 +379,29 @@ class RuntimePreflightTest(unittest.TestCase):
         # path resolves under asserts nothing. Such a root is refused before
         # any native check receives it, rather than passed on as a proof that
         # cannot fail.
-        document = deployment({"relay": service("relay")})
-        for root in ("/", "", "var/lib/relay", "/var/lib/relay/../audit"):
+        document = deployment({"evidence": service("evidence")})
+        for root in (
+            "/",
+            "",
+            "var/lib/registry-evidence",
+            "/var/lib/registry-evidence/../audit",
+        ):
             with self.subTest(root=root):
                 with unittest.mock.patch.dict(
-                    self.module.AUDIT_PREFIXES, {"relay": root}
+                    self.module.AUDIT_PREFIXES, {"evidence": root}
                 ):
                     with self.assertRaises(self.module.PreflightError) as raised:
                         self.module.validate_service(
-                            self.module.ServiceSelection("relay", "relay"), document
+                            self.module.ServiceSelection("evidence", "evidence"),
+                            document,
                         )
                 self.assertIn("audit root", str(raised.exception))
 
     def test_a_passing_run_states_that_persistence_is_not_proven(self) -> None:
-        document = deployment({"relay": service("relay")})
+        document = deployment({"evidence": service("evidence")})
         result, stdout, stderr, _ = self.run_main(
             document,
-            argv=["--compose-file", "compose.yaml", "--service", "relay=relay"],
+            argv=["--compose-file", "compose.yaml", "--service", "evidence=evidence"],
         )
         self.assertEqual(0, result, stderr)
         self.assertIn("not proven", stdout)
@@ -582,78 +586,78 @@ class RuntimePreflightTest(unittest.TestCase):
                     )
 
     def test_mounts_cannot_shadow_official_executables_or_libraries(self) -> None:
-        for product in ("evidence", "relay"):
-            executable = f"/usr/local/bin/{product}"
-            for target in (
-                "/",
-                "/usr",
-                "/usr/local",
-                "/usr/local/bin",
-                executable,
-                f"//usr/local/bin/{product}",
-                f"/usr/local/bin/../bin/{product}",
-                "/lib",
-                "/lib/replacement",
-                "/usr/lib",
-                "/usr/local/lib/replacement",
-                "/etc/ld.so.preload",
-                "/etc/ld.so.cache",
-            ):
-                with self.subTest(product=product, target=target):
-                    selected = service(product)
-                    selected["volumes"].append(  # type: ignore[union-attr]
-                        {
-                            "type": "bind",
-                            "source": "/srv/replacement",
-                            "target": target,
-                            "read_only": True,
-                        }
+        product = "evidence"
+        executable = f"/usr/local/bin/{product}"
+        for target in (
+            "/",
+            "/usr",
+            "/usr/local",
+            "/usr/local/bin",
+            executable,
+            f"//usr/local/bin/{product}",
+            f"/usr/local/bin/../bin/{product}",
+            "/lib",
+            "/lib/replacement",
+            "/usr/lib",
+            "/usr/local/lib/replacement",
+            "/etc/ld.so.preload",
+            "/etc/ld.so.cache",
+        ):
+            with self.subTest(product=product, target=target):
+                selected = service(product)
+                selected["volumes"].append(  # type: ignore[union-attr]
+                    {
+                        "type": "bind",
+                        "source": "/srv/replacement",
+                        "target": target,
+                        "read_only": True,
+                    }
+                )
+                with self.assertRaises(self.module.PreflightError):
+                    self.module.validate_service(
+                        self.module.ServiceSelection(product, product),
+                        deployment({product: selected}),
                     )
-                    with self.assertRaises(self.module.PreflightError):
-                        self.module.validate_service(
-                            self.module.ServiceSelection(product, product),
-                            deployment({product: selected}),
-                        )
 
-            selected = service(product)
-            selected["configs"] = [
-                {"source": "replacement", "target": executable, "mode": "0555"}
-            ]
-            with self.assertRaises(self.module.PreflightError):
-                self.module.validate_service(
-                    self.module.ServiceSelection(product, product),
-                    deployment({product: selected}),
-                )
+        selected = service(product)
+        selected["configs"] = [
+            {"source": "replacement", "target": executable, "mode": "0555"}
+        ]
+        with self.assertRaises(self.module.PreflightError):
+            self.module.validate_service(
+                self.module.ServiceSelection(product, product),
+                deployment({product: selected}),
+            )
 
-            selected = service(product)
-            selected["configs"] = [
-                {
-                    "source": "replacement",
-                    "target": "/etc/ld.so.preload",
-                    "mode": "0444",
-                }
-            ]
-            with self.assertRaises(self.module.PreflightError):
-                self.module.validate_service(
-                    self.module.ServiceSelection(product, product),
-                    deployment({product: selected}),
-                )
+        selected = service(product)
+        selected["configs"] = [
+            {
+                "source": "replacement",
+                "target": "/etc/ld.so.preload",
+                "mode": "0444",
+            }
+        ]
+        with self.assertRaises(self.module.PreflightError):
+            self.module.validate_service(
+                self.module.ServiceSelection(product, product),
+                deployment({product: selected}),
+            )
 
-            selected = service(product)
-            selected["secrets"][0]["target"] = executable  # type: ignore[index]
-            with self.assertRaises(self.module.PreflightError):
-                self.module.validate_service(
-                    self.module.ServiceSelection(product, product),
-                    deployment({product: selected}),
-                )
+        selected = service(product)
+        selected["secrets"][0]["target"] = executable  # type: ignore[index]
+        with self.assertRaises(self.module.PreflightError):
+            self.module.validate_service(
+                self.module.ServiceSelection(product, product),
+                deployment({product: selected}),
+            )
 
-            selected = service(product)
-            selected["secrets"][0]["target"] = "/etc/ld.so.preload"  # type: ignore[index]
-            with self.assertRaises(self.module.PreflightError):
-                self.module.validate_service(
-                    self.module.ServiceSelection(product, product),
-                    deployment({product: selected}),
-                )
+        selected = service(product)
+        selected["secrets"][0]["target"] = "/etc/ld.so.preload"  # type: ignore[index]
+        with self.assertRaises(self.module.PreflightError):
+            self.module.validate_service(
+                self.module.ServiceSelection(product, product),
+                deployment({product: selected}),
+            )
 
     def test_writable_mounts_cannot_overlap_configuration_or_secrets(self) -> None:
         for target in ["/", "/etc", "/etc/registry-evidence", "/run", "/run/secrets"]:
@@ -694,7 +698,7 @@ class RuntimePreflightTest(unittest.TestCase):
         document = deployment(
             {
                 "evidence": service("evidence"),
-                "relay": service("relay"),
+                "evidence-secondary": service("evidence-secondary"),
             }
         )
         document["services"]["evidence"]["environment"] = {  # type: ignore[index]
@@ -716,13 +720,13 @@ class RuntimePreflightTest(unittest.TestCase):
         # An image built before the flag existed cannot make the persistent
         # audit root assertion. The preflight stays closed and says which
         # service needs a newer image instead of reporting a generic failure.
-        document = deployment({"relay": service("relay")})
+        document = deployment({"evidence": service("evidence")})
         result, stdout, stderr, _ = self.run_main(
             document,
             native_returncode=2,
             native_stderr=(
                 "error: unexpected argument '--require-audit-under' found\n"
-                "\nUsage: relay check --runtime-config <FILE>\n"
+                "\nUsage: evidence check --runtime-config <FILE>\n"
             ),
             argv=[
                 "--compose-file",
@@ -730,12 +734,12 @@ class RuntimePreflightTest(unittest.TestCase):
                 "--env-file",
                 "operator.env",
                 "--service",
-                "relay=relay",
+                "evidence=evidence",
             ],
         )
         self.assertEqual(1, result)
         self.assertEqual("", stdout)
-        self.assertIn("service relay", stderr)
+        self.assertIn("service evidence", stderr)
         self.assertIn("--require-audit-under", stderr)
         self.assertIn("does not support", stderr)
         self.assertIn("requires an image", stderr)
@@ -747,7 +751,7 @@ class RuntimePreflightTest(unittest.TestCase):
         # error and reported with the same value-free message as any other
         # failing check.
         noisy = "".join(f"line {index:04d} " + "x" * 200 + "\n" for index in range(500))
-        document = deployment({"relay": service("relay")})
+        document = deployment({"evidence": service("evidence")})
         result, stdout, stderr, _ = self.run_main(
             document,
             native_returncode=1,
@@ -756,13 +760,13 @@ class RuntimePreflightTest(unittest.TestCase):
                 "--compose-file",
                 "compose.yaml",
                 "--service",
-                "relay=relay",
+                "evidence=evidence",
             ],
         )
         self.assertEqual(1, result)
         self.assertEqual("", stdout)
         self.assertEqual(
-            "runtime preflight failed: relay service relay failed its native "
+            "runtime preflight failed: evidence service evidence failed its native "
             "runtime check\n",
             stderr,
         )
@@ -814,7 +818,7 @@ class RuntimePreflightTest(unittest.TestCase):
         document = deployment(
             {
                 "evidence": service("evidence"),
-                "relay": service("relay"),
+                "evidence-secondary": service("evidence-secondary"),
             }
         )
         minimum = self.module.MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS
@@ -887,15 +891,44 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertNotIn("sensitive", stderr.getvalue())
         self.assertIn("native runtime check deadline", stderr.getvalue())
 
+    def test_a_retired_product_is_refused_before_compose_runs(self) -> None:
+        run = unittest.mock.Mock()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.module.main(
+                ["--compose-file", "compose.yaml", "--service", "relay=relay"]
+            )
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout.getvalue())
+        self.assertEqual(
+            "runtime preflight failed: service selection must be "
+            "PRODUCT=SERVICE, where PRODUCT is evidence\n",
+            stderr.getvalue(),
+        )
+        run.assert_not_called()
+        self.assertEqual(("evidence",), self.module.PRODUCTS)
+        for table in (
+            self.module.IMAGE_PATTERNS,
+            self.module.AUDIT_PREFIXES,
+            self.module.EXECUTABLE_PATHS,
+            self.module.NATIVE_CHECKS,
+        ):
+            self.assertEqual({"evidence"}, set(table))
+
     def test_parser_rejects_duplicates_and_unsafe_service_names(self) -> None:
         with self.assertRaises(self.module.PreflightError):
             self.module.closed_json('{"services":{},"services":{}}')
         for value in [
             "mint=service",
             "other=service",
-            "relay=../service",
-            "relay=",
-            "relay=a b",
+            "evidence=../service",
+            "evidence=",
+            "evidence=a b",
         ]:
             with self.assertRaises(self.module.PreflightError):
                 self.module.parse_service(value)
