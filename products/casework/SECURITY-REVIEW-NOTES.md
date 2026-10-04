@@ -405,3 +405,84 @@ relations, including an empty database. Older servers refuse with an upgrade
 instruction before migrations or activation writes. The shared
 `postgres_version_floor_precedes_missing_ledger_observation` database test
 covers that entry point; unit tests pin the 16/17 version boundary.
+
+## State older than the immediate predecessor
+
+Before 1.0 a release reads only the state its immediate predecessor wrote.
+The change removes what read, converted, or specifically refused state that
+only releases older than v0.38.0 wrote: the version 0 reading of saved
+attempt evidence in the BReg source adapter, the Mint session probe and the
+per-field defaults in `caseworkctl dev` state, the optional `caseworkctl`
+install in the release image, and the upgrade rehearsal's steps for a
+database, package, or audit table from before v0.38.0. It touches
+authorization (what recovery accepts as evidence of a prepared source
+action), deployment defaults (what the release image carries), and release
+provenance (what the upgrade rehearsal proves). The runtime's migrations,
+its activation ledger, and its own audit guards are unchanged.
+
+### Threat
+
+1. Removing the version 0 reading turns saved attempt evidence that carries
+   no version into evidence read under the current format, so recovery
+   resumes a prepared source action from a shape this release never wrote.
+2. Removing the Mint probe turns a refusal into an acceptance: a Mint-era or
+   incomplete dev state file is read as current, with a missing field filled
+   in by a default, and the session acts on resources that file never
+   recorded.
+3. A release image ships without `caseworkctl`, so the documented plan,
+   apply, and doctor steps cannot run from the image the release evidence
+   describes.
+4. The rehearsal reports an upgrade path it never exercised, or passes while
+   the upgraded runtime starts a fresh audit stream and the predecessor's
+   records are no longer part of it.
+
+### Enforcement and defaults
+
+- `decode_saved_attempt` in `crates/registry-casework-breg/src/lib.rs`
+  requires the `version` member and accepts only the current version. Any
+  other evidence is `SourceAdapterError::Invalid`, raised before the adapter
+  sends a source request. Every release since the first Casework tag wrote
+  version 1, so no attempt v0.38.0 can have retained is refused.
+- `caseworkctl dev` reads its state strictly. A version other than the
+  current one fails the ownership check, an unknown field or a missing
+  recorded field is invalid retained dev state, and in every case the file
+  is left untouched and no resource is changed. v0.38.0 writes version 2
+  with every field present.
+- `release/docker/Dockerfile.casework` installs `caseworkctl`
+  unconditionally, and `release/scripts/check-debian13-images.py` refuses a
+  Dockerfile that makes any operator tool conditional. v0.38.0 published
+  `caseworkctl` for `linux-amd64`, the one platform the image is built for.
+- `release/scripts/rehearse-upgrade.py` refuses a start before v0.38.0
+  before any download or container starts, and runs the one path from it:
+  the predecessor's `caseworkctl plan` and `apply`, then this release's.
+  The upgraded runtime continues the predecessor's audit file, and the
+  rehearsal fails when the file is empty before the upgrade or holds fewer
+  records after it than before plus what the upgraded runtime must write.
+
+### Tests
+
+1. `crates/registry-casework-breg/tests/prepared_recovery.rs`:
+   `recovery_refuses_an_unsupported_saved_attempt_version_before_source_io`
+   (no version, version 0, and version 2).
+2. `crates/registry-caseworkctl/src/dev/tests.rs`:
+   `retained_state_of_another_shape_is_invalid_without_mutation`.
+3. `release/scripts/test_check_debian13_images.py`:
+   `test_operator_tools_cannot_be_optional`.
+4. `release/scripts/test_rehearse_upgrade.py`:
+   `test_refuses_a_start_before_the_immediate_predecessor`,
+   `test_main_refuses_an_earlier_start_before_any_download_or_container`,
+   `test_a_stream_must_keep_the_previous_records_and_gain_the_new_ones`.
+
+### Accepted residuals
+
+- **Dev state from a Mint-era session is no longer named.** It is refused
+  as invalid retained state without the instruction to stop it with the
+  older CLI. The changelog carries that instruction.
+- **The rehearsal no longer covers a start before v0.38.0.** An operator on
+  an older release upgrades one release at a time, with each release's own
+  rehearsal and upgrade steps.
+- **The runtime still guards state older than v0.38.0.** The hosted-work
+  and audit-outbox drop guards in `crates/registry-casework/src/store.rs`
+  and the removed-key refusals stay as they are. Removing them needs a
+  decision on a schema floor, because without one an unsupported upgrade
+  from before the audit writer would drop unpublished audit rows silently.

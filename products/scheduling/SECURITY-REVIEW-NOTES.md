@@ -714,6 +714,36 @@ back, so removing that re-check fails the test.
 the suite if a test derives an instant from the wall clock again. All are in
 `crates/registry-scheduling/tests/postgres_commitments.rs`.
 
+## State older than the immediate predecessor
+
+Before 1.0 a release reads only the state its immediate predecessor wrote.
+For Scheduling the change is confined to the release image: the optional
+`schedulingctl` install, which served releases that published no
+`schedulingctl`, is now unconditional. It touches deployment defaults and
+release provenance. The runtime, its migrations, its activation ledger, and
+its audit guards are unchanged.
+
+**Threat.** A release image ships without `schedulingctl`, so the documented
+plan, apply, and status steps cannot run from the image the release evidence
+describes.
+
+**Enforcement.** `release/docker/Dockerfile.scheduling` installs
+`schedulingctl` unconditionally, so the build fails when the tool is not
+staged beside the runtime, and `release/scripts/check-debian13-images.py`
+refuses a Dockerfile that makes any operator tool conditional. v0.38.0
+published `schedulingctl` for `linux-amd64`, the one platform the image is
+built for.
+
+**Tests.** `release/scripts/test_check_debian13_images.py`:
+`test_operator_tools_cannot_be_optional`.
+
+**Accepted residual.** The runtime still guards state older than v0.38.0:
+the audit-outbox drop guard in `crates/registry-scheduling/src/store/activation.rs`
+(SCHEDULING-SEC-14) and the removed-key refusals stay as they are. Removing
+the guard needs a decision on a schema floor, because without one an
+unsupported upgrade from before the audit writer would drop unpublished
+audit rows silently.
+
 ## Known deferrals
 
 The matrix records four deferrals with their compensating controls.
