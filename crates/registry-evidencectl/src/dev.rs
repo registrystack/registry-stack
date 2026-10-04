@@ -125,17 +125,6 @@ impl std::fmt::Display for DevRefusal {
 
 impl std::error::Error for DevRefusal {}
 
-#[derive(Debug)]
-pub(crate) struct RetiredMintDevelopment;
-
-impl std::fmt::Display for RetiredMintDevelopment {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("the retired Registry Mint development flags were used")
-    }
-}
-
-impl std::error::Error for RetiredMintDevelopment {}
-
 #[derive(Debug, Args)]
 // The bare-form flags --detach and --project stay parseable beside an action
 // subcommand on purpose: `args_conflicts_with_subcommands` would replace this
@@ -167,10 +156,6 @@ pub struct DevArgs {
     #[arg(long, global = true, value_name = "URI")]
     resource: Option<String>,
 
-    /// Retained Mint-era spelling, refused with migration guidance.
-    #[arg(long, global = true, hide = true)]
-    mint_port: Option<u16>,
-
     /// Project root. Defaults to the current directory.
     #[arg(long, hide = true)]
     project: Option<PathBuf>,
@@ -182,10 +167,6 @@ pub struct DevArgs {
 
     #[arg(long, hide = true, global = true)]
     evidence_bin: Option<PathBuf>,
-
-    /// Retained Mint-era spelling, refused with migration guidance.
-    #[arg(long, hide = true, global = true)]
-    mint_bin: Option<PathBuf>,
 
     #[arg(long, hide = true, global = true)]
     docker_bin: Option<PathBuf>,
@@ -283,10 +264,6 @@ const DEFAULT_NAME_PREFIX: &str = "evidence-dev";
 /// well inside the container runtime's name limit.
 const MAX_NAME_PREFIX_BYTES: usize = 32;
 
-fn default_name_prefix() -> String {
-    DEFAULT_NAME_PREFIX.to_owned()
-}
-
 fn valid_name_prefix(prefix: &str) -> bool {
     let bytes = prefix.as_bytes();
     (1..=MAX_NAME_PREFIX_BYTES).contains(&bytes.len())
@@ -356,11 +333,8 @@ struct DevState {
     evidence_origin: String,
     issuer_origin: String,
     issuer_session_id: String,
-    #[serde(default = "default_name_prefix")]
     name_prefix: String,
-    #[serde(default)]
     issuer_project: Option<PathBuf>,
-    #[serde(default)]
     issuer_owner: Option<String>,
     token_url: String,
     access_token_audience: String,
@@ -401,45 +375,10 @@ struct QuestionState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", try_from = "SubjectStateDocument")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SubjectState {
     role: String,
     selectors: Vec<crate::authoring::CompiledSelector>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SubjectStateDocument {
-    role: String,
-    #[serde(default)]
-    selectors: Vec<crate::authoring::CompiledSelector>,
-    #[serde(default)]
-    selector_profile: Option<String>,
-    #[serde(default)]
-    selector_field: Option<String>,
-}
-
-impl TryFrom<SubjectStateDocument> for SubjectState {
-    type Error = &'static str;
-
-    fn try_from(document: SubjectStateDocument) -> Result<Self, Self::Error> {
-        let selectors = match (
-            document.selectors.is_empty(),
-            document.selector_profile,
-            document.selector_field,
-        ) {
-            (true, Some(profile), Some(field)) => vec![crate::authoring::CompiledSelector {
-                profile,
-                fields: vec![field],
-            }],
-            (false, None, None) => document.selectors,
-            _ => return Err("subject state must carry one complete selector representation"),
-        };
-        Ok(Self {
-            role: document.role,
-            selectors,
-        })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -536,9 +475,6 @@ impl Drop for OwnedChildren {
 }
 
 pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<ExitCode> {
-    if args.mint_port.is_some() || args.mint_bin.is_some() {
-        return Err(RetiredMintDevelopment.into());
-    }
     if let Some(action) = &args.action {
         if args.detach || args.project.is_some() {
             return Err(compat_flag_refusal(action_name(action)));
@@ -3416,14 +3352,6 @@ fn read_state(path: &Path) -> Result<DevState> {
     let bytes = read_owner_file(path, MAX_STATE_BYTES)?;
     let shape: Value = serde_json::from_slice(&bytes).context("local state is invalid")?;
     if shape.get("schema").and_then(Value::as_str) != Some(STATE_SCHEMA) {
-        if shape.get("mintOrigin").is_some()
-            || shape
-                .get("schema")
-                .and_then(Value::as_str)
-                .is_some_and(|schema| schema.starts_with("registry.evidencectl.dev-state/v"))
-        {
-            bail!("this retained local session uses the retired Mint lifecycle; stop it with its matching Mint-era evidencectl, then start a fresh issuer-backed session. Nothing was changed");
-        }
         bail!("local state schema is unsupported");
     }
     let state: DevState = serde_json::from_slice(&bytes).context("local state is invalid")?;
@@ -3573,7 +3501,7 @@ mod tests {
     }
 
     #[test]
-    fn a_retained_state_without_a_name_prefix_keeps_the_default() {
+    fn a_retained_state_without_a_name_prefix_is_invalid() {
         let state: serde_json::Value = serde_json::json!({
             "schema": STATE_SCHEMA,
             "status": "stopped",
@@ -3589,8 +3517,37 @@ mod tests {
             "questions": [],
             "failure": null,
         });
-        let state: DevState = serde_json::from_value(state).expect("a retained state still reads");
-        assert_eq!(state.name_prefix, DEFAULT_NAME_PREFIX);
+        assert!(serde_json::from_value::<DevState>(state.clone()).is_err());
+
+        let mut named = state;
+        named["namePrefix"] = serde_json::json!("ci-job");
+        let named: DevState = serde_json::from_value(named).expect("a named state reads");
+        assert_eq!(named.name_prefix, "ci-job");
+    }
+
+    #[test]
+    fn a_retained_state_under_another_schema_is_unsupported() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let private = root.path().join("private");
+        create_private_directory(&private).expect("private directory");
+        for (index, retained) in [
+            serde_json::json!({"schema": "registry.evidencectl.dev-state/v5", "mintOrigin": "http://127.0.0.1:8081"}),
+            serde_json::json!({"schema": "registry.evidencectl.dev-state/v7"}),
+            serde_json::json!({"mintOrigin": "http://127.0.0.1:8081"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = private.join(format!("state-{index}.json"));
+            let bytes = serde_json::to_vec(&retained).expect("state bytes");
+            create_private_file(&path)
+                .expect("retained state file")
+                .write_all(&bytes)
+                .expect("retained state");
+            let error = read_state(&path).expect_err("another schema is refused");
+            assert_eq!(error.to_string(), "local state schema is unsupported");
+            assert_eq!(fs::read(&path).expect("retained state stays"), bytes);
+        }
     }
 
     #[test]
@@ -3774,14 +3731,23 @@ mod tests {
     }
 
     #[test]
-    fn selector_state_accepts_legacy_shape_and_refuses_mixed_shapes() {
-        let legacy: SubjectState = serde_json::from_value(
-            serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code"}),
+    fn selector_state_reads_only_the_selectors_list() {
+        let current: SubjectState = serde_json::from_value(
+            serde_json::json!({"role":"record","selectors":[{"profile":"by-code","fields":["code"]}]}),
         )
         .unwrap();
-        assert_eq!(legacy.selectors[0].profile, "by-code");
-        assert_eq!(legacy.selectors[0].fields, ["code"]);
-        assert!(serde_json::from_value::<SubjectState>(serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code","selectors":[{"profile":"other","fields":["code"]}]})).is_err());
+        assert_eq!(current.selectors[0].profile, "by-code");
+        assert_eq!(current.selectors[0].fields, ["code"]);
+        for refused in [
+            serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code"}),
+            serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code","selectors":[{"profile":"other","fields":["code"]}]}),
+            serde_json::json!({"role":"record"}),
+        ] {
+            assert!(
+                serde_json::from_value::<SubjectState>(refused.clone()).is_err(),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

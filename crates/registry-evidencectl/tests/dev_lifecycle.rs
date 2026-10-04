@@ -151,7 +151,7 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
 }
 
 #[test]
-fn retired_mint_flags_are_refused_before_private_state_is_created() {
+fn mint_issuer_flags_are_unknown_arguments_and_create_no_private_state() {
     for flag in ["--mint-port", "--mint-bin"] {
         let fixture = Project::new();
         let value = if flag == "--mint-port" {
@@ -163,14 +163,14 @@ fn retired_mint_flags_are_refused_before_private_state_is_created() {
             .args(["dev", "--detach", flag, value, "--project"])
             .arg(&fixture.root)
             .output()
-            .expect("retired Mint flag");
-        assert!(!output.status.success());
+            .expect("Mint issuer flag");
+        assert_eq!(output.status.code(), Some(2));
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(
-            error.contains("Registry Mint development flags were removed"),
+            error.contains("error[evidencectl.usage]") && error.contains("unsupported arguments"),
             "{error}"
         );
-        assert!(error.contains("--issuer-port"), "{error}");
+        assert!(!error.contains(value), "{error}");
         assert!(!fixture.root.join(".evidence").exists());
     }
 }

@@ -705,6 +705,7 @@ impl Fixture {
             "evidenceOrigin": "http://127.0.0.1:8080",
             "issuerOrigin": "http://127.0.0.1:8081",
             "issuerSessionId": "0123456789abcdef0123456789abcdef0123456789abcdef",
+            "namePrefix": "evidence-dev",
             "tokenUrl": "http://127.0.0.1:8081/oauth2/token",
             "accessTokenAudience": "urn:registrystack:evidence:local:gateway",
             "caller": null,
@@ -716,8 +717,7 @@ impl Fixture {
                     "purpose": "service-path-selection",
                     "subjects": [{
                         "role": "person",
-                        "selectorProfile": "local-subject-age-bracket-v1",
-                        "selectorField": "person_id"
+                        "selectors": [{"profile": "local-subject-age-bracket-v1", "fields": ["person_id"]}]
                     }],
                     "concepts": [{
                         "alias": "age_bracket",
@@ -731,8 +731,7 @@ impl Fixture {
                     "purpose": "age-check",
                     "subjects": [{
                         "role": "person",
-                        "selectorProfile": "local-subject-adult-status-v1",
-                        "selectorField": "person_id"
+                        "selectors": [{"profile": "local-subject-adult-status-v1", "fields": ["person_id"]}]
                     }],
                     "concepts": [{
                         "alias": "is_adult",
