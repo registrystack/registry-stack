@@ -177,16 +177,18 @@ Every pull request should make the review path clear:
 - Schema and migration code refuses when it would drop rows; it never drops
   them silently. A change that would lose persisted state fails with an error
   that names what would be lost, and the operator decides the next step. Cover
-  the refusal with a test. The documented audit-writer transition retires
-  only BReg's audit journal/head and Casework's and Scheduling's audit outboxes.
-  Preserve the retired audit state separately before removal, drain old outbox
-  publishers, and verify archived row counts in the release rehearsal. The
-  rehearsal verifies release binaries, and `v0.33.0` and `v0.34.0` shipped
-  Scheduling only as a container image, so Scheduling's outbox retirement is
-  covered instead by migration 8 refusing an undrained outbox and by the
-  operator archiving the old audit file; an image-driven rehearsal leg is
-  tracked separately. Every retained domain and operational state table still
-  requires row preservation.
+  the refusal with a test. Every retained domain and operational state table
+  requires row preservation, and the release upgrade rehearsal checks it.
+- Before 1.0, a release reads only the state its immediate predecessor wrote,
+  and an operator upgrades one release at a time. Keep everything the previous
+  release could have written to a database, package, configuration file, or
+  local state readable. Do not add code that reads, upgrades, or refuses by
+  name the state of an older release, and remove such code in the release
+  after the one that needed it, with a BREAKING entry in the product
+  changelog. `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py`
+  names the predecessor, and
+  [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
+  states the promise for operators.
 
 ## Dependency Changes
 
