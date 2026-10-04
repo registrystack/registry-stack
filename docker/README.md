@@ -9,14 +9,19 @@ docker build -f docker/Dockerfile --target casework -t registry-casework .
 ```
 
 These locally built images are **not release evidence**. Starting with
-`v0.21.0`, every release publishes the official Evidence and Relay images as
-`ghcr.io/registrystack/evidence:<tag>` and
-`ghcr.io/registrystack/relay:<tag>`; take `<tag>` from the
+`v0.21.0`, every release publishes the official Evidence image as
+`ghcr.io/registrystack/evidence:<tag>`; take `<tag>` from the
 [latest release](https://github.com/registrystack/registry-stack/releases/latest).
-They are assembled from
+It is assembled from
 `release/docker/` with byte-reproducible binaries built outside Docker by
 `release/scripts/build-release-binaries.sh`. Published deployments should pin
 the selected image by the digest recorded in the release manifest.
+
+Releases from `v0.21.0` up to and including the 0.38 line also published
+`ghcr.io/registrystack/relay:<tag>`. No later release does, and the tooling in
+this directory does not support that image; the
+[Registry Relay retirement decision](../docs/site/src/content/docs/decisions/registry-relay-retirement-2026-10-03.mdx)
+gives the support boundary.
 
 ## Build architecture
 
@@ -26,7 +31,7 @@ compilation is an ordinary image layer, cacheable by registry-backed or CI
 layer caches across ephemeral runners (which BuildKit `--mount=type=cache`
 mounts are not). Each binary has its own recipe filtered to its transitive
 dependency closure (`cargo chef prepare --bin`), so a manifest change in an
-unrelated workspace member (for example Relay) invalidates none of these images, and
+unrelated workspace member (for example Scheduling) invalidates none of these images, and
 none of the images compiles heavyweight dependencies it does not use.
 
 ## Running Casework locally
@@ -122,11 +127,9 @@ declared root, and an existing symlink inside the root that leads out of it,
 both fail closed. The option proves containment only; the destination writability
 checks still have to pass.
 
-Relay provides the equivalent `relay check --runtime-config
-/etc/relay/runtime.yaml`, including the same `--require-audit-under` option.
-For a Compose deployment containing Evidence, Relay, or both, use
-`docker/runtime-preflight.py` to verify the common container posture first and
-then run each product's native check in its actual mounts and network. The
+For a Compose deployment containing one or more Evidence services, use
+`docker/runtime-preflight.py` to verify the container posture first and
+then run each service's native check in its actual mounts and network. The
 preflight rejects host or shared network namespaces, entrypoint or command
 overrides, alternate Evidence configuration paths, privileged mode,
 replacement builds, added capabilities or supplementary groups, host devices,

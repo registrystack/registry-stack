@@ -22,7 +22,7 @@ CAPTURE_DRAIN_SECONDS = 5
 MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 30
 MAXIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 6 * 60 * 60
 DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS = 30 * 60
-PRODUCTS = ("evidence", "relay")
+PRODUCTS = ("evidence",)
 SERVICE_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
 IMAGE_PATTERNS = {
     product: re.compile(rf"ghcr\.io/registrystack/{product}@sha256:[0-9a-f]{{64}}")
@@ -30,7 +30,6 @@ IMAGE_PATTERNS = {
 }
 AUDIT_PREFIXES = {
     "evidence": "/var/lib/registry-evidence",
-    "relay": "/var/lib/relay/audit",
 }
 EXECUTABLE_PATHS = {product: f"/usr/local/bin/{product}" for product in PRODUCTS}
 AUDIT_CONTAINMENT_FLAG = "--require-audit-under"
@@ -91,13 +90,6 @@ NATIVE_CHECKS = {
         AUDIT_CONTAINMENT_FLAG,
         AUDIT_PREFIXES["evidence"],
     ],
-    "relay": [
-        "check",
-        "--runtime-config",
-        "/etc/relay/runtime.yaml",
-        AUDIT_CONTAINMENT_FLAG,
-        AUDIT_PREFIXES["relay"],
-    ],
 }
 
 
@@ -119,7 +111,7 @@ def parse_service(raw: str) -> ServiceSelection:
         or SERVICE_PATTERN.fullmatch(service) is None
     ):
         raise PreflightError(
-            "service selection must be PRODUCT=SERVICE for evidence or relay"
+            "service selection must be PRODUCT=SERVICE, where PRODUCT is evidence"
         )
     return ServiceSelection(product, service)
 
@@ -672,7 +664,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--service",
         action="append",
         required=True,
-        help="PRODUCT=SERVICE; repeat for each Evidence or Relay service",
+        help="PRODUCT=SERVICE; repeat for each Evidence service",
     )
     parser.add_argument(
         "--native-check-timeout-seconds",
