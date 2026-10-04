@@ -753,10 +753,13 @@ naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
 
-Old Casework and Evidence audit files move to separate archives before the new
-writer starts; Evidence's new stream must contain valid current envelopes
-after the upgraded request. The Evidence target is packaged again with the new
-`evidencectl` and its configuration is carried forward unchanged.
+The upgraded Casework and Evidence runtimes continue the audit files the
+previous release wrote, as the upgrade runbook has an operator do. The
+rehearsal counts the records in each stream before and after the upgrade and
+fails unless every earlier record is still there and the upgraded runtime added
+its own; every record in the Evidence stream must also be a valid current
+envelope. The Evidence target is packaged again with the new `evidencectl` and
+its configuration is carried forward unchanged.
 
 Every table is subject to the row-preservation check. When the
 rehearsal reports a row loss, fix the migration so that it refuses with an error
