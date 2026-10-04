@@ -823,6 +823,20 @@ fn version_comparison_refuses_a_mismatched_runtime() {
 }
 
 #[test]
+fn default_ports_lie_below_the_source_port_range() {
+    for port in [
+        DEFAULT_CASEWORK_PORT,
+        DEFAULT_ISSUER_PORT,
+        DEFAULT_DATABASE_PORT,
+    ] {
+        assert!(
+            port < FIRST_SOURCE_PORT,
+            "an outgoing connection can take default port {port} as its source port"
+        );
+    }
+}
+
+#[test]
 fn ports_must_be_three_distinct_loopback_ports() {
     ports(8092, 8093, 55433).unwrap();
     assert!(ports(8092, 8092, 55433).is_err());

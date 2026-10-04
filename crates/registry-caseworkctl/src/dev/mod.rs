@@ -47,6 +47,16 @@ const RUNTIME_ROLE: &str = "casework_dev_runtime";
 const IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
 const LABEL: &str = "org.registrystack.caseworkctl.dev-owner";
+/// Loopback ports a first start takes when no flag names one. Each lies below
+/// `FIRST_SOURCE_PORT`, so no outgoing connection on the machine can hold one
+/// as its own source port and have the start refuse it as occupied.
+const DEFAULT_CASEWORK_PORT: u16 = 8092;
+const DEFAULT_ISSUER_PORT: u16 = 8093;
+const DEFAULT_DATABASE_PORT: u16 = 15433;
+/// The lowest port an operating system takes as the source of an outgoing
+/// connection: Linux starts at 32768, macOS and Windows at 49152.
+#[cfg(test)]
+const FIRST_SOURCE_PORT: u16 = 32768;
 /// Refusal for a project that never started. Reporting a stopped session
 /// would claim owned services were stopped when none were ever created.
 const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check the project path, or start one with caseworkctl dev";
@@ -184,7 +194,7 @@ struct StartArgs {
     /// Ready Base Registry Engine (BReg) dev project that owns the shared issuer registration.
     #[arg(long, value_name = "PROJECT")]
     issuer_project: Option<PathBuf>,
-    /// PostgreSQL loopback port on first start (default 55433; retained for restarts).
+    /// PostgreSQL loopback port on first start (default 15433; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_DATABASE_PORT")]
     database_port: Option<u16>,
     /// Running Base Registry Engine (BReg) dev project serving a declared source. This compatibility
@@ -1367,18 +1377,18 @@ fn start(args: StartArgs) -> Result<Value> {
             casework_port: args
                 .casework_port
                 .or(previous.map(|s| s.casework_port))
-                .unwrap_or(8092),
+                .unwrap_or(DEFAULT_CASEWORK_PORT),
             issuer_port: args
                 .issuer_port
                 .or(issuer_owner.as_ref().map(|(_, port)| *port))
                 .or(previous.map(|s| s.issuer_port))
-                .unwrap_or(8093),
+                .unwrap_or(DEFAULT_ISSUER_PORT),
             issuer_project,
             issuer_owner: issuer_owner.map(|(owner, _)| owner),
             database_port: args
                 .database_port
                 .or(previous.map(|s| s.database_port))
-                .unwrap_or(55433),
+                .unwrap_or(DEFAULT_DATABASE_PORT),
             clients_file,
             source_digest: digest,
             resource: clients
