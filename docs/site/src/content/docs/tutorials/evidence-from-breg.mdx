@@ -63,12 +63,12 @@ bregctl init ./registry --from publicschema --selection ./organization-selection
 bregctl dev ./registry
 ```
 
-BReg starts PostgreSQL, the pinned local issuer, and the registry. If defaults `8090`, `8091`, or `55432`
+BReg starts PostgreSQL, the pinned local issuer, and the registry. If defaults `8090`, `8091`, or `15432`
 are occupied, choose unused ports on the first start instead:
 
 ```sh
 bregctl dev ./registry --breg-port 8190 --issuer-port 8191 \
-  --database-port 55433
+  --database-port 15532
 ```
 
 Use these ports only if they are available, or substitute another unused set.
