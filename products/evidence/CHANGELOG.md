@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: before 1.0, a release reads only the state its immediate
+  predecessor wrote. This release reads state written by v0.38.0 and nothing
+  older. If you run an older release, upgrade one release at a time and finish
+  each release's upgrade steps before starting the next. The entries below
+  remove what served only releases before v0.38.0.
+  - `release/scripts/rehearse-upgrade.py` rehearses an Evidence upgrade only
+    from a deployment v0.38.0 packaged. It no longer rewrites a runtime file
+    or a governance file from an earlier grammar, and it always starts
+    `evidence` with `--runtime-config`.
+
 ## v0.38.0 - 2026-10-01
 
 - `evidence-oid4vci` omits `response_types_supported` from its OAuth

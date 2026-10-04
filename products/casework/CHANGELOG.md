@@ -10,6 +10,19 @@
   database by the old default needs the new port, or `--database-port 55433`
   (or `CASEWORKCTL_DEV_DATABASE_PORT`) on the first start.
 
+- BREAKING: before 1.0, a release reads only the state its immediate
+  predecessor wrote. This release reads state written by v0.38.0 and nothing
+  older. If you run an older release, upgrade one release at a time and finish
+  each release's upgrade steps before starting the next. The entries below
+  remove what served only releases before v0.38.0.
+  - `release/scripts/rehearse-upgrade.py` rehearses a Casework upgrade only
+    from state v0.38.0 wrote. It no longer starts from a release without
+    `caseworkctl plan` and `apply`, adopts a database that records no
+    activation, repackages a package that carries no `SHA256SUMS`, or waits
+    for the audit outbox table that v0.38.0 no longer has.
+  - Building the Registry Casework release image fails when no `caseworkctl`
+    is staged beside the runtime.
+
 - Empty source-backed inbox views over a source reconciled within the larger
   of twice its `reconciliationIntervalMilliseconds` and 2 minutes return
   `complete` without requeueing subjects or clearing source completeness. A
