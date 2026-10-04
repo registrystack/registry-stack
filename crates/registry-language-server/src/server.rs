@@ -247,7 +247,8 @@ impl LanguageServer for Backend {
     async fn initialized(&self, _params: InitializedParams) {
         if self.supports_dynamic_file_watching.load(Ordering::Relaxed) {
             // Evidence registers its authored extensions and source-artifact
-            // directories; generic product roots refresh their declared inputs.
+            // directories. The other products follow file references to any
+            // safe relative path, so their recursive glob covers those targets.
             let watchers = evidence_watched_globs()
                 .into_iter()
                 .chain(crate::products::watched_globs())
