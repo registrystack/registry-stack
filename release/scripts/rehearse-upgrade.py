@@ -1207,6 +1207,10 @@ CASEWORK_KID = "upgrade-rehearsal-rsa"
 CASEWORK_DATABASE_ID = "upgrade-rehearsal-casework"
 CASEWORK_OPERATOR_REFERENCE = "upgrade-rehearsal"
 CASEWORK_ALREADY_ACTIVE = "casework.activation.already-active"
+# What the upgraded runtime appends to the audit stream in `rehearse_casework`:
+# deciding a review task writes one request entry and one response entry.
+# Reading the views and creating a review request write none.
+CASEWORK_UPGRADED_AUDIT_RECORDS = 2
 CASEWORK_ACTORS = {
     "administrator": ("upgrade-rehearsal-admin", "casework:admin", True),
     "staff": ("upgrade-rehearsal-staff", "casework:staff", True),
@@ -1432,7 +1436,8 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
         service.stop()
     losses += row_count_losses(before_counts, postgres.row_counts("casework"))
     records_after = audit_record_count(casework.audit, "casework.ndjson")
-    losses += audit_stream_losses("Casework", records_before, records_after, 1)
+    losses += audit_stream_losses("Casework", records_before, records_after,
+                                  CASEWORK_UPGRADED_AUDIT_RECORDS)
     new.run_json("caseworkctl", "--format", "json", "check", str(casework.project))
 
     report["casework"] = {
