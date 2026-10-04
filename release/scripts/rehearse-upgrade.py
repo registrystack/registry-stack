@@ -72,7 +72,9 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # FORWARD_PATH_FLOOR is the earliest release this source reads state from, so a
 # rehearsal refuses to start from any earlier release.
 # docs/site/src/content/docs/reference/api-stability.mdx states the same.
+# check_floor_is_current holds it to the release before the workspace version.
 FORWARD_PATH_FLOOR = (0, 38, 0)
+STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 
 BINARIES = (
     "breg", "bregctl", "casework", "caseworkctl", "evidence", "evidencectl",
@@ -173,6 +175,40 @@ def check_forward_path(from_tag: str, version: str) -> None:
             f"refusing {from_tag}: before 1.0 a release reads only the state its "
             f"immediate predecessor wrote, and this source reads state from {floor} "
             "onward; upgrade one release at a time"
+        )
+
+
+def manifest_versions(repo: Path) -> list[str]:
+    """Read the stack version each release manifest in the repository names."""
+
+    versions = []
+    for path in sorted((repo / "release/manifests").glob("registry-stack-*.yaml")):
+        match = STACK_VERSION.match(path.read_text(encoding="utf-8"))
+        if match is None:
+            raise RehearsalError(f"release manifest {path.name} names no stack version")
+        versions.append(match.group(1))
+    return versions
+
+
+def check_floor_is_current(released: list[str], version: str) -> None:
+    """Refuse a floor that is not the release before the workspace version.
+
+    That release is the newest manifest version below the workspace version,
+    which holds before and after the post-release bump: the bump is the change
+    that has to move the floor.
+    """
+
+    ceiling = parse_version(version)
+    earlier = sorted(
+        candidate for candidate in map(parse_version, released) if candidate < ceiling
+    )
+    if not earlier:
+        raise RehearsalError(f"no release manifest precedes workspace version {version}")
+    if FORWARD_PATH_FLOOR != earlier[-1]:
+        raise RehearsalError(
+            "FORWARD_PATH_FLOOR is v{}.{}.{}, but the release before workspace "
+            "version {} is v{}.{}.{}; move the floor as release/OPERATIONS.md "
+            "describes".format(*FORWARD_PATH_FLOOR, version, *earlier[-1])
         )
 
 
@@ -2136,6 +2172,7 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
         version = workspace_version(ROOT)
+        check_floor_is_current(manifest_versions(ROOT), version)
         from_tag = args.from_tag or select_from_tag(published_tags(), version)
         check_forward_path(from_tag, version)
         products, omitted = select_products(args.product, from_tag, args.platform,
