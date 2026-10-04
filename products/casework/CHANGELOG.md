@@ -32,6 +32,8 @@
     `.casework/dev` aside, then start a fresh session.
   - Dev state that lacks `binaries`, `sources`, or `borrowedScopes` is refused
     as invalid. Start a fresh session.
+  - `caseworkctl dev start --clients` is no longer accepted. Use
+    `--clients-file`.
 
 - Empty source-backed inbox views over a source reconciled within the larger
   of twice its `reconciliationIntervalMilliseconds` and 2 minutes return
