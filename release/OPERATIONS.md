@@ -706,6 +706,11 @@ published historical exception and must not be modified after publication.
 Before 1.0, a release reads only the state its immediate predecessor wrote, and
 promises a forward state path from that predecessor alone. An operator on an
 older release upgrades one release at a time.
+A patch release does not move the floor of its minor line, so its rehearsal
+may still start from the release before that line. The workflow does not do
+that by itself: it starts from the newest published release, which for a patch
+release is the previous release of the same line. To rehearse a patch release
+from the floor, dispatch the workflow with `-f from_tag=<floor tag>`.
 The release PR adds its manifest under `release/manifests/`, which starts
 `release-upgrade-rehearsal.yml` on that PR. The workflow builds BReg, Casework,
 Evidence, and Messaging from the PR and runs `release/scripts/rehearse-upgrade.py`. The
@@ -733,7 +738,8 @@ gh workflow run release-upgrade-rehearsal.yml \
 earliest release this source reads state from, `v0.38.0`, and the script
 refuses to start from any earlier release rather than skipping the check. It
 also refuses to run when the floor is not the newest release manifest recorded
-as `status: released` below the workspace version.
+as `status: released` below the first release of the workspace version's minor
+line.
 Scheduling state is not rehearsed: `PRODUCTS` in the script names no
 Scheduling leg.
 
@@ -1147,7 +1153,8 @@ loaders, the lockfiles in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, the VS Code and
 Zed extension manifests and lockfiles in `EDITOR_RELEASE_SURFACE_PATHS`, and
 the committed OpenAPI documents.
 The upgrade promise moves to the release just published once `main` both
-names the next version and records that release as published. The PR that
+names the next minor version and records that release as published. Naming a
+patch version of the same minor line leaves the floor where it is. The PR that
 completes the two moves it: this one when the publication record below has
 already merged or rides with it, and the publication record's PR when this bump
 merges first. That PR sets `FORWARD_PATH_FLOOR` in
@@ -1157,10 +1164,10 @@ restates it where this file's rehearsal section and
 `docs/site/src/content/docs/reference/api-stability.mdx` name the release this
 source reads state from. `check_floor_is_current` in the same script holds the
 floor to the newest release manifest recorded as `status: released` below the
-workspace version, so the release tooling tests fail on the PR that leaves the
-floor behind, and the rehearsal refuses to run with one. A manifest whose
-release was abandoned never gains that status, so a fix-forward release keeps
-the floor at the last published release.
+workspace version's minor line, so the release tooling tests fail on the PR
+that leaves the floor behind, and the rehearsal refuses to run with one. A
+manifest whose release was abandoned never gains that status, so a fix-forward
+release keeps the floor at the last published release.
 The release is closed only once this PR and the
 documentation promotion below have merged. The one exception is a next
 release already in preparation when `verify-public` passes: its release PR

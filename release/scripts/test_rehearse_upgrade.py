@@ -63,12 +63,24 @@ class ReleaseSelectionTest(unittest.TestCase):
         with unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 38, 0)):
             MODULE.check_floor_is_current(released, "0.39.0")
             MODULE.check_floor_is_current(released[:-1], "0.39.0")
-            for version in ("0.40.0", "0.39.1", "0.38.0"):
+            for version in ("0.40.0", "0.38.0"):
                 with self.subTest(version=version), \
                         self.assertRaisesRegex(Error, "FORWARD_PATH_FLOOR"):
                     MODULE.check_floor_is_current(released, version)
             with self.assertRaisesRegex(Error, "no released manifest"):
                 MODULE.check_floor_is_current(released, "0.9.0")
+
+    def test_a_patch_release_keeps_the_floor_of_its_minor_line(self) -> None:
+        released = ["0.37.0", "0.38.0", "0.39.0", "0.39.1"]
+        with unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 38, 0)):
+            for version in ("0.39.0", "0.39.1", "0.39.2"):
+                with self.subTest(version=version):
+                    MODULE.check_floor_is_current(released, version)
+            for tag in ("v0.38.0", "v0.39.0", "v0.39.1"):
+                with self.subTest(tag=tag):
+                    MODULE.check_forward_path(tag, "0.39.2")
+            with self.assertRaisesRegex(Error, "is v0.39.1"):
+                MODULE.check_floor_is_current(released, "0.40.0")
 
     def test_reads_the_stack_version_of_every_released_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

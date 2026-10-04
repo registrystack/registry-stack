@@ -71,7 +71,8 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # FORWARD_PATH_FLOOR is the earliest release this source reads state from, so a
 # rehearsal refuses to start from any earlier release.
 # docs/site/src/content/docs/reference/api-stability.mdx states the same.
-# check_floor_is_current holds it to the release before the workspace version.
+# check_floor_is_current holds it to the release before the workspace version's
+# minor line, so a patch release does not move it.
 FORWARD_PATH_FLOOR = (0, 38, 0)
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
@@ -198,27 +199,33 @@ def released_versions(repo: Path) -> list[str]:
 
 
 def check_floor_is_current(released: list[str], version: str) -> None:
-    """Refuse a floor that is not the release before the workspace version.
+    """Refuse a floor that is not the release before the workspace minor line.
 
-    That release is the newest released manifest version below the workspace
-    version. It changes once main both records a release as published and names
-    the next version, and the change that completes the two has to move the
-    floor.
+    That release is the newest released manifest version below the first
+    release of the workspace version's minor line, so a patch release keeps the
+    floor its minor line opened with. It changes once main both records a
+    release as published and names the next minor version, and the change that
+    completes the two has to move the floor.
     """
 
-    ceiling = parse_version(version)
+    major, minor, _ = parse_version(version)
     earlier = sorted(
-        candidate for candidate in map(parse_version, released) if candidate < ceiling
+        candidate
+        for candidate in map(parse_version, released)
+        if candidate < (major, minor, 0)
     )
     if not earlier:
         raise RehearsalError(
-            f"no released manifest precedes workspace version {version}"
+            "no released manifest precedes the minor line of workspace version "
+            f"{version}"
         )
     if FORWARD_PATH_FLOOR != earlier[-1]:
         raise RehearsalError(
-            "FORWARD_PATH_FLOOR is v{}.{}.{}, but the release before workspace "
-            "version {} is v{}.{}.{}; move the floor as release/OPERATIONS.md "
-            "describes".format(*FORWARD_PATH_FLOOR, version, *earlier[-1])
+            "FORWARD_PATH_FLOOR is v{}.{}.{}, but the release before the minor "
+            "line of workspace version {} is v{}.{}.{}; move the floor as "
+            "release/OPERATIONS.md describes".format(
+                *FORWARD_PATH_FLOOR, version, *earlier[-1]
+            )
         )
 
 
