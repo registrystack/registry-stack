@@ -541,15 +541,6 @@ class NightlyTest(unittest.TestCase):
             "GITHUB_OUTPUT": str(self.root / "outputs"),
         }
 
-        def api(path, payload=None):
-            if path == f"repos/{nightly.REPOSITORY}/branches/main":
-                return {"commit": {"sha": SHA}}
-            package = path.rsplit("/", 1)[-1]
-            return {
-                "name": package,
-                "visibility": "private" if package.endswith("-candidate") else "public",
-            }
-
         with (
             patch.dict(os.environ, environment),
             patch.object(nightly, "ROOT", self.root),

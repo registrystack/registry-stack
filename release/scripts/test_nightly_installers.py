@@ -85,6 +85,34 @@ class InstallerBootstrapTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(f"{TAG}\n", fixture.marker.read_text())
 
+    def test_current_schema_manifest_with_a_source_roster_is_supported(self) -> None:
+        roster = {
+            "profile": "registry-stack.nightly-roster.v2.0",
+            "images": ["breg", "evidence"],
+            "installers": sorted(INSTALLERS),
+            "payloads": ["THIRD_PARTY_NOTICES", f"breg-{TAG}-linux-amd64"],
+        }
+        for product, installer in INSTALLERS.items():
+            with self.subTest(product=product), BootstrapFixture(product, installer) as fixture:
+                manifest = json.loads(fixture.manifest.read_text())
+                manifest["schema_version"] = "registry-stack.nightly.v2"
+                manifest["roster"] = roster
+                fixture.manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+                result = fixture.run("--channel", "nightly")
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(f"{TAG}\n", fixture.marker.read_text())
+
+    def test_unsupported_schema_refuses_before_downloading_an_installer(self) -> None:
+        with BootstrapFixture("breg", INSTALLERS["breg"]) as fixture:
+            manifest = json.loads(fixture.manifest.read_text())
+            manifest["schema_version"] = "registry-stack.nightly.v3"
+            fixture.manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+            result = fixture.run("--channel", "nightly")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("unsupported schema_version", result.stderr)
+            self.assertFalse(fixture.marker.exists())
+            self.assertEqual(1, len(fixture.requests()), fixture.requests())
+
     def test_missing_manifest_refuses_before_executing_an_installer(self) -> None:
         with BootstrapFixture("breg", INSTALLERS["breg"]) as fixture:
             fixture.manifest.unlink()
