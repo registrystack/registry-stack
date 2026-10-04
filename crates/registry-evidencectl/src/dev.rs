@@ -378,7 +378,23 @@ struct QuestionState {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SubjectState {
     role: String,
+    #[serde(deserialize_with = "deserialize_selectors")]
     selectors: Vec<crate::authoring::CompiledSelector>,
+}
+
+fn deserialize_selectors<'de, D>(
+    deserializer: D,
+) -> Result<Vec<crate::authoring::CompiledSelector>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let selectors = Vec::deserialize(deserializer)?;
+    if selectors.is_empty() {
+        return Err(serde::de::Error::custom(
+            "subject state must carry at least one selector",
+        ));
+    }
+    Ok(selectors)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -3742,6 +3758,7 @@ mod tests {
             serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code"}),
             serde_json::json!({"role":"record","selectorProfile":"by-code","selectorField":"code","selectors":[{"profile":"other","fields":["code"]}]}),
             serde_json::json!({"role":"record"}),
+            serde_json::json!({"role":"record","selectors":[]}),
         ] {
             assert!(
                 serde_json::from_value::<SubjectState>(refused.clone()).is_err(),
