@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { cliReferenceSidebar } from '../src/lib/cli-reference-sidebar.mjs';
 import { omittedCliBinaries, productRoutes } from '../src/lib/docset-products.mjs';
 import {
+  buildRelayRetirementRedirects,
   RELAY_RETIREMENT,
   RETIRED_RELAY_ROUTES,
 } from '../src/lib/relay-retirement-redirects.mjs';
@@ -852,6 +853,71 @@ test('legacy Relay entry points redirect to the retirement decision', () => {
   assert.notEqual(RELAY_RETIREMENT, '/');
   assert.match(configSource, /buildRelayRetirementRedirects\(currentDocsetRedirect\)/);
   assert.match(configSource, /buildNotaryRetirementRedirects\(currentDocsetRedirect\)/);
+});
+
+// A redirect outranks a content page at the same route, so a retired route
+// that a page still publishes would stop that page and its `.md` twin from
+// rendering. The check reads the content tree as it is on disk, which after
+// `npm run generate` includes the pulled product pages and the generated
+// command reference.
+test('retires no Relay route that a content page still publishes', () => {
+  const redirects = buildRelayRetirementRedirects((target) => target);
+  const shadowing = Object.keys(redirects).filter((source) => {
+    const slug = source.replace(/\.md$/, '').replace(/^\/|\/$/g, '');
+    return ['.mdx', '.md', '/index.mdx', '/index.md'].some((suffix) => (
+      existsSync(resolve(siteRoot, 'src/content/docs', `${slug}${suffix}`))
+    ));
+  });
+  assert.deepEqual(shadowing, []);
+});
+
+test('redirects every retired Relay page and its Markdown twin to the retirement decision', () => {
+  const redirects = buildRelayRetirementRedirects((target) => target);
+  const retiredPages = [
+    // Hand-authored pages.
+    '/configure/',
+    '/configure/relay/',
+    '/decisions/relay-v1-and-registryctl-retirement-2026-08-11/',
+    '/explanation/governed-registry-publication/',
+    '/explanation/relay-semantics-and-disclosure/',
+    '/operate/relay/',
+    '/reference/relayctl/',
+    '/spec/rs-op-posture/',
+    '/spec/rs-pr-relay/',
+    '/spec/rs-pr-relayctl/',
+    '/tutorials/first-run-with-solmara-lab/',
+    '/tutorials/publish-governed-sqlite-registry/',
+    '/tutorials/query-relay-client/',
+    '/verify/',
+    // Pulled product pages.
+    '/products/registry-relay/',
+    '/products/registry-relay/standards-alignment/',
+    // Generated command reference for the `relay` and `relayctl` binaries.
+    '/reference/cli/relay/',
+    '/reference/cli/relay/check/',
+    '/reference/cli/relay/healthcheck/',
+    '/reference/cli/relay/serve/',
+    '/reference/cli/relayctl/',
+    '/reference/cli/relayctl/check/',
+    '/reference/cli/relayctl/diff/',
+    '/reference/cli/relayctl/generate/',
+    '/reference/cli/relayctl/init/',
+    '/reference/cli/relayctl/inspect/',
+    '/reference/cli/relayctl/package/',
+    '/reference/cli/relayctl/test/',
+    '/reference/cli/relayctl/tooling/',
+    '/reference/cli/relayctl/tooling/editor/',
+    '/reference/cli/relayctl/tooling/language-server/',
+    // Routes that already redirected to a Relay page.
+    '/configure/oauth-client-credentials/',
+    '/products/registry-relay/standards-assumptions/',
+  ];
+
+  for (const route of retiredPages) {
+    assert.equal(redirects[route], RELAY_RETIREMENT, `${route} has no retirement redirect`);
+    const twin = `${route.slice(0, -1)}.md`;
+    assert.equal(redirects[twin], RELAY_RETIREMENT, `${twin} has no retirement redirect`);
+  }
 });
 
 test('keeps source-assurance artifacts out of the adopter navigation', () => {
