@@ -91,8 +91,8 @@ includes both named periods and contains at most 366 periods. Responses contain
 at most 10,000 cells, including totals and zero-filled domain combinations.
 Canonical JSON documents and CSV responses are limited to 8 MiB, matching the
 maintained clients' default body limit. The compiler bounds a single-period
-document; reduce a multi-period range if it returns `400 query.invalid` at
-`from` because its representation exceeds that limit.
+document; reduce a multi-period range if it returns `400 query.invalid` naming
+no parameter because its representation exceeds that limit.
 
 A flow counts unit rows whose date field is in `[start, end)`. A stock counts
 rows valid at the reference date. It may use the entity's temporal declaration:
