@@ -196,7 +196,11 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs/site
-        run: npm ci
+        # This job needs the install scripts. The Vale postinstall downloads
+        # its binary from GitHub without a token, and shared runner addresses
+        # are sometimes refused. The refusal is per request, so a failed
+        # install is retried once after a pause.
+        run: npm ci || { sleep 30; npm ci; }
 
       - name: Build protected main at /dev/
         working-directory: docs/site
