@@ -212,7 +212,6 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.breg"): {
         "binary": "breg",
         "tool": "bregctl",
-        "tool_required": True,
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/breg"]',
         "command": 'CMD ["--runtime-config", "/etc/breg/runtime.yaml"]',
     },
@@ -241,7 +240,6 @@ HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.messaging"): {
         "binary": "messaging",
         "tool": "messagingctl",
-        "tool_required": True,
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/messaging"]',
         "command": 'CMD ["--runtime-config", "/etc/registry-messaging/runtime.yaml", "serve"]',
     },
@@ -758,9 +756,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
                     f"{relative}: {tool} operator tool must precede timestamp "
                     "normalization"
                 )
-            if contract.get("tool_required") and (
-                f"if [ -e /workspace/image-bin/{tool} ]" in texts[relative]
-            ):
+            if f"if [ -e /workspace/image-bin/{tool} ]" in texts[relative]:
                 failures.append(
                     f"{relative}: {tool} operator tool must be required by every "
                     "release image build"
