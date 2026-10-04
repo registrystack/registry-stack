@@ -892,7 +892,7 @@ rule depends on the mapping:
 The crate renders a development session's ThunderID declarative resources and
 ships in no runtime: `registry-bregctl`, `registry-caseworkctl`, and
 `registry-evidencectl` depend on it, and `registry-casework`,
-`registry-relay-v2`, `registry-evidence-client`, and
+`registry-evidence-client`, and
 `registry-evidence-oid4vci` only as a dev-dependency. A production issuer is
 operated separately, and each runtime still enforces its own issuer,
 audience, scope, and boundary checks on every token, so a wider local client
