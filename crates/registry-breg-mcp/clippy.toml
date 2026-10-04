@@ -38,7 +38,8 @@ disallowed-methods = [
 
   # Registry operations no gateway tool offers. A citizen's agent drafts and
   # edits a change request; it does not run lifecycle actions, tombstone,
-  # batch, invoke actions, manage attachments, or ingest.
+  # batch, invoke actions, manage attachments, ingest, or publish or withdraw
+  # statistical releases.
   { path = "registry_breg_client::BaseRegistryClient::execute_lifecycle_action", reason = "the gateway offers no lifecycle action" },
   { path = "registry_breg_client::BaseRegistryClient::tombstone_record", reason = "the gateway offers no tombstone" },
   { path = "registry_breg_client::BaseRegistryClient::batch_records", reason = "the gateway offers no batch write" },
@@ -49,4 +50,6 @@ disallowed-methods = [
   { path = "registry_breg_client::BaseRegistryClient::create_ingestion_run", reason = "the gateway offers no ingestion" },
   { path = "registry_breg_client::BaseRegistryClient::submit_ingestion_chunk", reason = "the gateway offers no ingestion" },
   { path = "registry_breg_client::BaseRegistryClient::cancel_ingestion_run", reason = "the gateway offers no ingestion" },
+  { path = "registry_breg_client::BaseRegistryClient::statistics_publish", reason = "the gateway offers no statistical release publication" },
+  { path = "registry_breg_client::BaseRegistryClient::statistics_withdraw", reason = "the gateway offers no statistical release withdrawal" },
 ]
