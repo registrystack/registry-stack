@@ -290,10 +290,12 @@ Registry Stack v0.22.0 through v0.26.0 promoted separate Evidence, Relay, and,
 from v0.23.0, Discovery client projects. Those immutable versions remain
 supported release history. Starting with v0.26.1, a release promotes only the
 unified user-facing clients: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. Their product namespaces carry the version-selected APIs. From v0.38.0,
-these include `discovery`, `evidence`, `breg`, `scheduling`, and `messaging`
-from `v0.39.0`. The product-specific native bindings are build inputs, not
-additional public projects.
+`registry-stack-client` on PyPI. Their product namespaces carry the
+version-selected APIs: `discovery`, `evidence`, and `breg` from v0.26.1,
+`casework` from v0.30.0, and `messaging` from v0.38.0. Releases through
+v0.38.0 also carry a `relay` namespace; v0.39.0 removes it. The
+product-specific native bindings are build inputs, not additional public
+projects.
 
 The npm and PyPI publication jobs use GitHub-hosted runners and OpenID Connect
 trusted publishing. Do not add npm or PyPI write tokens to the repository.
