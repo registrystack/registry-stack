@@ -47,7 +47,7 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
     ] {
         assert!(request.contains(visible), "missing {visible}: {request}");
     }
-    for hidden in ["--project", "--evidence-bin", "--mint-bin"] {
+    for hidden in ["--project", "--evidence-bin"] {
         assert!(!request.contains(hidden), "test seam leaked: {request}");
     }
 
@@ -832,6 +832,7 @@ impl Fixture {
             "evidenceOrigin": "http://127.0.0.1:8080",
             "issuerOrigin": issuer_origin,
             "issuerSessionId": "0123456789abcdef0123456789abcdef0123456789abcdef",
+            "namePrefix": "evidence-dev",
             "tokenUrl": format!("{issuer_origin}/oauth2/token"),
             "accessTokenAudience": "urn:registrystack:evidence:local:gateway",
             "caller": {
@@ -849,8 +850,7 @@ impl Fixture {
                     "purpose": "age-check",
                     "subjects": [{
                         "role": "person",
-                        "selectorProfile": "local-subject-adult-status-v1",
-                        "selectorField": "person_id"
+                        "selectors": [{"profile": "local-subject-adult-status-v1", "fields": ["person_id"]}]
                     }],
                     "concepts": [{
                         "alias": "is_adult",
@@ -864,8 +864,7 @@ impl Fixture {
                     "purpose": "service-path-selection",
                     "subjects": [{
                         "role": "person",
-                        "selectorProfile": "local-subject-age-bracket-v1",
-                        "selectorField": "person_id"
+                        "selectors": [{"profile": "local-subject-age-bracket-v1", "fields": ["person_id"]}]
                     }],
                     "concepts": [{
                         "alias": "age_bracket",
@@ -880,13 +879,11 @@ impl Fixture {
                     "subjects": [
                         {
                             "role": "child",
-                            "selectorProfile": "child-reference-v1",
-                            "selectorField": "child_reference"
+                            "selectors": [{"profile": "child-reference-v1", "fields": ["child_reference"]}]
                         },
                         {
                             "role": "candidate",
-                            "selectorProfile": "person-reference-v1",
-                            "selectorField": "person_reference"
+                            "selectors": [{"profile": "person-reference-v1", "fields": ["person_reference"]}]
                         }
                     ],
                     "concepts": [{
@@ -1236,10 +1233,9 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
                 .expect("question subjects")
                 .iter()
                 .map(|subject| {
-                    let profile = subject["selectorProfile"]
-                        .as_str()
-                        .expect("selector profile");
-                    let field = subject["selectorField"].as_str().expect("selector field");
+                    let selector = &subject["selectors"][0];
+                    let profile = selector["profile"].as_str().expect("selector profile");
+                    let field = selector["fields"][0].as_str().expect("selector field");
                     selector_profiles.insert(
                         profile.to_owned(),
                         json!({"fields": {field: {"type": "string"}}}),
@@ -1276,7 +1272,7 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
             .map(|subject| {
                 json!({
                     "role": subject["role"],
-                    "selectorProfile": subject["selectorProfile"],
+                    "selectorProfile": subject["selectors"][0]["profile"],
                     "valueOrigin": "request",
                 })
             })

@@ -11,6 +11,16 @@
     from a deployment v0.38.0 packaged. It no longer rewrites a runtime file
     or a governance file from an earlier grammar, and it always starts
     `evidence` with `--runtime-config`.
+  - `evidencectl dev --mint-port` and `--mint-bin` are unknown arguments
+    (exit status 2), where they were refused as `evidence.dev.mint-retired`.
+    Retained dev state under any schema but
+    `registry.evidencectl.dev-state/v6` is refused as an unsupported local
+    state schema, without the Mint guidance, and left untouched. Stop it with
+    the release that wrote it, or move `.evidence/dev` aside, then start a
+    fresh session.
+  - Dev state that lacks `namePrefix`, or that names a subject's selector with
+    `selectorProfile` and `selectorField` instead of `selectors`, is refused
+    as invalid. Start a fresh session.
 
 ## v0.38.0 - 2026-10-01
 

@@ -978,21 +978,6 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
                 }
                 .into());
             }
-            if error
-                .downcast_ref::<dev::RetiredMintDevelopment>()
-                .is_some()
-            {
-                return Err(SafeCliFailure {
-                    operational: false,
-                    code: "evidence.dev.mint-retired".to_owned(),
-                    artifact: "local development command".to_owned(),
-                    path: "$".to_owned(),
-                    message: "Registry Mint development flags were removed.".to_owned(),
-                    cause: None,
-                    suggested_action: "Stop any retained Mint session with its matching older evidencectl, then start a fresh session with --issuer-port and the pinned local issuer.".to_owned(),
-                }
-                .into());
-            }
             safe_command(
                 Err(error),
                 "evidence.dev.failed",
