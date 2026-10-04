@@ -178,7 +178,8 @@ Every pull request should make the review path clear:
   them silently. A change that would lose persisted state fails with an error
   that names what would be lost, and the operator decides the next step. Cover
   the refusal with a test. Every retained domain and operational state table
-  requires row preservation, and the release upgrade rehearsal checks it.
+  requires row preservation, and the release upgrade rehearsal checks it for
+  the products it rehearses.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
   and an operator upgrades one release at a time. Keep everything the previous
   release could have written to a database, package, configuration file, or
