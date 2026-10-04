@@ -891,6 +891,22 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
 }
 
 #[test]
+fn population_in_list_refuses_values_the_runtime_would_read_as_duplicates() {
+    let mut distinct = source();
+    distinct["statisticalDatasets"][0]["population"] = json!("category in ('a','b')");
+    compile(&distinct).expect("a list of distinct values compiles");
+
+    // The runtime compares the text of each value, so a boolean and its
+    // quoted spelling are one value.
+    for population in ["category in ('a','a')", "active in (true,'true')"] {
+        assert_refused(
+            |value| value["statisticalDatasets"][0]["population"] = json!(population),
+            "statistical_dataset.population.invalid",
+        );
+    }
+}
+
+#[test]
 fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
     let mut vocabulary = source();
     vocabulary["vocabularies"][0]["values"] = json!(["alpha", "beta"]);

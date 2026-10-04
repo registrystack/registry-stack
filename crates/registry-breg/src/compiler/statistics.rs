@@ -1239,6 +1239,12 @@ fn population_predicate_valid(predicate: &FilterPredicate, field_type: &FieldTyp
             operator_valid && population_literal_valid(literal, field_type)
         }
         FilterPredicate::In { values, .. } => {
+            // The runtime refuses a list that repeats a value, comparing the
+            // text of each literal.
+            let unique = values
+                .iter()
+                .filter_map(population_literal_text)
+                .collect::<BTreeSet<_>>();
             !values.is_empty()
                 && values
                     .iter()
@@ -1246,6 +1252,7 @@ fn population_predicate_valid(predicate: &FilterPredicate, field_type: &FieldTyp
                 && values
                     .iter()
                     .all(|literal| population_literal_valid(literal, field_type))
+                && unique.len() == values.len()
         }
         FilterPredicate::Function { literal, .. } => {
             let Literal::String(value) = literal else {
@@ -1256,11 +1263,19 @@ fn population_predicate_valid(predicate: &FilterPredicate, field_type: &FieldTyp
     }
 }
 
+fn population_literal_text(literal: &Literal) -> Option<String> {
+    match literal {
+        Literal::Boolean(value) => Some(value.to_string()),
+        Literal::String(value) | Literal::Integer(value) | Literal::Decimal(value) => {
+            Some(value.clone())
+        }
+        Literal::Null => None,
+    }
+}
+
 fn population_literal_valid(literal: &Literal, field_type: &FieldTypeSource) -> bool {
-    let text = match literal {
-        Literal::Boolean(value) => value.to_string(),
-        Literal::String(value) | Literal::Integer(value) | Literal::Decimal(value) => value.clone(),
-        Literal::Null => return false,
+    let Some(text) = population_literal_text(literal) else {
+        return false;
     };
     let value = match field_type {
         FieldTypeSource::Boolean => match text.as_str() {
