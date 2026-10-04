@@ -33,11 +33,13 @@ const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const EXPLICIT_MARKER: &str = ".registry-stack-editor/project.json";
 const AUTHORING_EXTENSIONS: &[&str] = &["yaml", "yml", "json"];
 
-/// File changes in retained authoring formats refresh their owned project inputs.
+/// A product document may name a file at any safe relative path and with any extension: a
+/// script, a query, a template, a font, a key. Such a reference resolves only while its target
+/// exists, so only a recursive all-files watcher tells a session when one appears or goes. A
+/// notification is not authority to read the file it names: a reload opens authoring documents
+/// and nothing else.
 pub(crate) fn watched_globs() -> impl Iterator<Item = String> {
-    AUTHORING_EXTENSIONS
-        .iter()
-        .map(|extension| format!("**/*.{extension}"))
+    std::iter::once("**/*".to_owned())
 }
 
 fn spec(product: ProductKind) -> ProductSpec {
@@ -858,9 +860,28 @@ mod tests {
                 "{path}"
             );
         }
-        assert!(!globs
-            .iter()
-            .any(|glob| matches_pattern(glob, "signing.key")));
+    }
+
+    /// A file reference resolves only while its target exists, so a target created or removed
+    /// outside the editor has to reach the session whatever extension it carries.
+    #[test]
+    fn watchers_cover_file_reference_targets_of_any_extension() {
+        let globs = watched_globs().collect::<Vec<_>>();
+        for path in [
+            "templates/receipt.typ",
+            "sql/active-permits.sql",
+            "templates/reminder/en/body.j2",
+            "keys/token-client.pem",
+            "fonts/Inter-Regular.ttf",
+            "LICENSE",
+        ] {
+            assert!(!is_authoring_document(Path::new(path)), "{path}");
+            assert!(
+                globs.iter().any(|glob| matches_pattern(glob, path)),
+                "{path} can be a file reference target and is covered by no registered glob: \
+                 {globs:?}"
+            );
+        }
     }
 
     fn project(files: &[(&str, &str)]) -> TempDir {
