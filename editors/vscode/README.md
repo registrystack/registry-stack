@@ -41,7 +41,7 @@ and virtual workspaces.
 ## Install and launch
 
 Prerequisites are Node.js 22 or newer, the `code` command-line tool, and a matching
-`evidencectl`. Both embed the same language server.
+`evidencectl`, which embeds the language server.
 
 Configure the project's maintained schemas and native validation task from the repository root:
 
@@ -53,8 +53,8 @@ Use the product name from the [shared setup guide](../README.md). For a project 
 opened workspace folder, add `--workspace /path/to/workspace`. Manifest files with a custom name use
 `--document custom.yaml`; Evidence OID4VCI requires `--document wallet-config.yaml`. The configurator
 writes the explicit marker for those two families, adds available schema mappings, and preserves
-existing editor settings and tasks. Evidence schema setup runs through their matching
-adopter CLI. See the shared guide for products whose validation remains a native CLI check.
+existing editor settings and tasks. Evidence schema setup runs through the matching
+`evidencectl`. See the shared guide for products whose validation remains a native CLI check.
 
 1. From the repository root, install the integration into the active VS Code profile:
 
@@ -62,8 +62,8 @@ adopter CLI. See the shared guide for products whose validation remains a native
    ./editors/install.sh vscode
    ```
 
-   The installer checks the version and embedded language server of each adopter CLI in order,
-   packages the extension, and installs it without
+   The installer checks the version and embedded language server of the first `evidencectl` on
+   `PATH`, packages the extension, and installs it without
    reading or changing a project. The locally built VSIX records the verified absolute path of the
    CLI it selected, so it also works when an existing VS Code process did not inherit the shell
    `PATH`. Use `--profile <name>` to select an existing profile.

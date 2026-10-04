@@ -4,8 +4,8 @@ This beta integration is installed from a Registry Stack source release.
 It is not yet listed in Zed Extensions and no release artifact is provided.
 Set up a project with `python3 editors/configure.py <product> <project>` before
 opening it. The helper uses the current product's maintained schemas and check
-commands where they exist. For Evidence, it runs their existing
-`tooling editor` command. Install this integration for semantic navigation.
+commands where they exist. For Evidence, it runs the existing
+`evidencectl tooling editor` command. Install this integration for semantic navigation.
 
 This extension attaches the shared Registry Stack language server to Zed's built-in YAML and JSON languages.
 It provides cross-file definitions, references, workspace/document symbols, and Registry Stack
@@ -98,10 +98,11 @@ means in practice.
 - If the development extension does not compile, confirm `rustup` owns the active Rust installation
   and that `cargo check` for `wasm32-wasip2` passes.
 - If Zed cannot find the server, close it, export the updated `PATH`, and relaunch it from that
-  terminal. The launcher tries matching `evidencectl` copies on `PATH`, accepts only a CLI
+  terminal. The launcher uses the first `evidencectl` on `PATH`, accepts only a CLI
   reporting this extension's version (or that version with `-dev`), and checks that it answers
-  `tooling language-server --help`. If an earlier copy is old or lacks the server, a later matching copy can
-  still serve the worktree. A standalone `registry-language-server` has no version command; select
+  `tooling language-server --help`. It does not look past that first copy: if it is old or lacks
+  the server, remove it from `PATH` or put the matching copy ahead of it, then relaunch Zed.
+  A standalone `registry-language-server` has no version command; select
   it through `lsp.registry-stack.binary.path` when iterating on source.
 - Use `dev: open language server logs` to inspect how the server was launched. Use
   `zed: open log` for extension errors. For verbose extension output, close Zed and relaunch it with
