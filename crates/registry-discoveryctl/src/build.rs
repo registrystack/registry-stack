@@ -41,6 +41,10 @@ pub enum BuildError {
     Fetch,
     #[error("an approved Discovery origin returned an invalid public description")]
     Description,
+    #[error(
+        "an approved Discovery origin publishes a retired Relay service; remove Relay origins and package again"
+    )]
+    RetiredServiceKind,
     #[error("the Discovery index could not be compiled")]
     Compile,
     #[error("{0}")]
@@ -201,8 +205,13 @@ async fn fetch_origins(
         let fetched_at = OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .map_err(|_| BuildError::Compile)?;
-        let description = registry_discovery_profile::parse_description(&bytes)
-            .map_err(|_| BuildError::Description)?;
+        let description =
+            registry_discovery_profile::parse_description(&bytes).map_err(|error| match error {
+                registry_discovery_profile::ProfileError::RetiredServiceKind => {
+                    BuildError::RetiredServiceKind
+                }
+                _ => BuildError::Description,
+            })?;
         let content_digest = sha256_digest(&bytes);
         origins.push(OriginSummary {
             origin_id: approved.origin_id.clone(),

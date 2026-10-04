@@ -442,6 +442,38 @@ async fn unsupported_remote_context_leaves_the_previous_output_untouched() {
 }
 
 #[tokio::test]
+async fn retired_service_kind_is_named_in_the_refusal_and_leaves_the_previous_output_untouched() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&description()).expect("description JSON");
+    value["services"][0]["serviceKind"] = serde_json::json!("relay");
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (catalog_url, task) = provider(
+        serde_json::to_vec(&value).expect("description bytes"),
+        StatusCode::OK,
+        Arc::clone(&counter),
+    )
+    .await;
+    let project = authoring_project(&catalog_url);
+    let output = project.path().join("index.json");
+    fs::write(&output, b"previous-index-canary").expect("previous index");
+
+    let error = build_project_at(project.path(), &output, true, OffsetDateTime::UNIX_EPOCH)
+        .await
+        .expect_err("a retired service kind is refused");
+
+    assert!(matches!(error, BuildError::RetiredServiceKind));
+    let message = error.to_string();
+    assert!(message.contains("retired Relay service"), "{message}");
+    assert!(message.contains("remove Relay origins"), "{message}");
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fs::read(&output).expect("previous output"),
+        b"previous-index-canary"
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn oversized_origin_body_leaves_the_previous_output_untouched() {
     let counter = Arc::new(AtomicUsize::new(0));
     let (catalog_url, task) = provider(

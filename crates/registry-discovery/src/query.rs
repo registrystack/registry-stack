@@ -349,6 +349,22 @@ mod tests {
     }
 
     #[test]
+    fn retired_relay_service_kind_is_refused_on_its_own_and_beside_evidence() {
+        assert!(parse_service_filters("serviceKind=evidence").is_ok());
+        for retired in [
+            "serviceKind=relay",
+            "serviceKind=evidence&serviceKind=relay",
+            "serviceKind=relay&serviceKind=evidence",
+        ] {
+            assert_eq!(
+                parse_service_filters(retired),
+                Err(QueryError::InvalidRequest),
+                "{retired}"
+            );
+        }
+    }
+
+    #[test]
     fn malformed_percent_encoding_and_invalid_utf8_are_refused() {
         for invalid in [
             "serviceId=urn%",
