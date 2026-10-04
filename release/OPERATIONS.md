@@ -755,10 +755,11 @@ previous release omits it the same way.
 
 The upgraded Casework and Evidence runtimes continue the audit files the
 previous release wrote, as the upgrade runbook has an operator do. The
-rehearsal counts the records in each stream before and after the upgrade and
-fails unless every earlier record is still there and the upgraded runtime added
-its own; every record in the Evidence stream must also be a valid current
-envelope. The Evidence target is packaged again with the new `evidencectl` and
+rehearsal counts the records in each stream before and after the upgrade. It
+fails when the stream was empty before the upgrade, or holds fewer records
+after it than before plus the number the upgraded runtime must write. That is a
+count, not a comparison of the earlier records. Every record in the Evidence
+stream must also be a valid current envelope. The Evidence target is packaged again with the new `evidencectl` and
 its configuration is carried forward unchanged.
 
 Every table is subject to the row-preservation check. When the

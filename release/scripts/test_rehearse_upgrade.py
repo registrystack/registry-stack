@@ -805,6 +805,12 @@ class AuditUpgradeTest(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.assertEqual(len(MODULE.audit_stream_losses("Evidence", before, after, 2)), 1)
 
+    def test_casework_losing_one_record_across_the_upgrade_is_a_loss(self) -> None:
+        written = MODULE.CASEWORK_UPGRADED_AUDIT_RECORDS
+        self.assertEqual(written, 2)
+        self.assertEqual(MODULE.audit_stream_losses("Casework", 8, 8 + written, written), [])
+        self.assertEqual(len(MODULE.audit_stream_losses("Casework", 8, 7 + written, written)), 1)
+
     def test_the_stream_requires_valid_response_envelopes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -818,7 +824,6 @@ class AuditUpgradeTest(unittest.TestCase):
                 "eventId": "event-1", "time": "2026-09-25T00:00:00Z",
                 "correlation": "operation-1", "record": {}}) + "\n")
             self.assertEqual(MODULE.audit_record_count(root, "evidence.jsonl", schema=schema), 1)
-
 
 
 class GateWiringTest(unittest.TestCase):
