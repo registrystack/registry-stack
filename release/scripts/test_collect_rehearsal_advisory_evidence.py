@@ -8,7 +8,6 @@ import json
 import subprocess
 import tarfile
 import tempfile
-from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import TestCase, main, mock
@@ -254,16 +253,18 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
         )
 
     def test_rejects_invalid_duplicate_or_unsupported_rosters(self) -> None:
-        for roster in ("", "relay relay", "relay surprise"):
+        for roster in ("", "evidence evidence", "evidence surprise"):
             with self.subTest(roster=roster):
                 with self.assertRaises(MODULE.EvidenceError):
                     MODULE.parse_roster(roster)
 
     def test_retired_mint_is_not_an_admitted_rehearsal_image(self) -> None:
         with self.assertRaises(MODULE.EvidenceError):
-            MODULE.parse_roster("evidence mint relay\n")
+            MODULE.parse_roster("evidence mint\n")
 
-
+    def test_retired_relay_is_not_an_admitted_rehearsal_image(self) -> None:
+        with self.assertRaises(MODULE.EvidenceError):
+            MODULE.parse_roster("evidence relay\n")
 
     def test_v0_39_roster_excludes_relay(self) -> None:
         result = subprocess.run(
@@ -314,6 +315,36 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 with self.assertRaises(MODULE.EvidenceError):
                     MODULE.parse_operator_tools(output, roster)
 
+    def test_operator_tools_are_owned_by_the_release_roster(self) -> None:
+        for version in ("0.39.0", "1.0.0"):
+            with self.subTest(version=version):
+                results = [
+                    subprocess.run(
+                        [
+                            "python3",
+                            str(ROOT / "release/scripts/release_candidate.py"),
+                            command,
+                            "--version",
+                            version,
+                        ],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    ).stdout
+                    for command in ("image-names", "image-operator-tools")
+                ]
+                roster = MODULE.parse_roster(results[0])
+                self.assertEqual(
+                    {
+                        "breg": "bregctl",
+                        "casework": "caseworkctl",
+                        "messaging": "messagingctl",
+                        "scheduling": "schedulingctl",
+                    },
+                    MODULE.parse_operator_tools(results[1], roster),
+                )
+                # The collector supports no image the roster holds out.
+                self.assertEqual(MODULE.IMAGE_NAMES, set(roster))
 
     def test_each_operator_tool_gets_its_own_exposure_report(self) -> None:
         tools = {"breg": "bregctl"}
@@ -352,7 +383,7 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                     ("breg", "/usr/local/bin/bregctl"),
                     ("discovery", "/usr/local/bin/discovery"),
                     ("evidence", "/usr/local/bin/evidence"),
-                                    ],
+                ],
             )
             manifest = json.loads((output / "collection.json").read_text())
             self.assertNotIn("exposure", manifest)
@@ -373,9 +404,6 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 [path.name for path in (output / "exposure").iterdir()],
                 ["breg.json"],
             )
-
-
-
 
     def test_the_breg_citizen_services_are_supported_once_they_join(
         self,
