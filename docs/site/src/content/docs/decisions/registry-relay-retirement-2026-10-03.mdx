@@ -56,8 +56,33 @@ repackage the index.
 
 ## Support boundary
 
+Registry Stack uses a [roll-forward security model](../../security/support-window/):
+security fixes ship in the latest release, and Registry Stack does not promise backports to an
+earlier minor.
+From 0.39.0 the latest release contains no Relay, so Relay receives no security fixes once
+0.39.0 is released.
+A deployment that stays pinned to 0.38.0 keeps a Relay runtime with no promised remedy for a
+vulnerability found later.
+Treat the pin as a bounded migration state, not a supported configuration.
+
 Use the v0.38.0 documentation and artifacts only when maintaining a pinned
 Relay deployment during migration.
+They remain available in two places:
+
+- The [v0.38.0 GitHub release](https://github.com/registrystack/registry-stack/releases/tag/v0.38.0)
+  keeps the last `relay` and `relayctl` binaries, the Relay installer, and the documentation
+  archive `registry-docs-v0.38.0.tar.gz` as release assets.
+- The 0.38.0 documentation, including its Relay pages, is served at
+  [docs.registrystack.org/v/0.38.0/](https://docs.registrystack.org/v/0.38.0/) while 0.38.0 is
+  one of the three newest release archives.
+  After later releases move it out of that window, the documentation remains available as that
+  release asset.
+
+{/* Evidence: docs/site/src/content/docs/security/support-window.mdx;
+    docs/site/src/data/docsets.yaml, published_archive_limit;
+    docs/site/src/data/archive-lock.yaml; docs/site/README.md;
+    release/manifests/registry-stack-beta-50.yaml. */}
+
 Published documentation archives and release artifacts remain unchanged.
 Current source and numbered releases beginning with 0.39.0 do not contain Relay binaries, clients,
 installers, images, or authoring tools. The latest published 0.38.0 release remains unchanged.

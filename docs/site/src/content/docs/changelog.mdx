@@ -18,6 +18,26 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- BREAKING: Registry Relay is retired and absent from 0.39.0. The `relay` and `relayctl` binaries,
+  the Relay installer, the Relay container image, the `registry-relay-client` Rust crate, and the
+  `relay` namespace of the unified Rust, Node.js, and Python clients are removed, and Registry
+  Discovery refuses a package index that contains a Relay service. v0.38.0 is the last release
+  that ships them, and Relay receives no security fixes once 0.39.0 is released. There is no
+  automatic migration: choose Base Registry Engine, Evidence Gateway, or Registry Manifest for
+  each consumer and source, remove `relay` client imports, and remove Relay origins from a
+  Discovery index and rebuild it with `discoveryctl package` before upgrading. The
+  [Registry Relay retirement decision](../decisions/registry-relay-retirement-2026-10-03/) gives
+  the scope, the support boundary, and where the v0.38.0 release and documentation remain
+  available.
+
+{/* Evidence: release/scripts/release_roster.py, RELAY_RETIREMENT_RELEASE and relay_in_release;
+    release/scripts/release_candidate.py, _candidate_image_names and _release_payload_inventory;
+    crates/registry-stack-client/src/lib.rs;
+    crates/registry-stack-client-node/package.json;
+    crates/registry-stack-client-py/python/registry_client/__init__.py;
+    crates/registry-discovery/src/startup.rs, PackageIndexRetiredService;
+    crates/registry-discovery-profile/src/lib.rs, RetiredServiceKind. */}
+
 ## v0.38.0 beta-50
 
 - BREAKING: a Base Registry Engine (BReg) direct create, patch, or batch item whose resulting row
