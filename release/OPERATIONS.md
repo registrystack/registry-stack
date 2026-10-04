@@ -751,17 +751,12 @@ naming it with `--product messaging` from such a release is refused. Messaging
 publishes Linux amd64 binaries only, so a macOS rehearsal that downloads the
 previous release omits it the same way.
 
-The audit-writer transition intentionally retires Casework's
-`casework_audit_outbox`. The rehearsal exports every row of that exact table to
-a private JSON Lines archive and checks its row count before allowing removal.
-It waits for the old Casework publisher to drain before stopping it. Old
-Casework and Evidence audit files move to separate archives before the new
+Old Casework and Evidence audit files move to separate archives before the new
 writer starts; Evidence's new stream must contain valid current envelopes
-after the upgraded request. The old Evidence bundle and runtime audit blocks
-are rewritten to the new configuration shape while retaining the same key
-reference and version.
+after the upgraded request. The Evidence target is packaged again with the new
+`evidencectl` and its configuration is carried forward unchanged.
 
-Every other table remains subject to the row-preservation check. When the
+Every table is subject to the row-preservation check. When the
 rehearsal reports a row loss, fix the migration so that it refuses with an error
 naming what it would lose, or keeps the rows. Do not accept the loss or narrow
 the comparison to make the run pass.

@@ -353,29 +353,7 @@ class CaseworkPackageTest(unittest.TestCase):
         dump_json(casework.runtime, {"package": {"root": str(casework.package)}})
         return casework
 
-    def test_a_package_from_before_the_shared_format_is_rebuilt_by_the_new_side(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            casework = self.casework(Path(directory))
-            (casework.package / "casework.package.json").write_text("{}")
-            side = unittest.mock.Mock()
-            self.assertTrue(casework.repackage(side))
-            rebuilt = Path(directory) / "package-rebuilt"
-            side.run.assert_called_once_with("caseworkctl", "package", str(casework.project),
-                                             "--output", str(rebuilt))
-            self.assertEqual(casework.package, rebuilt)
-            self.assertEqual(load_json(casework.runtime)["package"]["root"], str(rebuilt))
-
-    def test_a_shared_format_package_is_kept(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            casework = self.casework(Path(directory))
-            (casework.package / "SHA256SUMS").write_text("")
-            side = unittest.mock.Mock()
-            self.assertFalse(casework.repackage(side))
-            side.run.assert_not_called()
-            self.assertEqual(load_json(casework.runtime)["package"]["root"],
-                             str(casework.package))
-
-    def test_the_new_side_names_the_database_then_plans_and_applies(self) -> None:
+    def test_a_side_names_the_database_then_plans_and_applies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             casework = self.casework(Path(directory))
             side = unittest.mock.Mock()
@@ -392,12 +370,12 @@ class CaseworkPackageTest(unittest.TestCase):
             ])
             side.run.assert_not_called()
 
-    def test_a_plan_with_nothing_pending_is_refused_before_apply(self) -> None:
+    def test_a_first_plan_with_nothing_pending_is_refused_before_apply(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             casework = self.casework(Path(directory))
             side = unittest.mock.Mock()
             side.run_json.return_value = {"changesPending": False}
-            with self.assertRaisesRegex(MODULE.RehearsalError, "adopt"):
+            with self.assertRaisesRegex(MODULE.RehearsalError, "first activation"):
                 casework.activate(side)
             self.assertEqual(side.run_json.call_count, 1)
 
@@ -436,19 +414,6 @@ class CaseworkPackageTest(unittest.TestCase):
                 with self.assertRaisesRegex(MODULE.RehearsalError, "already active"):
                     casework.activate(side, "seeded")
                 self.assertEqual(side.run_json.call_count, 1)
-
-    def test_a_release_that_activates_packages_is_told_apart_by_its_apply_command(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            bin_dir = Path(temp)
-            script = bin_dir / "caseworkctl"
-            side = MODULE.Side("from", bin_dir, bin_dir / "ca.pem")
-            for status, activates in ((0, True), (2, False)):
-                with self.subTest(status=status):
-                    script.write_text(
-                        f'#!/bin/sh\n[ "$1 $2" = "apply --help" ] || exit 64\nexit {status}\n',
-                        encoding="utf-8")
-                    script.chmod(0o755)
-                    self.assertIs(MODULE.activates_casework_packages(side), activates)
 
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
@@ -606,69 +571,14 @@ class EvidencePackageTest(unittest.TestCase):
 
 
 class EvidenceGrammarTest(unittest.TestCase):
-    OLD_GOVERNANCE = {
-        "version": 1,
-        "authentication": {
-            "kind": "oidc-access-token",
-            "issuer": "http://127.0.0.1:9000",
-            "audiences": ["urn:example:evidence"],
-            "jwksUri": "http://127.0.0.1:9000/oauth2/jwks",
-            "requiredScopes": ["evidence"],
-        },
-        "audit": {"format": "keyed-jsonl", "hashSecretRef": "secret:file/audit",
-                  "hashKeyVersion": 1, "failClosed": True},
-    }
-    OLD_RUNTIME = {
-        "version": 1,
-        "bundleDirectory": "/srv/candidate/bundle",
-        "listener": {"bindHost": "127.0.0.1", "port": 8080, "tlsTermination": "x"},
-        "metricsListener": {"bindHost": "::1", "port": 9090},
-        "secretProviders": {"file": {"root": "/srv/secrets"}},
-        "auditStorage": {"path": "/audit/evidence.jsonl", "maximumFileBytes": 1048576},
-    }
-
-    def test_an_earlier_governance_moves_to_the_oidc_block_and_the_current_audit_key(self) -> None:
-        migrated = MODULE.migrate_evidence_governance(self.OLD_GOVERNANCE)
-        self.assertEqual(migrated["authentication"], {"oidc": {
-            "issuer": "http://127.0.0.1:9000",
-            "audience": "urn:example:evidence",
-            "jwksSource": {"kind": "uri", "uri": "http://127.0.0.1:9000/oauth2/jwks"},
-            "requiredScopes": ["evidence"],
-        }})
-        self.assertEqual(migrated["audit"], {"hashKeyRef": "secret:file/audit",
-                                             "hashKeyVersion": 1})
-        self.assertEqual(self.OLD_GOVERNANCE["authentication"]["kind"], "oidc-access-token")
-        self.assertEqual(MODULE.migrate_evidence_governance(migrated), migrated)
-
-    def test_an_earlier_governance_with_several_audiences_is_refused(self) -> None:
-        governance = {"authentication": {**self.OLD_GOVERNANCE["authentication"],
-                                         "audiences": ["a", "b"]}}
-        with self.assertRaisesRegex(Error, "one audience"):
-            MODULE.migrate_evidence_governance(governance)
-
-    def test_an_earlier_runtime_gains_the_envelope_package_bind_addresses_and_audit_block(self) -> None:
-        migrated = MODULE.migrate_evidence_runtime(self.OLD_RUNTIME)
-        self.assertEqual(migrated, {
-            "apiVersion": "registry.registrystack.org/evidence-runtime/v1alpha1",
-            "kind": "EvidenceRuntimeConfig",
-            "package": {"root": "/srv/candidate/bundle"},
-            "listener": {"bind": "127.0.0.1:8080", "tlsTermination": "x"},
-            "metricsListener": {"bind": "[::1]:9090"},
-            "secretProviders": {"file": {"root": "/srv/secrets"}},
-            "audit": {"path": "/audit/evidence.jsonl", "rotateBytes": 1048576},
-        })
-        self.assertEqual(MODULE.migrate_evidence_runtime(migrated), migrated)
-
-    def test_the_runtime_file_is_named_the_way_each_side_reads_it(self) -> None:
+    def test_the_runtime_file_is_named_the_way_each_binary_reads_it(self) -> None:
         runtime = Path("/srv/runtime.yaml")
-        self.assertEqual(MODULE.evidence_arguments(True, runtime, "check"),
+        self.assertEqual(MODULE.evidence_arguments(runtime, "check"),
                          ["check", "--runtime-config", "/srv/runtime.yaml"])
-        self.assertEqual(MODULE.evidence_arguments(False, runtime, "check"),
-                         ["--runtime", "/srv/runtime.yaml", "check"])
         self.assertEqual(MODULE.breg_arguments(runtime),
                          ["--runtime-config", "/srv/runtime.yaml"])
 
-    def test_a_local_target_becomes_a_production_target_in_either_grammar(self) -> None:
+    def test_a_local_target_becomes_a_production_target(self) -> None:
         local = {
             "assuranceProfile": "local",
             "service": {"providerId": "urn:registrystack:evidence:local:provider",
@@ -677,39 +587,29 @@ class EvidenceGrammarTest(unittest.TestCase):
             "responseFormats": [],
             "signing": {"activePublicJwkFile": "public-keys/local.jwk.json"},
             "authorityProfiles": {"local-caller": {"grants": [], "kind": "explicit-request"}},
+            "authentication": {"oidc": {"issuer": "http://127.0.0.1:8081"}},
         }
-        for authentication, issuer_key, jwks in (
-            (self.OLD_GOVERNANCE["authentication"], ("issuer",), ("jwksUri",)),
-            ({"oidc": {"issuer": "http://127.0.0.1:8081"}}, ("oidc", "issuer"),
-             ("oidc", "jwksSource", "uri")),
-        ):
-            production = MODULE.evidence_production_governance(
-                {**local, "authentication": authentication}, "https://127.0.0.1:9443",
-                "public-keys/transit.jwk.json")
-            self.assertEqual(production["assuranceProfile"], "production")
-            self.assertEqual(production["service"], {
-                "providerId": "urn:example:upgrade-rehearsal:provider",
-                "publicOrigin": "https://evidence.example.test"})
-            self.assertEqual(production["publication"],
-                             {"endpointUrl": "https://evidence.example.test"})
-            self.assertEqual(production["responseFormats"], ["signed-jws"])
-            self.assertEqual(production["authorityProfiles"]["local-caller"]["grants"], [{
-                "requirement": MODULE.EVIDENCE_REQUIREMENT,
-                "purpose": MODULE.EVIDENCE_PURPOSE,
-                "audienceFrom": "authenticated-requester",
-                "responseFormats": ["signed-jws"],
-                "subjects": [{"role": "subject", "selectorProfile": "record-reference-v1",
-                              "valueOrigin": "request"}]}])
-            self.assertEqual(production["signing"],
-                             {"activePublicJwkFile": "public-keys/transit.jwk.json"})
-            value: Any = production["authentication"]
-            for key in issuer_key:
-                value = value[key]
-            self.assertEqual(value, "https://127.0.0.1:9443")
-            value = production["authentication"]
-            for key in jwks:
-                value = value[key]
-            self.assertEqual(value, "https://127.0.0.1:9443/oauth2/jwks")
+        production = MODULE.evidence_production_governance(
+            local, "https://127.0.0.1:9443", "public-keys/transit.jwk.json")
+        self.assertEqual(production["assuranceProfile"], "production")
+        self.assertEqual(production["service"], {
+            "providerId": "urn:example:upgrade-rehearsal:provider",
+            "publicOrigin": "https://evidence.example.test"})
+        self.assertEqual(production["publication"],
+                         {"endpointUrl": "https://evidence.example.test"})
+        self.assertEqual(production["responseFormats"], ["signed-jws"])
+        self.assertEqual(production["authorityProfiles"]["local-caller"]["grants"], [{
+            "requirement": MODULE.EVIDENCE_REQUIREMENT,
+            "purpose": MODULE.EVIDENCE_PURPOSE,
+            "audienceFrom": "authenticated-requester",
+            "responseFormats": ["signed-jws"],
+            "subjects": [{"role": "subject", "selectorProfile": "record-reference-v1",
+                          "valueOrigin": "request"}]}])
+        self.assertEqual(production["signing"],
+                         {"activePublicJwkFile": "public-keys/transit.jwk.json"})
+        self.assertEqual(production["authentication"], {"oidc": {
+            "issuer": "https://127.0.0.1:9443",
+            "jwksSource": {"kind": "uri", "uri": "https://127.0.0.1:9443/oauth2/jwks"}}})
         self.assertEqual(local["assuranceProfile"], "local")
 
 
@@ -797,9 +697,6 @@ class StateComparisonTest(unittest.TestCase):
             "public.c disappeared (held 0 rows)",
         ])
 
-    def test_only_retired_audit_tables_can_be_replaced_by_an_archive(self) -> None:
-        self.assertTrue(MODULE.row_count_losses({"public.records": 3}, {}, {"public.records": 3}))
-
     def test_the_upgrade_carries_the_instance_claim_over_or_records_one(self) -> None:
         claim = {"systemIdentifier": "7", "databaseOid": 16384, "epoch": 1,
                  "claimedAt": "2026-09-28T00:00:00Z"}
@@ -858,32 +755,6 @@ class AuditUpgradeTest(unittest.TestCase):
                 "correlation": "operation-1", "record": {}}) + "\n")
             self.assertEqual(MODULE.audit_record_count(root, "evidence.jsonl", schema=schema), 1)
 
-    def test_retired_audit_tables_are_preserved_before_exclusion(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            postgres = unittest.mock.Mock()
-            postgres.sql.return_value = '{"record":1}\n{"record":2}\n'
-            table = "public.casework_audit_outbox"
-            before = {table: 2, "public.casework_items": 1}
-            archive = MODULE.archive_audit_tables(postgres, "casework", before, Path(temporary))
-            self.assertEqual(archive, {table: 2})
-            self.assertEqual(MODULE.row_count_losses(before,
-                {"public.casework_items": 1}, archive), [])
-            self.assertTrue(MODULE.row_count_losses(before, {}, archive))
-            self.assertTrue(MODULE.row_count_losses(before, {}, {table: 1}))
-            postgres.sql.return_value = '{"record":1}\n'
-            with self.assertRaisesRegex(Error, "archive"):
-                MODULE.archive_audit_tables(postgres, "casework", before, Path(temporary) / "bad")
-
-    def test_outbox_drain_waits_and_refuses_a_timeout(self) -> None:
-        postgres = unittest.mock.Mock()
-        postgres.sql.side_effect = ["t", "2", "0"]
-        with unittest.mock.patch.object(MODULE.time, "sleep"):
-            MODULE.wait_for_casework_audit(postgres)
-        postgres.sql.side_effect = None
-        postgres.sql.return_value = "t"
-        with unittest.mock.patch.object(MODULE.time, "monotonic", side_effect=[0, 91]):
-            with self.assertRaisesRegex(Error, "drain"):
-                MODULE.wait_for_casework_audit(postgres)
 
 
 class GateWiringTest(unittest.TestCase):

@@ -10,8 +10,7 @@ queue with answered and in-flight work, an Evidence audit stream with a
 signed response, and a Messaging package ledger with scheduled and cancelled
 messages. It then points the binaries built from this source at that
 exact state, runs the documented upgrade steps, and fails unless the state is
-still served unchanged and no retained table lost a row. Retired audit tables
-are archived and counted before the documented migration removes them.
+still served unchanged and no table lost a row.
 A product the previous release did not ship has no state to carry forward,
 so its leg is omitted and the report says why.
 
@@ -301,27 +300,16 @@ def install_asset(asset: Path, binary: str, destination: Path) -> None:
             output.chmod(0o755)
 
 
-def row_count_losses(before: dict[str, int], after: dict[str, int],
-                     archived: dict[str, int] | None = None) -> list[str]:
-    """Name every row loss, allowing only checked archives of retired audit tables."""
+def row_count_losses(before: dict[str, int], after: dict[str, int]) -> list[str]:
+    """Name every table that disappeared or lost rows."""
 
     losses = []
     for table, count in sorted(before.items()):
-        if (table not in after and (archived or {}).get(table) == count
-                and any(table in tables for tables in RETIRED_AUDIT_TABLES.values())):
-            continue
         if table not in after:
             losses.append(f"{table} disappeared (held {count} rows)")
         elif after[table] < count:
             losses.append(f"{table} dropped from {count} to {after[table]} rows")
     return losses
-
-
-# Only these audit tables retire in this transition. Business tables always
-# remain subject to the ordinary row-preservation comparison.
-RETIRED_AUDIT_TABLES = {
-    "casework": ("public.casework_audit_outbox",),
-}
 
 
 def audit_paths(directory: Path, name: str) -> list[Path]:
@@ -360,37 +348,6 @@ def audit_record_count(directory: Path, name: str, *, schema: str | None = None)
                 raise RehearsalError("audit stream contains an invalid current envelope")
             count += 1
     return count
-
-
-def archive_audit_tables(postgres: Postgres, database: str, counts: dict[str, int],
-                         directory: Path) -> dict[str, int]:
-    private_directory(directory)
-    archived = {}
-    for table in RETIRED_AUDIT_TABLES[database]:
-        if table not in counts:
-            continue
-        # Table names come only from the closed list above, never input.
-        rows = postgres.sql(database, f"SELECT row_to_json(t)::text FROM {table} AS t;")
-        path = directory / f"{table}.jsonl"
-        with path.open("x", encoding="utf-8") as handle:
-            path.chmod(0o600)
-            handle.write(rows)
-        count = audit_record_count(directory, path.name)
-        if count != counts[table]:
-            raise RehearsalError(f"audit archive row count differs for {table}")
-        archived[table] = count
-    return archived
-
-
-def wait_for_casework_audit(postgres: Postgres) -> None:
-    if postgres.sql("casework", "SELECT to_regclass('casework_audit_outbox') IS NOT NULL;").strip() != "t":
-        return
-    deadline = time.monotonic() + READY_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if postgres.sql("casework", "SELECT count(*) FROM casework_audit_outbox WHERE published_at IS NULL;").strip() == "0":
-            return
-        time.sleep(0.1)
-    raise RehearsalError("the previous Casework release did not drain its audit outbox")
 
 
 def breg_view_differences(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -1178,10 +1135,10 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     before_counts = postgres.row_counts("registry")
     claim_before = instance_claim(old, breg.runtime)
 
-    def apply(target: Path, digest: str, activation: str) -> None:
+    def apply(target: Path, digest: str) -> None:
         plan = new.run_json("bregctl", "--format", "json", "plan", "--runtime-config",
                             str(breg.runtime), "--package", str(target))
-        expect_plan(plan, activation, digest)
+        expect_plan(plan, "successor", digest)
         new.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
                      str(breg.runtime), "--package", str(target))
         breg.write_runtime(breg.runtime, "registry", target, breg.port)
@@ -1205,7 +1162,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
                             "classification": "public"})
     dump_yaml(breg.project / "registry.yaml", registry)
     successor, successor_digest = breg.package(new, work / "build-successor", baseline=package)
-    apply(successor, successor_digest, "successor")
+    apply(successor, successor_digest)
     ledger = expect_ledger(
         new.run_json("bregctl", "--format", "json", "status", "--runtime-config",
                      str(breg.runtime)), successor_digest)
@@ -1241,7 +1198,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
 
 
 # ---------------------------------------------------------------------------
-# Casework: migrate or activate, bootstrap, write review work, upgrade and apply,
+# Casework: activate, bootstrap, write review work, upgrade and apply,
 # compare.
 
 
@@ -1257,13 +1214,6 @@ CASEWORK_ACTORS = {
     "supervisor": ("upgrade-rehearsal-supervisor", "casework:supervisor", True),
     "requester": ("upgrade-rehearsal-requester", "casework:request", False),
 }
-
-
-def activates_casework_packages(side: Side) -> bool:
-    """Whether one side's Casework applies database changes with a package
-    activation; an earlier release migrated with `casework migrate`."""
-
-    return side.run("caseworkctl", "apply", "--help", check=False).returncode == 0
 
 
 class Casework:
@@ -1307,13 +1257,6 @@ class Casework:
         write_secret(self.secrets / "jwks.json",
                      json.dumps({"keys": [self.keys.rsa_jwk(CASEWORK_KID)]}))
 
-    def grant_existing(self) -> None:
-        self.postgres.sql("casework", """
-            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public
-              TO casework_runtime;
-            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO casework_runtime;
-        """)
-
     def author(self, side: Side) -> None:
         side.run("caseworkctl", "init", "--template", "standalone-decision", str(self.project))
         project = load_yaml(self.project / "casework.yaml")
@@ -1344,29 +1287,13 @@ class Casework:
                       "hashKeyRef": "secret:file/audit-key"},
         })
 
-    def repackage(self, side: Side) -> bool:
-        """Rebuild the package with this side's caseworkctl when the deployed
-        one predates the shared package format, the upgrade step the Casework
-        changelog names. Returns whether a rebuild was needed."""
-        if (self.package / "SHA256SUMS").exists():
-            return False
-        rebuilt = self.work / "package-rebuilt"
-        side.run("caseworkctl", "package", str(self.project), "--output", str(rebuilt))
-        runtime = load_yaml(self.runtime)
-        runtime["package"]["root"] = str(rebuilt)
-        dump_yaml(self.runtime, runtime)
-        self.package = rebuilt
-        return True
-
     def activate(self, side: Side, active: str | None = None) -> dict[str, Any]:
         """Name the database in runtime.yaml, then plan and apply with the
         migration credential, the upgrade step the Casework changelog names.
         The first apply on an empty database migrates it and records the
-        first activation. The first apply on a database an earlier release
-        migrated adopts it: it applies the pending migrations, grants the
-        runtime role, and records the first activation.
+        first activation.
 
-        `active` is the activation an earlier release already recorded. When
+        `active` is the activation the previous release already recorded. When
         plan reports that activation as already active with nothing pending,
         apply would refuse, so nothing is applied. Returns the apply report,
         or the active activation when nothing was applied."""
@@ -1379,9 +1306,8 @@ class Casework:
             return side.run_json("caseworkctl", "--format", "json", "apply", *config,
                                  "--operator-reference", CASEWORK_OPERATOR_REFERENCE)
         if active is None:
-            raise RehearsalError("caseworkctl plan reported nothing pending, so the first "
-                                 "apply would not adopt the database the previous release "
-                                 "migrated")
+            raise RehearsalError("caseworkctl plan reported nothing pending before the "
+                                 "first activation")
         current = planned.get("active") or {}
         refusals = [refusal.get("code") for refusal in planned.get("refusals") or []]
         if current.get("activationId") != active or refusals != [CASEWORK_ALREADY_ACTIVE]:
@@ -1476,12 +1402,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     casework.provision()
     casework.author(old)
     runtime = ["--runtime-config", str(casework.runtime)]
-    seeded = None
-    if activates_casework_packages(old):
-        seeded = casework.activate(old)["activationId"]
-    else:
-        old.run("casework", *runtime, "migrate")
-        casework.grant_existing()
+    seeded = casework.activate(old)["activationId"]
     ready = f"http://127.0.0.1:{casework.port}/ready"
     service = Service(old, "casework", [*runtime, "serve"], work / "casework-old.log", ready)
     try:
@@ -1495,16 +1416,13 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
                 or len(before_views["tasks"]) < 2):
             raise RehearsalError("the previous release did not record the answered "
                                  "and in-flight review work the rehearsal compares")
-        wait_for_casework_audit(postgres)
     finally:
         service.stop()
     before_counts = postgres.row_counts("casework")
 
-    archived = archive_audit_tables(postgres, "casework", before_counts, work / "audit-table-archive")
     archived_files = archive_audit_files(casework.audit, "casework.ndjson", work / "audit-archive")
-    repackaged = casework.repackage(new)
     activation = casework.activate(new, seeded)
-    losses = row_count_losses(before_counts, postgres.row_counts("casework"), archived)
+    losses = row_count_losses(before_counts, postgres.row_counts("casework"))
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
     try:
         after_views = casework.views(requests)
@@ -1513,16 +1431,13 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
         casework.request_review("after-0")
     finally:
         service.stop()
-    losses += row_count_losses(before_counts, postgres.row_counts("casework"), archived)
+    losses += row_count_losses(before_counts, postgres.row_counts("casework"))
     new.run_json("caseworkctl", "--format", "json", "check", str(casework.project))
 
     report["casework"] = {
         "reviewRequests": len(requests),
         "tables": len(before_counts),
         "auditFilesArchived": archived_files,
-        "archivedAuditTables": archived,
-        "repackaged": repackaged,
-        "seededBy": "migrate" if seeded is None else "activation",
         "activationId": activation["activationId"],
         "activatedOnUpgrade": activation["activationId"] != seeded,
         "viewDifferences": differences,
@@ -1721,37 +1636,6 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
 EVIDENCE_KID = "upgrade-rehearsal-evidence-issuer"
 EVIDENCE_REQUIREMENT = "urn:example:requirement:record-status:v1"
 EVIDENCE_PURPOSE = "record-status-check"
-EVIDENCE_RUNTIME_API_VERSION = "registry.registrystack.org/evidence-runtime/v1alpha1"
-EVIDENCE_RUNTIME_KIND = "EvidenceRuntimeConfig"
-
-
-def migrate_evidence_governance(document: dict[str, Any]) -> dict[str, Any]:
-    """Rewrite bundle-shaped governance written before the access-token rules
-    moved under `authentication.oidc`, `audit.hashSecretRef` became
-    `audit.hashKeyRef`, and `audit.format` and `audit.failClosed` were
-    removed. A current document is returned unchanged."""
-
-    migrated = json.loads(json.dumps(document))
-    authentication = migrated.get("authentication")
-    if isinstance(authentication, dict) and "oidc" not in authentication:
-        rules = {key: value for key, value in authentication.items() if key != "kind"}
-        audiences = rules.pop("audiences", None)
-        if audiences is not None:
-            if len(audiences) != 1:
-                raise RehearsalError("Evidence governance must name exactly one audience "
-                                     "to move it under authentication.oidc")
-            rules["audience"] = audiences[0]
-        jwks_uri = rules.pop("jwksUri", None)
-        if jwks_uri is not None:
-            rules["jwksSource"] = {"kind": "uri", "uri": jwks_uri}
-        migrated["authentication"] = {"oidc": rules}
-    audit = migrated.get("audit")
-    if isinstance(audit, dict) and ({"hashSecretRef", "format", "failClosed"} & audit.keys()):
-        migrated["audit"] = {"hashKeyRef": audit.get("hashKeyRef", audit.get("hashSecretRef")),
-                             "hashKeyVersion": audit["hashKeyVersion"]}
-    return migrated
-
-
 EVIDENCE_LOCAL_IDENTIFIERS = "urn:registrystack:evidence:local:"
 EVIDENCE_REHEARSAL_IDENTIFIERS = "urn:example:upgrade-rehearsal:"
 EVIDENCE_PUBLIC_ORIGIN = "https://evidence.example.test"
@@ -1759,10 +1643,10 @@ EVIDENCE_PUBLIC_ORIGIN = "https://evidence.example.test"
 
 def evidence_production_governance(document: dict[str, Any], issuer: str,
                                    public_jwk_file: str) -> dict[str, Any]:
-    """Turn the governance `target new --local` writes into a production one,
-    in either configuration grammar: `evidencectl package` refuses a local
-    target, and a production profile refuses the local starter's disposable
-    identifiers, plain-HTTP origins, and empty response formats."""
+    """Turn the governance `target new --local` writes into a production one:
+    `evidencectl package` refuses a local target, and a production profile
+    refuses the local starter's disposable identifiers, plain-HTTP origins,
+    and empty response formats."""
 
     text = json.dumps(document).replace(EVIDENCE_LOCAL_IDENTIFIERS,
                                         EVIDENCE_REHEARSAL_IDENTIFIERS)
@@ -1781,66 +1665,18 @@ def evidence_production_governance(document: dict[str, Any], issuer: str,
                 "audienceFrom": "authenticated-requester", "responseFormats": ["signed-jws"],
                 "subjects": [{"role": "subject", "selectorProfile": "record-reference-v1",
                               "valueOrigin": "request"}]}]
-    authentication = governance["authentication"]
-    if "oidc" in authentication:
-        authentication["oidc"]["issuer"] = issuer
-        authentication["oidc"]["jwksSource"] = {"kind": "uri", "uri": f"{issuer}/oauth2/jwks"}
-    else:
-        authentication["issuer"] = issuer
-        authentication["jwksUri"] = f"{issuer}/oauth2/jwks"
+    oidc = governance["authentication"]["oidc"]
+    oidc["issuer"] = issuer
+    oidc["jwksSource"] = {"kind": "uri", "uri": f"{issuer}/oauth2/jwks"}
     return governance
-
-
-def evidence_bind(host: str, port: int) -> str:
-    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-
-
-def migrate_evidence_runtime(document: dict[str, Any]) -> dict[str, Any]:
-    """Rewrite an Evidence runtime file written before the apiVersion/kind
-    envelope, `package.root`, `host:port` bind addresses, and the `audit`
-    destination block that replaced `auditStorage`. A current document is
-    returned unchanged."""
-
-    if "apiVersion" in document and "auditStorage" not in document:
-        return json.loads(json.dumps(document))
-    migrated: dict[str, Any] = {"apiVersion": EVIDENCE_RUNTIME_API_VERSION,
-                                "kind": EVIDENCE_RUNTIME_KIND}
-    for key, value in document.items():
-        if key == "version":
-            continue
-        if key == "auditStorage":
-            migrated["audit"] = {"path": value["path"]}
-            if "maximumFileBytes" in value:
-                migrated["audit"]["rotateBytes"] = value["maximumFileBytes"]
-        elif key == "bundleDirectory":
-            migrated["package"] = {"root": value}
-        elif key in ("listener", "metricsListener") and isinstance(value, dict):
-            listener = {}
-            for name, setting in value.items():
-                if name == "bindHost":
-                    listener["bind"] = evidence_bind(setting, value["port"])
-                elif name != "port":
-                    listener[name] = setting
-            migrated[key] = listener
-        else:
-            migrated[key] = json.loads(json.dumps(value))
-    return migrated
 
 
 def breg_arguments(runtime: Path) -> list[str]:
     return ["--runtime-config", str(runtime)]
 
 
-def evidence_arguments(reads_runtime_config: bool, runtime: Path, subcommand: str) -> list[str]:
-    """Name the runtime file the way one side's `evidence` binary reads it."""
-
-    if reads_runtime_config:
-        return [subcommand, "--runtime-config", str(runtime)]
-    return ["--runtime", str(runtime), subcommand]
-
-
-def reads_runtime_config(side: Side) -> bool:
-    return "--runtime-config" in side.run("evidence", "check", "--help").stdout
+def evidence_arguments(runtime: Path, subcommand: str) -> list[str]:
+    return [subcommand, "--runtime-config", str(runtime)]
 
 
 class Evidence:
@@ -1870,19 +1706,15 @@ class Evidence:
 
     def target_runtime(self, runtime: dict[str, Any]) -> dict[str, Any]:
         """Point a target runtime at this rehearsal's listener, audit file,
-        extract, Transit signer, and installed package, in either grammar."""
+        extract, Transit signer, and installed package."""
 
         runtime["signer"] = {"kind": "transit", "unixSocketPath": str(self.transit.socket_path),
                              "mount": "transit", "keyName": TransitServer.KEY_NAME,
                              "keyVersion": 1, "timeoutMilliseconds": 2000}
-        if "package" in runtime:
-            # A current package is installed at a stable path outside the candidate.
-            runtime["package"]["root"] = str(self.installed)
-            runtime["listener"]["bind"] = f"127.0.0.1:{self.port}"
-        else:
-            runtime["bundleDirectory"] = str(self.candidate / "bundle")
-            runtime["listener"]["port"] = self.port
-        runtime["auditStorage" if "auditStorage" in runtime else "audit"]["path"] = str(self.audit / "evidence.jsonl")
+        # The package is installed at a stable path outside the candidate.
+        runtime["package"]["root"] = str(self.installed)
+        runtime["listener"]["bind"] = f"127.0.0.1:{self.port}"
+        runtime["audit"]["path"] = str(self.audit / "evidence.jsonl")
         extract = self.work / "record-status.sqlite"
         if not extract.exists():
             self.extract()
@@ -1890,19 +1722,19 @@ class Evidence:
         return runtime
 
     def package(self, side: Side, candidate: Path) -> None:
-        """Package the target and write the operative runtime beside it."""
+        """Package the target, install the package, and write the operative
+        runtime beside it."""
 
         target_runtime = self.target / "runtime.yaml"
         side.run("evidencectl", "package", "--target", str(self.target), "--output",
                  str(candidate), str(self.project))
         runtime = load_yaml(target_runtime)
-        if "package" in runtime:
-            if self.installed.exists():
-                # evidencectl seals every package directory read-only.
-                for directory, _, _ in os.walk(self.installed):
-                    os.chmod(directory, 0o700)
-                shutil.rmtree(self.installed)
-            candidate.rename(self.installed)
+        if self.installed.exists():
+            # evidencectl seals every package directory read-only.
+            for directory, _, _ in os.walk(self.installed):
+                os.chmod(directory, 0o700)
+            shutil.rmtree(self.installed)
+        candidate.rename(self.installed)
         if self.runtime.exists():
             self.runtime.chmod(0o600)
         dump_yaml(self.runtime, runtime)
@@ -1930,24 +1762,11 @@ class Evidence:
         self.package(side, self.candidate)
 
     def upgrade(self, side: Side) -> None:
-        """Carry the deployment into the configuration grammar and package
-        format this side reads.
-
-        This is the documented upgrade step for a release that renames
-        Evidence configuration keys and changes the package format: rewrite
-        the target's governance and runtime, package it with this side's
-        evidencectl, install it, and point the operative runtime at it. The
-        audit stream, secrets, and keys stay where they are.
+        """Package the unchanged target with this side's evidencectl, install
+        the package, and point the operative runtime at it, the documented
+        upgrade step. The audit stream, secrets, and keys stay where they are.
         """
 
-        if not reads_runtime_config(side):
-            return
-        governance_path = self.target / "governance.yaml"
-        self.governance = migrate_evidence_governance(load_yaml(governance_path))
-        dump_yaml(governance_path, self.governance)
-        target_runtime = self.target / "runtime.yaml"
-        runtime = self.target_runtime(migrate_evidence_runtime(load_yaml(target_runtime)))
-        dump_yaml(target_runtime, runtime)
         self.package(side, self.work / "candidate-upgraded")
 
     def extract(self) -> Path:
@@ -1969,11 +1788,9 @@ class Evidence:
         return path
 
     def request(self) -> tuple[int, Any]:
-        authentication = self.governance["authentication"]
-        authentication = authentication.get("oidc", authentication)
-        audience = authentication.get("audience") or authentication["audiences"][0]
+        authentication = self.governance["authentication"]["oidc"]
         profile = next(iter(self.governance["authorityProfiles"].values()))
-        claims = {"iss": self.issuer, "aud": audience,
+        claims = {"iss": self.issuer, "aud": authentication["audience"],
                   "sub": "upgrade-rehearsal-caller", "client_id": "upgrade-rehearsal-caller",
                   "scope": " ".join(authentication["requiredScopes"]),
                   "registry_actor_kind": "service",
@@ -1997,17 +1814,11 @@ def rehearse_evidence(work: Path, keys: Keys, tls: Path, old: Side, new: Side,
     evidence = Evidence(work, keys, tls)
     try:
         evidence.author(old)
-        old_reads = reads_runtime_config(old)
-
-        def on_old(subcommand: str) -> list[str]:
-            return evidence_arguments(old_reads, evidence.runtime, subcommand)
-
-        def on_new(subcommand: str) -> list[str]:
-            return evidence_arguments(True, evidence.runtime, subcommand)
-
-        old.run("evidence", *on_old("check"))
+        check = evidence_arguments(evidence.runtime, "check")
+        serve = evidence_arguments(evidence.runtime, "serve")
+        old.run("evidence", *check)
         ready = f"http://127.0.0.1:{evidence.port}/ready"
-        service = Service(old, "evidence", on_old("serve"), work / "evidence-old.log", ready)
+        service = Service(old, "evidence", serve, work / "evidence-old.log", ready)
         try:
             status, before = evidence.request()
             expect_status("previous release evidence request", status, before, 200)
@@ -2020,8 +1831,8 @@ def rehearse_evidence(work: Path, keys: Keys, tls: Path, old: Side, new: Side,
         archive_audit_files(evidence.audit, "evidence.jsonl", archive)
 
         evidence.upgrade(new)
-        new.run("evidence", *on_new("check"))
-        service = Service(new, "evidence", on_new("serve"), work / "evidence-new.log", ready)
+        new.run("evidence", *check)
+        service = Service(new, "evidence", serve, work / "evidence-new.log", ready)
         try:
             status, after = evidence.request()
             expect_status("upgraded evidence request", status, after, 200)
