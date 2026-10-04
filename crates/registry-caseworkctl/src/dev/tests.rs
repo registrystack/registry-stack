@@ -2749,21 +2749,45 @@ fn service_cleanup_joins_every_log_pump() {
 }
 
 #[test]
-fn legacy_issuer_state_and_unsafe_token_clients_are_refused_without_effects() {
+fn retained_state_of_another_shape_is_invalid_without_mutation() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
     let state = session(&project);
     private::directory(&project.join(".casework")).unwrap();
     private::directory(&state.root()).unwrap();
-    let mut legacy = serde_json::to_value(&state).unwrap();
-    legacy["version"] = json!(1);
-    let bytes = serde_json::to_vec(&legacy).unwrap();
-    private::create(&state.root().join("state.json"), &bytes).unwrap();
-    assert!(read_state(&state.root())
-        .unwrap_err()
-        .to_string()
-        .contains("uses Mint"));
-    assert_eq!(fs::read(state.root().join("state.json")).unwrap(), bytes);
+    let state_file = state.root().join("state.json");
+    let current = serde_json::to_value(&state).unwrap();
+    private::create(&state_file, &serde_json::to_vec(&current).unwrap()).unwrap();
+    assert_eq!(read_state(&state.root()).unwrap().owner, state.owner);
+
+    let ownership = "retained dev state ownership is invalid; no resources were changed";
+    let invalid = "retained dev state is invalid; preserve it for inspection";
+    let mut earlier_version = current.clone();
+    earlier_version["version"] = json!(1);
+    let mut unknown_field = earlier_version.clone();
+    unknown_field["mintPort"] = json!(8081);
+    let mut cases = vec![(earlier_version, ownership), (unknown_field, invalid)];
+    for field in ["binaries", "sources", "borrowedScopes"] {
+        let mut missing = current.clone();
+        missing.as_object_mut().unwrap().remove(field).unwrap();
+        cases.push((missing, invalid));
+    }
+    for (retained, refusal) in cases {
+        let bytes = serde_json::to_vec(&retained).unwrap();
+        private::replace(&state_file, &bytes).unwrap();
+        assert_eq!(
+            read_state(&state.root()).unwrap_err().to_string(),
+            refusal,
+            "{retained}"
+        );
+        assert_eq!(fs::read(&state_file).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn unsafe_token_clients_are_refused_without_effects() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
     for id in ["../staff", "/staff", "", "staff/header"] {
         assert!(fresh_token(&project, id)
             .unwrap_err()
