@@ -22,6 +22,10 @@
     for the audit outbox table that v0.38.0 no longer has.
   - Building the Registry Casework release image fails when no `caseworkctl`
     is staged beside the runtime.
+  - Recovery of a prepared BReg source action refuses saved attempt evidence
+    that carries no `version`, before any source request, where it read such
+    evidence as an earlier format. Every release has written `version` 1, so
+    no retained attempt is affected.
 
 - Empty source-backed inbox views over a source reconciled within the larger
   of twice its `reconciliationIntervalMilliseconds` and 2 minutes return
