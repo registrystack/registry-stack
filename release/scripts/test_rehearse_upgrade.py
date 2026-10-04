@@ -67,24 +67,45 @@ class ReleaseSelectionTest(unittest.TestCase):
                 with self.subTest(version=version), \
                         self.assertRaisesRegex(Error, "FORWARD_PATH_FLOOR"):
                     MODULE.check_floor_is_current(released, version)
-            with self.assertRaisesRegex(Error, "no release manifest"):
+            with self.assertRaisesRegex(Error, "no released manifest"):
                 MODULE.check_floor_is_current(released, "0.9.0")
 
-    def test_reads_the_stack_version_of_every_release_manifest(self) -> None:
+    def test_reads_the_stack_version_of_every_released_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifests = Path(temporary) / "release/manifests"
             manifests.mkdir(parents=True)
             for release, version in (("beta-9", "0.9.0"), ("beta-10", "0.10.0")):
                 (manifests / f"registry-stack-{release}.yaml").write_text(
                     f"stack:\n  release: {release}\n  version: {version}\n"
-                    f"\nartifacts:\n  version: 9.9.9\n", encoding="utf-8")
+                    f"  source_tag: v{version}\n  status: released\n"
+                    f"\nartifacts:\n  version: 9.9.9\n  status: released\n",
+                    encoding="utf-8")
             (manifests / "import-map.yaml").write_text("version: 1\n", encoding="utf-8")
-            self.assertEqual(sorted(MODULE.manifest_versions(Path(temporary))),
+            self.assertEqual(sorted(MODULE.released_versions(Path(temporary))),
                              ["0.10.0", "0.9.0"])
             (manifests / "registry-stack-beta-11.yaml").write_text(
                 "artifacts:\n  version: 0.11.0\n", encoding="utf-8")
             with self.assertRaisesRegex(Error, "registry-stack-beta-11.yaml"):
-                MODULE.manifest_versions(Path(temporary))
+                MODULE.released_versions(Path(temporary))
+
+    def test_a_manifest_that_was_never_published_is_not_a_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifests = Path(temporary) / "release/manifests"
+            manifests.mkdir(parents=True)
+            for release, version, status in (
+                ("beta-50", "0.38.0", "  status: released\n"),
+                ("beta-51", "0.39.0", "  status: release-candidate\n"),
+                ("beta-52", "0.39.1", "\nartifacts:\n  status: released\n"),
+            ):
+                (manifests / f"registry-stack-{release}.yaml").write_text(
+                    f"stack:\n  release: {release}\n  version: {version}\n"
+                    f"  source_tag: v{version}\n{status}", encoding="utf-8")
+            released = MODULE.released_versions(Path(temporary))
+        self.assertEqual(released, ["0.38.0"])
+        with unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 38, 0)):
+            for version in ("0.39.1", "0.39.2", "0.40.0"):
+                with self.subTest(version=version):
+                    MODULE.check_floor_is_current(released, version)
 
     def test_main_refuses_a_stale_floor_before_any_download_or_container(self) -> None:
         stderr = io.StringIO()
@@ -940,7 +961,7 @@ class GateWiringTest(unittest.TestCase):
             self.assertFalse(refused in workflow, f"workflow carries {refused!r}")
 
     def test_floor_is_the_release_before_the_workspace_version(self) -> None:
-        MODULE.check_floor_is_current(MODULE.manifest_versions(ROOT),
+        MODULE.check_floor_is_current(MODULE.released_versions(ROOT),
                                       MODULE.workspace_version(ROOT))
 
     def test_api_stability_states_the_same_floor(self) -> None:
