@@ -183,7 +183,7 @@ struct StartArgs {
     project: PathBuf,
     /// Local clients and their directory teams (default on first start:
     /// dev-clients.yaml in the project; retained for restarts).
-    #[arg(long, alias = "clients", value_name = "FILE")]
+    #[arg(long, value_name = "FILE")]
     clients_file: Option<PathBuf>,
     /// Casework loopback port on first start (default 8092; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_CASEWORK_PORT")]

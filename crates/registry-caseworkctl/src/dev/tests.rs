@@ -920,6 +920,22 @@ fn bare_dev_alias_ports_also_fall_back_to_the_environment() {
 }
 
 #[test]
+fn start_names_its_clients_only_with_clients_file() {
+    for form in [
+        vec!["caseworkctl", "dev", "start", "/tmp/casework-project"],
+        vec!["caseworkctl", "dev", "/tmp/casework-project"],
+    ] {
+        let named = |flag: &'static str| {
+            let mut arguments = form.clone();
+            arguments.extend([flag, "clients.yaml"]);
+            crate::Cli::try_parse_from(arguments)
+        };
+        assert!(named("--clients-file").is_ok(), "{form:?}");
+        assert!(named("--clients").is_err(), "{form:?}");
+    }
+}
+
+#[test]
 fn events_reports_only_the_bounded_journal_tail() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
