@@ -681,6 +681,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retired_relay_service_kind_is_an_invalid_request_on_the_real_router() {
+        let response = app(10)
+            .oneshot(
+                Request::get(format!("{SERVICES_ROUTE}?serviceKind=relay"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/problem+json");
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let problem: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(problem["type"], ProblemCode::InvalidRequest.type_uri());
+        assert_eq!(problem["status"], 400);
+    }
+
+    #[tokio::test]
     async fn duplicate_request_members_are_refused_by_the_real_router() {
         let response = app(10)
             .oneshot(
