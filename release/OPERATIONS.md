@@ -732,8 +732,8 @@ gh workflow run release-upgrade-rehearsal.yml \
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
 earliest release this source reads state from, `v0.38.0`, and the script
 refuses to start from any earlier release rather than skipping the check. It
-also refuses to run when the floor is not the newest release manifest below the
-workspace version.
+also refuses to run when the floor is not the newest release manifest recorded
+as `status: released` below the workspace version.
 Scheduling state is not rehearsed: `PRODUCTS` in the script names no
 Scheduling leg.
 
@@ -1147,15 +1147,21 @@ dependencies and `Cargo.lock`, the native client packages and generated
 loaders, the lockfiles in `FUZZ_LOCK_RELEASE_SURFACE_PATHS`, the VS Code and
 Zed extension manifests and lockfiles in `EDITOR_RELEASE_SURFACE_PATHS`, and
 the committed OpenAPI documents.
-The same PR moves the upgrade promise to the release just published: set
-`FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` to that release,
-move the tags `release/scripts/test_rehearse_upgrade.py` asserts on either side
-of it, and restate it where this file's rehearsal section and
+The upgrade promise moves to the release just published once `main` both
+names the next version and records that release as published. The PR that
+completes the two moves it: this one when the publication record below has
+already merged or rides with it, and the publication record's PR when this bump
+merges first. That PR sets `FORWARD_PATH_FLOOR` in
+`release/scripts/rehearse-upgrade.py` to that release, moves the tags
+`release/scripts/test_rehearse_upgrade.py` asserts on either side of it, and
+restates it where this file's rehearsal section and
 `docs/site/src/content/docs/reference/api-stability.mdx` name the release this
 source reads state from. `check_floor_is_current` in the same script holds the
-floor to the newest release manifest below the workspace version, so the
-release tooling tests fail on a bump that leaves the floor behind, and the
-rehearsal refuses to run with one.
+floor to the newest release manifest recorded as `status: released` below the
+workspace version, so the release tooling tests fail on the PR that leaves the
+floor behind, and the rehearsal refuses to run with one. A manifest whose
+release was abandoned never gains that status, so a fix-forward release keeps
+the floor at the last published release.
 The release is closed only once this PR and the
 documentation promotion below have merged. The one exception is a next
 release already in preparation when `verify-public` passes: its release PR
@@ -1179,6 +1185,9 @@ docset rebuilt archives mark indexable.
 
 2. In `release/manifests/registry-stack-<release-id>.yaml`, add
    `source_ref: <commit>` before `source_tag` and `status: released` after it.
+   When the next development version has already merged, this is the change
+   that moves the upgrade promise, as "Open the next development version"
+   describes.
 3. In `docs/site/src/data/docsets.yaml`, set `released: v<version>`. In the
    `v<version>` docset, set `availability: released`, begin the description with
    `Released Registry Stack v<version> <release-id>` and drop `candidate`, and
