@@ -6066,6 +6066,37 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
 }
 
 #[test]
+fn entity_ids_that_share_one_sql_name_are_refused() {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject",
+          "registry":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[
+            {"id":"case-file","primaryDataset":"test-dataset","route":"case-files","mutationMode":"create_only","fields":[
+              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            ]},
+            {"id":"case_file","primaryDataset":"test-dataset","route":"case_files","mutationMode":"create_only","fields":[
+              {"id":"code","type":"string","maxLength":8,"classification":"internal"}
+            ]}
+          ],
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","permissions":[
+            {"entity":"case-file","operations":["get"],"readableFields":["code"], "rowBoundaries": []},
+            {"entity":"case_file","operations":["get"],"readableFields":["code"], "rowBoundaries": []}
+          ]}]
+        }"#,
+    )
+    .expect("project parses");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("a hyphen and an underscore yield one SQL name");
+
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "entity.sql_name.duplicate"
+            && diagnostic.path == "entities[].id"));
+}
+
+#[test]
 fn temporal_non_overlap_refuses_a_nullable_scope_field() {
     let mut project = asset_project();
     let scope = project
