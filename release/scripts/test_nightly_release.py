@@ -147,6 +147,25 @@ class NightlyTest(unittest.TestCase):
             with self.subTest(tag=tag), self.assertRaises(nightly.NightlyError):
                 nightly.identity(tag)
 
+    def test_identity_loads_without_tomllib(self):
+        # The native arm64 builder runs the runner's Python 3.10, which has no
+        # tomllib, and imports this module only to check the nightly identity.
+        script = (
+            "import sys\n"
+            "sys.modules['tomllib'] = None\n"
+            "import nightly_release\n"
+            "print(*nightly_release.identity(sys.argv[1]))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script, TAG],
+            cwd=SCRIPTS,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), f"{BASE} {SHA}")
+
     def test_old_v1_0_39_manifest_with_relay_remains_readable(self):
         path = self.root / "old-nightly.json"
         manifest = {
