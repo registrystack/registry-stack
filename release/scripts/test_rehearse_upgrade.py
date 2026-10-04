@@ -58,6 +58,47 @@ class ReleaseSelectionTest(unittest.TestCase):
         MODULE.check_forward_path("v0.38.0", "0.38.0")
         MODULE.check_forward_path("v0.38.0", "0.39.0")
 
+    def test_refuses_a_floor_that_is_not_the_release_before_the_workspace_version(self) -> None:
+        released = ["0.9.0", "0.37.0", "0.38.0", "0.39.0"]
+        with unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 38, 0)):
+            MODULE.check_floor_is_current(released, "0.39.0")
+            MODULE.check_floor_is_current(released[:-1], "0.39.0")
+            for version in ("0.40.0", "0.39.1", "0.38.0"):
+                with self.subTest(version=version), \
+                        self.assertRaisesRegex(Error, "FORWARD_PATH_FLOOR"):
+                    MODULE.check_floor_is_current(released, version)
+            with self.assertRaisesRegex(Error, "no release manifest"):
+                MODULE.check_floor_is_current(released, "0.9.0")
+
+    def test_reads_the_stack_version_of_every_release_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifests = Path(temporary) / "release/manifests"
+            manifests.mkdir(parents=True)
+            for release, version in (("beta-9", "0.9.0"), ("beta-10", "0.10.0")):
+                (manifests / f"registry-stack-{release}.yaml").write_text(
+                    f"stack:\n  release: {release}\n  version: {version}\n"
+                    f"\nartifacts:\n  version: 9.9.9\n", encoding="utf-8")
+            (manifests / "import-map.yaml").write_text("version: 1\n", encoding="utf-8")
+            self.assertEqual(sorted(MODULE.manifest_versions(Path(temporary))),
+                             ["0.10.0", "0.9.0"])
+            (manifests / "registry-stack-beta-11.yaml").write_text(
+                "artifacts:\n  version: 0.11.0\n", encoding="utf-8")
+            with self.assertRaisesRegex(Error, "registry-stack-beta-11.yaml"):
+                MODULE.manifest_versions(Path(temporary))
+
+    def test_main_refuses_a_stale_floor_before_any_download_or_container(self) -> None:
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr), \
+                unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 1, 0)):
+            work = Path(temporary) / "work"
+            status = MODULE.main([
+                "--from-tag", "v0.38.0", "--platform", "linux-amd64",
+                "--to-bin-dir", temporary, "--work-dir", str(work),
+            ])
+            self.assertFalse(work.exists())
+        self.assertEqual(status, 1)
+        self.assertIn("FORWARD_PATH_FLOOR", stderr.getvalue())
+
     def test_refuses_to_move_state_backward(self) -> None:
         with self.assertRaisesRegex(Error, "only moves state forward"):
             MODULE.check_forward_path("v0.34.0", "0.33.0")
@@ -897,6 +938,10 @@ class GateWiringTest(unittest.TestCase):
             self.assertTrue(required in workflow, f"workflow lacks {required!r}")
         for refused in ("--from-bin-dir", "contents: write", "id-token: write"):
             self.assertFalse(refused in workflow, f"workflow carries {refused!r}")
+
+    def test_floor_is_the_release_before_the_workspace_version(self) -> None:
+        MODULE.check_floor_is_current(MODULE.manifest_versions(ROOT),
+                                      MODULE.workspace_version(ROOT))
 
     def test_api_stability_states_the_same_floor(self) -> None:
         page = API_STABILITY.read_text(encoding="utf-8")
