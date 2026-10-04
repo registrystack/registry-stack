@@ -925,15 +925,13 @@ fn state_name(state: BRegRequestState) -> &'static str {
     }
 }
 
-const LEGACY_SAVED_ATTEMPT_VERSION: u32 = 0;
 const CURRENT_SAVED_ATTEMPT_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize)]
 struct SavedAttempt {
-    /// Version 0 is the legacy shape, where this field was absent. Compatible
-    /// additive fields retain version 1 so version-1 readers can ignore them;
-    /// incompatible shape changes must increment the version and fail closed.
-    #[serde(default)]
+    /// Compatible additive fields retain version 1 so version-1 readers can
+    /// ignore them; incompatible shape changes must increment the version and
+    /// fail closed.
     version: u32,
     subject: SubjectRef,
     actor: IssuerPrincipal,
@@ -950,10 +948,7 @@ fn encode_saved_attempt(saved: &SavedAttempt) -> Result<Vec<u8>, SourceAdapterEr
 fn decode_saved_attempt(bytes: &[u8]) -> Result<SavedAttempt, SourceAdapterError> {
     let saved: SavedAttempt =
         serde_json::from_slice(bytes).map_err(|_| SourceAdapterError::Invalid)?;
-    if !matches!(
-        saved.version,
-        LEGACY_SAVED_ATTEMPT_VERSION | CURRENT_SAVED_ATTEMPT_VERSION
-    ) {
+    if saved.version != CURRENT_SAVED_ATTEMPT_VERSION {
         return Err(SourceAdapterError::Invalid);
     }
     Ok(saved)
