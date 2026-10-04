@@ -11,7 +11,8 @@ source_repos:
 last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
-standards_referenced: []
+standards_referenced:
+  - sd-jwt-vc
 ---
 
 This page summarizes the cross-product threat model. Product specifications and source-owned
@@ -184,6 +185,65 @@ does not claim certification of itself.
   correctness, and legal authority remain operator duties.
 - Project approval remains semantic. Validators cannot decide whether an institution chose the
   lawful purpose, correct source fields, derivation, or disclosure default.
+
+## What is explicitly out of scope
+
+These are non-goals for this version. None of them should be read into a Registry Stack
+conformance claim:
+
+- A credential lifecycle: Evidence Gateway's SD-JWT VC output is a second serialization of the same
+  stateless assertion. There is no issuance session, credential offer, status list, revocation,
+  reissuance, persisted credential state, or OID4VCI endpoint of any kind, in either subject
+  binding mode. Under the default audience-scoped mode there is no holder binding ceremony either,
+  and an optional caller-supplied holder key is echoed unverified into a confirmation claim rather
+  than proved. A requirement that declares the holder-bound mode adds a proof of possession the
+  relying party checks at presentation, and nothing else: the service appends no key-binding JWT,
+  issues no challenge, and retains no presentation or replay state.
+- Delegated or federated evaluation between peers: no service in this model evaluates a
+  question on another deployment's behalf, and there is no trust-chain discovery, peer
+  registry, or cross-institution evaluation route.
+- Identity resolution: lookup is match, no-match, or ambiguous. Evidence Gateway is not an
+  identity-resolution or record-linkage engine and returns no candidate material.
+- Cross-verifier credential use under the default binding mode: an audience-scoped subject binding
+  makes an assertion meaningful to one relying party and correlatable across none. A requirement
+  that declares the holder-bound mode opts out of this non-goal deliberately, and accepts the
+  correlation that follows: holder key reuse links a holder across every verifier that sees it,
+  and the service can neither prevent nor detect that. Batch issuance under distinct keys reduces
+  the deterministic key-based link; it does not make credentials unlinkable, because members still
+  share an issuance timestamp, purpose, requirement, Evidence Type, configuration revision, and
+  disclosed values.
+- Replay prevention at presentation: a relying party verifying a key-binding JWT compares the
+  nonce from the challenge it issued, and comparing a nonce is not consuming it. The same
+  presentation bytes verify again under the same stateless policy. RFC 9901 section 7.3 places the
+  challenge lifecycle in the surrounding protocol, so issuing a nonce, retaining it, and retiring
+  it are the relying party's own duties.
+- External policy enforcement of any kind: no runtime service in this stack evaluates an
+  external policy. There is no policy decision point, no ODRL term enforcement, and no policy
+  discovery. Registry Manifest can publish a policy reference, and that reference describes
+  intent rather than naming a control the stack applies.
+- Certified standards compliance: Aligning with a standard is not conforming to it. Speaking
+  the shape of OIDC, OAuth 2.0, SD-JWT VC, CCCEV, or the rest does not certify conformance to
+  any of them, and CCCEV-shaped output is not conformant to CCCEV 2.2.0.
+- A hostile local account on the machine that runs adopter tooling: `bregctl`, `evidencectl`,
+  `caseworkctl`, `schedulingctl`, and the other authoring and scaffolding commands
+  assume a single-user machine the adopter trusts, and resisting another account on that machine
+  is not a tooling guarantee. Some `bregctl` lifecycle writes walk directories by descriptor:
+  they refuse a symbolic link they encounter, and an ancestor replaced after the walk cannot
+  redirect them, because they keep writing into the directory they already hold. Other tooling
+  writes use ordinary path-based file operations, and another account that can write to a parent
+  directory can race their directory creation or redirect them through a symbolic link. Generate
+  production key material on a machine where no other account can write anywhere along the output
+  path. The owner, mode, and no-follow checks described for the runtimes are runtime startup
+  checks.
+  {/* Evidence: descriptor-held SafeDir walk with openat and O_NOFOLLOW,
+       crates/registry-bregctl/src/safe_path.rs; path-based directory creation in
+       ensure_private_dir_impl and ensure_parent_dir, crates/registry-evidencectl/src/keygen.rs,
+       and ensure_private_parents, crates/registry-bregctl/src/field_encryption.rs. */}
+- Non-Unix targets: Evidence Gateway is Unix-only. Its secret and audit invariants depend on
+  owner, mode, no-follow, link-count, and open-file identity checks, so the runtime does not
+  compile for a non-Unix target rather than degrading those checks.
+  {/* Evidence: compile_error under #[cfg(not(unix))], crates/registry-evidence/src/lib.rs;
+       platform.supported and platform.reason, products/evidence/contracts/runtime.schema.yaml. */}
 
 ## Verification
 

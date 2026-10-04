@@ -11,10 +11,13 @@ source_repos:
 last_reviewed: "2026-10-03"
 doc_type: reference
 locale: en
-standards_referenced: []
+standards_referenced:
+  - oid4vci
+  - sd-jwt-vc
 ---
 
 Registry Stack is pre-1.0 Beta software for self-hosted institutional pilots.
+It is not a production support commitment and carries no hosted service-level agreement.
 
 ## Product maturity
 
@@ -153,12 +156,150 @@ a signed assertion proves what the configured service asserted rather than the s
     crates/registry-evidence/src/auth.rs; crates/registry-evidence/src/source.rs;
     crates/registry-evidence/src/runtime.rs, Runtime::ready. */}
 
+### Two subject binding modes, two different limits
+
+A requirement in the immutable bundle declares which mode it issues under. The vocabulary is closed
+at two values and carries no default: a requirement that declares nothing issues audience-scoped
+assertions, and no caller input selects a mode.
+
+| Boundary | `audience-scoped` (absence of a declaration) | `holder-bound` (declared per requirement) |
+| --- | --- | --- |
+| Subject binding scope | The audience taken from the authenticated context | The RFC 7638 thumbprint of the holder key the caller supplied |
+| Cross-verifier use | None. The assertion is meaningful to the one relying party it names | Deliberate. One credential is presentable to several verifiers, and the holder decides which |
+| Holder key | Optional, echoed into `cnf`, verified by nothing | Required, and `cnf` is required in the credential |
+| Possession proof | None at any point | A key-binding JWT the relying party verifies at presentation |
+| Correlation across verifiers | Prevented by the service | Delegated to the holder, who chooses which key to reuse and where |
+| Response formats | Signed JWS, SD-JWT VC, or the unsigned envelope, as permitted | Narrowed to the SD-JWT VC serialization and its batch envelope |
+| Value forms | All twelve | Ten forms; the two entity-reference forms are refused, because both take the audience as a derivation input |
+| Contract status | Frozen Version 1 | Frozen, and every negative test the profile names resolves to an executable test |
+
+- The audience-scoped holder key is unverified: a request may carry an optional `holderKey` that is
+  echoed into the `cnf` member. Under this mode Evidence Gateway issues no holder key, binds none,
+  and verifies none, so `cnf` is a caller-supplied convenience for whatever presentation layer the
+  operator runs elsewhere.
+- Audience-scoped assertions are not multi-verifier: the subject identifier is an audience-scoped
+  pseudonym, so the same person requested for a different audience yields a different identifier.
+  Purpose is an input to every subject binding and audit pseudonym as well, so one subject is not
+  linkable across purposes. This is deliberate, and it means an audience-scoped assertion is not a
+  general-purpose credential a holder presents to several verifiers.
+- A holder-bound credential accepts cross-verifier correlation: the binding no longer takes the
+  audience as an input, so the same holder key, trust domain, purpose, subject role, selector
+  profile, and selector values yield the same binding for every caller and every verifier. Holder
+  key reuse is the correlator, and Evidence Gateway can neither prevent nor detect it. The declared
+  purpose is a low-cardinality attribute disclosed to every verifier the credential reaches, and the
+  binding is a persistent pseudonym for that whole tuple: repeating the same request with the same
+  key returns the same binding.
+- Batch issuance reduces linkability; it does not remove it: a holder-bound release may carry one
+  member per distinct holder key under a ceiling the bundle declares, so a holder presenting a
+  different member to each verifier hands them no shared subject binding. What it removes is the
+  deterministic key-based link, not linkability in general: the members still share an issuance
+  timestamp, purpose, requirement, Evidence Type, configuration revision, and disclosed values. The
+  issuer knows one requester submitted those keys together.
+- The holder-bound audit pseudonym is stable across issuances: it omits the audience, so repeated
+  issuance for the same subject records the same pseudonym. That is a deliberate accountability
+  property, stated rather than hidden.
+- Presentation-time audience is verifier-asserted: the relying party puts the audience and nonce in
+  its own challenge, and neither is issuer-signed. No issuance record names the verifier a
+  holder-bound credential later reached.
+
+### What verifying a presentation does and does not prove
+
+- A verified key-binding JWT proves the presenter held the private key of the credential's
+  confirmation key when that JWT was signed, over exactly the presented bytes, for the audience and
+  nonce the relying party chose. It proves nothing else.
+- A valid issuer signature alone does not prove possession. A presentation whose issuer signature
+  verifies and whose key binding does not is rejected, never reported as an issuer-only success.
+- Nonce equality is not nonce consumption: the same presentation bytes verify again, and again,
+  against the same stateless policy. RFC 9901 section 7.3 places the challenge lifecycle in the
+  surrounding protocol, so issuing a challenge, retaining it, and retiring it belong to the relying
+  party. This is not replay prevention, and no Evidence Gateway surface performs replay prevention.
+- The relying party cannot derive a subject binding under either mode: the derivation is keyed by a
+  deployment secret it does not hold. Expected subject bindings are pinned from independent trusted
+  state, exactly as they are for an audience-scoped assertion. An expected holder key thumbprint is
+  an optional extra expectation for a pre-established holder, not what proves possession.
+- Wallet compatibility is unclaimed: full SD-JWT VC and OID4VCI conformance are not claimed, and no
+  test in this repository covers a wallet storing or presenting an Evidence Gateway credential.
+  The pinned OID4VCI runner covers sanitized metadata and wire shapes, service-side key binding,
+  and independent presentation verification. Its opt-in upstream half runs focused source tests at
+  exact Inji revisions, not Android or iOS user-interface or device automation.
+
+{/* Evidence: products/evidence/contracts/holder-bound-profile.yaml;
+    products/evidence/contracts/supported-value-forms.yaml;
+    products/evidence/contracts/bundle.schema.yaml, holderBoundBatchMaxSize;
+    products/evidence/contracts/oid4vci-profile.yaml;
+    products/evidence/scripts/compat/inji-oid4vci.sh. */}
+
 ## Registry Manifest and Discovery
 
 - Manifest output is descriptive and static. It neither serves records nor authorizes access.
+- Rendered standards artifacts are well-formed, not certified: Manifest rendering emits
+  standards-shaped artifacts but does not validate them against external standard bodies: a
+  rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against
+  the standard. Read the limits in full in the [Manifest data model](../../spec/rs-dm-manifest/).
 - Current Discovery runtime and clients support Evidence providers only.
 - Published Discovery v1alpha1 profile resources remain historically broad. Operators must rebuild
   mixed pre-retirement indexes before serving them with a current runtime.
+
+## Stack-wide boundaries at a glance
+
+These boundaries cut across components.
+
+- No source mutation: Evidence Gateway reads its fixed sources read-only, and persists nothing it
+  read.
+- A published manifest grants nothing: Publishing a dataset, policy, or evidence offering in a
+  discovery artifact grants no access, enforces nothing, and asserts no fact about a live record.
+  Discovery metadata is not a trust anchor: a published manifest does not bind a consumer to trust
+  a JWKS endpoint or a service host.
+  Trust bootstrap stays in the consumer's local policy.
+- Solmara Lab and its hosted instance are demonstrations, not infrastructure: Solmara Lab is a
+  separately maintained adopter demo that uses generated synthetic data and demo configuration.
+  It is not a formal Registry Stack product and provides no production deployment guidance.
+  Any hosted instance of Solmara Lab is likewise a demonstration, not production infrastructure:
+  it carries no uptime or data-retention commitment.
+
+## Security-model operator boundary
+
+A healthy, reachable, internally consistent deployment is not the same as a production-secure one.
+Read the full security boundary in the [security model](../../spec/rs-sec-g/).
+
+- Health checks do not certify key custody: Readiness, liveness, and protocol-conformance checks
+  do not certify production-grade private-key custody.
+  A deployment using software keys, local JWK files, or demo-generated keys can be reachable and
+  internally consistent yet not production-secure.
+  Custody, rotation, and key-provider approval remain operator responsibilities.
+- Many guarantees are the operator's to provide: Secret and key provisioning, key custody and
+  rotation schedule, audit retention and storage, tenant isolation, transport termination, edge
+  rate limiting, deployment configuration, and incident response are operator responsibilities,
+  not behaviors the stack guarantees.
+- Audit retention is not audit completeness: the local audit log of Evidence, Render,
+  Base Registry Engine, Casework, and Scheduling is not chained or signed, so it provides no
+  cryptographic tamper evidence for retained history. A running writer detects external changes to
+  its active file and fails closed, while each runtime deletes sealed files after `retainDays`.
+  None of them ships sealed history for you;
+  tamper evidence and completeness come only from the append-only storage the operator ships audit
+  entries to.
+- Demo and template code is not a production profile: Demo helper code and generated workflow
+  snippets are integration examples, not a production freshness or replay-protection profile, and
+  must not be relied on for freshness, expiry, or replay protection.
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, retain_days. */}
+
+## Supply-chain and release limits
+
+These concern how releases are signed and what that signing currently covers.
+
+- Partial release signing: One keyless cosign bundle authenticates the public
+  `SHA256SUMS` inventory, and GitHub artifact attestations authenticate the
+  candidate manifest and bundle.
+  OCI image signatures are not yet published, and Git version tags are not yet
+  cryptographically signed (GPG, SSH, or Sigstore).
+  The `v0.8.0` prerelease was published before release-asset signing and does not currently
+  include cosign signatures.
+
+For how to verify what *is* signed, see the release verification guidance in `release/VERIFY.md`
+in the repository.
+
+{/* Evidence: release/VERIFY.md; .github/workflows/release.yml. */}
 
 ## Product removal
 

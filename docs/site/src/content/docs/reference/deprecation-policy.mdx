@@ -60,6 +60,14 @@ examples, read the `BREAKING:` entries in `release/notes/v0.19.0.md`, which name
 binary for each retired one and state that a Relay 1.0 configuration is not an in-place upgrade
 input.
 
+A removal that has no migration path is a different event, and this policy does not let a release
+disguise one as a rename. The v0.19.0 replacement of Relay 1.0 and `registryctl` said so: the
+replacement required a new governed registry contract rather than a conversion of the old
+configuration. The 0.39.0 retirement of Registry Relay says so as well: there is no automatic
+migration from a Relay project, and an operator chooses a retained design for each consumer and
+source. See the
+[Registry Relay retirement decision](../../decisions/registry-relay-retirement-2026-10-03/).
+
 ## Security exceptions
 
 A fix for a vulnerability may tighten or remove surface without the full notice period when
