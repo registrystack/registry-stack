@@ -95,10 +95,9 @@ sequence on a restored copy first, as
    `--without-audit-lock` while the earlier instance still runs), stop the earlier `evidence`,
    start the new one, and verify a fresh synthetic assertion. Then start the new `evidence-oid4vci`.
 7. **Upgrade Scheduling**, when it runs. Stop the earlier `scheduling` runtime, or keep its
-   destination bindings until its hook deliveries drain. Add `identity.databaseId` to the runtime
-   file when it has none, run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
-   FILE` with the new binary, then start `scheduling`; `schedulingctl status --runtime-config
-   FILE` confirms what the database activated.
+   destination bindings until its hook deliveries drain. Run `schedulingctl plan --runtime-config
+   FILE` and `schedulingctl apply --runtime-config FILE` with the new binary, then start
+   `scheduling`; `schedulingctl status --runtime-config FILE` confirms what the database activated.
 8. **Resume traffic, and upgrade clients.** Roll out every application that embeds a Registry
    Stack client at the same release before it calls the upgraded runtimes.
 
@@ -113,7 +112,7 @@ sequence on a restored copy first, as
     crates/registry-bregctl/src/lib.rs, PlanSuccessReport, StatusSuccessReport, and
     lifecycle_failure() for ApplyLifecycleError::CurrentPackage;
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
-    (identity.databaseId, apply before start, hook drain);
+    (apply before start, hook drain);
     release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
 
 ## Roll back
