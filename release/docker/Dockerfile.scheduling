@@ -16,9 +16,8 @@ ADD --checksum=sha256:d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd
 # schedulingctl by overriding it. Scheduling
 # stores its capacity ledger in PostgreSQL; only its local append-only audit
 # chain needs a writable persistent directory.
-# A build before 0.36.0 stages no schedulingctl, so its image keeps the runtime
-# binary alone; from 0.36.0 the release roster stages the tool and the
-# candidate refuses a build whose staged copy is missing.
+# Every release stages schedulingctl beside the runtime, and the candidate
+# refuses a build whose staged copy is missing.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
     --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \
@@ -30,9 +29,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
         /workspace/runtime-root/usr/local/bin \
         /workspace/runtime-root/var/lib/registry-scheduling/audit \
     && install -m 0755 /workspace/image-bin/scheduling /workspace/runtime-root/usr/local/bin/scheduling \
-    && if [ -e /workspace/image-bin/schedulingctl ]; then \
-        install -m 0755 /workspace/image-bin/schedulingctl /workspace/runtime-root/usr/local/bin/schedulingctl; \
-    fi \
+    && install -m 0755 /workspace/image-bin/schedulingctl /workspace/runtime-root/usr/local/bin/schedulingctl \
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/scheduling/LICENSE \
     && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/scheduling/THIRD_PARTY_NOTICES \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-scheduling \
