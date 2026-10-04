@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: `caseworkctl dev` takes PostgreSQL loopback port 15433 on a first
+  start, where it took 55433. On Linux an outgoing loopback connection could
+  take 55433 as its own source port, and a first start then refused the port as
+  occupied although nothing listened on it. A session that already started
+  keeps the port it retained. Anything that connects to a new session's
+  database by the old default needs the new port, or `--database-port 55433`
+  (or `CASEWORKCTL_DEV_DATABASE_PORT`) on the first start.
+
 - Empty source-backed inbox views over a source reconciled within the larger
   of twice its `reconciliationIntervalMilliseconds` and 2 minutes return
   `complete` without requeueing subjects or clearing source completeness. A
