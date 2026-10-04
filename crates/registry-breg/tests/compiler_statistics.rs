@@ -401,6 +401,42 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
     );
     assert_refused(
         |value| {
+            let boundary = json!({"field":"category","claim":"categories","operator":"in"});
+            value["entities"][0]["accessRequirements"] =
+                json!({"rowBoundaries":[boundary.clone()]});
+            for profile in [0_usize, 1] {
+                value["accessProfiles"][profile]["permissions"][0]["rowBoundaries"] =
+                    json!([boundary.clone()]);
+            }
+        },
+        "statistical_dataset.publisher.entity_row_boundary",
+    );
+}
+
+#[test]
+fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_count_grants() {
+    assert_refused(
+        |value| {
+            value["entities"][0]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                        "id":"secret","type":"string","maxLength":80,"encrypted":true,
+                        "classification":"restricted"
+                }));
+            for profile in [0_usize, 1] {
+                value["accessProfiles"][profile]["permissions"][0]["readableFields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!("secret"));
+            }
+            value["statisticalDatasets"][0]["population"] =
+                json!("active eq true and secret eq 'x'");
+        },
+        "statistical_dataset.field.encrypted",
+    );
+    assert_refused(
+        |value| {
             value["recipients"] = json!({
                 "organizations":[{
                     "id":"publisher-organization","name":"Publisher organization",
@@ -438,42 +474,10 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
         },
         "statistical_dataset.count_grant.consent",
     );
-    assert_refused(
-        |value| {
-            let boundary = json!({"field":"category","claim":"categories","operator":"in"});
-            value["entities"][0]["accessRequirements"] =
-                json!({"rowBoundaries":[boundary.clone()]});
-            for profile in [0_usize, 1] {
-                value["accessProfiles"][profile]["permissions"][0]["rowBoundaries"] =
-                    json!([boundary.clone()]);
-            }
-        },
-        "statistical_dataset.publisher.entity_row_boundary",
-    );
 }
 
 #[test]
-fn statistical_dataset_refuses_encrypted_reserved_and_unbounded_dimensions() {
-    assert_refused(
-        |value| {
-            value["entities"][0]["fields"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({
-                        "id":"secret","type":"string","maxLength":80,"encrypted":true,
-                        "classification":"restricted"
-                }));
-            for profile in [0_usize, 1] {
-                value["accessProfiles"][profile]["permissions"][0]["readableFields"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!("secret"));
-            }
-            value["statisticalDatasets"][0]["population"] =
-                json!("active eq true and secret eq 'x'");
-        },
-        "statistical_dataset.field.encrypted",
-    );
+fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
     assert_refused(
         |value| value["vocabularies"][0]["values"] = json!(["_reserved", "a"]),
         "statistical_dataset.dimension.code_reserved",

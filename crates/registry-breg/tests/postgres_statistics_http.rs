@@ -308,6 +308,11 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         total_cell(&wide_live, &prior_period) + total_cell(&wide_live, &current_period),
         10
     );
+    // These exact prior-period counts are what a release must never retain.
+    assert_eq!(
+        category_cells(&wide_live, &prior_period),
+        json!([["a", 6, "exact"], ["b", 1, "exact"], ["_T", 7, "exact"]])
+    );
 
     let default_live = send(
         &app,
@@ -516,6 +521,26 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         )
     );
     assert_eq!(first_header["contentDigest"], stored_digest);
+    // The store holds the suppressed and rounded cells, never the exact counts.
+    let disclosed_cells = json!([
+        ["a", 5, "rounded"],
+        ["b", null, "suppressed"],
+        ["_T", 5, "rounded"]
+    ]);
+    let stored_document: Value =
+        serde_json::from_slice(&stored_bytes).expect("stored release is JSON");
+    assert_eq!(
+        category_cells(&stored_document, &prior_period),
+        disclosed_cells
+    );
+    assert_eq!(stored_document["cells"].as_array().map(Vec::len), Some(3));
+    let stored_text = std::str::from_utf8(&stored_bytes).expect("stored release is UTF-8");
+    for exact_count in [6, 1, 7] {
+        assert!(
+            !stored_text.contains(&format!("\"value\":{exact_count}")),
+            "the stored release retains the exact count {exact_count}"
+        );
+    }
     let exact = send(&app, Method::GET,
         &format!("/v1/statistics/records-by-category/releases/{prior_period}/versions/1?accessProfile=reader"),
         Some(reader.clone()), &[], Vec::new()).await;
@@ -588,6 +613,8 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     assert_eq!(latest_json["release"]["version"], 1);
     assert!(latest_json.get("live").is_none());
     assert!(latest_json.get("disclosure").is_some());
+    assert_eq!(category_cells(&latest_json, &prior_period), disclosed_cells);
+    assert_eq!(latest_json["cells"].as_array().map(Vec::len), Some(3));
 
     let unmatched_accept = send(
         &app,
@@ -3943,6 +3970,23 @@ fn total_cell(document: &Value, period: &str) -> u64 {
         .find(|cell| cell["period"] == period && cell["dimensions"]["category"] == "_T")
         .and_then(|cell| cell["value"].as_u64())
         .expect("period total cell is present")
+}
+
+/// Each cell of one period as `[category, value, status]`, in document order.
+fn category_cells(document: &Value, period: &str) -> Value {
+    document["cells"]
+        .as_array()
+        .expect("cells are an array")
+        .iter()
+        .filter(|cell| cell["period"] == period)
+        .map(|cell| {
+            json!([
+                cell["dimensions"]["category"],
+                cell["value"],
+                cell["status"]
+            ])
+        })
+        .collect()
 }
 
 fn month_code(date: NaiveDate) -> String {
