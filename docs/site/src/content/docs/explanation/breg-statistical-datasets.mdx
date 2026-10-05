@@ -42,7 +42,7 @@ A release contains the transformed cells and a snapshot reference when history c
 
 A definition digest identifies the population, source definitions, publisher visibility, dimensions, and disclosure parameters. Current reads serve only that definition's versions. Changing readers alone preserves the series. Changing the population creates another definition series without reusing version numbers.
 
-Withdrawal records a reason and removes the stored content atomically. The immutable header remains. A direct version read returns 410; latest reads fall back to the preceding eligible version. An identical publication or withdrawal retry uses its idempotency key to recover the original response.
+Withdrawal records a reason and removes the stored content atomically. The immutable header remains, without the `contentDigest` that named the removed content. A direct version read returns 410; latest reads fall back to the preceding eligible version. An identical publication or withdrawal retry uses its idempotency key to recover the original response.
 
 {/* Evidence: crates/registry-breg/src/postgres/statistics.rs;
     crates/registry-breg/src/statistics_store.rs;

@@ -132,6 +132,7 @@ fn decode_publish_header(
         || header.version == 0
         || header.version > i64::MAX as u64
         || header.status != status
+        || header.content_digest.is_none()
         || header.withdrawal.is_some()
     {
         return Err(StatisticsLifecycleError::Response);
@@ -155,6 +156,7 @@ fn decode_withdraw_header(
     if header.dataset != dataset
         || header.period != period
         || header.version != version
+        || header.content_digest.is_some()
         || header
             .withdrawal
             .as_ref()
@@ -236,11 +238,26 @@ mod tests {
                 Err(StatisticsLifecycleError::Response)
             ));
         }
+        let mut without_digest = valid.clone();
+        without_digest
+            .as_object_mut()
+            .unwrap()
+            .remove("contentDigest");
+        assert!(matches!(
+            decode_publish_header(
+                &encoded(&without_digest),
+                "population",
+                "2025-01",
+                BRegReleaseStatus::Final,
+            ),
+            Err(StatisticsLifecycleError::Response)
+        ));
     }
 
     #[test]
     fn withdrawal_response_is_bound_to_the_requested_release_and_reason() {
         let mut valid = header();
+        valid.as_object_mut().unwrap().remove("contentDigest");
         valid["status"] = serde_json::json!("provisional");
         valid["withdrawal"] = serde_json::json!({
             "withdrawnAt": "2026-10-03T00:01:00Z",
@@ -259,6 +276,10 @@ mod tests {
             ("dataset", serde_json::json!("other-population")),
             ("period", serde_json::json!("2025-02")),
             ("version", serde_json::json!(8)),
+            (
+                "contentDigest",
+                serde_json::json!(format!("sha256:{}", "3".repeat(64))),
+            ),
             ("withdrawal", serde_json::Value::Null),
             (
                 "withdrawal",

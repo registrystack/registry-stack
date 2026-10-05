@@ -201,6 +201,14 @@ read of that version returns `410 statistical_dataset.version_withdrawn` with
 the reason code. A second withdrawal is refused; an identical idempotent retry
 returns its original response.
 
+A withdrawn header omits `contentDigest`: in the withdrawal response, in its
+audit entry, and in every later listing. The digest is an unsalted hash of a
+document whose every member except the cells can be derived from the header
+and the dataset metadata, so serving it would let a reader confirm guessed
+cell values offline after the content is gone. The stored header row and the
+publication's own audit entry keep the digest for operators, and an identical
+retry of the publication returns the response the publisher first received.
+
 ## HTTP and representations
 
 | Method and path | Access | Result |
@@ -239,9 +247,10 @@ dimension codes before plotting, and keep `status` so a blank cell cannot be
 mistaken for zero. Release listings and mutation responses are JSON.
 
 Stored JSON is canonicalized using RFC 8785 and hashed with SHA-256. The
-`contentDigest` in a header names the stored document. `Repr-Digest` uses RFC
-9530 syntax and hashes the exact response bytes; a CSV digest therefore differs
-from its JSON digest. Responses use `Cache-Control: no-store` and
+`contentDigest` in a header names the stored document; a withdrawn header has
+no stored document and carries none. `Repr-Digest` uses RFC 9530 syntax and
+hashes the exact response bytes; a CSV digest therefore differs from its JSON
+digest. Responses use `Cache-Control: no-store` and
 `Vary: authorization, accept`, without a strong ETag.
 
 ## Operation and deployment
