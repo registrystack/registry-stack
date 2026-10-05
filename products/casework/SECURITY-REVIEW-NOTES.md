@@ -412,11 +412,13 @@ Before 1.0 a release reads only the state its immediate predecessor wrote.
 The change removes what read, converted, or specifically refused state that
 only releases older than v0.38.0 wrote: the version 0 reading of saved
 attempt evidence in the BReg source adapter, the Mint session probe and the
-per-field defaults in `caseworkctl dev` state, the optional `caseworkctl`
+per-field defaults in `caseworkctl dev` state, the by-name refusal of the
+bare lifecycle hook in `caseworkctl source add`, the optional `caseworkctl`
 install in the release image, and the upgrade rehearsal's steps for a
 database, package, or audit table from before v0.38.0. It touches
 authorization (what recovery accepts as evidence of a prepared source
-action), deployment defaults (what the release image carries), and release
+action), data minimization (which lifecycle events a paired registry sends),
+deployment defaults (what the release image carries), and release
 provenance (what the upgrade rehearsal proves). The runtime's migrations,
 its activation ledger, and its own audit guards are unchanged.
 
@@ -435,6 +437,10 @@ its activation ledger, and its own audit guards are unchanged.
 4. The rehearsal reports an upgrade path it never exercised, or passes while
    the upgraded runtime starts a fresh audit stream and the predecessor's
    records are no longer part of it.
+5. Removing the by-name refusal of the bare `casework-lifecycle-v1` hook
+   lets `source add` pair a registry that still carries it, so BReg keeps
+   sending that hook's lifecycle events although Casework coordinates work
+   only under the per-entity event type.
 
 ### Enforcement and defaults
 
@@ -458,6 +464,13 @@ its activation ledger, and its own audit guards are unchanged.
   The upgraded runtime continues the predecessor's audit file, and the
   rehearsal fails when the file is empty before the upgrade or holds fewer
   records after it than before plus what the upgraded runtime must write.
+- `caseworkctl source add` writes only the per-entity hook,
+  `casework-lifecycle-v1-<entity>`, and never the bare one. The BReg
+  compiler refuses one hook id on a second entity
+  (`event.id.registry_duplicate`), and the Casework BReg adapter accepts
+  only the event type a paired entity derives, so an event of the bare type
+  is `SourceAdapterError::Invalid`. v0.38.0 refused the bare hook, so no
+  project it paired carries one.
 
 ### Tests
 
@@ -472,12 +485,21 @@ its activation ledger, and its own audit guards are unchanged.
    `test_refuses_a_start_before_the_immediate_predecessor`,
    `test_main_refuses_an_earlier_start_before_any_download_or_container`,
    `test_a_stream_must_keep_the_previous_records_and_gain_the_new_ones`.
+5. `crates/registry-caseworkctl/src/source_add.rs`:
+   `a_bare_lifecycle_hook_is_left_as_an_authored_hook`, and
+   `crates/registry-casework-breg/tests/signed_event_intake.rs`:
+   `a_lifecycle_event_type_no_paired_request_entity_derives_is_refused`.
 
 ### Accepted residuals
 
 - **Dev state from a Mint-era session is no longer named.** It is refused
   as invalid retained state without the instruction to stop it with the
   older CLI. The changelog carries that instruction.
+- **A bare lifecycle hook is no longer named.** A `registry.yaml` that
+  carries one from before v0.34.0 keeps it as an authored hook, and BReg
+  keeps sending its events to that hook's destination until an operator
+  removes it. Casework refuses each one. The changelog carries the
+  instruction to remove it.
 - **The rehearsal no longer covers a start before v0.38.0.** An operator on
   an older release upgrades one release at a time, with each release's own
   rehearsal and upgrade steps.
