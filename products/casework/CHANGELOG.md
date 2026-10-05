@@ -34,6 +34,13 @@
     as invalid. Start a fresh session.
   - `caseworkctl dev start --clients` is no longer accepted. Use
     `--clients-file`.
+  - `caseworkctl source add` no longer refuses a BReg `registry.yaml` by name
+    for carrying the bare `casework-lifecycle-v1` hook that releases before
+    v0.34.0 wrote. v0.38.0 refused that hook, so no project it paired carries
+    one. A project that still does keeps it as an authored hook beside the
+    per-entity hook `source add` writes: `bregctl check` refuses it on a
+    second entity, and Casework still refuses the events it emits. Remove it
+    from `registry.yaml` by hand.
 
 - Empty source-backed inbox views over a source reconciled within the larger
   of twice its `reconciliationIntervalMilliseconds` and 2 minutes return
