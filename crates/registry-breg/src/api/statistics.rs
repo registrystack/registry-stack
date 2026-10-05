@@ -411,6 +411,7 @@ async fn dispatch(
         .and_then(|s| s.parse::<i64>().ok())
         .filter(|v| *v > 0 && path.get("version") == Some(&v.to_string()));
     let mut lifecycle = None;
+    let mut commit_unresolved = false;
     let result = if deadline <= tokio::time::Instant::now() {
         Err(service_problem(StatisticsServiceError::Timeout))
     } else {
@@ -426,6 +427,7 @@ async fn dispatch(
             deadline,
             now,
             &mut lifecycle,
+            &mut commit_unresolved,
         )
         .await
     };
@@ -433,6 +435,11 @@ async fn dispatch(
         Ok(v) => v,
         Err(response) => (response, 0),
     };
+    // An unresolved commit proves neither a commit nor a refusal, so no
+    // terminal entry is appended: the attempt's drop answers it `unfinished`.
+    if commit_unresolved {
+        return response;
+    }
     let success = response.status().is_success();
     let hasher = backend.audit().profile().key_hasher();
     let principal = context
@@ -535,6 +542,7 @@ async fn execute(
     deadline: tokio::time::Instant,
     now: chrono::DateTime<chrono::Utc>,
     lifecycle: &mut Option<Lifecycle>,
+    commit_unresolved: &mut bool,
 ) -> HttpResult {
     let backend = service.statistics.as_ref().ok_or_else(unavailable)?;
     let selection = options.selection().map_err(statistics_invalid_query_at)?;
@@ -724,7 +732,10 @@ async fn execute(
                     })
                     .await
             }
-            .map_err(service_problem)?;
+            .map_err(|error| {
+                *commit_unresolved = matches!(error, StatisticsServiceError::CommitUnresolved);
+                service_problem(error)
+            })?;
             let count = held.result_count;
             *lifecycle = Some(Lifecycle {
                 header: held.header,
@@ -855,7 +866,9 @@ fn service_problem(error: StatisticsServiceError) -> Response {
         StatisticsServiceError::IdempotencyConflict => {
             statistics_problem(ProblemCode::IdempotencyConflict, None)
         }
-        StatisticsServiceError::Unavailable => unavailable(),
+        StatisticsServiceError::Unavailable | StatisticsServiceError::CommitUnresolved => {
+            unavailable()
+        }
     }
 }
 
