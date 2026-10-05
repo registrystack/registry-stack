@@ -392,6 +392,16 @@
   compiler, so the build now refuses that package at load. Deploy a package
   with WASM hooks only on a build with the `wasm` feature, which default
   builds carry.
+- A package whose project declares a change-request `planner` is accepted as
+  a predecessor (#1814). Its packaged effective model records where the
+  planner was declared as `declaringOrigin`, and the predecessor reader
+  refused that member, so `bregctl test` and `bregctl package` refused the
+  package under `--baseline-package` with
+  `package.baseline.integrity_refused`, and `bregctl plan` and
+  `bregctl apply` refused a database it was active on with
+  `apply.package.refused`. No successor of such a package could be built or
+  applied. The package format is unchanged, so packages already published
+  need no rebuild.
 
 ## v0.38.0 - 2026-10-01
 

@@ -27,8 +27,10 @@ use registry_breg::package::{
 };
 #[cfg(feature = "tooling")]
 use registry_breg::package::{
-    inspect_package_integrity, prepare_package, prepare_package_with_project_assets,
-    PackageEnvelope, PackageError, PackageFileRole, PreparedPackage, MAX_RHAI_PLANNER_SOURCE_BYTES,
+    compiled_registry_change_set_from_baseline, inspect_package_integrity,
+    load_predecessor_package, prepare_package, prepare_package_with_project_assets,
+    PackageEnvelope, PackageError, PackageFileRole, PackageLoadContext, PreparedPackage,
+    MAX_RHAI_PLANNER_SOURCE_BYTES,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
@@ -283,6 +285,188 @@ fn module_rhai_planner_uses_module_origin_role_and_refuses_origin_swaps() {
         prepare_package_with_project_assets(swapped, vec![script]).unwrap_err(),
         PackageError::Derivation
     );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn rhai_planner_package_is_a_readable_predecessor() {
+    let project = prepare_package_with_project_assets(
+        project_planner_build_request(),
+        vec![PackageSourceFile {
+            path: "planners/request.rhai".to_owned(),
+            bytes: project_planner_script().to_vec(),
+        }],
+    )
+    .expect("declared project planner packages");
+    let module = prepare_package(module_planner_build_request()).expect("module planner packages");
+
+    for (prepared, source_module) in [(project, None), (module, Some("core"))] {
+        let root = tempfile::Builder::new()
+            .prefix("registry-planner-package-predecessor-")
+            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        let package = root.path().join("package");
+        prepared.publish_to_directory(&package).unwrap();
+        let compiled = prepared.registry().entities()["request"]
+            .change_request
+            .as_ref()
+            .expect("compiled change request exists");
+        let compiled_planner = compiled.planner.as_ref().expect("compiled planner exists");
+
+        let predecessor = load_predecessor_package(
+            &package,
+            &PackageLoadContext {
+                database_initialization_environment: "local",
+            },
+        )
+        .expect("a package with a change-request planner is accepted as a predecessor");
+        let baseline = predecessor.migration_baseline().entities["request"]
+            .change_request
+            .as_ref()
+            .expect("the predecessor baseline carries the change request");
+        assert_eq!(baseline.contract_fingerprint, compiled.contract_fingerprint);
+        let baseline_planner = baseline
+            .planner
+            .as_ref()
+            .expect("the predecessor baseline carries the planner");
+        assert_eq!(baseline_planner.source_module.as_deref(), source_module);
+        assert_eq!(
+            baseline_planner.script_sha256,
+            compiled_planner.script_sha256
+        );
+        assert_eq!(baseline_planner.writes, compiled_planner.writes);
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn rhai_planner_predecessor_without_a_declared_origin_is_refused() {
+    let prepared =
+        prepare_package(module_planner_build_request()).expect("module planner packages");
+    let context = PackageLoadContext {
+        database_initialization_environment: "local",
+    };
+    let effective_model = "effective-model.json";
+
+    // The republished envelope and manifest are themselves accepted, so the
+    // refusal below belongs to the missing origin alone.
+    for (remove_origin, expected) in [(false, None), (true, Some(PackageError::Derivation))] {
+        let root = tempfile::Builder::new()
+            .prefix("registry-planner-package-origin-")
+            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        let package = root.path().join("package");
+        prepared.publish_to_directory(&package).unwrap();
+
+        let model_path = package.join(effective_model);
+        let mut model: serde_json::Value =
+            serde_json::from_slice(&fs::read(&model_path).unwrap()).unwrap();
+        let planner = model["entities"]["request"]["changeRequest"]["planner"]
+            .as_object_mut()
+            .expect("the packaged effective model carries the planner");
+        assert_eq!(
+            planner["declaringOrigin"],
+            json!({"kind": "module", "id": "core"})
+        );
+        if remove_origin {
+            planner.remove("declaringOrigin");
+        }
+        let bytes = canonicalize_json(&model).unwrap();
+        fs::write(&model_path, &bytes).unwrap();
+
+        let manifest_path = package.join("package.json");
+        let mut envelope: PackageEnvelope =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let entry = envelope
+            .manifest
+            .files
+            .iter_mut()
+            .find(|entry| entry.path == effective_model)
+            .unwrap();
+        entry.size = bytes.len() as u64;
+        entry.sha256 = digest(&bytes);
+        fs::write(&manifest_path, canonical(&envelope)).unwrap();
+        refresh_shared_package_envelope(&package);
+
+        assert_eq!(
+            load_predecessor_package(&package, &context).err(),
+            expected,
+            "declaringOrigin removed: {remove_origin}"
+        );
+    }
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn rhai_planner_predecessor_plans_an_additive_successor() {
+    let planner_asset = || PackageSourceFile {
+        path: "planners/request.rhai".to_owned(),
+        bytes: project_planner_script().to_vec(),
+    };
+    let first =
+        prepare_package_with_project_assets(project_planner_build_request(), vec![planner_asset()])
+            .expect("declared project planner packages");
+    let root = tempfile::Builder::new()
+        .prefix("registry-planner-package-successor-")
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
+    let package = root.path().join("package");
+    first.publish_to_directory(&package).unwrap();
+    let context = PackageLoadContext {
+        database_initialization_environment: "local",
+    };
+    let predecessor = load_predecessor_package(&package, &context)
+        .expect("a package with a change-request planner is accepted as a predecessor");
+
+    let mut request = project_planner_build_request();
+    let entities = r#""entities":["#;
+    let project = String::from_utf8(request.project.bytes).unwrap();
+    assert!(project.contains(entities));
+    request.project.bytes = project
+        .replacen(
+            entities,
+            r#""entities":[{"id":"note","primaryDataset":"planner-package","route":"notes","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}]},"#,
+            1,
+        )
+        .into_bytes();
+    request.from_package_digest = Some(predecessor.package_digest().to_owned());
+    request.migration_plan = PackageMigrationPlanInput::SuccessorFromBaseline {
+        prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+    };
+    let successor = prepare_package_with_project_assets(request, vec![planner_asset()])
+        .expect("an additive successor of a planner package prepares");
+
+    let changes = compiled_registry_change_set_from_baseline(
+        predecessor.migration_baseline(),
+        successor.registry(),
+        predecessor.package_digest(),
+    );
+    assert_eq!(
+        changes
+            .changes
+            .iter()
+            .map(|change| (
+                change.code,
+                change.target.entity_id.as_deref(),
+                change.target.member_id.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(CompiledRegistryChangeCode::EntityAdded, Some("note"), None)],
+        "the unchanged planner contributes no change to the successor"
+    );
+    assert_eq!(
+        successor
+            .manifest()
+            .migration_plan
+            .from_package_digest
+            .as_deref(),
+        Some(predecessor.package_digest())
+    );
+
+    let successor_package = root.path().join("successor");
+    successor.publish_to_directory(&successor_package).unwrap();
+    load_predecessor_package(&successor_package, &context)
+        .expect("the successor is itself a readable predecessor");
 }
 
 #[test]
