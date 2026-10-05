@@ -724,10 +724,11 @@ registry package with records and revisions, a Casework queue with answered
 and in-flight work, and an Evidence audit stream with the old binaries, using a
 disposable loopback PostgreSQL container. It then runs the documented upgrade
 steps with the PR's binaries and fails when any captured view is served
-differently or any retained table holds fewer rows. BReg serves the
-predecessor's package with the new binaries, then applies an additive successor
-and serves again; its package-bound ETags may change, while record data and
-stored revisions must remain identical. Require
+differently or any retained table holds fewer rows. BReg rebuilds its package
+with the current compiler and applies it as a successor when the rebuilt digest
+changes, serves, then applies an additive successor and serves again; its
+package-bound ETags may change, while record data and stored revisions must
+remain identical. Require
 that run to succeed before
 merging the release PR. To rehearse without a release PR, dispatch it by hand:
 

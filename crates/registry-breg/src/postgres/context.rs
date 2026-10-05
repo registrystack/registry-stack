@@ -3604,6 +3604,7 @@ mod tests {
                 hooks: Vec::new(),
             }],
             actions: Vec::new(),
+            statistical_datasets: Vec::new(),
             access_profiles: vec![
                 ProjectAccessProfileSource {
                     id: "operator".to_owned(),

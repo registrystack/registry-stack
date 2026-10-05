@@ -153,6 +153,16 @@ path = "tests/postgres_history_commit.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_statistics"
+path = "tests/postgres_statistics.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_statistics_http"
+path = "tests/postgres_statistics_http.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_historical"
 path = "tests/postgres_historical.rs"
 required-features = ["postgres-test"]

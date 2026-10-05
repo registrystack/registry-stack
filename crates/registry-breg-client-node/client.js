@@ -12,7 +12,7 @@ class BaseRegistryClientError extends Error {
     super(envelope.message);
     this.name = 'BaseRegistryClientError';
     this.kind = envelope.kind;
-    for (const field of ['code', 'planRefusal', 'refusalCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
+    for (const field of ['code', 'planRefusal', 'refusalCode', 'reasonCode', 'status', 'traceId', 'transportKind', 'tokenKind']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
     if (envelope.fieldPath !== undefined && envelope.fieldPath !== null) {
@@ -205,6 +205,9 @@ function wrapAsync(name, jsonIndexes = [], requiredIndexes = []) {
 
 for (const [method, jsonIndexes, requiredIndexes] of [
   ['health'], ['ready'], ['openapi'], ['registryMetadata'], ['registryContract'], ['entitySchema'],
+  ['statisticsLive'], ['statisticsReleases'], ['statisticsLatestRelease'],
+  ['statisticsReleaseVersion'], ['statisticsReleaseSeries'], ['statisticsPublish'],
+  ['statisticsWithdraw'],
   ['recordRevisions'], ['getRecordRevision', [3]],
   ['getRecord', [2]], ['listRecords', [1]], ['continueList', [0], [0]],
   ['getGeoJsonRecord', [2]], ['listGeoJsonRecords', [1]], ['continueGeoJsonList', [0], [0]],

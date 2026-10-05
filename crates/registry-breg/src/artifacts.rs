@@ -23,7 +23,7 @@ use crate::model::{
     CompiledManifestProjection, CompiledMetadataInventory, CompiledModuleIdentity,
     CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
     CompiledQueryTemporalValueKind, CompiledRecipients, CompiledRevisionKind, CompiledRoute,
-    CompiledRouteInventory, HttpMethod,
+    CompiledRouteInventory, CompiledStatisticalDataset, HttpMethod,
 };
 use crate::physical_names::{hex_prefix, PhysicalNameInventory};
 use crate::record_profile::{link_header_value, CONTEXT_IDENTIFIER, PROFILE_IDENTIFIER};
@@ -78,6 +78,8 @@ pub(crate) struct EffectiveModel<'a> {
     pub module_order: &'a [String],
     pub module_closure: &'a [CompiledModuleIdentity],
     pub entities: &'a BTreeMap<String, CompiledEntity>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub statistical_datasets: &'a BTreeMap<String, CompiledStatisticalDataset>,
     pub physical_names: &'a PhysicalNameInventory,
     #[serde(skip_serializing_if = "CompiledActionInventory::is_empty")]
     pub action_inventory: &'a CompiledActionInventory,
@@ -97,6 +99,7 @@ pub(crate) fn generate_artifacts(
     module_order: &[String],
     module_closure: &[CompiledModuleIdentity],
     entities: &BTreeMap<String, CompiledEntity>,
+    statistical_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
     physical_names: &PhysicalNameInventory,
     actions: &CompiledActionInventory,
     routes: &CompiledRouteInventory,
@@ -116,6 +119,7 @@ pub(crate) fn generate_artifacts(
         module_order,
         module_closure,
         entities,
+        statistical_datasets,
         physical_names,
         action_inventory: actions,
         metadata_inventory: metadata,
@@ -129,6 +133,13 @@ pub(crate) fn generate_artifacts(
         &sanitized_effective_model(&effective_model)?,
     )?;
     insert_json(&mut artifacts, "compiled/modules.json", &module_closure)?;
+    if !statistical_datasets.is_empty() {
+        insert_json(
+            &mut artifacts,
+            "compiled/statistical-datasets.json",
+            statistical_datasets,
+        )?;
+    }
     if !actions.is_empty() {
         insert_json(&mut artifacts, "compiled/actions.json", actions)?;
     }
@@ -141,15 +152,11 @@ pub(crate) fn generate_artifacts(
         "compiled/event-deliveries.json",
         event_deliveries,
     )?;
-    if actions.is_empty() {
-        insert_json(&mut artifacts, REGISTRY_METADATA_ARTIFACT_PATH, metadata)?;
-    } else {
-        insert_json_value(
-            &mut artifacts,
-            REGISTRY_METADATA_ARTIFACT_PATH,
-            &registry_metadata_artifact(metadata, actions),
-        )?;
-    }
+    insert_json_value(
+        &mut artifacts,
+        REGISTRY_METADATA_ARTIFACT_PATH,
+        &registry_metadata_artifact(metadata, actions, statistical_datasets),
+    )?;
     insert_bytes(
         &mut artifacts,
         "generated/postgres/schema.sql",
@@ -214,15 +221,16 @@ pub(crate) fn generate_artifacts(
             )?;
         }
     }
-    let openapi = openapi_document(
+    let openapi = openapi_document(OpenApiDocumentInput {
         registry_id,
         version,
         entities,
         routes,
         actions,
         query,
-        &schemas,
-    );
+        schemas: &schemas,
+        statistical_datasets,
+    });
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
         let projected = project_manifest_artifacts(registry_id, projection, entities)?;
@@ -1357,15 +1365,24 @@ pub(crate) fn public_action_metadata(actions: &CompiledActionInventory) -> Value
 fn registry_metadata_artifact(
     metadata: &CompiledMetadataInventory,
     actions: &CompiledActionInventory,
+    statistical_datasets: &BTreeMap<String, CompiledStatisticalDataset>,
 ) -> Value {
     let mut value = serde_json::to_value(metadata).expect("compiled metadata serializes");
     let object = value
         .as_object_mut()
         .expect("compiled metadata serializes as object");
-    object.insert(
-        "actions".to_owned(),
-        public_action_metadata(actions)["actions"].clone(),
-    );
+    if !actions.is_empty() {
+        object.insert(
+            "actions".to_owned(),
+            public_action_metadata(actions)["actions"].clone(),
+        );
+    }
+    if !statistical_datasets.is_empty() {
+        object.insert(
+            "statisticalDatasets".to_owned(),
+            crate::statistical_artifacts::all_statistical_dataset_metadata(statistical_datasets),
+        );
+    }
     value
 }
 
@@ -1916,15 +1933,28 @@ pub(crate) fn decimal_pattern(precision: u8, scale: u8) -> String {
     }
 }
 
-fn openapi_document(
-    registry_id: &str,
-    version: &str,
-    entities: &BTreeMap<String, CompiledEntity>,
-    routes: &CompiledRouteInventory,
-    actions: &CompiledActionInventory,
-    query: &CompiledQueryInventory,
-    schemas: &BTreeMap<String, Value>,
-) -> Value {
+struct OpenApiDocumentInput<'a> {
+    registry_id: &'a str,
+    version: &'a str,
+    entities: &'a BTreeMap<String, CompiledEntity>,
+    routes: &'a CompiledRouteInventory,
+    actions: &'a CompiledActionInventory,
+    query: &'a CompiledQueryInventory,
+    schemas: &'a BTreeMap<String, Value>,
+    statistical_datasets: &'a BTreeMap<String, CompiledStatisticalDataset>,
+}
+
+fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
+    let OpenApiDocumentInput {
+        registry_id,
+        version,
+        entities,
+        routes,
+        actions,
+        query,
+        schemas,
+        statistical_datasets,
+    } = input;
     let mut paths = Map::new();
     let mut input_schemas = Map::new();
     let mut has_access_log = false;
@@ -2090,6 +2120,13 @@ fn openapi_document(
         );
     }
     append_review_completion_openapi(&mut paths, &mut component_schemas);
+    crate::statistical_artifacts::append_statistics_openapi(
+        &mut paths,
+        &mut component_schemas,
+        statistical_datasets,
+        statistical_datasets,
+        false,
+    );
     let has_request_actions = routes
         .routes
         .iter()
@@ -4438,6 +4475,10 @@ fn problem_schema() -> Value {
             "traceId": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[0-9a-f]{32}$"},
             "fieldPath": {"type": "string", "maxLength": 256},
             "refusalCode": {"type": "string", "minLength": 1, "maxLength": 128},
+            "reasonCode": {
+                "type": "string",
+                "enum": ["computation-error", "source-data-error", "disclosure-risk"]
+            },
             "entityId": {"type": "string", "minLength": 1, "maxLength": 128},
             "fieldId": {"type": "string", "minLength": 1, "maxLength": 128},
             "code": {
@@ -4451,8 +4492,37 @@ fn problem_schema() -> Value {
         "allOf": [
             {
                 "if": {"properties": {"code": {"const": "action.refused"}}},
-                "then": {"required": ["refusalCode"], "properties": {"status": {"const": 422}}},
-                "else": {"not": {"required": ["refusalCode"]}}
+                "then": {"required": ["refusalCode"], "properties": {"status": {"const": 422}}}
+            },
+            {
+                "if": {"properties": {"code": {"const": "statistical_dataset.release_refused"}}},
+                "then": {
+                    "required": ["refusalCode"],
+                    "properties": {
+                        "status": {"const": 422},
+                        "refusalCode": {"enum": [
+                            "period-not-ended",
+                            "before-first-period",
+                            "provisional-after-final",
+                            "already-withdrawn"
+                        ]}
+                    }
+                }
+            },
+            {
+                "if": {"properties": {"code": {"not": {"enum": [
+                    "action.refused",
+                    "statistical_dataset.release_refused"
+                ]}}}},
+                "then": {"not": {"required": ["refusalCode"]}}
+            },
+            {
+                "if": {"properties": {"code": {"const": "statistical_dataset.version_withdrawn"}}},
+                "then": {"required": ["reasonCode"], "properties": {"status": {"const": 410}}}
+            },
+            {
+                "if": {"properties": {"code": {"not": {"const": "statistical_dataset.version_withdrawn"}}}},
+                "then": {"not": {"required": ["reasonCode"]}}
             },
             {
                 "if": {"properties": {"code": {"const": "action.evidence_failed"}}},
@@ -4942,6 +5012,49 @@ mod problem_contract_tests {
             !validator.is_valid(&fault),
             "a package fault is not a caller error"
         );
+    }
+
+    #[test]
+    fn problem_contract_accepts_closed_statistical_release_details() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+
+        let mut refused = problem_example(
+            "422",
+            "statistical_dataset.release_refused",
+            "The statistical release was refused.",
+        );
+        refused["refusalCode"] = json!("period-not-ended");
+        assert!(validator.is_valid(&refused));
+        refused["refusalCode"] = json!("unreviewed-reason");
+        assert!(!validator.is_valid(&refused));
+        refused.as_object_mut().unwrap().remove("refusalCode");
+        assert!(!validator.is_valid(&refused));
+        refused["refusalCode"] = json!("already-withdrawn");
+        refused["status"] = json!(409);
+        assert!(!validator.is_valid(&refused));
+
+        let mut withdrawn = problem_example(
+            "410",
+            "statistical_dataset.version_withdrawn",
+            "The statistical release version was withdrawn.",
+        );
+        withdrawn["reasonCode"] = json!("source-data-error");
+        assert!(validator.is_valid(&withdrawn));
+        withdrawn["reasonCode"] = json!("unreviewed-reason");
+        assert!(!validator.is_valid(&withdrawn));
+        withdrawn.as_object_mut().unwrap().remove("reasonCode");
+        assert!(!validator.is_valid(&withdrawn));
+        withdrawn["reasonCode"] = json!("disclosure-risk");
+        withdrawn["status"] = json!(422);
+        assert!(!validator.is_valid(&withdrawn));
+
+        let mut unrelated = problem_example("404", "resource.not_found", "Not found.");
+        unrelated["reasonCode"] = json!("computation-error");
+        assert!(!validator.is_valid(&unrelated));
     }
 
     #[test]

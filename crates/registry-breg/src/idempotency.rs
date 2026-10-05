@@ -39,6 +39,7 @@ pub enum PermittedResponseHeader {
     Etag,
     Link,
     Location,
+    ReprDigest,
 }
 
 impl PermittedResponseHeader {
@@ -48,6 +49,7 @@ impl PermittedResponseHeader {
             Self::Etag => "etag",
             Self::Link => "link",
             Self::Location => "location",
+            Self::ReprDigest => "repr-digest",
         }
     }
 
@@ -57,6 +59,7 @@ impl PermittedResponseHeader {
             2 => Some(Self::Etag),
             3 => Some(Self::Location),
             4 => Some(Self::Link),
+            5 => Some(Self::ReprDigest),
             _ => None,
         }
     }
@@ -67,6 +70,7 @@ impl PermittedResponseHeader {
             Self::Etag => 2,
             Self::Location => 3,
             Self::Link => 4,
+            Self::ReprDigest => 5,
         }
     }
 }
@@ -190,6 +194,10 @@ pub(crate) enum StoredResultMetadata {
     ImmediateAction {
         result_count: u16,
     },
+    Release {
+        release_reference: String,
+        release_version: i64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -200,8 +208,21 @@ pub enum IdempotencyError {
     Conflict,
     #[error("a cached mutation response holds bytes no JSON reader accepts")]
     CachedResponseUnreadable,
+    #[error("mutation state operation timed out")]
+    Timeout,
     #[error("mutation state is unavailable")]
     Unavailable,
+}
+
+fn map_database_error(error: tokio_postgres::Error) -> IdempotencyError {
+    if error
+        .code()
+        .is_some_and(|code| code == &tokio_postgres::error::SqlState::QUERY_CANCELED)
+    {
+        IdempotencyError::Timeout
+    } else {
+        IdempotencyError::Unavailable
+    }
 }
 
 pub(crate) fn resolve_binding(
@@ -521,7 +542,7 @@ pub(crate) async fn lock_and_load(
             &[&binding.key_reference],
         )
         .await
-        .map_err(|_| IdempotencyError::Unavailable)?;
+        .map_err(map_database_error)?;
     let Some(row) = transaction
         .query_opt(
             "SELECT binding_reference, result_kind, record_revision, response_status,
@@ -532,7 +553,7 @@ pub(crate) async fn lock_and_load(
             &[&binding.key_reference],
         )
         .await
-        .map_err(|_| IdempotencyError::Unavailable)?
+        .map_err(map_database_error)?
     else {
         return Ok(None);
     };
@@ -619,6 +640,23 @@ pub(crate) async fn lock_and_load(
                 .ok_or(IdempotencyError::Unavailable)?;
             StoredResultMetadata::ImmediateAction { result_count }
         }
+        "release" => {
+            let release_version = row
+                .get::<_, Option<i64>>(2)
+                .filter(|version| *version > 0)
+                .ok_or(IdempotencyError::Unavailable)?;
+            let release_reference = row
+                .get::<_, Option<String>>(6)
+                .filter(|reference| !reference.is_empty())
+                .ok_or(IdempotencyError::Unavailable)?;
+            if row.get::<_, Option<i16>>(7).is_some() || row.get::<_, Option<i64>>(8).is_some() {
+                return Err(IdempotencyError::Unavailable);
+            }
+            StoredResultMetadata::Release {
+                release_reference,
+                release_version,
+            }
+        }
         _ => return Err(IdempotencyError::Unavailable),
     };
     let status = u16::try_from(row.get::<_, i16>(3)).map_err(|_| IdempotencyError::Unavailable)?;
@@ -699,6 +737,16 @@ pub(crate) async fn insert_result(
                     None,
                 )
             }
+            StoredResultMetadata::Release {
+                release_reference,
+                release_version,
+            } if !release_reference.is_empty() && *release_version > 0 => (
+                "release",
+                Some(*release_version),
+                Some(release_reference.as_str()),
+                None,
+                None,
+            ),
             _ => return Err(IdempotencyError::InvalidInput),
         };
     let changed = transaction
@@ -722,7 +770,7 @@ pub(crate) async fn insert_result(
             ],
         )
         .await
-        .map_err(|_| IdempotencyError::Unavailable)?;
+        .map_err(map_database_error)?;
     if changed != 1 {
         return Err(IdempotencyError::Unavailable);
     }
@@ -819,7 +867,12 @@ pub(crate) async fn tombstone_erased_cached_responses(
             // A cached batch body is read back as JSON here. Bytes no reader
             // accepts are the row's own state, not an outage, and are named so
             // rather than retried behind a transport failure.
-            if stored_bytes::unreadable(&error, stored_bytes::Reader::IdempotencyCache) {
+            if error
+                .code()
+                .is_some_and(|code| code == &tokio_postgres::error::SqlState::QUERY_CANCELED)
+            {
+                IdempotencyError::Timeout
+            } else if stored_bytes::unreadable(&error, stored_bytes::Reader::IdempotencyCache) {
                 IdempotencyError::CachedResponseUnreadable
             } else {
                 IdempotencyError::Unavailable
@@ -840,7 +893,7 @@ async fn affected_snapshot_references(
             &[&affected_positions],
         )
         .await
-        .map_err(|_| IdempotencyError::Unavailable)?;
+        .map_err(map_database_error)?;
     Ok(rows
         .into_iter()
         .map(|row| SnapshotReference::for_uuid(row.get::<_, Uuid>(0)).to_string())

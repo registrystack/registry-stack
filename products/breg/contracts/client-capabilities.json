@@ -36,7 +36,10 @@
     "snapshot",
     "validAt",
     "requestHistoryAfterProposalVersion",
-    "proposalVersion"
+    "proposalVersion",
+    "from",
+    "to",
+    "status"
   ],
   "queryOptionBindings": {
     "accessProfile": {
@@ -108,6 +111,21 @@
       "rust": ["BaseRegistryClient.download_attachment.proposal_version"],
       "node": ["BaseRegistryClient.downloadAttachment.proposalVersion"],
       "python": ["BaseRegistryClient.download_attachment.proposal_version"]
+    },
+    "from": {
+      "rust": ["BaseRegistryClient.statistics_live.from", "BaseRegistryClient.statistics_release_series.from"],
+      "node": ["BaseRegistryClient.statisticsLive.from", "BaseRegistryClient.statisticsReleaseSeries.from"],
+      "python": ["BaseRegistryClient.statistics_live.from_period", "BaseRegistryClient.statistics_release_series.from_period"]
+    },
+    "to": {
+      "rust": ["BaseRegistryClient.statistics_live.to", "BaseRegistryClient.statistics_release_series.to"],
+      "node": ["BaseRegistryClient.statisticsLive.to", "BaseRegistryClient.statisticsReleaseSeries.to"],
+      "python": ["BaseRegistryClient.statistics_live.to_period", "BaseRegistryClient.statistics_release_series.to_period"]
+    },
+    "status": {
+      "rust": ["BaseRegistryClient.statistics_latest_release.selection", "BaseRegistryClient.statistics_release_series.selection"],
+      "node": ["BaseRegistryClient.statisticsLatestRelease.selection", "BaseRegistryClient.statisticsReleaseSeries.selection"],
+      "python": ["BaseRegistryClient.statistics_latest_release.selection", "BaseRegistryClient.statistics_release_series.selection"]
     }
   },
   "representations": [
@@ -116,6 +134,7 @@
     "application/geo+json",
     "application/problem+json",
     "application/octet-stream",
+    "text/csv",
     "*/*"
   ],
   "excludedRoutes": [
@@ -405,6 +424,36 @@
       "python": [
         "action_target_conditions",
         "invoke_action"
+      ]
+    },
+    {
+      "id": "statistical-datasets",
+      "rust": [
+        "statistics_live",
+        "statistics_releases",
+        "statistics_latest_release",
+        "statistics_release_version",
+        "statistics_release_series",
+        "statistics_publish",
+        "statistics_withdraw"
+      ],
+      "node": [
+        "statisticsLive",
+        "statisticsReleases",
+        "statisticsLatestRelease",
+        "statisticsReleaseVersion",
+        "statisticsReleaseSeries",
+        "statisticsPublish",
+        "statisticsWithdraw"
+      ],
+      "python": [
+        "statistics_live",
+        "statistics_releases",
+        "statistics_latest_release",
+        "statistics_release_version",
+        "statistics_release_series",
+        "statistics_publish",
+        "statistics_withdraw"
       ]
     },
     {

@@ -29,8 +29,8 @@ WAVE = re.compile(r"^W[0-9]+$")
 PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
-ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 24))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 150))
+ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 25))
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 161))
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -43,6 +43,7 @@ ACCEPTANCE_FIXTURES = {
     "BREG-J20": ("request-attachments", "acceptance/request-attachments"),
     "BREG-J22": ("consent-person-registry", "fixtures/consent-person-registry"),
     "BREG-J23": ("consent-land-registry", "fixtures/consent-land-registry"),
+    "BREG-J24": ("facility", "acceptance/facility"),
 }
 RUST_TEST = re.compile(
     r"#\[(?:tokio::)?test(?:\([^\]]*\))?\]"
@@ -155,6 +156,13 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_spatial_migration",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_reference_indexes",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_fixture_journeys",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_http",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_stock",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_byte_limits",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_first_period",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics_history",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_logical_sql_names",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test schema_fingerprint_rehearsal",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_startup",
 )
@@ -404,7 +412,7 @@ def validate_acceptance(errors: list[str]) -> set[str]:
     identifiers = unique_ids(scenarios, "acceptance matrix.scenarios", errors)
     ordered_identifiers = [item.get("id") for item in scenarios if isinstance(item, dict)]
     if ordered_identifiers != list(ACCEPTANCE_JOURNEY_IDS):
-        errors.append("acceptance matrix: must contain BREG-J01 through BREG-J23 exactly once in order")
+        errors.append("acceptance matrix: must contain BREG-J01 through BREG-J24 exactly once in order")
     for index, raw in enumerate(scenarios):
         item = as_mapping(raw, f"acceptance matrix.scenarios[{index}]", errors)
         identifier = item.get("id")

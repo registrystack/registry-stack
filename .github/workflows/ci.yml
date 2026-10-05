@@ -1210,6 +1210,12 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-adopter-workflow.sh
 
+      - name: Base Registry Engine statistical dataset workflow
+        if: matrix.lane == 'contracts'
+        env:
+          BREG_SKIP_BUILD: "1"
+        run: products/breg/scripts/test-statistics-workflow.sh
+
       - name: Base Registry Engine staging-to-production promotion
         if: matrix.lane == 'contracts'
         env:

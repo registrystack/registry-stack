@@ -85,6 +85,10 @@
     - ['`service.unavailable`', '503', 'The runtime could not complete the mutation for a reason other than the request itself.']
     - ['`runtime.not_ready`', '503', 'The readiness probe before the package and database are usable.']
     - ['`runtime.field_encryption.unavailable`', '503', 'The route reaches an entity with encrypted fields while the field-encryption key state is not usable. Entities without encrypted fields keep serving.']
+    - ['`statistical_dataset.domain_violation`', '500', 'A non-null source value falls outside a declared dimension domain; the value is not disclosed.']
+    - ['`statistical_dataset.release_refused`', '422', 'The period or lifecycle state is ineligible; `refusalCode` names a closed reason.']
+    - ['`statistical_dataset.version_conflict`', '409', 'The active package changed or a fresher computation superseded this publication.']
+    - ['`statistical_dataset.version_withdrawn`', '410', 'The directly requested version was withdrawn; `reasonCode` names the recorded reason.']
 - id: request-actions
   title: Change request actions
   columns: [Action, Route suffix, Body, Accepted from]
@@ -110,3 +114,14 @@
     - ['`reference`', 'string', 'The target record identifier as a UUID.']
     - ['`crs84-point`', 'object', 'GeoJSON Point, `{"type": "Point", "coordinates": [longitude, latitude]}`.']
     - ['`structured`', 'object', 'Validated against the declared schema, bounded by `maxBytes`, advertised as `x-registry-maxBytes`.']
+- id: statistical-dataset-routes
+  title: Statistical dataset routes
+  columns: [Route, Profile grant, Result]
+  rows:
+    - ['`GET /v1/statistics/{dataset}:live`', 'Live profile with count-capable source list grant', 'Exact JSON or CSV; optional `from` and `to`.']
+    - ['`GET /v1/statistics/{dataset}/releases`', 'Released-data reader, publisher, or live profile', 'Version headers and `pageInfo`; `$top` and opaque `$skiptoken`.']
+    - ['`GET /v1/statistics/{dataset}/releases:series`', 'Released-data access', 'Latest eligible document per period; required `from` and `to`, optional `status=final`.']
+    - ['`GET /v1/statistics/{dataset}/releases/{period}`', 'Released-data access', 'Latest eligible JSON or CSV; optional `status=final`.']
+    - ['`GET /v1/statistics/{dataset}/releases/{period}/versions/{version}`', 'Released-data access', 'Immutable JSON or CSV; 410 after withdrawal.']
+    - ['`POST /v1/statistics/{dataset}/releases/{period}/versions`', 'Publisher', '201 version header; `{"status":"provisional"}` or `{"status":"final"}`; `Idempotency-Key` required.']
+    - ['`POST /v1/statistics/{dataset}/releases/{period}/versions/{version}/withdrawal`', 'Publisher', '200 header with withdrawal; closed `reason`; `Idempotency-Key` required.']

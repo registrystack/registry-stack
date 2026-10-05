@@ -3,6 +3,10 @@ from typing import Any, Literal, NotRequired, Sequence, TypedDict
 JsonScalar = str | int | float | bool | None
 JsonValue = JsonScalar | list["JsonValue"] | tuple["JsonValue", ...] | dict[str, "JsonValue"]
 RecordFormat = Literal["json", "json-ld"]
+StatisticsFormat = Literal["json", "csv"]
+StatisticsReleaseStatus = Literal["provisional", "final"]
+StatisticsReleaseSelection = Literal["any", "final"]
+StatisticsWithdrawalReason = Literal["computation-error", "source-data-error", "disclosure-risk"]
 
 class ExchangeContext(TypedDict):
     issuer: str
@@ -57,6 +61,7 @@ class BaseRegistryClientError(Exception):
     code: str | None
     plan_refusal: str | None
     refusal_code: str | None
+    reason_code: str | None
     field_path: str | None
     status: int | None
     trace_id: str | None
@@ -305,6 +310,37 @@ class BaseRegistryClient:
     def ready(self) -> dict[str, Any]: ...
     def openapi(self, access_profile: str | None = None) -> dict[str, Any]: ...
     def registry_metadata(self, access_profile: str | None = None) -> dict[str, Any]: ...
+    def statistics_live(
+        self, dataset: str, *, from_period: str | None = None,
+        to_period: str | None = None, access_profile: str | None = None,
+        format: StatisticsFormat = "json",
+    ) -> dict[str, Any]: ...
+    def statistics_releases(
+        self, dataset: str, *, top: int | None = None,
+        skip_token: str | None = None, access_profile: str | None = None,
+    ) -> dict[str, Any]: ...
+    def statistics_latest_release(
+        self, dataset: str, period: str, selection: StatisticsReleaseSelection,
+        *, access_profile: str | None = None, format: StatisticsFormat = "json",
+    ) -> dict[str, Any]: ...
+    def statistics_release_version(
+        self, dataset: str, period: str, version: int,
+        *, access_profile: str | None = None, format: StatisticsFormat = "json",
+    ) -> dict[str, Any]: ...
+    def statistics_release_series(
+        self, dataset: str, from_period: str, to_period: str,
+        selection: StatisticsReleaseSelection, *, access_profile: str | None = None,
+        format: StatisticsFormat = "json",
+    ) -> dict[str, Any]: ...
+    def statistics_publish(
+        self, dataset: str, period: str, status: StatisticsReleaseStatus,
+        access_profile: str, idempotency_key: str,
+    ) -> dict[str, Any]: ...
+    def statistics_withdraw(
+        self, dataset: str, period: str, version: int,
+        reason: StatisticsWithdrawalReason, access_profile: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]: ...
     def registry_contract(self, access_profile: str | None = None) -> BRegMetadata: ...
     def entity_schema(self, entity_identifier: str, access_profile: str | None = None) -> dict[str, Any]: ...
     def get_record(

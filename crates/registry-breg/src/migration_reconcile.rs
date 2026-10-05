@@ -35,7 +35,6 @@ use crate::migration::{
     compiler_statement_checksums, package_ledger_entry, target_package_identity,
     verify_successor_package_binding, ApplyRoles, MigrationError,
 };
-use crate::model::CompiledRegistry;
 use crate::package::VerifiedPackage;
 use crate::postgres::{
     ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceSnapshot,
@@ -89,8 +88,8 @@ pub struct ReconcileRequest<'a> {
     pub target_package: &'a VerifiedPackage,
     /// The durable identity the Registry was active on before that apply.
     pub current: &'a ExpectedRegistryIdentity,
-    /// The compiled registry of the active package, for its expected catalog.
-    pub current_registry: &'a CompiledRegistry,
+    /// The exact expected catalog of the verified active predecessor package.
+    pub current_catalog: &'a ExpectedManagedCatalog,
     pub migration_role: &'a SqlIdentifier,
     pub runtime_role: &'a SqlIdentifier,
     pub timeouts: ReconcileTimeouts,
@@ -366,7 +365,7 @@ async fn reconcile_under_lock(
     let target = &target_package_identity(request.target_package, database_id, activation_id);
 
     let target_catalog = ExpectedManagedCatalog::compiled(request.target_package.registry());
-    let active_catalog = ExpectedManagedCatalog::compiled(request.current_registry);
+    let active_catalog = request.current_catalog.clone();
     report.target_catalog_finding = connection
         .managed_catalog_finding(
             target,

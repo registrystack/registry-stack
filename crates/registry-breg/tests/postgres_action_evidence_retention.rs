@@ -12,7 +12,7 @@ use registry_breg::{
     contract::{parse_project_yaml, ModuleAssetSource},
     mutation::MutationError,
     postgres::{
-        initialize_registry_state_for_catalog_test, install_compiled_schema, ConnectionConfig,
+        initialize_compiled_registry_state_for_test, install_compiled_schema, ConnectionConfig,
         ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
         RegistryStateTestIdentity,
     },
@@ -52,10 +52,10 @@ async fn install(
     install_compiled_schema(&client, registry, runtime_role)
         .await
         .unwrap();
-    let expected = initialize_registry_state_for_catalog_test(
+    let expected = initialize_compiled_registry_state_for_test(
         &client,
         runtime_role,
-        &ExpectedManagedCatalog::compiled(registry),
+        registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE,
             database_id: identity,

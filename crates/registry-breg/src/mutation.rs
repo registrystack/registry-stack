@@ -140,7 +140,7 @@ pub async fn install_mutation_schema(
                  binding_reference text NOT NULL CHECK (binding_reference <> ''),
                  result_kind text NOT NULL
                      CONSTRAINT registry_idempotency_result_kind_values
-                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased')),
+                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'release', 'erased')),
                  record_reference text CHECK (record_reference <> ''),
                  record_revision bigint CHECK (record_revision > 0),
                  result_count smallint CHECK (result_count BETWEEN 1 AND 100 OR
@@ -168,6 +168,10 @@ pub async fn install_mutation_schema(
                      (result_kind = 'immediate_action' AND record_reference IS NULL
                          AND record_revision IS NULL AND result_count IS NOT NULL
                          AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'release' AND record_reference IS NOT NULL
+                         AND record_revision IS NOT NULL AND result_count IS NULL
                          AND proposal_version IS NULL)
                      OR
                      (result_kind = 'erased' AND record_reference IS NULL
@@ -228,11 +232,12 @@ pub async fn install_mutation_schema(
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    // The receipt erasure column and the result count, response body, and
-    // erasure constraints are installed after creation, so a reinstall replaces
-    // each constraint under its stable name. The inline result count check
-    // spans two columns, so PostgreSQL names it `registry_idempotency_check`;
-    // it is replaced by `registry_idempotency_result_count_check`.
+    // The receipt erasure column and the result count, response body, erasure,
+    // result kind, and result shape constraints are installed after creation, so
+    // a reinstall replaces each constraint under its stable name. The inline
+    // result count check spans two columns, so PostgreSQL names it
+    // `registry_idempotency_check`; it is replaced by
+    // `registry_idempotency_result_count_check`.
     migration
         .batch_execute(&format!(
             "ALTER TABLE registry_internal.registry_idempotency
@@ -257,7 +262,40 @@ pub async fn install_mutation_schema(
                      (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES})
                  ),
                  ADD CONSTRAINT registry_idempotency_erasure_shape
-                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));",
+                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values,
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_result_shape;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_result_kind_values
+                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'release', 'erased')),
+                 ADD CONSTRAINT registry_idempotency_result_shape CHECK (
+                     (result_kind = 'record' AND record_reference IS NOT NULL
+                         AND record_revision IS NOT NULL AND result_count IS NULL
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'batch' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NOT NULL
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'application' AND record_reference IS NOT NULL
+                         AND record_revision IS NOT NULL AND result_count IS NOT NULL
+                         AND result_count BETWEEN 1 AND 16
+                         AND proposal_version IS NOT NULL)
+                     OR
+                     (result_kind = 'immediate_action' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NOT NULL
+                         AND result_count BETWEEN 0 AND {MAX_IMMEDIATE_ACTION_RESULTS}
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'release' AND record_reference IS NOT NULL
+                         AND record_revision IS NOT NULL AND result_count IS NULL
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'erased' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NULL
+                         AND proposal_version IS NULL)
+                 );",
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -309,6 +347,9 @@ pub async fn install_mutation_schema(
     install_history_commit_schema(migration, runtime_role)
         .await
         .map_err(MutationError::from)?;
+    crate::statistics_store::install(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     Ok(())
 }
 
@@ -1352,7 +1393,8 @@ impl MutationCoordinator {
                         } => Some(record_reference.clone()),
                         StoredResultMetadata::Batch { .. }
                         | StoredResultMetadata::Application { .. }
-                        | StoredResultMetadata::ImmediateAction { .. } => None,
+                        | StoredResultMetadata::ImmediateAction { .. }
+                        | StoredResultMetadata::Release { .. } => None,
                     },
                     record_revision: match &stored.metadata {
                         StoredResultMetadata::Record {
@@ -1360,7 +1402,8 @@ impl MutationCoordinator {
                         } => Some(*record_revision),
                         StoredResultMetadata::Batch { .. }
                         | StoredResultMetadata::Application { .. }
-                        | StoredResultMetadata::ImmediateAction { .. } => None,
+                        | StoredResultMetadata::ImmediateAction { .. }
+                        | StoredResultMetadata::Release { .. } => None,
                     },
                     result_count: None,
                     field_set_reference: None,
@@ -4512,9 +4555,9 @@ impl From<IdempotencyError> for MutationError {
             // Only maintenance erasure reads a cached response body back, so
             // this classification names a state a mutation cannot reach. The
             // mutation surface answers it as the outage its callers retry.
-            IdempotencyError::CachedResponseUnreadable | IdempotencyError::Unavailable => {
-                Self::Unavailable
-            }
+            IdempotencyError::CachedResponseUnreadable
+            | IdempotencyError::Timeout
+            | IdempotencyError::Unavailable => Self::Unavailable,
         }
     }
 }

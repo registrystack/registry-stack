@@ -661,24 +661,7 @@ impl ReadFilterOperator {
     }
 }
 
-/// Validate one caller-supplied operand for the partial text operators.
-///
-/// Search terms share the query grammar's byte bound and the stored field's
-/// maximum character bound, but they are not complete stored values. They may
-/// therefore be shorter than a string's `minLength` or name only part of a
-/// vocabulary code. Empty terms remain admitted by the existing query grammar.
-pub(crate) fn valid_text_search_term(value: &str, field_type: &FieldTypeSource) -> bool {
-    if value.len() > crate::query::MAX_LITERAL_BYTES || value.chars().any(char::is_control) {
-        return false;
-    }
-    match field_type {
-        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
-            value.chars().count() <= *max_length as usize
-        }
-        FieldTypeSource::VocabularyCode { .. } => true,
-        _ => false,
-    }
-}
+pub(crate) use crate::data::valid_text_search_term;
 
 #[derive(Clone)]
 pub struct RecordReadRefusal {
@@ -911,6 +894,7 @@ pub struct HttpService {
     pub(crate) snapshots: Option<Arc<dyn SnapshotReadService>>,
     pub(crate) cursors: Arc<CursorCodec>,
     pub(crate) mutations: Option<Arc<PostgresRecordMutationService>>,
+    pub(crate) statistics: Option<Arc<crate::postgres::PostgresStatisticsService>>,
     pub(crate) review_completions: Option<Arc<crate::review_store::ReviewCompletionReceiver>>,
     pub(crate) readiness: Arc<dyn ReadinessProbe>,
     pub(crate) public_origin: Option<crate::runtime_config::PublicOrigin>,
@@ -952,11 +936,22 @@ impl HttpService {
             snapshots: None,
             cursors,
             mutations: None,
+            statistics: None,
             review_completions: None,
             readiness,
             public_origin: None,
             field_encryption: None,
         }
+    }
+
+    /// Install the package-fenced statistical dataset service.
+    #[must_use]
+    pub fn with_statistics(
+        mut self,
+        service: Arc<crate::postgres::PostgresStatisticsService>,
+    ) -> Self {
+        self.statistics = Some(service);
+        self
     }
 
     /// Install active field-encryption key state. Startup calls this exactly

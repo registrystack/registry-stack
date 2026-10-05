@@ -46,6 +46,10 @@ pub enum ProblemCode {
     RuntimeNotReady,
     ServiceUnavailable,
     SourceUnavailable,
+    StatisticalDatasetDomainViolation,
+    StatisticalDatasetReleaseRefused,
+    StatisticalDatasetVersionConflict,
+    StatisticalDatasetVersionWithdrawn,
     UnsupportedMediaType,
 }
 
@@ -76,6 +80,10 @@ impl ProblemCode {
         Self::RuntimeNotReady,
         Self::ServiceUnavailable,
         Self::SourceUnavailable,
+        Self::StatisticalDatasetDomainViolation,
+        Self::StatisticalDatasetReleaseRefused,
+        Self::StatisticalDatasetVersionConflict,
+        Self::StatisticalDatasetVersionWithdrawn,
         Self::UnsupportedMediaType,
     ];
 
@@ -106,6 +114,10 @@ impl ProblemCode {
         Self::RuntimeFieldEncryptionUnavailable,
         Self::ServiceUnavailable,
         Self::SourceUnavailable,
+        Self::StatisticalDatasetDomainViolation,
+        Self::StatisticalDatasetReleaseRefused,
+        Self::StatisticalDatasetVersionConflict,
+        Self::StatisticalDatasetVersionWithdrawn,
         Self::UnsupportedMediaType,
     ];
 
@@ -136,6 +148,10 @@ impl ProblemCode {
             Self::RuntimeNotReady => "runtime.not_ready",
             Self::ServiceUnavailable => "service.unavailable",
             Self::SourceUnavailable => "source.unavailable",
+            Self::StatisticalDatasetDomainViolation => "statistical_dataset.domain_violation",
+            Self::StatisticalDatasetReleaseRefused => "statistical_dataset.release_refused",
+            Self::StatisticalDatasetVersionConflict => "statistical_dataset.version_conflict",
+            Self::StatisticalDatasetVersionWithdrawn => "statistical_dataset.version_withdrawn",
             Self::UnsupportedMediaType => "unsupported.media_type",
         }
     }
@@ -155,13 +171,14 @@ impl ProblemCode {
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
             | Self::IngestionRunNotOpen
-            | Self::MutationConflict => 409,
-            Self::IngestionReceiptErased => 410,
+            | Self::MutationConflict
+            | Self::StatisticalDatasetVersionConflict => 409,
+            Self::IngestionReceiptErased | Self::StatisticalDatasetVersionWithdrawn => 410,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
-            Self::ActionRefused => 422,
+            Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
-            Self::ActionHandlerFailed => 500,
+            Self::ActionHandlerFailed | Self::StatisticalDatasetDomainViolation => 500,
             Self::ActionEvidenceFailed
             | Self::RuntimeFieldEncryptionUnavailable
             | Self::RuntimeNotReady
@@ -229,6 +246,18 @@ impl ProblemCode {
             Self::RuntimeNotReady => "Registry runtime is not ready.",
             Self::ServiceUnavailable => "The Registry mutation service is unavailable.",
             Self::SourceUnavailable => "The Registry data service is unavailable.",
+            Self::StatisticalDatasetDomainViolation => {
+                "A statistical dataset contains a code outside its declared domain."
+            }
+            Self::StatisticalDatasetReleaseRefused => {
+                "The statistical dataset release operation is not eligible."
+            }
+            Self::StatisticalDatasetVersionConflict => {
+                "The statistical dataset computation was superseded or its package changed."
+            }
+            Self::StatisticalDatasetVersionWithdrawn => {
+                "The statistical dataset version was withdrawn."
+            }
             Self::UnsupportedMediaType => "The request media type is not supported.",
         }
     }

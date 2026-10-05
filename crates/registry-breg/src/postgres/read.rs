@@ -1133,7 +1133,7 @@ impl RecordReadService for PostgresRecordReadService {
                 &self.expected,
                 crate::audit::HttpRefusalAudit {
                     grant: None,
-                    method: request.method,
+                    method: request.method.into(),
                     operation_id: &request.operation_id,
                     target_record: request.target_record.as_deref(),
                     action_id: None,
@@ -2281,7 +2281,7 @@ fn valid_cursor_reference(value: &str) -> bool {
     })
 }
 
-fn strict_claim_context(
+pub(crate) fn strict_claim_context(
     registry: &CompiledRegistry,
     context: &AuthorizedRequestContext,
     entity_id: &str,
@@ -2334,6 +2334,20 @@ async fn install_evaluation_date(
         .transpose()?
         .unwrap_or_else(time::OffsetDateTime::now_utc);
     let evaluation_date = instant.date().to_string();
+    transaction
+        .execute_typed(
+            "SELECT set_config('registry.evaluation_date', $1, true)",
+            &[(&evaluation_date, Type::TEXT)],
+        )
+        .await
+        .map_err(|_| ReadServiceError::Unavailable)?;
+    Ok(())
+}
+
+pub(crate) async fn install_statistics_evaluation_date(
+    transaction: &tokio_postgres::Transaction<'_>,
+    evaluation_date: &str,
+) -> Result<(), ReadServiceError> {
     transaction
         .execute_typed(
             "SELECT set_config('registry.evaluation_date', $1, true)",
@@ -2439,12 +2453,12 @@ fn collect_filter_fields<'a>(filter: &'a ReadFilterExpr, fields: &mut BTreeSet<&
     }
 }
 
-struct ReadRelations {
-    base_alias: &'static str,
-    source_alias: &'static str,
-    id_expression: String,
-    from_sql: String,
-    base_predicates: Vec<String>,
+pub(crate) struct ReadRelations {
+    pub(crate) base_alias: &'static str,
+    pub(crate) source_alias: &'static str,
+    pub(crate) id_expression: String,
+    pub(crate) from_sql: String,
+    pub(crate) base_predicates: Vec<String>,
     derived_aliases: BTreeMap<String, String>,
 }
 
@@ -2533,6 +2547,13 @@ impl ReadRelations {
         })
     }
 
+    pub(crate) fn statistics(
+        entity: &CompiledEntity,
+        required_fields: &[String],
+    ) -> Result<Self, ReadServiceError> {
+        Self::collection(entity, None, required_fields)
+    }
+
     fn relationship(
         source: &CompiledEntity,
         through: &CompiledEntity,
@@ -2613,7 +2634,7 @@ impl ReadRelations {
         })
     }
 
-    fn field_expression(
+    pub(crate) fn field_expression(
         &self,
         entity: &CompiledEntity,
         field_id: &str,
@@ -2709,11 +2730,11 @@ fn source_view_field_expression(
     ))
 }
 
-struct FieldExpression {
-    sql: String,
-    field_type: FieldTypeSource,
+pub(crate) struct FieldExpression {
+    pub(crate) sql: String,
+    pub(crate) field_type: FieldTypeSource,
     /// The expression resolves the raw envelope column of an encrypted field.
-    encrypted: bool,
+    pub(crate) encrypted: bool,
 }
 
 fn compiled_field_type<'a>(
@@ -2938,18 +2959,23 @@ struct ListStatements {
     values: Vec<BoundValue>,
 }
 
-fn list_sql(
+pub(crate) struct ReadPredicatePlan {
+    pub(crate) where_sql: String,
+    pub(crate) values: Vec<BoundValue>,
+}
+
+pub(crate) fn read_predicates(
     entity: &CompiledEntity,
     relations: &ReadRelations,
-    query: &crate::api::CompiledReadQuery,
-    projection: &str,
-) -> Result<ListStatements, ReadServiceError> {
+    filter: Option<&ReadFilterExpr>,
+    temporal_instant: Option<&str>,
+) -> Result<ReadPredicatePlan, ReadServiceError> {
     let mut values = Vec::new();
     let mut predicates = relations.base_predicates.clone();
-    if let Some(filter) = &query.filter {
+    if let Some(filter) = filter {
         predicates.push(filter_sql(entity, relations, filter, &mut values)?);
     }
-    if let Some(instant) = &query.temporal_instant {
+    if let Some(instant) = temporal_instant {
         let temporal = entity
             .temporal
             .as_ref()
@@ -2972,14 +2998,37 @@ fn list_sql(
         predicates.push(format!(
             "{start} <= {instant_expression} AND ({end} IS NULL OR {instant_expression} < {end})"
         ));
-    } else if matches!(
-        query.kind,
-        CompiledQueryKind::Current | CompiledQueryKind::AsOf
-    ) {
+    }
+    Ok(ReadPredicatePlan {
+        where_sql: where_clause(&predicates),
+        values,
+    })
+}
+
+fn list_sql(
+    entity: &CompiledEntity,
+    relations: &ReadRelations,
+    query: &crate::api::CompiledReadQuery,
+    projection: &str,
+) -> Result<ListStatements, ReadServiceError> {
+    if query.temporal_instant.is_none()
+        && matches!(
+            query.kind,
+            CompiledQueryKind::Current | CompiledQueryKind::AsOf
+        )
+    {
         return Err(ReadServiceError::Unavailable);
     }
-    let count_where_sql = where_clause(&predicates);
+    let plan = read_predicates(
+        entity,
+        relations,
+        query.filter.as_ref(),
+        query.temporal_instant.as_deref(),
+    )?;
+    let count_where_sql = plan.where_sql;
+    let mut values = plan.values;
     let count_parameters = values.len();
+    let mut predicates = vec![count_where_sql.clone()];
     if let Some(continuation) = &query.continuation {
         if !valid_canonical_uuid(&continuation.last_record_id) {
             return Err(ReadServiceError::CursorInvalid);

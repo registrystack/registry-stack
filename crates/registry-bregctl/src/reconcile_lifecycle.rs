@@ -19,7 +19,7 @@ use registry_breg::package::{load_package, PackageError};
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfigError};
 
 use crate::active_registry::{
-    observed_active_identity, recorded_active_identity, ActiveRegistryError,
+    observed_identity_for_digest, recorded_identity_for_digest, ActiveRegistryError,
 };
 use serde::Serialize;
 
@@ -82,11 +82,13 @@ pub(crate) fn run(
     let config = load_runtime_config(request.runtime_config)
         .map_err(ReconcileLifecycleError::RuntimeConfig)?;
 
-    // The active package carries the compiled registry whose expected catalog
-    // an abandoned target has to leave behind, so it is verified in full under
-    // the same startup binding the server itself requires.
+    // The active package may have been compiled before a generated contract
+    // changed. Verify it as a historical predecessor and combine its retained
+    // schema baseline with the verified current target; its hash-covered
+    // engine feature set separately binds whether the statistical release
+    // store belongs to the historical catalog.
     let active = config
-        .load_active_package()
+        .load_active_predecessor_package()
         .map_err(ReconcileLifecycleError::ActivePackage)?;
     let target = load_package(request.package, &config.package_load_context())
         .map_err(ReconcileLifecycleError::TargetPackage)?;
@@ -113,13 +115,20 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .map_err(|_| ReconcileLifecycleError::Runtime)?;
+    let active_registry = target
+        .registry()
+        .with_migration_baseline_schema(active.migration_baseline());
+    let active_catalog = registry_breg::postgres::ExpectedManagedCatalog::compiled_predecessor(
+        &active_registry,
+        active.statistical_release_store_present(),
+    );
     let reconcile = |current, audit| {
         runtime
             .block_on(reconcile_failed_migration(ReconcileRequest {
                 config: &connection,
                 target_package: &target,
                 current: &current,
-                current_registry: active.registry(),
+                current_catalog: &active_catalog,
                 migration_role: config.database().roles().migration(),
                 runtime_role: config.database().roles().runtime(),
                 timeouts,
@@ -129,8 +138,14 @@ pub(crate) fn run(
             .map_err(ReconcileLifecycleError::Reconcile)
     };
     let report = if request.execute {
-        let current = recorded_active_identity(&runtime, &config, &connection, &active)
-            .map_err(execute_preflight_refusal)?;
+        let current = recorded_identity_for_digest(
+            &runtime,
+            &config,
+            &connection,
+            active.package_id(),
+            active.package_digest(),
+        )
+        .map_err(execute_preflight_refusal)?;
         let audit = runtime
             .block_on(RegistryAudit::open_companion(&config))
             .map_err(|_| ReconcileLifecycleError::Audit)?;
@@ -140,8 +155,9 @@ pub(crate) fn run(
         // the exclusive lock and opens no audit writer. The reconciliation
         // takes the lock and re-reads the identity under it, refusing a
         // snapshot that no longer matches.
-        let current = observed_active_identity(&runtime, &config, &connection, &active)
-            .map_err(ReconcileLifecycleError::ActiveRegistry)?;
+        let current =
+            observed_identity_for_digest(&runtime, &config, &connection, active.package_digest())
+                .map_err(ReconcileLifecycleError::ActiveRegistry)?;
         reconcile(current, ReconcileAudit::Assess(&audit_profile))?
     };
     Ok(outcome_report(report))

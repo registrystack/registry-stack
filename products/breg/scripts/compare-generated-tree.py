@@ -29,6 +29,17 @@ BUSINESS_ESTABLISHMENTS_PATHS = (
     "generated/schemas/business.schema.json",
     "generated/schemas/establishment.schema.json",
 )
+FACILITY_PATHS = (
+    "generated/manifest/registry-manifest.json",
+    "generated/manifest/dcat.jsonld",
+    "generated/metadata/registry.json",
+    "generated/openapi.json",
+    "generated/postgres/schema.sql",
+    "generated/schemas/discharge-report.schema.json",
+    "generated/schemas/facility.schema.json",
+    "generated/schemas/installation.schema.json",
+    "generated/schemas/permit.schema.json",
+)
 PUBLICSCHEMA_HOUSEHOLD_PATHS = (
     "generated/manifest/registry-manifest.json",
     "generated/manifest/dcat.jsonld",
@@ -166,6 +177,7 @@ CONSENT_LAND_REGISTRY_PATHS = (
 EXPECTED_PATHS_BY_BASELINE = {
     "asset-site-placement": ASSET_SITE_PLACEMENT_PATHS,
     "business-establishments": BUSINESS_ESTABLISHMENTS_PATHS,
+    "facility": FACILITY_PATHS,
     "asset-site-placement-change-requests": ASSET_SITE_PLACEMENT_CHANGE_REQUEST_PATHS,
     "publicschema-household-change-requests": PUBLICSCHEMA_HOUSEHOLD_CHANGE_REQUEST_PATHS,
     "person-name-change-rhai": PERSON_NAME_CHANGE_RHAI_PATHS,

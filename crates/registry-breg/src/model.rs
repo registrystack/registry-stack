@@ -111,6 +111,94 @@ pub struct CompiledDerivedRelation {
     pub sql_sha256: String,
     pub sql_bytes: Vec<u8>,
     pub fields: Vec<String>,
+    /// Entity ids whose `registry_source` relations this SQL reads.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub source_entities: BTreeSet<String>,
+    /// Whether this SQL calls `registry_context.evaluation_date()`.
+    #[serde(default)]
+    pub uses_evaluation_date: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledStatisticalDataset {
+    pub id: String,
+    pub unit_entity_id: String,
+    pub population: String,
+    pub period: CompiledStatisticalPeriod,
+    pub dimensions: Vec<CompiledStatisticalDimension>,
+    pub disclosure: crate::statistics::DisclosureParameters,
+    /// Authentication requirements for every dataset grant, including
+    /// release readers which need no entity permission.
+    pub access_profiles: BTreeMap<String, AccessProfileSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub live_profiles: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub releases: Option<CompiledStatisticalReleases>,
+    pub dependency_entities: BTreeSet<String>,
+    pub referenced_fields: BTreeSet<String>,
+    pub evaluation_date_dependent: bool,
+    pub definition_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    deny_unknown_fields,
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CompiledStatisticalPeriod {
+    Flow {
+        field: String,
+        granularity: crate::statistics::PeriodGranularity,
+        first_period: String,
+    },
+    Stock {
+        granularity: crate::statistics::PeriodGranularity,
+        first_period: String,
+        validity: CompiledStatisticalValidity,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    deny_unknown_fields,
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CompiledStatisticalValidity {
+    Temporal { from: String, until: String },
+    Fields { from: String, until: Option<String> },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledStatisticalDimension {
+    pub field: String,
+    pub domain: CompiledStatisticalDimensionDomain,
+    pub codes: Vec<String>,
+    pub include_unknown: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    deny_unknown_fields,
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CompiledStatisticalDimensionDomain {
+    Boolean,
+    Vocabulary { vocabulary: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledStatisticalReleases {
+    pub publisher: String,
+    pub readers: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1578,6 +1666,8 @@ pub struct CompiledRegistry {
     module_order: Vec<String>,
     module_closure: Vec<CompiledModuleIdentity>,
     entities: BTreeMap<String, CompiledEntity>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
     physical_names: PhysicalNameInventory,
     action_inventory: CompiledActionInventory,
     route_inventory: CompiledRouteInventory,
@@ -1604,6 +1694,7 @@ impl CompiledRegistry {
         module_order: Vec<String>,
         module_closure: Vec<CompiledModuleIdentity>,
         entities: BTreeMap<String, CompiledEntity>,
+        statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
         physical_names: PhysicalNameInventory,
         action_inventory: CompiledActionInventory,
         route_inventory: CompiledRouteInventory,
@@ -1626,6 +1717,7 @@ impl CompiledRegistry {
             module_order,
             module_closure,
             entities,
+            statistical_datasets,
             physical_names,
             action_inventory,
             route_inventory,
@@ -1691,6 +1783,10 @@ impl CompiledRegistry {
 
     pub fn entities(&self) -> &BTreeMap<String, CompiledEntity> {
         &self.entities
+    }
+
+    pub fn statistical_datasets(&self) -> &BTreeMap<String, CompiledStatisticalDataset> {
+        &self.statistical_datasets
     }
 
     pub fn physical_names(&self) -> &PhysicalNameInventory {

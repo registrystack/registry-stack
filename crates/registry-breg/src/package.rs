@@ -48,6 +48,7 @@ use crate::migration_plan::{
 use crate::migration_plan::{
     reviewed_artifact_kind, ReviewedArtifactKind, ValidatedReviewedMigrationPlan,
 };
+use crate::model::CompiledStatisticalDataset;
 use crate::model::{
     CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
     CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRecipients,
@@ -86,10 +87,25 @@ pub struct PackageEnvelope {
 pub struct PackageManifest {
     pub package_id: String,
     pub compiler: CompilerIdentity,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub engine_features: BTreeSet<PackageEngineFeature>,
     pub schema_fingerprint: String,
     pub sources: CapturedSources,
     pub files: Vec<PackageFile>,
     pub migration_plan: MigrationPlan,
+}
+
+/// Engine-owned catalog capabilities installed by the package's compiler.
+/// The set is hash-covered package identity and defaults empty only for
+/// predecessor packages produced before capability declarations existed.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageEngineFeature {
+    StatisticalReleaseStore,
+}
+
+fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
+    BTreeSet::from([PackageEngineFeature::StatisticalReleaseStore])
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -192,6 +208,8 @@ pub struct CompiledRegistryMigrationBaseline {
     pub registry_version: String,
     pub registry_revision: String,
     pub entities: BTreeMap<String, CompiledEntity>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
     pub physical_names: PhysicalNameInventory,
     pub routes: CompiledRouteInventory,
     pub access: CompiledAccessInventory,
@@ -210,6 +228,7 @@ impl CompiledRegistryMigrationBaseline {
             registry_version: compiled.version().to_owned(),
             registry_revision: compiled.revision().to_owned(),
             entities: compiled.entities().clone(),
+            statistical_datasets: compiled.statistical_datasets().clone(),
             physical_names: compiled.physical_names().clone(),
             routes: compiled.routes().clone(),
             access: compiled.access().clone(),
@@ -310,6 +329,9 @@ pub enum CompiledRegistryChangeCode {
     RecipientGroupAdded,
     RecipientGroupRemoved,
     RecipientGroupChanged,
+    StatisticalDatasetAdded,
+    StatisticalDatasetRemoved,
+    StatisticalDatasetChanged,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -338,6 +360,7 @@ pub enum CompiledRegistryChangeTargetKind {
     Event,
     Action,
     Recipient,
+    StatisticalDataset,
 }
 
 /// What package loading needs from the deployment. A package carries no
@@ -582,6 +605,7 @@ pub struct VerifiedPredecessorPackage {
     package_digest: String,
     migration_baseline: CompiledRegistryMigrationBaseline,
     history_schema_descriptor: HistorySchemaDescriptor,
+    statistical_release_store_present: bool,
 }
 
 impl VerifiedPredecessorPackage {
@@ -607,6 +631,14 @@ impl VerifiedPredecessorPackage {
     /// runtime access, SQL execution, or successor activation.
     pub fn history_schema_descriptor(&self) -> HistorySchemaDescriptor {
         self.history_schema_descriptor.clone()
+    }
+
+    /// Whether this predecessor's hash-covered manifest declares the complete
+    /// engine-owned statistical release store. Reconciliation uses this closed
+    /// fact to compare an older active catalog without granting partial-store
+    /// compatibility.
+    pub fn statistical_release_store_present(&self) -> bool {
+        self.statistical_release_store_present
     }
 }
 
@@ -890,6 +922,7 @@ pub fn compiled_registry_change_set_from_baseline(
     let mut changes = Vec::new();
     compare_registry_identity(previous, &candidate_baseline, &mut changes);
     compare_entities(previous, &candidate_baseline, &mut changes);
+    compare_statistical_datasets(previous, &candidate_baseline, &mut changes);
     compare_routes(previous, &candidate_baseline, &mut changes);
     compare_query_inventory(previous, &candidate_baseline, &mut changes);
     compare_actions(previous, &candidate_baseline, &mut changes);
@@ -968,6 +1001,52 @@ fn compare_registry_identity(
             CompiledRegistryChangeCode::RegistryVersionChanged,
             target(CompiledRegistryChangeTargetKind::Registry, None, None),
         );
+    }
+}
+
+fn compare_statistical_datasets(
+    previous: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistryMigrationBaseline,
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    for (id, before) in &previous.statistical_datasets {
+        match candidate.statistical_datasets.get(id) {
+            None => push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::StatisticalDatasetRemoved,
+                target(
+                    CompiledRegistryChangeTargetKind::StatisticalDataset,
+                    None,
+                    Some(id),
+                ),
+            ),
+            Some(after) if before != after => push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::StatisticalDatasetChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::StatisticalDataset,
+                    None,
+                    Some(id),
+                ),
+            ),
+            Some(_) => {}
+        }
+    }
+    for id in candidate.statistical_datasets.keys() {
+        if !previous.statistical_datasets.contains_key(id) {
+            push_change(
+                changes,
+                CompiledRegistryChangeClass::AccessOrDisclosureChange,
+                CompiledRegistryChangeCode::StatisticalDatasetAdded,
+                target(
+                    CompiledRegistryChangeTargetKind::StatisticalDataset,
+                    None,
+                    Some(id),
+                ),
+            );
+        }
     }
 }
 
@@ -2862,6 +2941,7 @@ pub fn prepare_package_with_project_assets(
             source_revision: request.compiler_source_revision,
             profile: PackageCompileProfile::Production,
         },
+        engine_features: current_engine_features(),
         schema_fingerprint: request.schema_fingerprint,
         sources: CapturedSources {
             project: request.project.path,
@@ -3739,6 +3819,9 @@ fn load_predecessor_closure(
     let migration_baseline = governed.migration_baseline(&package_digest);
     validate_migration_baseline(&migration_baseline)?;
     let history_schema_descriptor = governed.history_schema_descriptor(&package_digest)?;
+    let statistical_release_store_present = manifest
+        .engine_features
+        .contains(&PackageEngineFeature::StatisticalReleaseStore);
 
     Ok((
         VerifiedPredecessorPackage {
@@ -3746,6 +3829,7 @@ fn load_predecessor_closure(
             package_digest,
             migration_baseline,
             history_schema_descriptor,
+            statistical_release_store_present,
         },
         loaded,
     ))
@@ -3886,6 +3970,7 @@ struct PredecessorGovernedModel {
     version: String,
     model_revision: String,
     entities: BTreeMap<String, CompiledEntity>,
+    statistical_datasets: BTreeMap<String, CompiledStatisticalDataset>,
     physical_names: PhysicalNameInventory,
     routes: CompiledRouteInventory,
     access: CompiledAccessInventory,
@@ -3902,6 +3987,7 @@ impl PredecessorGovernedModel {
             registry_version: self.version.clone(),
             registry_revision: self.model_revision.clone(),
             entities: self.entities.clone(),
+            statistical_datasets: self.statistical_datasets.clone(),
             physical_names: self.physical_names.clone(),
             routes: self.routes.clone(),
             access: self.access.clone(),
@@ -3949,6 +4035,13 @@ fn package_predecessor_governed_model(
     restore_effective_model_planner_origins(&mut entities).ok_or(PackageError::Derivation)?;
     let entities: BTreeMap<String, CompiledEntity> =
         serde_json::from_value(entities).map_err(|_| PackageError::Derivation)?;
+    let statistical_datasets: BTreeMap<String, CompiledStatisticalDataset> = value
+        .get("statisticalDatasets")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| PackageError::Derivation)?
+        .unwrap_or_default();
     let effective_physical_names: PhysicalNameInventory = serde_json::from_value(
         value
             .get("physicalNames")
@@ -4014,6 +4107,7 @@ fn package_predecessor_governed_model(
         version,
         model_revision: entry.sha256.clone(),
         entities,
+        statistical_datasets,
         physical_names,
         routes,
         access,
@@ -4240,6 +4334,9 @@ fn rederive(
     manifest: &PackageManifest,
     loaded: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(CompiledRegistry, Option<ValidatedReviewedMigrationPlan>)> {
+    if manifest.engine_features != current_engine_features() {
+        return Err(PackageError::Derivation);
+    }
     let compiled = compile_package_sources(manifest, loaded)?;
     let expected_artifacts = expected_artifact_bytes(manifest, &compiled)?;
     let packaged_artifacts = manifest
