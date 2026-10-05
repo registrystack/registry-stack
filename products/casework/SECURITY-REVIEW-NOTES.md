@@ -486,7 +486,10 @@ its activation ledger, and its own audit guards are unchanged.
    `test_main_refuses_an_earlier_start_before_any_download_or_container`,
    `test_a_stream_must_keep_the_previous_records_and_gain_the_new_ones`.
 5. `crates/registry-caseworkctl/src/source_add.rs`:
-   `a_bare_lifecycle_hook_is_left_as_an_authored_hook`, and
+   `a_bare_lifecycle_hook_is_left_as_an_authored_hook`;
+   `products/casework/scripts/check-checkpoint.sh`, which runs
+   `caseworkctl source add --apply` through `bregctl` on a registry that
+   carries the bare hook on one request entity; and
    `crates/registry-casework-breg/tests/signed_event_intake.rs`:
    `a_lifecycle_event_type_no_paired_request_entity_derives_is_refused`.
 

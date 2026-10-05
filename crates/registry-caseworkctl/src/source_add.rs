@@ -3827,9 +3827,11 @@ mod tests {
     #[test]
     fn a_bare_lifecycle_hook_is_left_as_an_authored_hook() {
         let bare = json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":["record"],"handler":{"kind":"url","destinationId":"casework"}});
+        // BReg hook identifiers are unique across a registry, so one registry
+        // carries the bare hook on at most one entity.
         let mut root = json!({"entities":[
             {"id":"request","hooks":[bare.clone()]},
-            {"id":"transfer","hooks":[bare.clone()]}
+            {"id":"transfer"}
         ],"accessProfiles":[]});
         apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
         assert_eq!(
@@ -3842,9 +3844,13 @@ mod tests {
             ["casework-lifecycle-v1", "casework-lifecycle-v1-request"]
         );
         assert_eq!(root["entities"][0]["hooks"][0], bare);
-        // transfer is outside the pairing and carries only the bare hook.
+        // On an entity outside the pairing it is not a dropped fragment.
+        let unpaired = json!({"entities":[
+            {"id":"request"},
+            {"id":"transfer","hooks":[bare]}
+        ],"accessProfiles":[]});
         let paired: BTreeSet<&str> = BTreeSet::from(["request"]);
-        refuse_dropped_entity_fragments(&root, &paired).unwrap();
+        refuse_dropped_entity_fragments(&unpaired, &paired).unwrap();
     }
 
     #[test]
