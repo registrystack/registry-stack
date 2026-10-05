@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.39.0 - 2026-10-06
+
 - BREAKING: `bregctl dev` takes PostgreSQL loopback port 15432 on a first
   start, where it took 55432. On Linux an outgoing loopback connection could
   take 55432 as its own source port, and a first start then refused the port as
@@ -421,6 +423,34 @@
   `apply.package.refused`. No successor of such a package could be built or
   applied. The package format is unchanged, so packages already published
   need no rebuild.
+- BREAKING: the `contains` and `prefix` text-search operators (`contains` and
+  `startswith` in `$filter`) match without regard to case on string, text,
+  and vocabulary-code fields, on current and snapshot reads (#1849). They
+  matched case-sensitively. Matching follows PostgreSQL's locale rules,
+  treats `%`, `_`, and backslash literally, and does not fold accents or rank
+  results. An operand may be shorter than a string's `minLength` or name only
+  part of a vocabulary code; it keeps the query literal size bound and the
+  string or text `maxLength`, and a control character is refused. An empty
+  term matches every non-null value the caller's read profile permits.
+  `equals` and `in` keep exact, case-sensitive matching. A caller that relied
+  on case-sensitive `contains` or `prefix` results must filter them itself.
+- `bregctl check` names each unresolved field with its entity and its profile
+  or constraint under `access_profile.field.unknown`, and reports the finding
+  `access.profile.create_required_field_not_writable` at
+  `entities[id=..].accessProfiles[id=..].writableFields[field=..]` when a
+  direct `create` or `import` grant omits a required writable stored field,
+  which no request through that grant can supply. Add the field to
+  `writableFields` or remove the operation from the permission. The finding
+  fails a check only under `--deny-findings` (#1849).
+- A missing or malformed `Idempotency-Key` on an immediate action answers
+  `400 request.invalid` naming the header in `fieldPath`, where it carried no
+  `fieldPath`. The Rust, Node.js, and Python BReg clients expose the
+  validated `fieldPath` of an accepted problem (`field_path` in Rust and
+  Python), so a caller can identify the field or header that needs attention
+  (#1850).
+- The WebAssembly executor runs Wasmtime 48.0.5, which carries the fixes for
+  RUSTSEC-2026-0325, RUSTSEC-2026-0326, and RUSTSEC-2026-0327 (#1853).
+  Handler capabilities and the fuel and memory limits are unchanged.
 
 ## v0.38.0 - 2026-10-01
 

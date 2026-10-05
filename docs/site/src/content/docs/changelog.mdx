@@ -18,6 +18,8 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.39.0 beta-51
+
 - BREAKING: Registry Relay is retired and absent from 0.39.0. The `relay` and `relayctl` binaries,
   the Relay installer, the Relay container image, the `registry-relay-client` Rust crate, and the
   `relay` namespace of the unified Rust, Node.js, and Python clients are removed, and Registry
@@ -37,6 +39,150 @@ relevant product pages on this site rather than duplicating release notes.
     crates/registry-stack-client-py/python/registry_client/__init__.py;
     crates/registry-discovery/src/startup.rs, PackageIndexRetiredService;
     crates/registry-discovery-profile/src/lib.rs, RetiredServiceKind. */}
+
+- BREAKING: before 1.0, a release reads only the state its immediate predecessor wrote. v0.39.0
+  reads state written by v0.38.0 and nothing older, and the paths that served only earlier
+  releases are removed from Base Registry Engine (BReg), Registry Casework, Evidence, and
+  Registry Scheduling. Upgrade one release at a time and finish each release's
+  [upgrade steps](../operate/advanced/upgrade-and-retire/#upgrade-in-this-order) before starting
+  the next. Each product changelog lists every removed command, option, key, and refusal code.
+
+{/* Evidence: release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR;
+    products/breg/CHANGELOG.md;
+    products/casework/CHANGELOG.md;
+    products/evidence/CHANGELOG.md;
+    products/scheduling/CHANGELOG.md. */}
+
+- BREAKING: every BReg project compiles to a new `registryRevision` and a new managed schema
+  fingerprint, because every package installs the statistical release store, and a package
+  v0.38.0 built no longer loads in the v0.39.0 runtime. A project that declares immediate
+  actions, derived string, text, decimal, integer, or vocabulary fields, or one vocabulary on
+  projected fields that admit different codes also changes its generated row policy, views, or
+  codelist. Rebuild it with the v0.39.0 `bregctl test` and `bregctl package`, each naming the deployed
+  package with `--baseline-package`, as
+  [test and package the successor](../operate/breg-changes/#test-and-package-the-successor)
+  gives in full, and apply it with `bregctl plan` and `bregctl apply` before switching the
+  runtime. Then repin any Registry Casework BReg source for it with
+  `caseworkctl source add ... --apply` and package, plan, and apply the Casework project once. A
+  package whose project declares a change-request `planner` is now accepted as the predecessor,
+  where earlier releases refused it and no successor of it could be built or applied.
+
+{/* Evidence: products/breg/CHANGELOG.md;
+    crates/registry-bregctl/src/test_lifecycle.rs, baseline_fingerprint_drift;
+    crates/registry-breg/src/package.rs, statistical_release_store_present;
+    crates/registry-breg/src/artifacts.rs, restore_effective_model_planner_origins. */}
+
+- BReg adds governed statistical datasets. A root project declares count datasets under
+  `statisticalDatasets`; a live profile reads exact counts its own list grant could already
+  count, one publisher publishes immutable versioned releases under minimum-count suppression
+  and rounding, and a released-data reader needs no record permission. Seven operations under
+  `/v1/statistics/` serve JSON or CSV, `bregctl statistics publish` and `withdraw` drive the
+  lifecycle over HTTP, and the Rust, Node.js, and Python clients carry the operations.
+  [Publish a statistical series](../configure/breg-statistics/) gives the steps, and the
+  [statistical dataset explanation](../explanation/breg-statistical-datasets/) states the
+  inference risks the disclosure method accepts.
+
+{/* Evidence: products/breg/STATISTICS.md;
+    crates/registry-breg/src/compiler/statistics.rs;
+    crates/registry-breg/src/api/statistics.rs;
+    crates/registry-bregctl/src/statistics_lifecycle.rs. */}
+
+- BREAKING: BReg derived SQL accepts only reviewed PostgreSQL grammar. `JSON_QUERY`, `JSON_TABLE`,
+  `XMLTABLE`, SQL/JSON aggregates and constructors, XML functions, `NATURAL` and `USING` joins,
+  column alias lists, whole-row references, and casts outside the reviewed built-in scalar types
+  are refused; `JSON_VALUE` and `JSON_EXISTS` stay available. A derived value that does not fit
+  its declared length, scale, precision, range, or vocabulary is no longer truncated or rounded:
+  the generated view raises a value-free error and an API read of it answers
+  `503 source.unavailable`.
+
+{/* Evidence: products/breg/CHANGELOG.md. */}
+
+- BREAKING: the BReg `contains` and `prefix` text-search operators (`contains` and `startswith`
+  in `$filter`) match without regard to case on string, text, and vocabulary-code fields. `%`,
+  `_`, and backslash match literally, and `equals` and `in` keep exact, case-sensitive matching.
+
+{/* Evidence: crates/registry-breg/src/postgres/read.rs, ILIKE;
+    products/breg/metadata.md. */}
+
+- BREAKING: a BReg background worker or the metrics listener that panics or returns before
+  shutdown ends `breg` with exit status 1, where the process kept serving without the task. Run
+  `breg` under a supervisor that restarts it on failure. The metrics listener publishes
+  `breg_worker_last_success_age_seconds`, `breg_queue_oldest_pending_age_seconds`, and
+  `breg_active_package_info` with the package digest the process verified at startup.
+
+{/* Evidence: crates/registry-breg/src/startup.rs, BackgroundTaskStop;
+    crates/registry-breg/src/metrics.rs, breg_worker_last_success_age_seconds,
+    breg_queue_oldest_pending_age_seconds, and breg_active_package_info. */}
+
+- BREAKING: `bregctl apply` and `plan` report a migration lock another session holds as
+  `apply.database.in_progress`, where they reported `apply.database.unavailable`, and the
+  maintenance commands report it under their own `in_progress` codes. The webhook,
+  request-retention, import-authority, and evidence-retention commands refuse a package that
+  `package.expectedDigest` does not pin under `*.package.refused` codes. `bregctl apply` and
+  `plan` take `--expected-digest` and refuse another package as `apply.package.digest_mismatch`
+  before any database contact.
+
+{/* Evidence: crates/registry-bregctl/src/apply_lifecycle.rs, expected_digest;
+    products/breg/CHANGELOG.md. */}
+
+- BREAKING: a BReg reviewed migration's `rehearsal.json` no longer carries `proofs`, and
+  `bregctl test` and `package` refuse a receipt that still does with
+  `migration.review.receipt_proofs_retired`. `bregctl test --fingerprint-only` measures the schema
+  fingerprint a fresh install of the candidate produces without running fixtures.
+
+{/* Evidence: crates/registry-bregctl/src/reviewed_migrations.rs, receipt_proofs_retired;
+    products/breg/CHANGELOG.md. */}
+
+- BREAKING: the BReg WebAssembly executor builds Wasmtime without its default features and
+  refuses a handler module that uses GC types, exception handling, or `externref`. A build
+  without the `wasm` feature refuses a WASM hook handler with
+  `hook.handler.wasm_build_unsupported`. The executor runs Wasmtime 48.0.5, which carries the
+  fixes for RUSTSEC-2026-0325, RUSTSEC-2026-0326, and RUSTSEC-2026-0327.
+
+{/* Evidence: crates/registry-platform-script/Cargo.toml;
+    crates/registry-breg/src/compiler.rs, wasm_build_unsupported. */}
+
+- BREAKING: `bregctl dev` takes PostgreSQL loopback port 15432 on a first start, where it took
+  55432, and `caseworkctl dev` takes 15433, where it took 55433. A session that already started
+  keeps its port. `bregctl dev` pins a session on its compiled content, so run
+  `bregctl dev stop --remove` on a session an earlier release started.
+
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, DEFAULT_DATABASE_PORT;
+    crates/registry-caseworkctl/src/dev/mod.rs, DEFAULT_DATABASE_PORT. */}
+
+- `bregctl check` reports `access.profile.create_required_field_not_writable` when a direct
+  create or import grant omits a required writable stored field. A missing or malformed
+  `Idempotency-Key` on a BReg immediate action names the header in `fieldPath`, and the Rust,
+  Node.js, and Python BReg clients expose the validated `fieldPath` of an accepted problem.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, create_required_field_not_writable;
+    crates/registry-breg/src/api/mod.rs, missing_idempotency_key;
+    crates/registry-breg-client/src/error.rs, BRegProblemFieldPath. */}
+
+- A Registry Casework inbox view that is empty over a recently reconciled source returns
+  `complete`. Retry a `budget_exhausted` page that waited only for source discovery without a
+  cursor, and deduplicate the retried walk by `itemId`. `caseworkctl source add
+  --casework-endpoint URL` sets the Casework endpoint of the local BReg review authority, and
+  `caseworkctl dev` reports a local session failure under `caseworkctl.dev.*` codes.
+
+{/* Evidence: crates/registry-casework/src/store.rs, fresh_within;
+    crates/registry-caseworkctl/src/source_add.rs, casework_endpoint;
+    products/casework/CHANGELOG.md. */}
+
+- BREAKING: Registry Discovery service search accepts `serviceKind=evidence` only and no longer
+  takes the `semanticClass` and `operationFamily` filters. A search that sends
+  `serviceKind=relay` or either filter answers `400` with the invalid-request problem.
+
+{/* Evidence: crates/registry-discovery/src/query.rs, FILTER_NAMES and
+    retired_relay_service_kind_is_refused_on_its_own_and_beside_evidence. */}
+
+- A nightly channel publishes evaluation builds from protected `main` as immutable GitHub
+  prereleases and container image tags, with no npm package, PyPI package, or documentation site.
+  The BReg, Casework, and Evidence installers downloaded from a numbered release stay pinned to
+  that release. Use a numbered release for a production deployment.
+
+{/* Evidence: release/NIGHTLY.md;
+    release/scripts/nightly_release.py. */}
 
 ## v0.38.0 beta-50
 
