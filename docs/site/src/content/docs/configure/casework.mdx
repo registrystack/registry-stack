@@ -588,7 +588,6 @@ The report includes the exact candidate fragments, `status: preview`, and
 `activation: not_performed`.
 Each paired request entity gets its own lifecycle hook, `casework-lifecycle-v1-<entity>`, because BReg requires a hook id to be unique across the registry and sends it as the event's `ce-type`.
 The prefix leaves room for an entity id of at most 42 bytes within BReg's 64-byte identifier limit; `source add` refuses a longer one before it writes anything.
-It also refuses a `registry.yaml` that still carries the bare `casework-lifecycle-v1` hook an earlier `caseworkctl` wrote, naming each entity that carries it: remove that hook and repeat `source add`.
 Read the patch before you take the next step.
 
 ```sh

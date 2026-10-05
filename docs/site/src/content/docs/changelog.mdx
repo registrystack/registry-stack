@@ -1104,7 +1104,7 @@ relevant product pages on this site rather than duplicating release notes.
   See [deploy Registry Casework](../operate/casework/#write-the-runtime-file).
 
 {/* Evidence: crates/registry-casework-breg/src/lib.rs, LIFECYCLE_EVENT_TYPE_PREFIX;
-    crates/registry-caseworkctl/src/source_add.rs, LEGACY_LIFECYCLE_HOOK_ID. */}
+    crates/registry-caseworkctl/src/source_add.rs, apply_breg_candidate(). */}
 
 - BREAKING: Base Registry Engine (BReg) drops the `superseded` change-request
   state, which no transition ever wrote. A request is `draft`, `submitted`, `cancelled`, or

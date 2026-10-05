@@ -31,10 +31,6 @@ const ACTOR_KIND_CLAIM: &str = "registry_actor_kind";
 const SERVICE_ACTOR_KIND: &str = "service";
 /// The issuer claim a local BReg client's access token carries its purpose under.
 const PURPOSE_CLAIM: &str = "registry_purpose";
-/// The bare lifecycle hook identifier an earlier `source add` wrote on every
-/// paired request entity. BReg hook identifiers are unique across a registry,
-/// so it paired only one entity and is refused by name wherever it is left.
-const LEGACY_LIFECYCLE_HOOK_ID: &str = "casework-lifecycle-v1";
 /// BReg's identifier limit, which a lifecycle hook identifier must fit.
 const BREG_IDENTIFIER_MAXIMUM_BYTES: usize = 64;
 /// The local Casework endpoint a generated BReg review authority calls when
@@ -93,7 +89,6 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let requests = select_requests(&project, &args.source_id, &registry_id, &explained)?;
     let paired_entities: BTreeSet<&str> = requests.iter().map(SelectedRequest::entity).collect();
     refuse_overlong_lifecycle_hook_ids(&paired_entities)?;
-    refuse_legacy_lifecycle_hooks(&authored)?;
     refuse_dropped_entity_fragments(&authored, &paired_entities)?;
     let mut findings = check_unpaired_review_policies(
         &project,
@@ -702,35 +697,6 @@ fn refuse_overlong_lifecycle_hook_ids(paired_entities: &BTreeSet<&str>) -> Resul
     )
 }
 
-/// Refuse, before any write, a BReg registry.yaml that still carries the bare
-/// lifecycle hook an earlier source add wrote on every paired entity. BReg
-/// refuses that identifier on a second entity, and the Casework adapter no
-/// longer accepts it as an event type, so it is named for removal on every
-/// entity that carries it rather than kept beside the per-entity hook.
-fn refuse_legacy_lifecycle_hooks(authored: &Value) -> Result<()> {
-    let legacy: Vec<&str> = authored["entities"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|entity| {
-            entity["hooks"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|hook| hook["id"] == LEGACY_LIFECYCLE_HOOK_ID)
-        })
-        .filter_map(|entity| entity["id"].as_str())
-        .collect();
-    if legacy.is_empty() {
-        return Ok(());
-    }
-    bail!(
-        "registry.yaml still carries the {LEGACY_LIFECYCLE_HOOK_ID} hook an earlier caseworkctl source add wrote on {}, and nothing was written. source add now writes one {}<entity> hook per paired request entity, since BReg hook identifiers are unique across a registry and Casework accepts only the per-entity event type. Remove the {LEGACY_LIFECYCLE_HOOK_ID} hook from each entity named above in registry.yaml (and the hooks key itself when that hook is its only entry), then repeat source add; it writes each paired entity's hook in its place",
-        entity_list(&legacy),
-        registry_casework_breg::LIFECYCLE_EVENT_TYPE_PREFIX,
-    )
-}
-
 /// Refuse, before any write, a BReg registry.yaml that still grants
 /// least-privilege access `apply_breg_candidate` generated for a request
 /// entity this run's paired set no longer includes. `apply_breg_candidate`
@@ -748,8 +714,7 @@ fn refuse_legacy_lifecycle_hooks(authored: &Value) -> Result<()> {
 /// that entity's own `lifecycle_event_type`, and a `permissions` entry naming
 /// any entity under the `accessProfiles` entry with id READER_CLIENT_ID, are
 /// presumed to be source add's own fragments, whether or not that entity is
-/// in the set this run pairs. The bare hook an earlier source add wrote is
-/// refused before this check, by `refuse_legacy_lifecycle_hooks`.
+/// in the set this run pairs.
 fn refuse_dropped_entity_fragments(
     authored: &Value,
     paired_entities: &BTreeSet<&str>,
@@ -3856,31 +3821,30 @@ mod tests {
         refuse_dropped_entity_fragments(&root, &paired).unwrap();
     }
 
-    /// An earlier caseworkctl wrote the same bare hook identifier on every
-    /// paired entity. That hook is refused by name on whichever entity carries
-    /// it, paired or not, so it is never silently kept beside the per-entity
-    /// hook or left on an entity Casework no longer coordinates.
+    /// A hook named with the bare lifecycle prefix is an authored hook like
+    /// any other: source add writes the entity's own hook beside it, leaves it
+    /// as written, and does not count it as a fragment it generated.
     #[test]
-    fn a_legacy_registry_wide_lifecycle_hook_is_named_for_removal() {
-        let legacy = json!([{"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":["record"],"handler":{"kind":"url","destinationId":"casework"}}]);
-        let root = json!({"entities":[
-            {"id":"request","hooks":legacy},
-            {"id":"transfer","hooks":legacy},
-            {"id":"untouched"}
+    fn a_bare_lifecycle_hook_is_left_as_an_authored_hook() {
+        let bare = json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":["record"],"handler":{"kind":"url","destinationId":"casework"}});
+        let mut root = json!({"entities":[
+            {"id":"request","hooks":[bare.clone()]},
+            {"id":"transfer","hooks":[bare.clone()]}
         ],"accessProfiles":[]});
-        let error = format!("{:#}", refuse_legacy_lifecycle_hooks(&root).unwrap_err());
-        assert!(
-            error.contains("casework-lifecycle-v1 hook")
-                && error.contains("request entities request, transfer")
-                && error.contains("casework-lifecycle-v1-<entity>")
-                && error.contains("registry.yaml")
-                && error.contains("nothing was written")
-                && error.contains("repeat source add"),
-            "{error}"
+        apply_breg_candidate(&mut root, "request", &record_reader(&[])).unwrap();
+        assert_eq!(
+            root["entities"][0]["hooks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|hook| hook["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["casework-lifecycle-v1", "casework-lifecycle-v1-request"]
         );
-        assert!(!error.contains("untouched"), "{error}");
-        let current = json!({"entities":[{"id":"request"}],"accessProfiles":[]});
-        refuse_legacy_lifecycle_hooks(&current).unwrap();
+        assert_eq!(root["entities"][0]["hooks"][0], bare);
+        // transfer is outside the pairing and carries only the bare hook.
+        let paired: BTreeSet<&str> = BTreeSet::from(["request"]);
+        refuse_dropped_entity_fragments(&root, &paired).unwrap();
     }
 
     #[test]
