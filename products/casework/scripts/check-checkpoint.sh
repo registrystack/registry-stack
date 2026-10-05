@@ -107,6 +107,35 @@ cp "$repo_root/products/casework/fixtures/source-add-public-organizations/casewo
   --bregctl-bin "$bregctl_bin" >/dev/null
 "$bregctl_bin" check "$source_add_registry" >/dev/null
 
+# A registry that carries the bare `casework-lifecycle-v1` hook on one request
+# entity is paired like any other. `source add` leaves that authored hook as
+# written and writes the entity's own hook beside it, and the result is a
+# registry `bregctl check` accepts.
+bare_hook_registry="$work/bare-hook-registry"
+mkdir -p "$bare_hook_registry"
+sed 's/id: casework-lifecycle-v1-name-correction$/id: casework-lifecycle-v1/' \
+  "$source_add_registry/registry.yaml" >"$bare_hook_registry/registry.yaml"
+bare_hook_registry=$(CDPATH= cd -- "$bare_hook_registry" && pwd -P)
+if ! grep -q 'id: casework-lifecycle-v1$' "$bare_hook_registry/registry.yaml"; then
+  echo "the bare lifecycle hook was not written into the registry under test" >&2
+  exit 1
+fi
+"$bregctl_bin" check "$bare_hook_registry" >/dev/null
+bare_hook_project="$work/bare-hook-casework"
+mkdir -p "$bare_hook_project"
+cp "$repo_root/products/casework/fixtures/source-add-public-organizations/casework.yaml" \
+  "$bare_hook_project/casework.yaml"
+"$caseworkctl_bin" source add "$bare_hook_registry" \
+  --project "$bare_hook_project" --source-id public-organizations --apply \
+  --bregctl-bin "$bregctl_bin" >/dev/null
+for hook in casework-lifecycle-v1 casework-lifecycle-v1-name-correction; do
+  if ! grep -q "id: $hook\$" "$bare_hook_registry/registry.yaml"; then
+    echo "source add left no $hook hook beside the bare lifecycle hook" >&2
+    exit 1
+  fi
+done
+"$bregctl_bin" check "$bare_hook_registry" >/dev/null
+
 # The pin `source add` just wrote is the public-organizations registry
 # revision. A BReg package built from another registry rederives a different
 # one, so `check --against-breg-package` must refuse the pin as stale and name
