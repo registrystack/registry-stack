@@ -575,6 +575,8 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'explanation/governed-registry-actions',
     'explanation/native-field-patterns',
     'explanation/breg-field-encryption',
+    'explanation/breg-statistical-datasets',
+    'configure/breg-statistics',
     'explanation/membership-read-boundaries',
     'explanation/deriving-a-registry-from-a-model',
     'operate/breg-requirements',

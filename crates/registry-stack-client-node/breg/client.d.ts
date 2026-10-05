@@ -349,7 +349,16 @@ export interface RawOutcome {
   mediaType: string
   traceId: string
   etag?: string
+  reprDigest?: string
 }
+
+export type StatisticsFormat = 'json' | 'csv'
+export type StatisticsReleaseStatus = 'provisional' | 'final'
+export type StatisticsReleaseSelection = 'any' | 'final'
+export type StatisticsWithdrawalReason =
+  | 'computation-error'
+  | 'source-data-error'
+  | 'disclosure-risk'
 
 export interface PatchOperation {
   op: 'add' | 'replace' | 'test'
@@ -986,6 +995,7 @@ export interface BaseRegistryClientFailure extends Error {
   readonly code?: string
   readonly planRefusal?: string
   readonly refusalCode?: string
+  readonly reasonCode?: string
   readonly fieldPath?: string
   readonly status?: number
   readonly traceId?: string
@@ -998,6 +1008,7 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
   readonly code?: string
   readonly planRefusal?: string
   readonly refusalCode?: string
+  readonly reasonCode?: string
   readonly fieldPath?: string
   readonly status?: number
   readonly traceId?: string
@@ -1011,6 +1022,13 @@ export declare class BaseRegistryClient {
   ready(): Promise<CompleteOutcome<ProbeStatus>>
   openapi(accessProfile?: string | null): Promise<RawOutcome>
   registryMetadata(accessProfile?: string | null): Promise<RawOutcome>
+  statisticsLive(dataset: string, from?: string | null, to?: string | null, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
+  statisticsReleases(dataset: string, top?: SafeInteger | null, skipToken?: string | null, accessProfile?: string | null): Promise<RawOutcome>
+  statisticsLatestRelease(dataset: string, period: string, selection: StatisticsReleaseSelection, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
+  statisticsReleaseVersion(dataset: string, period: string, version: SafeInteger, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
+  statisticsReleaseSeries(dataset: string, from: string, to: string, selection: StatisticsReleaseSelection, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
+  statisticsPublish(dataset: string, period: string, status: StatisticsReleaseStatus, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
+  statisticsWithdraw(dataset: string, period: string, version: SafeInteger, reason: StatisticsWithdrawalReason, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | null): Promise<BRegMetadata>
   entitySchema(entityIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>
   recordRevisions(entityRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<RawOutcome>

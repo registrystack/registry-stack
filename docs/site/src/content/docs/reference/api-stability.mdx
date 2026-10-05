@@ -184,8 +184,9 @@ The promise is machine-checked where a checker exists:
   describes, and writes records, review work, and audit entries with them against disposable
   PostgreSQL. It then runs the upgrade steps with the binaries built from the pull request and
   fails when captured domain data or stored revisions change, other captured views differ, or
-  retained tables lose rows. Base Registry Engine serves the predecessor's package, then applies an
-  additive successor and serves again; its package-bound ETags may change. The upgraded Casework
+  retained tables lose rows. Base Registry Engine rebuilds its package with the current compiler,
+  applies it as a successor when the rebuilt digest changes, and serves; it then applies an
+  additive successor and serves again. Its package-bound ETags may change. The upgraded Casework
   and Evidence Gateway runtimes continue the audit files the previous release wrote, and the
   rehearsal fails when a file was empty before the upgrade or holds fewer entries after it than
   before plus the number the upgraded runtime must write. It refuses to start from a release

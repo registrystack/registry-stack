@@ -154,6 +154,101 @@ async fn insert_idempotency_response(
         .await
 }
 
+/// The predecessor's idempotency table admits no release receipt, and
+/// `CREATE TABLE IF NOT EXISTS` leaves its constraints in place, so schema
+/// install replaces the result kind and result shape constraints.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_idempotency_release_kind_installs_on_the_predecessor_schema() {
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("clean mutation schema installs");
+    insert_idempotency_release(&migration, "clean-release")
+        .await
+        .expect("a clean schema admits a release receipt");
+
+    migration
+        .batch_execute(
+            "DELETE FROM registry_internal.registry_idempotency;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT registry_idempotency_result_kind_values,
+                 DROP CONSTRAINT registry_idempotency_result_shape;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_result_kind_values
+                     CHECK (result_kind IN ('record', 'batch', 'application', 'immediate_action', 'erased')),
+                 ADD CONSTRAINT registry_idempotency_result_shape CHECK (
+                     (result_kind = 'record' AND record_reference IS NOT NULL
+                         AND record_revision IS NOT NULL AND result_count IS NULL
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'batch' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NOT NULL
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'application' AND record_reference IS NOT NULL
+                         AND record_revision IS NOT NULL AND result_count IS NOT NULL
+                         AND result_count BETWEEN 1 AND 16
+                         AND proposal_version IS NOT NULL)
+                     OR
+                     (result_kind = 'immediate_action' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NOT NULL
+                         AND proposal_version IS NULL)
+                     OR
+                     (result_kind = 'erased' AND record_reference IS NULL
+                         AND record_revision IS NULL AND result_count IS NULL
+                         AND proposal_version IS NULL)
+                 )",
+        )
+        .await
+        .expect("test restores the predecessor's result kind and shape constraints");
+    assert!(
+        insert_idempotency_release(&migration, "predecessor-release")
+            .await
+            .is_err(),
+        "the predecessor fixture must refuse a release receipt"
+    );
+
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("mutation schema replaces the predecessor's result constraints");
+    insert_idempotency_release(&migration, "upgraded-release")
+        .await
+        .expect("an upgraded schema admits a release receipt");
+    assert!(
+        migration
+            .execute(
+                "INSERT INTO registry_internal.registry_idempotency (
+                     key_reference, binding_reference, result_kind,
+                     response_status, response_body, response_headers
+                 ) VALUES ('upgraded-release-without-record', 'binding', 'release', 200, '{}', '')",
+                &[],
+            )
+            .await
+            .is_err(),
+        "an upgraded schema still refuses a release receipt without its record reference"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+async fn insert_idempotency_release(
+    migration: &tokio_postgres::Client,
+    key_reference: &str,
+) -> Result<u64, tokio_postgres::Error> {
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_idempotency (
+                 key_reference, binding_reference, result_kind,
+                 record_reference, record_revision, response_status,
+                 response_body, response_headers
+             ) VALUES ($1, 'binding', 'release', 'release', 1, 200, '{}', '')",
+            &[&key_reference],
+        )
+        .await
+}
+
 fn json_body_with_size(size: usize) -> Vec<u8> {
     const PREFIX: &[u8] = b"{\"value\":\"";
     const SUFFIX: &[u8] = b"\"}";

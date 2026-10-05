@@ -1085,6 +1085,22 @@ conformance, compute collection extents, or add a query engine of its own.
 {/* Evidence: crates/registry-breg/src/api/gis.rs;
     products/breg/acceptance/spatial-service-sites/README.md. */}
 
+## Statistical datasets
+
+<ApiReferenceTable id="statistical-dataset-routes" />
+
+Every statistical operation requires an authenticated profile. Select it with `accessProfile`; a released-data reader can have no record permissions. `/v1/registry` advertises only the selected profile's dataset operations.
+
+Live counts use the profile's ordinary list predicates. Releases contain transformed cells, a definition digest, and version metadata. Document reads from the live, released-series, latest-version, and exact-version routes send `Cache-Control: no-store`, `Vary: authorization, accept`, and `Repr-Digest` for the exact JSON or CSV bytes. The release listing omits `Repr-Digest` because it returns version headers rather than a statistical document. The version header's `contentDigest` identifies canonical stored JSON. No strong ETag is issued.
+
+CSV columns are `period,periodStart,periodEnd,<dimension field IDs...>,value,status`. A suppressed value is blank; an exact or rounded zero remains zero with its corresponding status. Totals round independently. See [live counts and statistical releases](../../explanation/breg-statistical-datasets/) for the inference risks.
+
+Unknown datasets and unavailable profile grants are concealed as 404. Invalid ranges return 400 `query.invalid`; ineligible publication or repeated withdrawal returns 422 `statistical_dataset.release_refused` with `refusalCode`. Package or stale-computation conflicts return 409 `statistical_dataset.version_conflict`. A directly requested withdrawn version returns 410 `statistical_dataset.version_withdrawn` with `reasonCode`. An out-of-domain source value refuses the whole computation as 500 `statistical_dataset.domain_violation`, without echoing the value. Deadline exhaustion returns 504 `request.timeout`.
+
+{/* Evidence: crates/registry-breg/src/api/statistics.rs;
+    crates/registry-breg/src/postgres/statistics.rs;
+    crates/registry-breg/src/problem.rs. */}
+
 ## Sources
 
 The implementation and generated schemas in the same source checkout are the source of truth.

@@ -2438,7 +2438,7 @@ async fn token_async_with_claims(
     scopes: Vec<String>,
     output_id: &str,
 ) -> Result<()> {
-    use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
+    use registry_platform_httputil::TokenProvider;
 
     let root = state.root();
     let issuer = state.issuer_origin();
@@ -2456,13 +2456,13 @@ async fn token_async_with_claims(
         String::from_utf8(key_bytes.to_vec()).context("the retained client key is unreadable")?;
     let key = registry_platform_crypto::PrivateJwk::parse(&key_text)
         .map_err(|_| anyhow::anyhow!("the retained client key is unusable"))?;
-    let provider = PrivateKeyJwt::new(
-        PrivateKeyJwtConfig::new(endpoint, token_client_id.to_owned(), key)
-            // ThunderID v1.0.1 checks the assertion audience against the
-            // issuer identifier, not the token endpoint.
-            .with_audience(issuer.clone())
-            .with_resource(state.audience())
-            .with_scopes(scopes),
+    let provider = dev_token_provider(
+        endpoint,
+        token_client_id.to_owned(),
+        key,
+        &issuer,
+        &state.audience(),
+        scopes,
     )
     .map_err(|error| anyhow::anyhow!("the dev token provider is unusable: {error}"))?;
     let value = provider
@@ -2483,6 +2483,33 @@ async fn token_async_with_claims(
         &root.join("secrets").join(format!("{output_id}-token")),
         text.as_bytes(),
     )
+}
+
+fn dev_token_provider(
+    endpoint: url::Url,
+    token_client_id: String,
+    key: registry_platform_crypto::PrivateJwk,
+    issuer: &str,
+    resource: &str,
+    scopes: Vec<String>,
+) -> std::result::Result<
+    registry_platform_httputil::PrivateKeyJwt,
+    registry_platform_httputil::TokenError,
+> {
+    use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig};
+
+    let mut config = PrivateKeyJwtConfig::new(endpoint, token_client_id, key)
+        // ThunderID v1.0.1 checks the assertion audience against the
+        // issuer identifier, not the token endpoint.
+        .with_audience(issuer.to_owned())
+        .with_resource(resource.to_owned());
+    // An authenticated profile may deliberately require no OAuth scope. In
+    // that case omit the optional form parameter: configuring an explicit
+    // empty scope set is invalid RFC 6749 syntax and the provider refuses it.
+    if !scopes.is_empty() {
+        config = config.with_scopes(scopes);
+    }
+    PrivateKeyJwt::new(config)
 }
 
 /// Bring the session's issuer container up: one-time setup and bootstrap

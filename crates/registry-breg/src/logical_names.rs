@@ -20,6 +20,24 @@ pub fn default_sql_name(id: &str) -> String {
     id.replace('-', "_")
 }
 
+/// The installed PostgreSQL spelling of an authored logical identifier.
+///
+/// Authored identifiers may contain 64 ASCII bytes while PostgreSQL stores at
+/// most 63 bytes. Canonicalizing before compilation keeps the compiled model,
+/// generated DDL, and exact catalog inventory aligned instead of relying on
+/// PostgreSQL to truncate identifiers implicitly.
+pub fn canonical_sql_name(id: &str) -> String {
+    let mut name = default_sql_name(id);
+    if name.len() > 63 {
+        let mut boundary = 63;
+        while !name.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        name.truncate(boundary);
+    }
+    name
+}
+
 pub(crate) fn valid_api_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64

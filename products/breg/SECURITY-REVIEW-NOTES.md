@@ -1532,6 +1532,174 @@ file run only in builds with the feature.
   feature-off build with a WASM-hook package active cannot load that package;
   the operator replaces it or deploys a build with the feature.
 
+## Immediate action history commit allocation
+
+### Threat
+
+An immediate action records revision rows without indexing them in the
+shared history commit journal. The latest snapshot omits accepted changes,
+and coverage rebaselining refuses their unindexed revisions. An aliased patch
+can also index one record twice if allocation follows effects rather than
+changed records.
+
+### Enforcement and defaults
+
+The action mutation path allocates one ordinary mutation commit before its
+transaction commits. It deduplicates effect results by entity and record,
+retaining the resulting revision. Allocation uses the same package binding,
+actor and request references, transaction, and commit-head locking as direct
+mutations. Production activation always initializes the coverage baseline;
+no missing-head compatibility path is introduced.
+
+### Tests
+
+`tests/support/action_history_commit_regressions.rs` reproduces the missing
+head and missing membership before the fix. Its real PostgreSQL tests verify
+one head advance, one member per changed record, a latest snapshot of an
+action-patched record, and successful coverage rebaselining. Existing action
+fault, retry, concurrency, and aliased-effect tests retain their rollback and
+replay assertions with normal activation initialization.
+
+### Accepted residuals
+
+This corrects future action commits. It does not fabricate historical commit
+positions for revisions that an earlier runtime left unindexed. The existing rebaseline command continues to refuse a retained journal head
+that has no commit member; this change supplies no repair for those rows.
+
+Affected pre-1.0 development databases containing unindexed action revisions
+must be rebuilt before relying on snapshots or coverage rebaselining.
+
+## Statistical datasets
+
+### Threat
+
+A count can disclose records beyond the caller's ordinary read authority. A
+published release can expose small populations, depend on caller-specific
+visibility, retain hidden true counts, or be silently rewritten after readers
+have used it. The statistical invariants are BREG-SEC-150 through BREG-SEC-160.
+
+### Enforcement and defaults
+
+The compiler admits a live grant only when the selected profile already has
+list and count authority and can filter every processing field. PostgreSQL
+reuses the ordinary read relations and visibility predicates for the grouped
+count, including the request-owner visibility context. Source entity
+dependencies are extracted from the reviewed raw SQL
+syntax tree and closed transitively. Publisher visibility must be independent
+of its caller on every entity in that closure, with an operation that installs
+an ordinary SELECT policy on each dependency. The compiler checks that operation
+set and includes it in the definition digest. The digest also binds the types
+and mappings of processing fields and the source columns read by their derived
+SQL, so an unchanged expression cannot keep old releases visible after its
+input definitions change. Unrelated field definitions do not enter the digest.
+Anonymous profiles, encrypted
+processing fields, and consent-gated count grants are refused.
+
+Publication computes one ended period under the current package binding and
+one statement snapshot, retaining its shared history head for the freshness
+check. History erasure can make the release's snapshot bookmark unavailable;
+the header then carries `snapshot: null` while publication continues. Persistence
+rechecks bookmark coverage under the shared registry lock, so erasure between
+computation and persistence also produces a null bookmark. Storage errors and
+invalid history identity still fail closed. Rebaseline restores bookmarks for
+later releases. Publication and withdrawal bind an idempotency receipt to the caller, route, selected profile,
+package, and canonical request. A per-dataset-period transaction lock serializes
+version allocation and final-status ordering. Only canonical disclosed documents
+are persisted; exact live counts are not stored in release content.
+
+Immutable version headers and content tables grant the runtime only SELECT and
+INSERT. Withdrawal grants no table DELETE or UPDATE: one fixed owner function
+records the closed withdrawal reason and erases the content atomically. Latest
+and series reads omit withdrawn versions; a direct version read returns a
+value-free withdrawal problem. Current grants and definition digests govern
+retained reads, including a released-reader profile with no record authority.
+
+Audit entries contain dataset, period, release identity, status, and digest
+references, never cell values or true counts. Attempts precede database work;
+terminal audit acceptance gates response bytes. Each request has an absolute
+deadline, including lock waits and statement execution. Statistical work reserves
+500 ms before the outer HTTP deadline to construct and enqueue its terminal
+audit response. JSON representation
+digests cover exact response bytes; CSV digests cover the CSV representation.
+Both are sent with no-store cache policy.
+
+Maintained clients verify and retain representation digests for live, release,
+and series documents, and successful publication and withdrawal responses.
+Every successful statistics response must carry the declared no-store and
+authorization/accept cache policy; read and mutation responses use the same
+validation. The CLI binds mutation success to the requested dataset and period:
+publication also matches status and a positive version without withdrawal
+metadata, while withdrawal matches the version and reason. Nullable snapshot
+bookmarks remain valid.
+The Rust client and its Node and Python bindings require positive signed
+64-bit version selectors and canonical year, quarter, month, or day codes with
+valid Gregorian dates and an exclusive end in the four-digit year domain.
+Invalid selectors fail before token-provider acquisition or HTTP I/O. The CLI
+reads its operator-supplied token file before calling the Rust client. Release listing
+clients accept the complete envelope the server's
+cursor codec can issue, while retaining a fixed size bound.
+
+Anonymous refusals return before authenticated refusal auditing, preventing
+unauthenticated requests from filling that journal or observing sink health.
+Authenticated unknown datasets and ungranted profiles enter refusal auditing;
+unknown IDs use a fixed route identity so caller input cannot enter the journal.
+Unmatched routes record the actual standard HTTP method and a fixed unknown
+operation; extension-method tokens become `OTHER`.
+Caller-filtered OpenAPI names only the selected profile; its query selector
+still follows the runtime's actual default admission rules.
+
+### Tests
+
+`compiler_statistics.rs` exercises typed count admission, publisher dependency
+closure, period models, generated contracts, definition digests, and grant
+changes. Referenced field types and derived SQL input definitions are bound,
+while unrelated field changes preserve the digest. `statistics.rs` verifies calendar periods, zero filling and margins,
+checked arithmetic, suppression, independent rounding, canonical bytes, and
+CSV escaping. The PostgreSQL statistics tests verify exact runtime privileges,
+atomic withdrawal, unexpected grants and altered withdrawal functions, and the
+authenticated HTTP release lifecycle. They also pin alias remapping in definition
+digests, owner count parity, anonymous refusals under audit failure, stored-byte
+digest equality, real definition successor activation, and publication after
+maintained history erasure and rebaseline, including erasure between computation
+and persistence. The outer HTTP timeout test blocks the source table and verifies
+a refused terminal with no release or idempotency rows; unmatched-route tests
+verify method classification without recording caller-controlled values. The facility
+workflow executes publication and JSON/CSV series reads through native CLI and
+HTTP clients with separate access profiles.
+`registry-breg-client/tests/statistics_http_boundary.rs` verifies complete
+continuation propagation, version and calendar bounds before credentials or I/O, and
+refusal of missing or mismatched publication and withdrawal digests, and
+missing or incorrect cache headers on JSON, CSV, and listing reads. Native
+Node and Python tests exercise the same client decisions. CLI lifecycle tests
+refuse mismatched release identities and operation-specific response headers.
+
+### Accepted residuals
+
+Independent suppression and rounding do not prevent reconstruction. The tests
+pin a four-plus-four case and seven positive cells whose rounded total reveals
+that each suppressed value was one. Overlapping datasets, periods, revisions,
+and external knowledge can amplify disclosure. Institutions must review their
+population, dimensions, cadence, and release policy; this mechanism makes no
+statistical confidentiality guarantee. With minimumCount 5 and roundingBase 5,
+two suppressed positive cells and a rounded total of 10 force both cells to 4:
+each lies in 1..4, and only a sum of 8 rounds to 10. Seven suppressed positive
+cells and a rounded total of 5 force all seven to 1. Zero cells also disclose
+group attributes. Deterministic rounding supports differencing across releases,
+and no privacy budget limits repeated observations.
+
+If an institution cannot accept the interval-pinning residual, cell key
+perturbation is the next mechanism to evaluate through a separate statistical
+design and review. It is not implemented by this threshold-and-rounding release
+path.
+
+Withdrawal erases the engine's stored content, not copies a reader already
+obtained. Release headers and withdrawal reasons remain. Historical definitions
+remain retained but unavailable under a different active definition digest.
+Live evaluation-date-dependent datasets serve only the current period; released
+computation evaluates at the period's reference date. Aggregate reads do not
+emit per-subject access-log hits. Publication scans the declared source views;
+there is no background refresh or shared aggregate cache.
+
 ## State older than the immediate predecessor
 
 Before 1.0 a release reads only the state its immediate predecessor wrote.

@@ -27,15 +27,15 @@ use registry_breg_client::{
     BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
     BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
     BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegRequestMetadata,
+    BRegRelationshipListRequest, BRegReleaseSelection, BRegReleaseStatus, BRegRequestMetadata,
     BRegRequestResultReference as CoreRequestResultReference, BRegRequestState,
     BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
-    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
-    BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError,
-    BaseRegistryClient as CoreClient, BaseRegistryClientConfig, BaseRegistryClientError,
-    PrivateKeyJwt, PrivateKeyJwtConfig, RegistryRecordRepresentation, RegistryRecordResponse,
-    StaticToken, TokenError, TokenProvider,
+    BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegStatisticsFormat,
+    BRegTombstoneBinding, BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError,
+    BRegWithdrawalReason, BaseRegistryClient as CoreClient, BaseRegistryClientConfig,
+    BaseRegistryClientError, PrivateKeyJwt, PrivateKeyJwtConfig, RegistryRecordRepresentation,
+    RegistryRecordResponse, StaticToken, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::exchange_authorization_from_json;
@@ -181,6 +181,7 @@ pub struct RawOutcome {
     pub media_type: String,
     pub trace_id: String,
     pub etag: Option<String>,
+    pub repr_digest: Option<String>,
 }
 
 /// One inert caller-visible target written by an applied request.
@@ -432,6 +433,7 @@ fn protocol_code(value: BRegProtocolFailure) -> &'static str {
         BRegProtocolFailure::ProfileLink => "profile_link",
         BRegProtocolFailure::Location => "location",
         BRegProtocolFailure::CachePolicy => "cache_policy",
+        BRegProtocolFailure::RepresentationDigest => "representation_digest",
         BRegProtocolFailure::Status => "status",
         _ => "protocol",
     }
@@ -492,9 +494,21 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
                 BRegProblemCode::RequestPlanRefused(value) => Some(value.kind()),
                 _ => None,
             },
-            // The refusal catalogue belongs to the package, so the declared code
-            // travels as the bounded string the Problem schema admits.
-            "refusalCode": refusal_code.as_ref().map(|value| value.as_str()),
+            // Problem detail codes travel as bounded strings after their
+            // operation-specific vocabulary has been checked by the Rust client.
+            "refusalCode": match code {
+                BRegProblemCode::ActionRefused
+                | BRegProblemCode::StatisticalDatasetReleaseRefused => {
+                    refusal_code.as_ref().map(|value| value.as_str())
+                }
+                _ => None,
+            },
+            "reasonCode": match code {
+                BRegProblemCode::StatisticalDatasetVersionWithdrawn => {
+                    refusal_code.as_ref().map(|value| value.as_str())
+                }
+                _ => None,
+            },
             "fieldPath": field_path.as_ref().map(|value| value.as_str()),
             "traceId": trace_id.as_str(),
             "message": "Base Registry Engine refused the request",
@@ -952,6 +966,61 @@ fn format(value: Option<String>) -> Result<BRegRecordFormat> {
             "format must be json or json-ld",
         )),
     }
+}
+
+fn statistics_format(value: Option<&str>) -> Result<BRegStatisticsFormat> {
+    match value.unwrap_or("json") {
+        "json" => Ok(BRegStatisticsFormat::Json),
+        "csv" => Ok(BRegStatisticsFormat::Csv),
+        _ => Err(binding_error(
+            "invalid_request",
+            "statistics format must be json or csv",
+        )),
+    }
+}
+
+fn release_selection(value: &str) -> Result<BRegReleaseSelection> {
+    match value {
+        "any" => Ok(BRegReleaseSelection::Any),
+        "final" => Ok(BRegReleaseSelection::Final),
+        _ => Err(binding_error(
+            "invalid_request",
+            "statistics release selection must be any or final",
+        )),
+    }
+}
+
+fn release_status(value: &str) -> Result<BRegReleaseStatus> {
+    match value {
+        "provisional" => Ok(BRegReleaseStatus::Provisional),
+        "final" => Ok(BRegReleaseStatus::Final),
+        _ => Err(binding_error(
+            "invalid_request",
+            "statistics release status must be provisional or final",
+        )),
+    }
+}
+
+fn withdrawal_reason(value: &str) -> Result<BRegWithdrawalReason> {
+    match value {
+        "computation-error" => Ok(BRegWithdrawalReason::ComputationError),
+        "source-data-error" => Ok(BRegWithdrawalReason::SourceDataError),
+        "disclosure-risk" => Ok(BRegWithdrawalReason::DisclosureRisk),
+        _ => Err(binding_error(
+            "invalid_request",
+            "statistics withdrawal reason is invalid",
+        )),
+    }
+}
+
+fn statistics_version(value: i64) -> Result<u64> {
+    if !(1..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER).contains(&value) {
+        return Err(binding_error(
+            "invalid_request",
+            "statistics release version must be a positive safe integer",
+        ));
+    }
+    Ok(value as u64)
 }
 
 /// Preconditions every attachment mutation shares, parsed before any request.
@@ -1503,6 +1572,10 @@ fn raw_value(value: BRegComplete<BRegRawDocument>) -> RawOutcome {
         media_type: value.value.media_type().to_owned(),
         trace_id,
         etag,
+        repr_digest: value
+            .value
+            .representation_digest()
+            .map(|digest| digest.as_str().to_owned()),
     }
 }
 
@@ -2680,6 +2753,171 @@ impl BaseRegistryClient {
     pub async fn registry_metadata(&self, access_profile: Option<String>) -> Result<RawOutcome> {
         self.inner
             .registry_metadata(access_profile.as_deref())
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn statistics_live(
+        &self,
+        dataset: String,
+        from: Option<String>,
+        to: Option<String>,
+        access_profile: Option<String>,
+        format: Option<String>,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .statistics_live(
+                &dataset,
+                from.as_deref(),
+                to.as_deref(),
+                access_profile.as_deref(),
+                statistics_format(format.as_deref())?,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn statistics_releases(
+        &self,
+        dataset: String,
+        top: Option<u32>,
+        skip_token: Option<String>,
+        access_profile: Option<String>,
+    ) -> Result<RawOutcome> {
+        let top = top
+            .map(|value| {
+                u16::try_from(value).map_err(|_| binding_error("invalid_request", "top is invalid"))
+            })
+            .transpose()?;
+        self.inner
+            .statistics_releases(
+                &dataset,
+                top,
+                skip_token.as_deref(),
+                access_profile.as_deref(),
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn statistics_latest_release(
+        &self,
+        dataset: String,
+        period: String,
+        selection: String,
+        access_profile: Option<String>,
+        format: Option<String>,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .statistics_latest_release(
+                &dataset,
+                &period,
+                release_selection(&selection)?,
+                access_profile.as_deref(),
+                statistics_format(format.as_deref())?,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn statistics_release_version(
+        &self,
+        dataset: String,
+        period: String,
+        version: i64,
+        access_profile: Option<String>,
+        format: Option<String>,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .statistics_release_version(
+                &dataset,
+                &period,
+                statistics_version(version)?,
+                access_profile.as_deref(),
+                statistics_format(format.as_deref())?,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn statistics_release_series(
+        &self,
+        dataset: String,
+        from: String,
+        to: String,
+        selection: String,
+        access_profile: Option<String>,
+        format: Option<String>,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .statistics_release_series(
+                &dataset,
+                &from,
+                &to,
+                release_selection(&selection)?,
+                access_profile.as_deref(),
+                statistics_format(format.as_deref())?,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn statistics_publish(
+        &self,
+        dataset: String,
+        period: String,
+        status: String,
+        access_profile: String,
+        idempotency_key: String,
+    ) -> Result<RawOutcome> {
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        self.inner
+            .statistics_publish(
+                &dataset,
+                &period,
+                release_status(&status)?,
+                &access_profile,
+                &key,
+            )
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn statistics_withdraw(
+        &self,
+        dataset: String,
+        period: String,
+        version: i64,
+        reason: String,
+        access_profile: String,
+        idempotency_key: String,
+    ) -> Result<RawOutcome> {
+        let key = registry_breg_client::BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| binding_error("invalid_request", error.to_string()))?;
+        self.inner
+            .statistics_withdraw(
+                &dataset,
+                &period,
+                statistics_version(version)?,
+                withdrawal_reason(&reason)?,
+                &access_profile,
+                &key,
+            )
             .await
             .map(raw_value)
             .map_err(client_error)

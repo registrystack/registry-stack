@@ -13,6 +13,9 @@ mod client_http;
 #[path = "support/immediate_action_review_regressions.rs"]
 mod review_regressions;
 
+#[path = "support/action_history_commit_regressions.rs"]
+mod history_commit_regressions;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,10 +32,10 @@ use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_compiled_registry_state_for_test,
-    initialize_registry_state_for_catalog_test, install_compiled_schema, ClaimContext,
-    ExpectedManagedCatalog, PostgresRecordMutationService, PostgresRecordReadService,
-    PostgresRevisionReadService, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
+    ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
+    RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
@@ -197,11 +200,10 @@ async fn immediate_action_acquires_conditions_applies_atomically_and_replays_by_
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs action RLS with compiled schema");
-    let catalog = ExpectedManagedCatalog::compiled(&registry);
-    let identity = initialize_registry_state_for_catalog_test(
+    let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
-        &catalog,
+        &registry,
         RegistryStateTestIdentity {
             package_id: PACKAGE_ID,
             database_id: DATABASE_ID,
@@ -1425,6 +1427,9 @@ async fn immediate_action_faults_roll_back_rows_revisions_outbox_audit_and_recei
         let fault_app =
             action_router_with_fault(&database, registry.clone(), identity.clone(), Some(fault));
         let before = action_counts(&database, &registry).await;
+        let head_before: i64 = database.admin.query_one(
+            "SELECT latest_position FROM registry_internal.registry_commit_head WHERE singleton", &[]
+        ).await.unwrap().get(0);
         let key = format!("fault-{index}");
         let failed = response_parts(
             send(
@@ -1458,6 +1463,13 @@ async fn immediate_action_faults_roll_back_rows_revisions_outbox_audit_and_recei
         assert_eq!(
             action_counts(&database, &registry).await.without_audit(),
             before.without_audit()
+        );
+        let head_after: i64 = database.admin.query_one(
+            "SELECT latest_position FROM registry_internal.registry_commit_head WHERE singleton", &[]
+        ).await.unwrap().get(0);
+        assert_eq!(
+            head_after, head_before,
+            "fault {fault:?} must roll back history allocation"
         );
     }
     database.cleanup().await;
@@ -1580,6 +1592,21 @@ async fn aliased_patch_effects_share_one_revision_and_distinct_results() {
     .await;
     assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
     assert_eq!(applied.body["results"].as_object().unwrap().len(), 2);
+    let members: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_revision_commit_members m
+         JOIN registry_internal.registry_commit_head h ON h.latest_position = m.commit_position
+         WHERE h.singleton",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        members, 1,
+        "aliased effects index their one changed record once"
+    );
     assert_eq!(
         applied.body["results"]["household-code-update"]["recordId"],
         HOUSEHOLD_ID
@@ -2028,7 +2055,7 @@ async fn install_action_registry(
 
 async fn install_action_registry_with_history(
     registry: registry_breg::CompiledRegistry,
-    retain_history: bool,
+    _retain_history: bool,
 ) -> (
     TestDatabase,
     Arc<registry_breg::CompiledRegistry>,
@@ -2045,25 +2072,15 @@ async fn install_action_registry_with_history(
         database_id: DATABASE_ID,
         label: "package-action-1",
     };
-    let identity = if retain_history {
-        // Revision reads need the package-bound history descriptor and the
-        // empty baseline an activation retains.
-        initialize_compiled_registry_state_for_test(
-            &migration,
-            &database.runtime_role,
-            &registry,
-            state_identity,
-        )
-        .await
-    } else {
-        initialize_registry_state_for_catalog_test(
-            &migration,
-            &database.runtime_role,
-            &ExpectedManagedCatalog::compiled(&registry),
-            state_identity,
-        )
-        .await
-    }
+    // Every normal activation retains the empty history baseline, including
+    // packages that do not expose revision reads.
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        state_identity,
+    )
+    .await
     .expect("migration initializes registry identity");
     drop(migration);
     migration_task.abort();
@@ -2543,6 +2560,15 @@ fn action_router_with_fault_and_timeout(
         Duration::from_secs(2),
         profile.clone(),
     ));
+    let snapshots = Arc::new(PostgresSnapshotReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        profile.clone(),
+        cursors.clone(),
+    ));
     let read_identity = ReadRuntimeIdentity {
         package_revision: identity.activation_id.clone(),
         schema_fingerprint: identity.schema_fingerprint.clone(),
@@ -2573,6 +2599,7 @@ fn action_router_with_fault_and_timeout(
             cursors,
         )
         .with_postgres_revisions(revisions)
+        .with_snapshots(snapshots)
         .with_postgres_mutations(Arc::new(mutations)),
     ))
 }
@@ -2962,12 +2989,12 @@ fn history_registry() -> registry_breg::CompiledRegistry {
             "requiredPurposes":["contact-registration"],
             "permissions":[{
                 "entity":"person",
-                "operations":["revisions"],"revisionAccess":true,
+                "operations":["revisions","snapshot"],"revisionAccess":true,
                 "readableFields":["person-code"],
                 "rowBoundaries":boundary.clone()
             },{
                 "entity":"household",
-                "operations":["revisions"],"revisionAccess":true,
+                "operations":["revisions","snapshot"],"revisionAccess":true,
                 "readableFields":["household-code","status-note"],
                 "rowBoundaries":boundary
             }]

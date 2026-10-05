@@ -442,3 +442,10 @@ PublicSchema is an authoring input rather than a runtime dependency.
 
 Registry Relay is retired from maintained Registry Stack. Base Registry Engine
 does not replace Relay's publication of an institution's existing SQLite data.
+
+## Statistical datasets
+
+Declare bounded count datasets for live analysis under ordinary read profiles
+and immutable, disclosure-controlled releases for separate dashboard readers.
+See [Statistical datasets](STATISTICS.md) for the model, HTTP contract,
+publication lifecycle, and accepted disclosure risks.

@@ -39,7 +39,7 @@ manifestProjection:
 modules:
   - id: facility-core
     version: 0.1.0
-    digest: sha256:1cae6ebbdfd4ce1f800cbfd1ead40926cda05e89d05285c6975adbc4801dbfe8
+    digest: "sha256:4f1f53bdee0af7f3d4151222d2bcf536ece49dd4abafc74f57b9f14d23bdf235"
 
 entities:
   - id: facility
@@ -318,6 +318,7 @@ accessProfiles:
           - administrative-boundary
           - import-source
           - source-record-id
+          - expiring-soon
         writableFields:
           - permit-number
           - facility
@@ -332,6 +333,10 @@ accessProfiles:
           - administrative-boundary
           - import-source
           - valid-from
+          - valid-to
+          - permit-type
+          - expiring-soon
+        allowCount: true
         rowBoundaries:
           - field: administrative-boundary
             claim: administrative_boundaries
@@ -383,6 +388,7 @@ accessProfiles:
           - period-end
           - quantity-value
           - quantity-unit
+          - has-measured-quantity
         writableFields:
           - installation
           - administrative-boundary
@@ -396,10 +402,114 @@ accessProfiles:
           - administrative-boundary
           - substance-code
           - period-start
+          - has-measured-quantity
+        allowCount: true
         rowBoundaries:
           - field: administrative-boundary
             claim: administrative_boundaries
             operator: in
+  - id: statistics-publisher
+    principalClaim: registry_principal
+    permissions:
+      - entity: permit
+        operations:
+          - list
+        readableFields:
+          - permit-type
+          - valid-from
+          - valid-to
+          - administrative-boundary
+          - expiring-soon
+        filterableFields:
+          - permit-type
+          - valid-from
+          - valid-to
+          - administrative-boundary
+          - expiring-soon
+        allowCount: true
+        rowBoundaries: []
+      - entity: discharge-report
+        operations:
+          - list
+        readableFields:
+          - substance-code
+          - period-start
+          - period-end
+          - administrative-boundary
+          - has-measured-quantity
+        filterableFields:
+          - substance-code
+          - period-start
+          - administrative-boundary
+          - has-measured-quantity
+        allowCount: true
+        rowBoundaries: []
+  - id: statistics-reader
+    principalClaim: registry_principal
+    permissions: []
+statisticalDatasets:
+  - id: monthly-discharge-reports
+    unit: discharge-report
+    population: "substanceCode ne null"
+    period:
+      kind: flow
+      field: period-start
+      granularity: month
+      firstPeriod: 2025-01
+    dimensions:
+      - administrative-boundary
+      - has-measured-quantity
+    disclosure:
+      minimumCount: 5
+      roundingBase: 5
+    live:
+      - facility-operator
+    releases:
+      publisher: statistics-publisher
+      readers:
+        - statistics-reader
+  - id: monthly-valid-permits-temporal
+    unit: permit
+    population: "permitType ne null"
+    period:
+      kind: stock
+      granularity: month
+      firstPeriod: 2025-01
+      validity: temporal
+    dimensions:
+      - administrative-boundary
+      - expiring-soon
+    disclosure:
+      minimumCount: 5
+      roundingBase: 5
+    live:
+      - facility-operator
+    releases:
+      publisher: statistics-publisher
+      readers:
+        - statistics-reader
+  - id: monthly-valid-permits-fields
+    unit: permit
+    population: "permitType ne null"
+    period:
+      kind: stock
+      granularity: month
+      firstPeriod: 2025-01
+      validity:
+        from: valid-from
+        until: valid-to
+    dimensions:
+      - administrative-boundary
+      - expiring-soon
+    disclosure:
+      minimumCount: 5
+      roundingBase: 5
+    live:
+      - facility-operator
+    releases:
+      publisher: statistics-publisher
+      readers:
+        - statistics-reader
 vocabularies:
   - id: administrative-boundary
     values:

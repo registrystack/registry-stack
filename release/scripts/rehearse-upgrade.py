@@ -1174,7 +1174,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     breg = Breg(work, keys, postgres)
     breg.provision()
     breg.author(old)
-    package, _digest = breg.package(old, work / "build-1")
+    package, digest = breg.package(old, work / "build-1")
     breg.write_runtime(breg.runtime, "registry", package, breg.port)
     old.run_json("bregctl", "--format", "json", "apply", "--runtime-config",
                  str(breg.runtime), "--package", str(package), "--initial")
@@ -1205,6 +1205,16 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         finally:
             service.stop()
 
+    # A package binds the compiler that built it. Rebuild against the verified
+    # predecessor and apply a changed package before any read or runtime
+    # startup with the new binaries.
+    predecessor_activation = "initial"
+    upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
+    if upgraded_digest != digest:
+        apply(upgraded, upgraded_digest)
+        predecessor_activation = "successor"
+    package = upgraded
+    breg.write_runtime(breg.runtime, "registry", package, breg.port)
     claim_after = instance_claim(new, breg.runtime)
     upgraded_views = serve("breg-upgraded.log")
 
@@ -1219,7 +1229,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     ledger = expect_ledger(
         new.run_json("bregctl", "--format", "json", "status", "--runtime-config",
                      str(breg.runtime)), successor_digest)
-    expected = ["initial:applied", "successor:applied"]
+    expected = [f"{predecessor_activation}:applied", "successor:applied"]
     if ledger[-2:] != expected:
         raise RehearsalError(f"the activation ledger recorded {ledger}, expected it to end "
                              f"with {expected}")

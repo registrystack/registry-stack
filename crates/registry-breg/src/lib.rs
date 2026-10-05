@@ -145,6 +145,10 @@ pub mod runtime_config;
 pub mod schema;
 #[cfg(feature = "runtime")]
 pub mod startup;
+pub(crate) mod statistical_artifacts;
+pub mod statistics;
+#[cfg(feature = "runtime")]
+pub(crate) mod statistics_store;
 #[cfg(feature = "runtime")]
 pub(crate) mod stored_bytes;
 #[cfg(feature = "runtime")]

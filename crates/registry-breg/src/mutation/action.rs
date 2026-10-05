@@ -1195,6 +1195,42 @@ impl MutationCoordinator {
             }
         }
 
+        // Several effects may share one final record revision. Index each
+        // distinct revision once, under the action transaction's one commit,
+        // just as the single-record and batch mutation paths do.
+        let distinct_revisions = results
+            .iter()
+            .map(|result| {
+                (
+                    (result.entity_id.as_str(), result.record_uuid),
+                    result.record_revision,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let members = distinct_revisions
+            .into_iter()
+            .map(
+                |((entity_id, record_id), record_revision)| RevisionCommitMember {
+                    entity_id,
+                    record_id,
+                    record_revision,
+                },
+            )
+            .collect::<Vec<_>>();
+        allocate_revision_commit(
+            transaction.transaction(),
+            CommitAllocation {
+                package_revision: &self.expected.activation_id,
+                origin: CommitOrigin::Mutation {
+                    actor_reference: &binding.principal_reference,
+                    request_reference: &binding.binding_reference,
+                },
+                change_context: None,
+                members: &members,
+            },
+        )
+        .await?;
+
         let held = action_held_response(action, claims, application_id, &results)?;
         let public_result_count = u16::try_from(
             results

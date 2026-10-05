@@ -39,6 +39,9 @@ pub struct RegistryProject {
     pub access_profiles: Vec<ProjectAccessProfileSource>,
     #[serde(default)]
     pub vocabularies: Vec<VocabularySource>,
+    /// Declared count tables computed from governed Registry records.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statistical_datasets: Vec<StatisticalDatasetSource>,
     /// Named organizations and frozen groups that consent may be given to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipients: Option<RecipientsSource>,
@@ -46,6 +49,94 @@ pub struct RegistryProject {
     /// rows still validate. A retired scope matches nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired_consent_scopes: Vec<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDatasetSource {
+    pub id: String,
+    pub unit: String,
+    pub population: String,
+    pub period: StatisticalPeriodSource,
+    pub dimensions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disclosure: Option<StatisticalDisclosureSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub releases: Option<StatisticalReleasesSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    deny_unknown_fields,
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum StatisticalPeriodSource {
+    Flow {
+        field: String,
+        granularity: StatisticalPeriodGranularitySource,
+        first_period: String,
+    },
+    Stock {
+        granularity: StatisticalPeriodGranularitySource,
+        first_period: String,
+        validity: StatisticalValiditySource,
+    },
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatisticalPeriodGranularitySource {
+    Day,
+    Month,
+    Quarter,
+    Year,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StatisticalValiditySource {
+    Temporal(StatisticalTemporalValiditySource),
+    Fields(StatisticalValidityFieldsSource),
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatisticalTemporalValiditySource {
+    Temporal,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalValidityFieldsSource {
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDisclosureSource {
+    pub minimum_count: u64,
+    pub rounding_base: u64,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalReleasesSource {
+    pub publisher: String,
+    pub readers: Vec<String>,
 }
 
 /// Declared consent recipients. Organization and group ids share one

@@ -22,8 +22,8 @@ use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
-    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
-    RegistryStateTestIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, PostgresStatisticsService,
+    RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_breg::review_store::{ReviewAuthorityClient, ReviewAuthorityRegistry};
 use registry_platform_audit::AuditProfile;
@@ -134,7 +134,9 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
             "tenant": TENANT,
             "placement": first_placement.id,
             "proposedSite": second_site.id,
-            "reason": "draft request must not enter submitted queue"
+            "reason": "draft request must not enter submitted queue",
+            "requestedOn": "2025-01-15",
+            "included": true
         }),
     )
     .await;
@@ -147,7 +149,9 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
             "tenant": TENANT,
             "placement": first_placement.id,
             "proposedSite": third_site.id,
-            "reason": "first submitted request"
+            "reason": "first submitted request",
+            "requestedOn": "2025-01-15",
+            "included": true
         }),
     )
     .await;
@@ -160,7 +164,9 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
             "tenant": TENANT,
             "placement": second_placement.id,
             "proposedSite": third_site.id,
-            "reason": "second submitted request"
+            "reason": "second submitted request",
+            "requestedOn": "2025-01-15",
+            "included": true
         }),
     )
     .await;
@@ -274,7 +280,9 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
             "tenant": TENANT,
             "placement": first_placement.id,
             "proposedSite": second_site.id,
-            "reason": "another submitter's draft must stay private"
+            "reason": "another submitter's draft must stay private",
+            "requestedOn": "2025-01-15",
+            "included": true
         }),
     )
     .await;
@@ -299,6 +307,51 @@ async fn real_postgres_request_queues_filter_count_and_page_on_server_owned_stat
         .body
         .to_string()
         .contains(&other_draft_request.id));
+
+    let count_filter = "included%20eq%20true%20and%20requestedOn%20ge%20'2025-01-01'%20and%20requestedOn%20lt%20'2025-02-01'";
+    for (principal, expected_count) in [
+        (submitter.clone(), 3_u64),
+        (other_submitter.clone(), 1_u64),
+        (submitter.clone(), 3_u64),
+    ] {
+        let ordinary = response_parts(
+            send(
+                &app,
+                Method::GET,
+                &format!(
+                    "/v1/records/correction-requests?accessProfile=submitter&$count=true&$top=1&$filter={count_filter}"
+                ),
+                Some(principal.clone()),
+                &[],
+                Vec::new(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(ordinary.status, StatusCode::OK, "{}", ordinary.body);
+        assert_eq!(ordinary.body["count"], expected_count);
+        let statistics = response_parts(
+            send(
+                &app,
+                Method::GET,
+                "/v1/statistics/monthly-owned-correction-requests:live?accessProfile=submitter&from=2025-01&to=2025-01",
+                Some(principal),
+                &[],
+                Vec::new(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(statistics.status, StatusCode::OK, "{}", statistics.body);
+        let total = statistics.body["cells"]
+            .as_array()
+            .expect("statistics cells are an array")
+            .iter()
+            .find(|cell| cell["dimensions"]["included"] == "_T")
+            .expect("statistics total cell exists");
+        assert_eq!(total["value"], ordinary.body["count"]);
+    }
+
     let other_submitter_page = response_parts(
         send(
             &app,
@@ -405,16 +458,24 @@ fn request_query_router(
     ));
     let mutations = Arc::new(
         PostgresRecordMutationService::new(
-            pool,
+            pool.clone(),
             registry.clone(),
             identity.clone(),
             "request-query-instance",
             lock_key,
             Duration::from_secs(2),
-            audit,
+            audit.clone(),
         )
         .with_review_result_source(review_authority_registry()),
     );
+    let statistics = Arc::new(PostgresStatisticsService::new(
+        pool,
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit.clone(),
+    ));
     router(Arc::new(
         HttpService::new(
             registry,
@@ -426,7 +487,8 @@ fn request_query_router(
             Arc::new(AlwaysReady),
             cursors,
         )
-        .with_postgres_mutations(mutations),
+        .with_postgres_mutations(mutations)
+        .with_statistics(statistics),
     ))
 }
 
@@ -668,7 +730,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 {"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"},
                 {"id":"placement","type":"reference","target":"asset-placement","required":true,"classification":"internal"},
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
-                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
+                {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"},
+                {"id":"requested-on","type":"date","required":true,"classification":"internal"},
+                {"id":"included","type":"boolean","required":true,"classification":"internal"}
               ],
               "changeRequest":{
                 "effects":[{
@@ -705,8 +769,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
-                "readableFields":["tenant","placement","proposed-site","reason"],
-                "writableFields":["tenant","placement","proposed-site","reason"],
+                "readableFields":["tenant","placement","proposed-site","reason","requested-on","included"],
+                "writableFields":["tenant","placement","proposed-site","reason","requested-on","included"],
+                "filterableFields":["requested-on","included"],
                 "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}],
                 "requestVisibility":"owner",
                 "allowCount":true
@@ -735,7 +800,16 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 }]
               }]
             }
-          ]
+          ],
+          "statisticalDatasets":[{
+            "id":"monthly-owned-correction-requests",
+            "unit":"correction-request",
+            "population":"included eq true",
+            "period":{"kind":"flow","field":"requested-on","granularity":"month","firstPeriod":"2025-01"},
+            "dimensions":["included"],
+            "disclosure":{"minimumCount":2,"roundingBase":2},
+            "live":["submitter"]
+          }]
         }"#,
     )
     .expect("request query fixture parses");

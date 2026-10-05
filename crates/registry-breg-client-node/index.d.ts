@@ -15,6 +15,13 @@ export declare class BaseRegistryClient {
   ready(): Promise<CompleteOutcome>
   openapi(accessProfile?: string | undefined | null): Promise<RawOutcome>
   registryMetadata(accessProfile?: string | undefined | null): Promise<RawOutcome>
+  statisticsLive(dataset: string, from?: string | undefined | null, to?: string | undefined | null, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
+  statisticsReleases(dataset: string, top?: number | undefined | null, skipToken?: string | undefined | null, accessProfile?: string | undefined | null): Promise<RawOutcome>
+  statisticsLatestRelease(dataset: string, period: string, selection: string, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
+  statisticsReleaseVersion(dataset: string, period: string, version: number, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
+  statisticsReleaseSeries(dataset: string, from: string, to: string, selection: string, accessProfile?: string | undefined | null, format?: string | undefined | null): Promise<RawOutcome>
+  statisticsPublish(dataset: string, period: string, status: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
+  statisticsWithdraw(dataset: string, period: string, version: number, reason: string, accessProfile: string, idempotencyKey: string): Promise<RawOutcome>
   registryContract(accessProfile?: string | undefined | null): Promise<BRegMetadata>
   entitySchema(entityIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
   /** Retrieve one bounded first page of record revisions as inert JSON. */
@@ -377,6 +384,7 @@ export interface RawOutcome {
   mediaType: string
   traceId: string
   etag?: string
+  reprDigest?: string
 }
 
 /** Authenticated BReg webhook metadata and exact body. */
