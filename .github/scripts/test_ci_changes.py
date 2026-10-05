@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -3076,6 +3077,58 @@ class RunCargoPackagesTest(unittest.TestCase):
     def test_rejects_shell_syntax_in_package_names(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid Cargo package name"):
             package_args('["registry-relay-v2; id"]')
+
+
+class DocsInstallRetryTest(unittest.TestCase):
+    """Run the docs install steps that need the Vale download against a stub npm."""
+
+    STEPS = (
+        ("ci.yml", "docs"),
+        ("ci.yml", "docs-archives"),
+        ("docs-pages.yml", "build"),
+    )
+
+    def install_calls(self, command: str, refusals: int) -> tuple[int, list[str]]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = root / "calls"
+            calls.touch()
+            (root / "npm").write_text(
+                "#!/usr/bin/env bash\n"
+                f'echo "npm $*" >> "{calls}"\n'
+                f'[[ "$(grep -c "^npm" "{calls}")" -gt {refusals} ]]\n'
+            )
+            (root / "sleep").write_text(
+                f'#!/usr/bin/env bash\necho "sleep $*" >> "{calls}"\n'
+            )
+            for stub in ("npm", "sleep"):
+                (root / stub).chmod(0o755)
+            completed = subprocess.run(
+                ["bash", "-e", "-c", command],
+                env={**os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}"},
+                check=False,
+            )
+            return completed.returncode, calls.read_text().splitlines()
+
+    def test_a_refused_docs_install_is_retried_once_after_a_pause(self) -> None:
+        for name, job in self.STEPS:
+            workflow = yaml.safe_load(Path(".github/workflows", name).read_text())
+            (step,) = (
+                step
+                for step in workflow["jobs"][job]["steps"]
+                if step.get("name") == "Install docs dependencies"
+            )
+            with self.subTest(workflow=name, job=job):
+                self.assertEqual(
+                    self.install_calls(step["run"], refusals=0), (0, ["npm ci"])
+                )
+                self.assertEqual(
+                    self.install_calls(step["run"], refusals=1),
+                    (0, ["npm ci", "sleep 30", "npm ci"]),
+                )
+                status, calls = self.install_calls(step["run"], refusals=2)
+                self.assertNotEqual(status, 0)
+                self.assertEqual(calls, ["npm ci", "sleep 30", "npm ci"])
 
 
 if __name__ == "__main__":
