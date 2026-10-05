@@ -511,6 +511,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/src/data/docsets.yaml",
         "docs/site/src/data/repo-docs.yaml",
         "docs/site/src/lib/analytics.mjs",
+        "docs/site/src/lib/archived-evidence-paths.mjs",
         "docs/site/src/lib/docset-path.mjs",
         "docs/site/src/lib/docset-retention.mjs",
         "docs/site/src/lib/generated-api-bases.mjs",
