@@ -20,7 +20,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
+use crate::artifacts::{restore_effective_model_planner_origins, REGISTRY_METADATA_ARTIFACT_PATH};
 use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{
     parse_module_yaml, parse_project_yaml, FieldTypeSource, ModuleAssetSource, RegistryModule,
@@ -3942,13 +3942,13 @@ fn package_predecessor_governed_model(
 
     let registry_id = required_str(&value, "registryId")?.to_owned();
     let version = required_str(&value, "version")?.to_owned();
-    let entities: BTreeMap<String, CompiledEntity> = serde_json::from_value(
-        value
-            .get("entities")
-            .cloned()
-            .ok_or(PackageError::Derivation)?,
-    )
-    .map_err(|_| PackageError::Derivation)?;
+    let mut entities = value
+        .get("entities")
+        .cloned()
+        .ok_or(PackageError::Derivation)?;
+    restore_effective_model_planner_origins(&mut entities).ok_or(PackageError::Derivation)?;
+    let entities: BTreeMap<String, CompiledEntity> =
+        serde_json::from_value(entities).map_err(|_| PackageError::Derivation)?;
     let effective_physical_names: PhysicalNameInventory = serde_json::from_value(
         value
             .get("physicalNames")

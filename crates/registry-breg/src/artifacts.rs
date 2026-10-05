@@ -281,6 +281,50 @@ fn sanitize_effective_model_planners(value: &mut Value) {
     }
 }
 
+/// Restore the compiled `sourceModule` member from the `declaringOrigin` the
+/// packaged effective model carries in its place, so an entity read back from
+/// that artifact deserializes as the compiled entity it was written from. The
+/// exact inverse of [`sanitize_effective_model_planners`]: a planner without
+/// `declaringOrigin`, any other origin shape, or a planner that carries both
+/// members is refused with `None`. The compiled planner reads a missing
+/// `sourceModule` as project origin, so a planner that omits its origin would
+/// otherwise be accepted as a project planner.
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) fn restore_effective_model_planner_origins(entities: &mut Value) -> Option<()> {
+    let Some(entities) = entities.as_object_mut() else {
+        return Some(());
+    };
+    for entity in entities.values_mut() {
+        let Some(planner) = entity
+            .as_object_mut()
+            .and_then(|entity| entity.get_mut("changeRequest"))
+            .and_then(Value::as_object_mut)
+            .and_then(|request| request.get_mut("planner"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        let declaring_origin = planner.remove("declaringOrigin")?;
+        if planner.contains_key("sourceModule") {
+            return None;
+        }
+        let mut origin = match declaring_origin {
+            Value::Object(origin) => origin,
+            _ => return None,
+        };
+        let source_module = match (origin.remove("kind")?.as_str()?, origin.remove("id")) {
+            ("project", None) => Value::Null,
+            ("module", Some(Value::String(identifier))) => Value::String(identifier),
+            _ => return None,
+        };
+        if !origin.is_empty() {
+            return None;
+        }
+        planner.insert("sourceModule".to_owned(), source_module);
+    }
+    Some(())
+}
+
 pub(crate) fn event_data_schema_binding(
     registry_id: &str,
     entity: &CompiledEntity,
@@ -5217,6 +5261,58 @@ mod spatial_tests {
         );
         assert!(module.get("scriptPath").is_none());
         assert!(module.get("scriptBytes").is_none());
+    }
+
+    #[test]
+    fn effective_model_planner_origin_restores_the_compiled_source_module() {
+        let compiled = json!({
+            "request": {
+                "changeRequest": {
+                    "planner": {"sourceModule": null, "scriptSha256": "sha256:01"}
+                }
+            },
+            "module-request": {
+                "changeRequest": {
+                    "planner": {"sourceModule": "request-module", "scriptSha256": "sha256:02"}
+                }
+            },
+            "plain": {"changeRequest": null},
+            "effects-only": {"changeRequest": {"planner": null}}
+        });
+        let mut model = json!({"entities": compiled.clone()});
+        sanitize_effective_model_planners(&mut model);
+        let mut entities = model["entities"].take();
+        assert_ne!(entities, compiled);
+
+        assert_eq!(
+            restore_effective_model_planner_origins(&mut entities),
+            Some(())
+        );
+        assert_eq!(entities, compiled);
+    }
+
+    #[test]
+    fn effective_model_planner_origin_refuses_any_other_shape() {
+        for planner in [
+            json!({"declaringOrigin": "project"}),
+            json!({"declaringOrigin": {}}),
+            json!({"declaringOrigin": {"kind": "registry"}}),
+            json!({"declaringOrigin": {"kind": "project", "id": "request-module"}}),
+            json!({"declaringOrigin": {"kind": "module"}}),
+            json!({"declaringOrigin": {"kind": "module", "id": 7}}),
+            json!({"declaringOrigin": {"kind": "module", "id": "core", "path": "plan.rhai"}}),
+            json!({"declaringOrigin": {"kind": "project"}, "sourceModule": "core"}),
+            json!({}),
+            json!({"sourceModule": null}),
+            json!({"sourceModule": "core"}),
+        ] {
+            let mut entities = json!({"request": {"changeRequest": {"planner": planner}}});
+            assert_eq!(
+                restore_effective_model_planner_origins(&mut entities),
+                None,
+                "{planner}"
+            );
+        }
     }
 }
 
