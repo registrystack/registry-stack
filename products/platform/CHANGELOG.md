@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.39.0 - 2026-10-06
+
 - `registry-platform-hooks` lets a product's `DeliverySeams` note each worker
   iteration that completed without failure, idle or not, through the defaulted
   `iteration_succeeded` method, so the product can report how recently its

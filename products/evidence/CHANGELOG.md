@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.39.0 - 2026-10-06
+
 - BREAKING: before 1.0, a release reads only the state its immediate
   predecessor wrote. This release reads state written by v0.38.0 and nothing
   older. If you run an older release, upgrade one release at a time and finish

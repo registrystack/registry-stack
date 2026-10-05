@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.39.0 - 2026-10-06
+
 - BREAKING: `caseworkctl dev` takes PostgreSQL loopback port 15433 on a first
   start, where it took 55433. On Linux an outgoing loopback connection could
   take 55433 as its own source port, and a first start then refused the port as

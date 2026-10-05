@@ -1,0 +1,37 @@
+stack:
+  release: beta-51
+  version: 0.39.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.39.0
+
+artifacts:
+  registry-manifest: 0.39.0
+  evidence: 0.39.0
+  evidencectl: 0.39.0
+  evidence-oid4vci: 0.39.0
+  evidencectl-installer: 0.39.0
+  registry-docs: 0.39.0
+  discovery: 0.39.0
+  discoveryctl: 0.39.0
+  breg: 0.39.0
+  bregctl: 0.39.0
+  breg-mcp: 0.39.0
+  breg-review: 0.39.0
+  breg-installer: 0.39.0
+  casework: 0.39.0
+  caseworkctl: 0.39.0
+  casework-installer: 0.39.0
+  scheduling: 0.39.0
+  schedulingctl: 0.39.0
+  messaging: 0.39.0
+  messagingctl: 0.39.0
+  registry-render: 0.39.0
+  registry-client-node: 0.39.0
+  registry-client-python: 0.39.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 45e32a08647e83f2d28b9a22403cce431e3161ea2f12ad1de46b42d84b02edee
+  entry_count: 159
+
+external: {}
