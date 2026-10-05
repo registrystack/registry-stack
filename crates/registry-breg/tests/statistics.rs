@@ -365,6 +365,39 @@ fn disclosure_property_values_are_null_zero_or_a_rounding_multiple() {
 }
 
 #[test]
+fn rounded_zero_exists_only_below_half_of_the_rounding_base() {
+    for minimum_count in 2..=12 {
+        for rounding_base in 2..=12 {
+            let mut cells = cells_with_values(&(0..=200).collect::<Vec<_>>());
+            apply_disclosure(
+                &mut cells,
+                DisclosureParameters {
+                    minimum_count,
+                    rounding_base,
+                },
+            )
+            .unwrap();
+            let rounded_zeros = (0..=200)
+                .zip(&cells)
+                .filter(|(_, cell)| cell.value == Some(0) && cell.status == CellStatus::Rounded)
+                .map(|(true_count, _)| true_count)
+                .collect::<Vec<u64>>();
+            assert_eq!(
+                rounded_zeros,
+                (minimum_count..rounding_base.div_ceil(2)).collect::<Vec<_>>(),
+                "minimum {minimum_count}, base {rounding_base}"
+            );
+            let suppressed = (0..=200)
+                .zip(&cells)
+                .filter(|(_, cell)| cell.status == CellStatus::Suppressed)
+                .map(|(true_count, _)| true_count)
+                .collect::<Vec<u64>>();
+            assert_eq!(suppressed, (1..minimum_count).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
 fn accepted_suppression_residual_is_pinned_for_four_plus_four_and_seven_ones() {
     let parameters = DisclosureParameters {
         minimum_count: 5,

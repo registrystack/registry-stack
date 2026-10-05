@@ -139,6 +139,20 @@ total bounds their sum at eight through twelve. The intersection pins both to
 four. Seven positive suppressed cells with a rounded total of five pin every
 cell to one. `tests/statistics.rs` executes these examples.
 
+The compiler checks only that each parameter is at least two. It leaves three
+limits to the dataset's author:
+
+- `minimumCount` is a threshold on unit rows, not on distinct people or
+  organizations. Where one subject can hold several unit rows, a published
+  cell can describe fewer subjects than the threshold.
+- A suppressed cell is known to hold one through `minimumCount` minus one. At
+  the floor of two, `suppressed` means exactly one.
+- The two parameters are not checked against each other. A count from
+  `minimumCount` up to, but not including, half of `roundingBase` is published
+  as zero with status `rounded`, which its status tells apart from an exact
+  zero. With minimum two and base five, a rounded zero is exactly two. A
+  `roundingBase` of at most twice `minimumCount` produces no rounded zero.
+
 Deterministic rounding permits differencing between releases or overlapping
 populations. Exact zeros disclose absence and can disclose group attributes.
 There is no privacy budget, differential privacy, or claim of universal

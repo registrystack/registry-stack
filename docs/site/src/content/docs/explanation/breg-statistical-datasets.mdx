@@ -54,6 +54,8 @@ Released cells suppress positive counts below the declared minimum. Other positi
 
 Suppression does not guarantee that a cell stays unknown. With minimum five and rounding base five, two suppressed cells of four each publish a rounded total of ten. Each cell must be between one and four; the total constrains their sum to eight through twelve. Together those bounds reveal that both cells equal four. Seven suppressed positive cells and a rounded total of five similarly reveal seven ones.
 
+The compiler checks only that the minimum and the rounding base are each at least two. Three limits stay with the dataset's author. The minimum is a threshold on unit rows, not on distinct people or organizations, so a published cell can describe fewer subjects than the minimum where one subject holds several rows. A suppressed cell is known to hold one through the minimum minus one, so at a minimum of two it holds exactly one. And a count from the minimum up to, but not including, half of the rounding base is published as zero with status `rounded`, which the status tells apart from an exact zero: with minimum two and base five, a rounded zero is exactly two. A rounding base of at most twice the minimum produces no rounded zero.
+
 Deterministic rounding permits differencing across versions or overlapping populations. Zeros reveal absence and may reveal group attributes. BReg supplies no cumulative privacy budget or differential privacy. Review the release cadence, dimensions, reader population, and other available information as part of the institution's disclosure decision.
 
 {/* Evidence: crates/registry-breg/tests/statistics.rs;
