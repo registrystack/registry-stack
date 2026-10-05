@@ -6,6 +6,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
+import { ARCHIVED_EVIDENCE_PATHS } from '../src/lib/archived-evidence-paths.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
 const checker = resolve(here, 'check-built-links.mjs');
 
@@ -83,6 +85,24 @@ test('allows an archived standards page to cite root-relative current evidence',
   const result = run(fixture(t, '/explanation/current/'));
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Built link check passed/);
+});
+
+test('allows an archived page to cite evidence the current data no longer names', (t) => {
+  for (const path of ARCHIVED_EVIDENCE_PATHS) {
+    const root = fixture(t, path);
+    write(root, `dist${path}index.html`, '<html></html>');
+    const result = run(root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Built link check passed/);
+  }
+});
+
+test('rejects archived evidence that no longer resolves on the current site', (t) => {
+  for (const path of ARCHIVED_EVIDENCE_PATHS) {
+    const result = run(fixture(t, path));
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /links to missing/);
+  }
 });
 
 test('allows archived navigation to the production development mount', (t) => {

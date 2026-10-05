@@ -3,6 +3,7 @@ import { dirname, join, normalize, relative, resolve } from 'node:path';
 
 import { extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
 import { loadDocsets } from './docsets.mjs';
+import { ARCHIVED_EVIDENCE_PATHS } from '../src/lib/archived-evidence-paths.mjs';
 import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 import { publishedArchiveDocsets } from '../src/lib/docset-retention.mjs';
 
@@ -124,6 +125,7 @@ const errors = [];
 let checked = 0;
 const idsByFile = new Map();
 const evidencePaths = await currentEvidencePaths();
+const archivedEvidencePaths = new Set(ARCHIVED_EVIDENCE_PATHS);
 const scope = scopeFromArgs(process.argv.slice(2));
 const archivedRootPattern = /^\/v\/[^/]+\//;
 const productionCurrentMountExists = await exists(
@@ -179,6 +181,7 @@ for (const file of files) {
       raw !== '/' &&
       !isWithinRoot(rawPath, root) &&
       !evidencePaths.has(rawPath) &&
+      !archivedEvidencePaths.has(rawPath) &&
       ![...declaredArchiveDestinations].some((path) => isWithinRoot(rawPath, path)) &&
       !isExternal(raw)
     ) {
