@@ -512,7 +512,9 @@ async fn dispatch(
                 ReleaseStatus::Provisional => "provisional",
                 ReleaseStatus::Final => "final",
             }),
-            content_digest: lifecycle.as_ref().map(|l| l.header.content_digest.as_str()),
+            content_digest: lifecycle
+                .as_ref()
+                .and_then(|l| l.header.content_digest.as_deref()),
         },
     );
     let Ok(entry) = entry else {

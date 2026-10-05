@@ -94,7 +94,7 @@ Import the file into your plotting tool. Use `periodStart` for the horizontal da
 
 ## Withdraw an incorrect version
 
-Withdrawal permanently removes the server's stored content and preserves its header and reason. It cannot remove a copy a reader already downloaded. Use the actual version number and an explicit closed reason:
+Withdrawal permanently removes the server's stored content and preserves its header and reason. From then on the header is served without `contentDigest`. It cannot remove a copy a reader already downloaded. Use the actual version number and an explicit closed reason:
 
 ```sh
 bregctl statistics withdraw \

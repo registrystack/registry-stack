@@ -139,20 +139,13 @@ pub struct ReleaseVersionHeader {
     pub computed_at: String,
     pub package_digest: String,
     pub definition_digest: String,
-    pub content_digest: String,
+    /// Names the stored document. A withdrawn header carries none: withdrawal
+    /// deletes the document, and a digest of it would let a reader confirm
+    /// guessed cell values offline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub withdrawal: Option<WithdrawalDocument>,
-}
-
-impl From<&ReleaseVersionHeader> for PeriodVersionHeader {
-    fn from(header: &ReleaseVersionHeader) -> Self {
-        Self {
-            version: header.version,
-            status: header.status,
-            content_digest: header.content_digest.clone(),
-            snapshot: header.snapshot.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

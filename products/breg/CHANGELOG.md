@@ -122,10 +122,11 @@
   runtime. Root projects may declare count datasets with live read profiles,
   one publisher, and separate released-data readers. The API serves exact live
   counts and disclosure-controlled immutable JSON/CSV releases, with
-  idempotent publication and atomic withdrawal. Publication remains available
-  after history erasure with an explicitly null snapshot bookmark until history
-  is rebaselined. See `STATISTICS.md` for
-  disclosure risks, definition series, and the seven HTTP operations.
+  idempotent publication and atomic withdrawal. A withdrawn version's header
+  omits `contentDigest`. Publication remains available after history erasure
+  with an explicitly null snapshot bookmark until history is rebaselined. See
+  `STATISTICS.md` for disclosure risks, definition series, and the seven HTTP
+  operations.
 - Derived SQL now accepts only explicitly reviewed raw PostgreSQL grammar
   nodes (#1841). `JSON_VALUE` and `JSON_EXISTS` remain available for scalar
   structured-field access; `JSON_QUERY`, `JSON_TABLE`, `XMLTABLE`, SQL/JSON

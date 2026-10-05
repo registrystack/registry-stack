@@ -662,6 +662,14 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         withdrawal_header["withdrawal"]["reason"],
         "source-data-error"
     );
+    assert!(
+        withdrawal_header.get("contentDigest").is_none(),
+        "a withdrawn header carries no digest of the deleted cells: {withdrawal_header}"
+    );
+    let withdrawal_replay =
+        withdraw(&app, &prior_period, 1, "withdraw-one", publisher.clone()).await;
+    assert_eq!(withdrawal_replay.status(), StatusCode::OK);
+    assert_eq!(body_json(withdrawal_replay).await, withdrawal_header);
 
     let explicit_withdrawn = send(
         &app,
@@ -827,6 +835,15 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         .map(|item| item["version"].as_u64().expect("release version"))
         .collect::<BTreeSet<_>>();
     assert_eq!(visible_versions, BTreeSet::from([1, 2, 4, 5]));
+    for item in all_releases["items"].as_array().expect("release items") {
+        let withdrawn = item.get("withdrawal").is_some();
+        assert_eq!(item["version"] == 1, withdrawn);
+        assert_eq!(
+            item.get("contentDigest").is_none(),
+            withdrawn,
+            "only a withdrawn header omits the content digest: {item}"
+        );
+    }
 
     let withdraw_inserted = withdraw(
         &app,
@@ -1105,6 +1122,15 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
                     && record.get("cells").is_none()
             }),
             "missing value-free terminal audit count for {operation}"
+        );
+    }
+    for record in terminal_records.iter().filter(|record| {
+        record["operationId"] == "statistics.records-by-category.withdraw_release"
+            && record["phase"] == "terminal"
+    }) {
+        assert!(
+            record.get("contentDigest").is_none(),
+            "a withdrawal journals no digest of the deleted cells: {record}"
         );
     }
     let allowed_summary_keys = BTreeSet::from([
@@ -3127,6 +3153,28 @@ async fn generated_openapi_validates_the_actual_statistical_http_wire_contract()
         validate_openapi_json_response(&publisher_openapi, withdrawal_path, "post", withdrawn, 200)
             .await;
     assert_eq!(withdrawn["withdrawal"]["reason"], "source-data-error");
+    assert!(withdrawn.get("contentDigest").is_none());
+
+    let withdrawn_list = send(
+        &app,
+        Method::GET,
+        "/v1/statistics/records-by-category/releases?accessProfile=reader",
+        Some(claims("reader", false)),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    let withdrawn_list =
+        validate_openapi_json_response(&reader_openapi, list_path, "get", withdrawn_list, 200)
+            .await;
+    let withdrawn_item = withdrawn_list["items"]
+        .as_array()
+        .expect("release items")
+        .iter()
+        .find(|item| item["period"] == prior_period.as_str() && item["version"] == 1)
+        .expect("the withdrawn version stays listed");
+    assert_eq!(withdrawn_item["withdrawal"]["reason"], "source-data-error");
+    assert!(withdrawn_item.get("contentDigest").is_none());
 
     let gone = send(
         &app,

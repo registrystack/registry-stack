@@ -12592,8 +12592,10 @@ fn write_statistics_success(
                     .clone()
                     .unwrap_or_else(|| "unavailable".to_owned()),
             ),
-            ("content digest", report.release.content_digest.clone()),
         ];
+        if let Some(content_digest) = &report.release.content_digest {
+            pairs.push(("content digest", content_digest.clone()));
+        }
         if let Some(withdrawal) = &report.release.withdrawal {
             let reason = match withdrawal.reason {
                 registry_breg::statistics::WithdrawalReason::ComputationError => {

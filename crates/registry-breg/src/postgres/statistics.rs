@@ -527,7 +527,7 @@ impl PostgresStatisticsService {
             computed_at: request.computed_at.to_rfc3339(),
             package_digest: self.expected.package_digest.clone(),
             definition_digest: dataset.definition_digest.clone(),
-            content_digest: canonical.content_digest,
+            content_digest: Some(canonical.content_digest),
             withdrawal: None,
         };
         let response =
@@ -1134,7 +1134,7 @@ impl PostgresStatisticsService {
             serde_json::from_slice(&bytes).map_err(|_| StatisticsServiceError::Unavailable)?;
         let canonical = canonical_document_and_digest(&document).map_err(map_statistics_error)?;
         if canonical.bytes != bytes
-            || canonical.content_digest != header.content_digest
+            || header.content_digest.as_deref() != Some(canonical.content_digest.as_str())
             || document.dataset.id != dataset.id
             || document.dataset.definition_digest != dataset.definition_digest
             || document.periods.len() != 1
@@ -1214,6 +1214,7 @@ impl PostgresStatisticsService {
         for row in rows.into_iter().take(usize::from(request.limit)) {
             let reason = row.get::<_, Option<String>>(8);
             let withdrawn_at = row.get::<_, Option<DateTime<Utc>>>(9);
+            let withdrawn = withdrawal(reason, withdrawn_at)?;
             headers.push(ReleaseVersionHeader {
                 dataset: dataset.id.clone(),
                 period: row.get(0),
@@ -1224,8 +1225,8 @@ impl PostgresStatisticsService {
                 computed_at: row.get::<_, DateTime<Utc>>(4).to_rfc3339(),
                 package_digest: row.get(5),
                 definition_digest: row.get(6),
-                content_digest: row.get(7),
-                withdrawal: withdrawal(reason, withdrawn_at)?,
+                content_digest: withdrawn.is_none().then(|| row.get(7)),
+                withdrawal: withdrawn,
             });
         }
         let next =
@@ -1671,7 +1672,7 @@ fn header_from_row(
         computed_at: row.get::<_, DateTime<Utc>>(3).to_rfc3339(),
         package_digest: row.get(4),
         definition_digest: row.get(5),
-        content_digest: row.get(6),
+        content_digest: withdrawal.is_none().then(|| row.get(6)),
         withdrawal,
     })
 }

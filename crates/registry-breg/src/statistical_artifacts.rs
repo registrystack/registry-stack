@@ -590,7 +590,8 @@ fn document_schema() -> Value {
 fn release_header_schema() -> Value {
     json!({
         "type":"object","additionalProperties":false,
-        "required":["dataset","period","version","status","definitionDigest","contentDigest","snapshot","computedAt","packageDigest"],
+        "required":["dataset","period","version","status","definitionDigest","snapshot","computedAt","packageDigest"],
+        "oneOf":[{"required":["contentDigest"]},{"required":["withdrawal"]}],
         "properties":{
             "dataset":{"type":"string"},"period":{"type":"string"},
             "version":{"type":"integer","format":"int64","minimum":1},
