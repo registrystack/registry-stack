@@ -2,7 +2,7 @@
   "version": 4,
   "service": "breg-mcp",
   "runtime": {
-    "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97",
+    "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2",
     "layer_ids": [
       "sha256:9486261b5a13f63ca6904b36721527ac8f19df53d300560138d69ae9b4c203de",
       "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
@@ -18,7 +18,7 @@
       "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
       "sha256:f2392a9484bf6b18f06beaf705b994e31dbb2716c99cf7d03c9c495cd107f364",
       "sha256:8a3b315d45080ecb38e39d42d28e951303c67c2ce7482bcdbbc3b5424be19013",
-      "sha256:ada8421c741188c83c2e6de96450043e65ce6233e7d2a1d84cd789a0ad97f420",
+      "sha256:2cef49adb7d7902c61ecdd385036e3c7fb7c9f0ada96a41901797c77b7daedd7",
       "sha256:c0e409312adc366898967307565f692bb33d43a439d3de48e27d14b742389725",
       "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:255aff0b9a78167155c1c338d49e03ff9429bea3f8797bbc5f7366c867b18dd9",
+      "sha256:6670f6a1b7c6e908d42f4a5a92de086f2dc0a73d9e91f04c2470dd7ae08e9cb2",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7"
+    "definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857"
   },
   "policies": [
     {
@@ -75,9 +75,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.38.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, beside the pinned libssl3t64 3.5.7-1~deb13u3, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
-      "reviewed_at": "2026-10-01",
-      "expires_at": "2026-10-06",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. That base ships libc6 2.41-12+deb13u4 itself and now also libssl3t64 3.5.7-1~deb13u3, the one package that moved from the previously reviewed base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 and libssl3t64 3.5.7-1~deb13u3 over them, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable imports none of the deprecated resolver-printing interfaces, including ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr and fp_nquery. The exposure report has no review-required dynamic lookup. Ordinary resolver initialization does not enter the vulnerable TSIG diagnostic-printing path. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still records this Trixie version as vulnerable and fixes only forky and sid.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -93,14 +93,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
-      "component_layer_id": "sha256:255aff0b9a78167155c1c338d49e03ff9429bea3f8797bbc5f7366c867b18dd9",
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+      "component_layer_id": "sha256:6670f6a1b7c6e908d42f4a5a92de086f2dc0a73d9e91f04c2470dd7ae08e9cb2",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
-        "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:8d8f3ad2d218d56db8df4d29249144de23585ba0966b8160976258580b2da10d"
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
           }
         ],
-        "definition_digest": "sha256:f1d6a437f62936573f0eda5547fb099a2341f2c516c8925df69b1dd8beb44c9d"
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
       }
     },
     {
@@ -133,9 +133,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.38.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. That base now ships libc6 2.41-12+deb13u4 itself, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 over it, beside the pinned libssl3t64 3.5.7-1~deb13u3, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian fixes the issue only in forky and sid.",
-      "reviewed_at": "2026-10-01",
-      "expires_at": "2026-10-06",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix; Grype reports wont-fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. That base ships libc6 2.41-12+deb13u4 itself and now also libssl3t64 3.5.7-1~deb13u3, the one package that moved from the previously reviewed base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97, and the image's application layer installs the same pinned libc6 2.41-12+deb13u4 and libssl3t64 3.5.7-1~deb13u3 over them, so its loader, libc, libm and libpthread bytes are the ones reviewed for the other release images since the v0.33.0 review. Its executable neither imports nor contains strfmon or strfmon_l. The exposure report has no review-required dynamic lookup. No caller-controlled right-justified monetary-format width path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian fixes the issue only in forky and sid.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -151,14 +151,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
-      "component_layer_id": "sha256:255aff0b9a78167155c1c338d49e03ff9429bea3f8797bbc5f7366c867b18dd9",
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+      "component_layer_id": "sha256:6670f6a1b7c6e908d42f4a5a92de086f2dc0a73d9e91f04c2470dd7ae08e9cb2",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
-        "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:8d8f3ad2d218d56db8df4d29249144de23585ba0966b8160976258580b2da10d"
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
           }
         ],
-        "definition_digest": "sha256:f1d6a437f62936573f0eda5547fb099a2341f2c516c8925df69b1dd8beb44c9d"
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
       }
     },
     {
@@ -191,9 +191,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed zlib package for Trixie.",
-      "reviewed_at": "2026-10-01",
-      "expires_at": "2026-10-06",
+      "rationale": "Debian Trixie has no fixed package and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. zlib1g 1:1.3.dfsg+really1.3.1-1+b1 remains in the same unchanged base layer. Its executable neither links libz nor contains libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. The exposure report has no review-required dynamic lookup. No vulnerable stalled gzip-write followed by formatted-output path was identified. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed zlib package for Trixie.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -209,14 +209,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
-        "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +236,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:8d8f3ad2d218d56db8df4d29249144de23585ba0966b8160976258580b2da10d"
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
           }
         ],
-        "definition_digest": "sha256:f1d6a437f62936573f0eda5547fb099a2341f2c516c8925df69b1dd8beb44c9d"
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
       }
     },
     {
@@ -249,9 +249,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-01",
-      "expires_at": "2026-10-06",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -267,14 +267,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
-        "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -294,10 +294,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:8d8f3ad2d218d56db8df4d29249144de23585ba0966b8160976258580b2da10d"
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
           }
         ],
-        "definition_digest": "sha256:f1d6a437f62936573f0eda5547fb099a2341f2c516c8925df69b1dd8beb44c9d"
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
       }
     },
     {
@@ -307,9 +307,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-01",
-      "expires_at": "2026-10-06",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -325,14 +325,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
-        "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -352,10 +352,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:8d8f3ad2d218d56db8df4d29249144de23585ba0966b8160976258580b2da10d"
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
           }
         ],
-        "definition_digest": "sha256:f1d6a437f62936573f0eda5547fb099a2341f2c516c8925df69b1dd8beb44c9d"
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
       }
     },
     {
@@ -365,9 +365,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-01",
-      "expires_at": "2026-10-06",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -383,14 +383,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
-        "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -410,10 +410,10 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:8d8f3ad2d218d56db8df4d29249144de23585ba0966b8160976258580b2da10d"
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
           }
         ],
-        "definition_digest": "sha256:f1d6a437f62936573f0eda5547fb099a2341f2c516c8925df69b1dd8beb44c9d"
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
       }
     },
     {
@@ -423,9 +423,9 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.38.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 36840686912 at source 252c1bf435c332f65c3a391ccb16a70c0a22587a, built on the pinned distroless cc-debian13 nonroot base sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-01; Debian still lists no fixed gcc-14 package for any release.",
-      "reviewed_at": "2026-10-01",
-      "expires_at": "2026-10-06",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix for GCC PR127656 changes only the libstdc++ policy-based data structures binary_heap header, so the vulnerable code is template code that exists only in a C++ program that instantiates a __gnu_pbds binary heap; the image's libstdc++.so.6, libgcc_s.so.1 and libgomp.so.1 contain no __gnu_pbds or binary_heap names, and gcc-14-base installs only documentation. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, and its bytes contain neither C++ type information nor __gnu_pbds names. The exposure report has no review-required dynamic lookup. No C++ __gnu_pbds binary heap is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian still lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
         "candidate_rootfs_changed",
@@ -441,14 +441,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:ddea597410e3343eb9617b517c5c16aa04cf94e0a658d36d37d5f9a5dd88c537",
-        "reference_source_revision": "252c1bf435c332f65c3a391ccb16a70c0a22587a",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:dcb6ef96df8ec33eb4e196820683b1cd2662194150f00b5482f23241dcd3c5c7",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -468,10 +468,242 @@
           },
           {
             "path": "/usr/local/bin/breg-mcp",
-            "sha256": "sha256:8d8f3ad2d218d56db8df4d29249144de23585ba0966b8160976258580b2da10d"
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
           }
         ],
-        "definition_digest": "sha256:f1d6a437f62936573f0eda5547fb099a2341f2c516c8925df69b1dd8beb44c9d"
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
+      }
+    },
+    {
+      "vulnerability_id": "CVE-2026-95619",
+      "package": "gcc-14-base",
+      "installed_version": "14.2.0-19",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. gcc-14-base 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_base_changed",
+        "runtime_config_changed"
+      ],
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+      "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/breg-mcp",
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
+          }
+        ],
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
+      }
+    },
+    {
+      "vulnerability_id": "CVE-2026-95619",
+      "package": "libgcc-s1",
+      "installed_version": "14.2.0-19",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgcc-s1 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_base_changed",
+        "runtime_config_changed"
+      ],
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+      "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/breg-mcp",
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
+          }
+        ],
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
+      }
+    },
+    {
+      "vulnerability_id": "CVE-2026-95619",
+      "package": "libgomp1",
+      "installed_version": "14.2.0-19",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libgomp1 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_base_changed",
+        "runtime_config_changed"
+      ],
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+      "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/breg-mcp",
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
+          }
+        ],
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
+      }
+    },
+    {
+      "vulnerability_id": "CVE-2026-95619",
+      "package": "libstdc++6",
+      "installed_version": "14.2.0-19",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian lists gcc-14 14.2.0-19 in Trixie as vulnerable with no fixed version in any release, and Grype reports no fix. The reviewed v0.39.0 Linux AMD64 BReg citizen MCP gateway local reproduction is exact rehearsal run 37345537748 at source 3231c84ce207ebffa0e47f5dd8a95d740803ab3b, built on the pinned distroless cc-debian13 nonroot base sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2. libstdc++6 14.2.0-19 remains in the same unchanged base layer. The upstream fix, GCC commit 59d235ffa5a69231eb42e5290d52dc8c90d28b7a, changes only libstdc++'s aligned operator new in libsupc++/new_opa.cc so that rounding the requested size up to the alignment detects size_t overflow; upstream states that the posix_memalign implementation does not do that rounding and is not affected. The image's libstdc++.so.6 defines the aligned operator new functions over posix_memalign, passing the requested size unrounded, and imports neither aligned_alloc nor memalign; libgcc_s.so.1 and libgomp.so.1 define no aligned operator new, and gcc-14-base installs only documentation. No ELF file in the image links libstdc++ or libgomp, and only libstdc++ itself links libgcc_s. Its executable is Rust with no C++ code: it links none of libstdc++, libgcc_s or libgomp, imports no C++ symbol, and its bytes contain neither C++ type information nor operator new names. The exposure report has no review-required dynamic lookup. No aligned C++ operator new is reachable from the image's code. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound reviewed executable, loader, libc, libm and libpthread file digests. Reviewed on 2026-10-05; Debian lists no fixed gcc-14 package for any release.",
+      "reviewed_at": "2026-10-05",
+      "expires_at": "2026-10-20",
+      "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_base_changed",
+        "runtime_config_changed"
+      ],
+      "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+      "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:53faeac753b948e2e1c1f073150eb111dfb1bb86be24ca9bdec7856b8323bd53",
+        "reference_source_revision": "3231c84ce207ebffa0e47f5dd8a95d740803ab3b",
+        "reference_provenance": "local_reproduction",
+        "runtime_definition_digest": "sha256:a7debcb840192af21966e31cd5a74952e6bdc35f177379f8f461f8522a260857",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:c8438e4fde1934e61c88311633f00949ff645d5c04cdb8671fa3d78164d2f307"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:9792e3cbb541c8f44c7acf5f14f4022ea62998ecc787d326bed4d8b6547dfd92"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "sha256:85e21f7dba0394411d00959176fd18b470e575b0b05f1f4f41e5636802ce0500"
+          },
+          {
+            "path": "/usr/local/bin/breg-mcp",
+            "sha256": "sha256:a6189b83117c01f580624c7d5d64ebdf7c17d8d52b365fc36e0ae6aff603d4bf"
+          }
+        ],
+        "definition_digest": "sha256:ea004cfd96be85d58cfb3f7a796f7c1e0fd9a5fc0d14c7eab9437c9a36a2b108"
       }
     }
   ]
