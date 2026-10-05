@@ -3,6 +3,7 @@
 //! PostgreSQL computation and immutable storage for governed statistical datasets.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,7 +36,10 @@ use crate::statistics::{
 use super::read::{
     install_statistics_evaluation_date, read_predicates, strict_claim_context, ReadRelations,
 };
-use super::{begin_record_transaction, ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
+use super::{
+    begin_record_transaction, ExpectedRegistryIdentity, GuardedTransaction, RegistryLockKey,
+    RuntimePool,
+};
 
 const CONTENT_TYPE_JSON: &[u8] = b"application/json";
 
@@ -76,6 +80,12 @@ pub enum StatisticsServiceError {
     IdempotencyConflict,
     #[error("statistical service is unavailable")]
     Unavailable,
+    /// A release or withdrawal reached its commit and its outcome is not
+    /// proven: the commit itself failed, or the deadline passed while it was
+    /// in flight. The attempt is answered `unfinished`, never refused, and
+    /// callers see the same response as `Unavailable`.
+    #[error("statistical release commit outcome is not proven")]
+    CommitUnresolved,
 }
 
 pub struct StatisticsLiveRequest<'a> {
@@ -322,6 +332,7 @@ impl PostgresStatisticsService {
         period: Period,
         mut computation: Computation,
         request: StatisticsPublishRequest<'_>,
+        commit: &CommitReach,
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
         let history_head = computation
             .history_head
@@ -533,7 +544,7 @@ impl PostgresStatisticsService {
         .await
         .map_err(map_idempotency)?;
         self.trace_for_test("publish.idempotency-inserted");
-        transaction.commit().await.map_err(unavailable)?;
+        commit_release_write(transaction, commit).await?;
         self.trace_for_test("publish.committed");
         Ok(StatisticsMutationOutcome {
             response,
@@ -837,12 +848,19 @@ impl PostgresStatisticsService {
         &self,
         request: StatisticsPublishRequest<'_>,
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
-        within_deadline(request.deadline, self.publish_inner(request)).await
+        let commit = CommitReach::default();
+        write_within_deadline(
+            request.deadline,
+            &commit,
+            self.publish_inner(request, &commit),
+        )
+        .await
     }
 
     async fn publish_inner(
         &self,
         request: StatisticsPublishRequest<'_>,
+        commit: &CommitReach,
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
         let dataset = self.publisher_dataset(request.dataset_id, request.context)?;
         if let Some(response) = self.publish_replay(dataset, &request).await? {
@@ -863,7 +881,7 @@ impl PostgresStatisticsService {
             .await?;
         self.trace_for_test("publish.computed");
         self.pause_before_persist_for_test().await;
-        self.persist_release(dataset, period, computation, request)
+        self.persist_release(dataset, period, computation, request, commit)
             .await
     }
 
@@ -871,12 +889,19 @@ impl PostgresStatisticsService {
         &self,
         request: StatisticsWithdrawalRequest<'_>,
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
-        within_deadline(request.deadline, self.withdraw_inner(request)).await
+        let commit = CommitReach::default();
+        write_within_deadline(
+            request.deadline,
+            &commit,
+            self.withdraw_inner(request, &commit),
+        )
+        .await
     }
 
     async fn withdraw_inner(
         &self,
         request: StatisticsWithdrawalRequest<'_>,
+        commit: &CommitReach,
     ) -> Result<StatisticsMutationOutcome, StatisticsServiceError> {
         let dataset = self.publisher_dataset(request.dataset_id, request.context)?;
         let reason_code = withdrawal_reason(request.reason);
@@ -1025,7 +1050,7 @@ impl PostgresStatisticsService {
         )
         .await
         .map_err(map_idempotency)?;
-        transaction.commit().await.map_err(unavailable)?;
+        commit_release_write(transaction, commit).await?;
         Ok(StatisticsMutationOutcome {
             response,
             replayed: false,
@@ -1802,6 +1827,50 @@ async fn within_deadline<T>(
         .map_err(|_| StatisticsServiceError::Timeout)?
 }
 
+/// Whether a release write has reached its COMMIT. The write and the deadline
+/// around it share one, so a deadline that passes while COMMIT is in flight is
+/// not reported as a timeout that proves nothing committed.
+#[derive(Default)]
+struct CommitReach(AtomicBool);
+
+impl CommitReach {
+    fn reach(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn reached(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// Commits a release or withdrawal. From here the outcome is not proven until
+/// COMMIT is acknowledged, so a failure is `CommitUnresolved`, never a refusal.
+async fn commit_release_write(
+    transaction: GuardedTransaction<'_>,
+    commit: &CommitReach,
+) -> Result<(), StatisticsServiceError> {
+    commit.reach();
+    transaction
+        .commit()
+        .await
+        .map_err(|_| StatisticsServiceError::CommitUnresolved)
+}
+
+/// Bounds a release write by its deadline. A deadline that passes before the
+/// write reaches its COMMIT is a timeout; one that passes afterwards leaves
+/// the outcome unproven, like a COMMIT that fails.
+async fn write_within_deadline<T>(
+    deadline: tokio::time::Instant,
+    commit: &CommitReach,
+    future: impl std::future::Future<Output = Result<T, StatisticsServiceError>>,
+) -> Result<T, StatisticsServiceError> {
+    match tokio::time::timeout_at(deadline, future).await {
+        Ok(result) => result,
+        Err(_) if commit.reached() => Err(StatisticsServiceError::CommitUnresolved),
+        Err(_) => Err(StatisticsServiceError::Timeout),
+    }
+}
+
 fn remaining_budget(deadline: tokio::time::Instant) -> Result<Duration, StatisticsServiceError> {
     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
     if remaining < Duration::from_millis(1) {
@@ -2148,5 +2217,36 @@ fn map_statement_error(error: tokio_postgres::Error) -> StatisticsServiceError {
         StatisticsServiceError::Timeout
     } else {
         StatisticsServiceError::Unavailable
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_write_deadline_is_a_timeout_only_before_the_commit_is_reached() {
+        let commit = CommitReach::default();
+        let before: Result<(), _> = write_within_deadline(
+            tokio::time::Instant::now() + Duration::from_millis(10),
+            &commit,
+            std::future::pending(),
+        )
+        .await;
+        assert!(matches!(before, Err(StatisticsServiceError::Timeout)));
+
+        let during: Result<(), _> = write_within_deadline(
+            tokio::time::Instant::now() + Duration::from_millis(10),
+            &commit,
+            async {
+                commit.reach();
+                std::future::pending().await
+            },
+        )
+        .await;
+        assert!(matches!(
+            during,
+            Err(StatisticsServiceError::CommitUnresolved)
+        ));
     }
 }

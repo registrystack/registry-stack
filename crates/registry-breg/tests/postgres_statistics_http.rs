@@ -1966,6 +1966,331 @@ async fn second_withdrawal_commits_while_the_first_is_paused_before_the_period_l
     database.cleanup().await;
 }
 
+/// A COMMIT that fails does not prove the release transaction rolled back, so
+/// the attempt is answered `unfinished`, never refused: a lost acknowledgement
+/// of a durable release or withdrawal must not leave a journal that says it
+/// was refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_commit_failure_is_answered_unfinished_not_refused() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-statistics-commit-refused-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+    let app = statistics_router(
+        database.runtime_config.build_pool().expect("pool builds"),
+        compiled,
+        identity,
+        RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+                .expect("audit profile is keyed"),
+        ),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+        None,
+    );
+    let today = Utc::now().date_naive();
+    let prior = today
+        .with_day(1)
+        .expect("current month has a first day")
+        .checked_sub_days(Days::new(1))
+        .expect("previous month exists");
+    let period = month_code(prior);
+
+    install_commit_fault(
+        &database,
+        "registry_statistical_release_versions",
+        "RAISE EXCEPTION 'test refuses this release commit';",
+    )
+    .await;
+    let publication = publish(
+        &app,
+        &period,
+        "commit-refused-publish",
+        "final",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(publication.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body_json(publication).await["code"], "source.unavailable");
+    remove_commit_fault(&database, "registry_statistical_release_versions").await;
+    assert_answered_unfinished(&database, "statistics.records-by-category.publish_release");
+    assert_eq!(
+        release_row_count(&database, "registry_statistical_release_versions").await,
+        0,
+        "the refused commit rolled back"
+    );
+
+    let published = publish(
+        &app,
+        &period,
+        "commit-refused-release",
+        "final",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(published.status(), StatusCode::CREATED);
+    install_commit_fault(
+        &database,
+        "registry_statistical_release_withdrawals",
+        "RAISE EXCEPTION 'test refuses this withdrawal commit';",
+    )
+    .await;
+    let withdrawal = withdraw(
+        &app,
+        &period,
+        1,
+        "commit-refused-withdrawal",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(withdrawal.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body_json(withdrawal).await["code"], "source.unavailable");
+    remove_commit_fault(&database, "registry_statistical_release_withdrawals").await;
+    assert_answered_unfinished(&database, "statistics.records-by-category.withdraw_release");
+    assert_eq!(
+        release_row_count(&database, "registry_statistical_release_withdrawals").await,
+        0,
+        "the refused commit rolled back"
+    );
+    database.assert_every_audit_request_answered_once();
+    database.cleanup().await;
+}
+
+/// A deadline that passes while COMMIT is in flight leaves the release or the
+/// withdrawal durable although its caller is told nothing committed. Each
+/// statement here stays inside the statement budget its transaction was given,
+/// so the server completes the COMMIT after the request has been answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn release_deadline_during_commit_is_answered_unfinished_not_refused() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-statistics-commit-deadline-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+    let app = statistics_router(
+        database.runtime_config.build_pool().expect("pool builds"),
+        compiled,
+        identity,
+        RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x7d; 32].into())
+                .expect("audit profile is keyed"),
+        ),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+        None,
+    );
+    let today = Utc::now().date_naive();
+    let prior = today
+        .with_day(1)
+        .expect("current month has a first day")
+        .checked_sub_days(Days::new(1))
+        .expect("previous month exists");
+    let period = month_code(prior);
+    let publish_uri = format!(
+        "/v1/statistics/records-by-category/releases/{period}/versions?accessProfile=publisher"
+    );
+    let withdraw_uri = format!(
+        "/v1/statistics/records-by-category/releases/{period}/versions/1/withdrawal?accessProfile=publisher"
+    );
+    for (table, uri, key, body, operation_id, retained) in [
+        (
+            "registry_statistical_release_versions",
+            &publish_uri,
+            "commit-deadline-publish",
+            json!({"status":"final"}),
+            "statistics.records-by-category.publish_release",
+            StatusCode::CREATED,
+        ),
+        (
+            "registry_statistical_release_withdrawals",
+            &withdraw_uri,
+            "commit-deadline-withdrawal",
+            json!({"reason":"source-data-error"}),
+            "statistics.records-by-category.withdraw_release",
+            StatusCode::OK,
+        ),
+    ] {
+        // The insert holds the transaction for 1.5 seconds and its COMMIT then
+        // runs for 2.75 seconds. The work deadline is 3.5 seconds, the outer
+        // deadline less the terminal audit reserve, so it passes during COMMIT.
+        install_slow_insert(&database, table, "1.5").await;
+        install_commit_fault(&database, table, "PERFORM pg_catalog.pg_sleep(2.75);").await;
+        let headers = [
+            ("content-type", "application/json"),
+            ("idempotency-key", key),
+        ];
+        let response = send_with_deadline(
+            &app,
+            Method::POST,
+            uri,
+            Some(claims("publisher", false)),
+            &headers,
+            serde_json::to_vec(&body).expect("request body serializes"),
+            Some(tokio::time::Instant::now() + Duration::from_secs(4)),
+        )
+        .await;
+        let committed = tokio::time::Instant::now() + Duration::from_secs(10);
+        while release_row_count(&database, table).await == 0 {
+            assert!(
+                tokio::time::Instant::now() < committed,
+                "the COMMIT the deadline abandoned never became durable in {table}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        remove_slow_insert(&database, table).await;
+        remove_commit_fault(&database, table).await;
+        assert_answered_unfinished(&database, operation_id);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body_json(response).await["code"], "source.unavailable");
+
+        let retried = send(
+            &app,
+            Method::POST,
+            uri,
+            Some(claims("publisher", false)),
+            &headers,
+            serde_json::to_vec(&body).expect("request body serializes"),
+        )
+        .await;
+        assert_eq!(
+            retried.status(),
+            retained,
+            "the same key recovers the retained response of the durable write"
+        );
+        assert_eq!(release_row_count(&database, table).await, 1);
+    }
+    database.assert_every_audit_request_answered_once();
+    database.cleanup().await;
+}
+
+/// Makes every COMMIT that inserted into `table` run `body` first, through a
+/// deferred constraint trigger.
+async fn install_commit_fault(database: &TestDatabase, table: &str, body: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION public.test_release_commit_fault()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN {body} RETURN NULL; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_release_commit_fault() TO PUBLIC;
+             CREATE CONSTRAINT TRIGGER test_release_commit_fault
+               AFTER INSERT ON registry_internal.{table}
+               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+               EXECUTE FUNCTION public.test_release_commit_fault();"
+        ))
+        .await
+        .expect("administrator installs the deferred commit fault");
+}
+
+async fn remove_commit_fault(database: &TestDatabase, table: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "DROP TRIGGER test_release_commit_fault ON registry_internal.{table};
+             DROP FUNCTION public.test_release_commit_fault();"
+        ))
+        .await
+        .expect("administrator removes the deferred commit fault");
+}
+
+/// Makes every insert into `table` take `seconds` longer inside its own
+/// statement, before the transaction reaches COMMIT.
+async fn install_slow_insert(database: &TestDatabase, table: &str, seconds: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION public.test_release_slow_insert()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN PERFORM pg_catalog.pg_sleep({seconds}); RETURN NULL; END $$;
+             GRANT EXECUTE ON FUNCTION public.test_release_slow_insert() TO PUBLIC;
+             CREATE TRIGGER test_release_slow_insert
+               AFTER INSERT ON registry_internal.{table}
+               FOR EACH ROW EXECUTE FUNCTION public.test_release_slow_insert();"
+        ))
+        .await
+        .expect("administrator installs the slow insert");
+}
+
+async fn remove_slow_insert(database: &TestDatabase, table: &str) {
+    database
+        .admin
+        .batch_execute(&format!(
+            "DROP TRIGGER test_release_slow_insert ON registry_internal.{table};
+             DROP FUNCTION public.test_release_slow_insert();"
+        ))
+        .await
+        .expect("administrator removes the slow insert");
+}
+
+async fn release_row_count(database: &TestDatabase, table: &str) -> i64 {
+    database
+        .admin
+        .query_one(
+            &format!("SELECT count(*) FROM registry_internal.{table}"),
+            &[],
+        )
+        .await
+        .expect("release rows read")
+        .get(0)
+}
+
+/// Asserts that the latest attempt for `operation_id` was answered by one
+/// `unfinished` response under its own correlation and by nothing else.
+fn assert_answered_unfinished(database: &TestDatabase, operation_id: &str) {
+    let entries = database.audit_entries();
+    let attempt = entries
+        .iter()
+        .rfind(|entry| {
+            entry["phase"] == "request" && entry["record"]["operationId"] == operation_id
+        })
+        .unwrap_or_else(|| panic!("no audit attempt for {operation_id}: {entries:#?}"));
+    let journal = entries
+        .iter()
+        .filter(|entry| entry["correlation"] == attempt["correlation"])
+        .map(|entry| {
+            (
+                entry["phase"].as_str().unwrap_or_default(),
+                entry["record"]["phase"].as_str().unwrap_or_default(),
+                entry["record"]["outcome"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        journal,
+        [("request", "attempt", ""), ("response", "unfinished", "")],
+        "an unproven commit is answered unfinished, never refused"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn computation_statement_obeys_the_request_deadline_and_persists_nothing() {
     let database = TestDatabase::create(3).await;

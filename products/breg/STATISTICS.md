@@ -239,7 +239,12 @@ can delete content, while recording the withdrawal. Catalog verification
 covers its owner, body, language, volatility, privileges, and fixed search path.
 
 Every protected request has an audit attempt before database I/O and an
-accepted terminal entry before bytes are returned. Audit entries contain keyed
+accepted terminal entry before bytes are returned. A publication or withdrawal
+whose COMMIT fails, or whose deadline passes while COMMIT is in flight, has no
+proven outcome. It returns `503 source.unavailable` and appends no terminal
+entry: its attempt is answered `unfinished`, never `refused`. Retry with the
+same `Idempotency-Key`; a write that did commit returns its retained response.
+Audit entries contain keyed
 references and lifecycle metadata, never cell values or unit counts. Aggregate
 reads do not add individual subject access-log hits.
 

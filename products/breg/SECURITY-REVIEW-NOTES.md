@@ -1616,7 +1616,11 @@ retained reads, including a released-reader profile with no record authority.
 
 Audit entries contain dataset, period, release identity, status, and digest
 references, never cell values or true counts. Attempts precede database work;
-terminal audit acceptance gates response bytes. Each request has an absolute
+terminal audit acceptance gates response bytes. A publication or withdrawal
+that reaches its COMMIT without a proven outcome, because the COMMIT failed or
+the work deadline passed while it was in flight, appends no terminal entry:
+its attempt is answered `unfinished`, never `refused`, and the caller receives
+503, as for an ordinary mutation whose commit is unresolved. Each request has an absolute
 deadline, including lock waits and statement execution. Statistical work reserves
 500 ms before the outer HTTP deadline to construct and enqueue its terminal
 audit response. JSON representation
@@ -1662,7 +1666,10 @@ digests, owner count parity, anonymous refusals under audit failure, stored-byte
 digest equality, real definition successor activation, and publication after
 maintained history erasure and rebaseline, including erasure between computation
 and persistence. The outer HTTP timeout test blocks the source table and verifies
-a refused terminal with no release or idempotency rows; unmatched-route tests
+a refused terminal with no release or idempotency rows; the commit tests fail a
+publication and a withdrawal at COMMIT, and let the work deadline pass during a
+COMMIT that then becomes durable, and verify an `unfinished` answer with no
+refused terminal; unmatched-route tests
 verify method classification without recording caller-controlled values. The facility
 workflow executes publication and JSON/CSV series reads through native CLI and
 HTTP clients with separate access profiles.
