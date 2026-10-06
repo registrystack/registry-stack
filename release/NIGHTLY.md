@@ -202,11 +202,19 @@ A nightly reuses the reviewed decision about a package version, not the proof a
 numbered release requires. A release also proves that its candidate image has
 the reviewed layers, process contract, and file digests. The nightly bytes
 differ from the reviewed release bytes, so that proof cannot hold for a nightly
-image and the nightly check does not claim it. A new finding, a changed package
-version, a changed severity, an available fix, or an expired exception blocks
-publication until the finding is fixed or the release baseline is reviewed
-again. The workflow has no bypass input, and a first run is not guaranteed to
-publish.
+image and the nightly check does not claim it.
+
+That gap is real exposure, not a formality. A reviewed exception often rests on
+the image's executables not reaching the vulnerable code, and that was judged
+against the release image. The nightly check does not judge it again. A nightly
+can change an executable so that it reaches the vulnerable code, and the check
+still admits the finding until the exception expires. Do not run a nightly
+image where an excepted vulnerability would matter; use a numbered release.
+
+A new finding, a changed package version, a changed severity, an available fix,
+or an expired exception blocks publication until the finding is fixed or the
+release baseline is reviewed again. The workflow has no bypass input, and a
+first run is not guaranteed to publish.
 
 For a normal run:
 
