@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- The retention sweep that erases an idempotency receipt also clears the
+  attempt's raw token issuer, subject, and key. The attempt is identified by a
+  SHA-256 digest of those three and the command and is never deleted, so the
+  key stays spent for that caller: an exact retry still answers
+  `idempotency.expired`, a changed one `idempotency.key-reused`, and another
+  caller's identical key is fresh. Migration 11 re-keys every existing attempt
+  and clears the raw values from receipts already erased; run
+  `schedulingctl plan` and `schedulingctl apply` with this release before
+  starting the runtime.
 - The Rust client resends a keyed command (hold create, appointment create,
   reschedule, cancel) whose outcome is unknown, identically and under the same
   idempotency key: after a timeout or broken exchange once the request was

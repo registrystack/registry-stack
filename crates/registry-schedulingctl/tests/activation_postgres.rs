@@ -13,7 +13,7 @@
 
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::config::RuntimeConfig;
-use registry_scheduling::store::PostgresStore;
+use registry_scheduling::store::{attempt_key_reference, PostgresStore};
 use registry_schedulingctl::activation;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -383,7 +383,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert_eq!(report["schemaVersion"], 0);
     assert_eq!(
         report["pendingSchemaVersions"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
     );
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
@@ -478,7 +478,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .starts_with("single-role mode"));
     assert_eq!(
         initial["schemaVersionsApplied"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
     );
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
@@ -575,7 +575,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 10);
+    assert_eq!(report["schemaVersion"], 11);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
     deployment.drop().await;
@@ -625,6 +625,132 @@ async fn external_reference_migration_preserves_existing_claims_with_an_empty_se
     assert_eq!(row.get::<_, String>(0), "registry-update-30");
     assert_eq!(row.get::<_, String>(1), "legacy-actor");
     assert_eq!(row.get::<_, Value>(2), serde_json::json!([]));
+
+    deployment.drop().await;
+}
+
+/// Migration 11 re-keys every stored attempt under the digest the runtime
+/// computes, so a key spent before the upgrade stays spent after it, and
+/// clears the raw caller and key from a receipt the sweep had already erased.
+#[tokio::test]
+async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_callers() {
+    let deployment = Deployment::single("activation_attempt_key_reference").await;
+    let first = deployment.package("first", POLICY);
+    let second = deployment.package("second", &successor_policy());
+    let first_config = deployment.config("first.yaml", &first, ConfigOptions::default());
+    let second_config = deployment.config("second.yaml", &second, ConfigOptions::default());
+    apply(&first_config).expect("the initial package activates");
+
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {schema}.scheduling_attempts
+                 DROP CONSTRAINT scheduling_attempts_raw_caller_check,
+                 DROP COLUMN key_reference,
+                 ALTER COLUMN actor_issuer SET NOT NULL,
+                 ALTER COLUMN actor_subject SET NOT NULL,
+                 ALTER COLUMN idempotency_key SET NOT NULL,
+                 ADD UNIQUE (actor_issuer, actor_subject, scope, idempotency_key);
+             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=11;
+             INSERT INTO {schema}.scheduling_attempts
+                 (attempt_id, actor_issuer, actor_subject, scope, idempotency_key,
+                  request_hash, state, status_code, receipt, expires_at, erased_at)
+             VALUES
+                 ('00000000-0000-4000-8000-000000001101', 'https://issuer.test',
+                  'subject-é', 'appointment:create', 'legacy-live', 'sha256:live',
+                  'completed', 201, '{{}}'::jsonb, now() + interval '1 day', NULL),
+                 ('00000000-0000-4000-8000-000000001102', 'https://issuer.test',
+                  'subject-é', 'hold:create', 'legacy-erased', 'sha256:erased',
+                  'refused', 409, NULL, now() - interval '1 day', now());",
+            schema = deployment.schema
+        ))
+        .await
+        .expect("simulate stored attempts immediately before migration 11");
+
+    let report = apply(&second_config).expect("the successor applies migration 11");
+    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([11]));
+    let rows = deployment
+        .admin
+        .query(
+            &format!(
+                "SELECT attempt_id::text, key_reference, actor_issuer, actor_subject,
+                        idempotency_key, scope, request_hash
+                   FROM {}.scheduling_attempts ORDER BY attempt_id",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the stored attempts remain");
+    assert_eq!(rows.len(), 2);
+
+    let live = &rows[0];
+    assert_eq!(
+        live.get::<_, String>(1),
+        attempt_key_reference(
+            "https://issuer.test",
+            "subject-é",
+            "appointment:create",
+            "legacy-live"
+        ),
+        "the migration's digest is the runtime's"
+    );
+    assert_eq!(
+        live.get::<_, Option<String>>(2).as_deref(),
+        Some("https://issuer.test")
+    );
+    assert_eq!(
+        live.get::<_, Option<String>>(3).as_deref(),
+        Some("subject-é")
+    );
+    assert_eq!(
+        live.get::<_, Option<String>>(4).as_deref(),
+        Some("legacy-live")
+    );
+
+    let erased = &rows[1];
+    assert_eq!(
+        erased.get::<_, String>(1),
+        attempt_key_reference(
+            "https://issuer.test",
+            "subject-é",
+            "hold:create",
+            "legacy-erased"
+        ),
+        "an erased key stays spent under its digest"
+    );
+    assert_eq!(erased.get::<_, Option<String>>(2), None);
+    assert_eq!(erased.get::<_, Option<String>>(3), None);
+    assert_eq!(erased.get::<_, Option<String>>(4), None);
+    assert_eq!(erased.get::<_, String>(5), "hold:create");
+    assert_eq!(erased.get::<_, String>(6), "sha256:erased");
+
+    // The raw caller and key are cleared together, and only from an erased
+    // receipt.
+    for statement in [
+        "UPDATE {schema}.scheduling_attempts SET actor_issuer=NULL \
+         WHERE attempt_id='00000000-0000-4000-8000-000000001101'",
+        "UPDATE {schema}.scheduling_attempts \
+         SET actor_issuer=NULL, actor_subject=NULL, idempotency_key=NULL \
+         WHERE attempt_id='00000000-0000-4000-8000-000000001101'",
+        "UPDATE {schema}.scheduling_attempts SET idempotency_key='legacy-erased' \
+         WHERE attempt_id='00000000-0000-4000-8000-000000001102'",
+    ] {
+        let error = deployment
+            .admin
+            .batch_execute(&statement.replace("{schema}", &deployment.schema))
+            .await
+            .expect_err("a partial or premature clearing is refused");
+        let constraint = error
+            .as_db_error()
+            .and_then(|error| error.constraint())
+            .map(str::to_owned);
+        assert_eq!(
+            constraint.as_deref(),
+            Some("scheduling_attempts_raw_caller_check"),
+            "{statement}"
+        );
+    }
 
     deployment.drop().await;
 }

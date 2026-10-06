@@ -34,8 +34,8 @@ use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::runtime::{dispatch_due_intents, reminder_transport};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
-    ActivationRequest, ActivePackage, CommitError, CommitOutcome, Commitment, PostgresStore,
-    RoleMode, StoreError, SupplyContext,
+    attempt_key_reference, ActivationRequest, ActivePackage, CommitError, CommitOutcome,
+    Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRefusal,
@@ -3340,6 +3340,152 @@ async fn an_idempotency_key_replays_refuses_a_reuse_and_expires_into_a_refusal()
     assert_eq!(moment(&fetched, "start"), first);
 }
 
+/// The raw issuer, subject, and key an attempt row carries live only as long
+/// as its receipt. The sweep that drops a receipt clears them too, and the
+/// key stays spent under its digest: the same caller's retry is refused as
+/// expired, a changed retry as reused, and another caller's identical key is
+/// a fresh request, because the digest binds the key to the caller.
+#[tokio::test]
+async fn a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent() {
+    let fx = fixture().await;
+    let (spent_slot, changed_slot) = first_overlapping_pair(&fx, OFFERING, 90, 260).await;
+    let spent_body = json!({"hold": null, "admission": admission(&fx, OFFERING, spent_slot)});
+    let (status, spent) = fx
+        .post("/v1/appointments", &fx.agent, "spent-1", spent_body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{spent}");
+    let kept_slot = first_slot(&fx, OFFERING, 300, 460).await;
+    let kept_body = json!({"hold": null, "admission": admission(&fx, OFFERING, kept_slot)});
+    let (status, kept) = fx
+        .post("/v1/appointments", &fx.agent, "kept-1", kept_body.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{kept}");
+
+    // Hold one receipt past the sweep's horizon so it stays in force.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_attempts SET expires_at = $1 WHERE idempotency_key = 'kept-1'",
+            &[&(pinned_now() + TimeDelta::days(30))],
+        )
+        .await
+        .expect("keep one receipt in force past the sweep");
+    let erased = fx
+        .store
+        .erase_expired_attempts(pinned_now() + TimeDelta::days(8))
+        .await
+        .expect("the retention sweep runs");
+    assert_eq!(
+        erased, 1,
+        "the sweep reaches only the receipt past its period"
+    );
+
+    let spent_reference =
+        attempt_key_reference(ISSUER, "principal-agent", "appointment:create", "spent-1");
+    let row = fx
+        .admin
+        .query_one(
+            "SELECT actor_issuer, actor_subject, idempotency_key, receipt IS NULL, \
+             erased_at IS NOT NULL, scope FROM scheduling_attempts WHERE key_reference = $1",
+            &[&spent_reference],
+        )
+        .await
+        .expect("the spent key keeps its row under its digest");
+    assert_eq!(
+        row.get::<_, Option<String>>(0),
+        None,
+        "the issuer is cleared"
+    );
+    assert_eq!(
+        row.get::<_, Option<String>>(1),
+        None,
+        "the subject is cleared"
+    );
+    assert_eq!(row.get::<_, Option<String>>(2), None, "the key is cleared");
+    assert!(row.get::<_, bool>(3), "the receipt is dropped");
+    assert!(row.get::<_, bool>(4), "the row is stamped erased");
+    assert_eq!(row.get::<_, String>(5), "appointment:create");
+
+    let kept_reference =
+        attempt_key_reference(ISSUER, "principal-agent", "appointment:create", "kept-1");
+    let row = fx
+        .admin
+        .query_one(
+            "SELECT actor_issuer, actor_subject, idempotency_key, receipt IS NOT NULL, \
+             erased_at IS NULL FROM scheduling_attempts WHERE key_reference = $1",
+            &[&kept_reference],
+        )
+        .await
+        .expect("the receipt in force keeps its row");
+    assert_eq!(row.get::<_, Option<String>>(0).as_deref(), Some(ISSUER));
+    assert_eq!(
+        row.get::<_, Option<String>>(1).as_deref(),
+        Some("principal-agent")
+    );
+    assert_eq!(row.get::<_, Option<String>>(2).as_deref(), Some("kept-1"));
+    assert!(row.get::<_, bool>(3), "the receipt in force is kept");
+    assert!(row.get::<_, bool>(4), "the receipt in force is not erased");
+    let (status, replayed) = fx
+        .post("/v1/appointments", &fx.agent, "kept-1", kept_body)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+    assert_eq!(replayed["appointmentId"], kept["appointmentId"]);
+
+    // The same caller's exact retry finds the spent key and is refused as
+    // expired; a changed retry is refused as reused.
+    let (status, problem) = fx
+        .post("/v1/appointments", &fx.agent, "spent-1", spent_body.clone())
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    assert_eq!(problem["code"], "idempotency.expired");
+    let changed_body = json!({"hold": null, "admission": admission(&fx, OFFERING, changed_slot)});
+    let (status, problem) = fx
+        .post("/v1/appointments", &fx.agent, "spent-1", changed_body)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "idempotency.key-reused");
+
+    // Another caller's identical key is its own, and commits fresh.
+    let other_slot = first_slot(&fx, OFFERING, 500, 660).await;
+    let other = agent_token_for("principal-other");
+    let (status, fresh) = fx
+        .post(
+            "/v1/appointments",
+            &other,
+            "spent-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, other_slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{fresh}");
+    assert_ne!(fresh["appointmentId"], spent["appointmentId"]);
+
+    // The digest row stays: a later sweep clears only the receipts still in
+    // force and deletes nothing, so the key is spent indefinitely.
+    let later = pinned_now() + TimeDelta::days(400);
+    assert_eq!(
+        fx.store
+            .erase_expired_attempts(later)
+            .await
+            .expect("a later sweep runs"),
+        2,
+        "the later sweep reaches the two receipts still in force"
+    );
+    let spent_rows: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_attempts WHERE key_reference = $1",
+            &[&spent_reference],
+        )
+        .await
+        .expect("count the spent key's rows")
+        .get(0);
+    assert_eq!(spent_rows, 1, "the spent key's digest row is never deleted");
+    let (status, problem) = fx
+        .post("/v1/appointments", &fx.agent, "spent-1", spent_body)
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    assert_eq!(problem["code"], "idempotency.expired");
+}
+
 /// Two writers reaching the same idempotency key at once: one commits, and
 /// the loser is told the key is already spoken for instead of being told the
 /// service is unavailable. The loser's whole transaction rolls back, so the
@@ -3361,15 +3507,18 @@ async fn a_concurrent_writer_of_one_idempotency_key_is_refused_not_failed() {
     // Another writer under the caller's own identity claims "race-2" and has
     // not committed yet, so the request below reads no stored attempt and
     // only meets the key at the moment it writes its own.
+    let reference =
+        attempt_key_reference(ISSUER, "principal-agent", "appointment:create", "race-2");
     fx.admin
-        .batch_execute(
+        .batch_execute(&format!(
             "BEGIN; \
-             INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
-             idempotency_key, request_hash, state, status_code, receipt, expires_at) \
-             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, 'race-2', \
-             'a-different-request', state, status_code, receipt, expires_at \
+             INSERT INTO scheduling_attempts(attempt_id, key_reference, actor_issuer, \
+             actor_subject, scope, idempotency_key, request_hash, state, status_code, receipt, \
+             expires_at) \
+             SELECT gen_random_uuid(), '{reference}', actor_issuer, actor_subject, scope, \
+             'race-2', 'a-different-request', state, status_code, receipt, expires_at \
              FROM scheduling_attempts WHERE idempotency_key = 'race-1'",
-        )
+        ))
         .await
         .expect("hold the idempotency key from another writer");
 
@@ -3417,13 +3566,15 @@ async fn race_an_exhausted_identical_request(
         .await;
     assert_eq!(status, StatusCode::CREATED, "{appointment}");
 
+    let reference = attempt_key_reference(ISSUER, "principal-agent", "appointment:create", key);
     fx.admin
         .batch_execute(&format!(
             "BEGIN; \
-             INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
-             idempotency_key, request_hash, state, status_code, receipt, expires_at) \
-             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, '{key}', \
-             request_hash, state, status_code, receipt, expires_at \
+             INSERT INTO scheduling_attempts(attempt_id, key_reference, actor_issuer, \
+             actor_subject, scope, idempotency_key, request_hash, state, status_code, receipt, \
+             expires_at) \
+             SELECT gen_random_uuid(), '{reference}', actor_issuer, actor_subject, scope, \
+             '{key}', request_hash, state, status_code, receipt, expires_at \
              FROM scheduling_attempts WHERE idempotency_key = '{seed_key}'"
         ))
         .await
@@ -3509,15 +3660,22 @@ async fn concurrent_identical_admissible_requests_replay_one_winning_success() {
     // Stage the same completed attempt under the contested key without
     // committing it. The two-unit window still has one unit free, so the
     // contender evaluates successfully and reaches this row conflict.
+    let reference = attempt_key_reference(
+        ISSUER,
+        "principal-agent",
+        "appointment:create",
+        "same-admissible-request",
+    );
     fx.admin
-        .batch_execute(
+        .batch_execute(&format!(
             "BEGIN; \
-             INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
-             idempotency_key, request_hash, state, status_code, receipt, expires_at) \
-             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, \
+             INSERT INTO scheduling_attempts(attempt_id, key_reference, actor_issuer, \
+             actor_subject, scope, idempotency_key, request_hash, state, status_code, receipt, \
+             expires_at) \
+             SELECT gen_random_uuid(), '{reference}', actor_issuer, actor_subject, scope, \
              'same-admissible-request', request_hash, state, status_code, receipt, expires_at \
              FROM scheduling_attempts WHERE idempotency_key = 'same-admissible-seed'",
-        )
+        ))
         .await
         .expect("hold the winning success from another writer");
 
@@ -5346,8 +5504,9 @@ async fn the_retention_sweep_erases_its_two_tables_and_leaves_the_rest_standing(
         .get(0);
     assert_eq!(cursors, 0, "an erased cursor leaves no row behind");
 
-    // A receipt is tombstoned, not deleted: the row keeps the key and the
-    // request it answered and drops only the answer, so the key stays spent.
+    // A receipt is tombstoned, not deleted: the row keeps the key's digest
+    // and the request it answered and drops the answer with the raw caller
+    // and key, so the key stays spent.
     let attempt = fx
         .admin
         .query_one(
