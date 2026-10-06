@@ -4961,7 +4961,11 @@ async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keep
 /// Upgrading from the table shape that keyed rows by an audit-key HMAC keeps
 /// every spent row as a tombstone no caller can find, since none carries the
 /// caller its key belongs to, and leaves the caller-scoped shape in place for
-/// the next write.
+/// the next write. One migration converts every shape the earlier engine
+/// could leave: a held response of each result kind, a held response request
+/// retention already erased (`erased_at` set, no body), and a key whose
+/// record history erasure turned it into the `erased` kind while keeping its
+/// erased body.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows() {
     let database = TestDatabase::create(1).await;
@@ -4986,14 +4990,38 @@ async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones
                  ADD CONSTRAINT registry_idempotency_erasure_shape
                      CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
              INSERT INTO registry_internal.registry_idempotency
-                 (key_reference, binding_reference, result_kind, result_count,
-                  response_status, response_body, response_headers)
+                 (key_reference, binding_reference, result_kind, record_reference,
+                  record_revision, result_count, proposal_version, response_status,
+                  response_body, response_headers, created_at, erased_at)
              VALUES
-                 ('hmac-sha256:held', 'hmac-sha256:held-binding', 'immediate_action', 0,
-                  200, '{}', '\\x0000');",
+                 ('hmac-sha256:application-erased', 'hmac-sha256:application-erased-binding',
+                  'application', 'sha256:request', 2, 1, 1,
+                  200, NULL, '\\x0000',
+                  transaction_timestamp() - interval '3 days',
+                  transaction_timestamp() - interval '1 day'),
+                 ('hmac-sha256:batch', 'hmac-sha256:batch-binding', 'batch', NULL,
+                  NULL, 2, NULL,
+                  200, '{\"results\":[]}', '\\x0000',
+                  transaction_timestamp() - interval '2 days', NULL),
+                 ('hmac-sha256:history-erased', 'hmac-sha256:history-erased-binding',
+                  'erased', NULL, NULL, NULL, NULL,
+                  200, '{\"erased\":true}', '\\x0000',
+                  transaction_timestamp() - interval '30 days', NULL),
+                 ('hmac-sha256:held', 'hmac-sha256:held-binding', 'immediate_action', NULL,
+                  NULL, 0, NULL,
+                  200, '{}', '\\x0000',
+                  transaction_timestamp(), NULL),
+                 ('hmac-sha256:record', 'hmac-sha256:record-binding', 'record', 'sha256:record',
+                  3, NULL, NULL,
+                  201, '{\"id\":\"record\"}', '\\x000101',
+                  transaction_timestamp() - interval '400 days', NULL),
+                 ('hmac-sha256:release', 'hmac-sha256:release-binding', 'release',
+                  'sha256:release', 1, NULL, NULL,
+                  201, '{\"version\":1}', '\\x0000',
+                  transaction_timestamp() - interval '1 hour', NULL);",
         )
         .await
-        .expect("the audit-keyed table shape is restored with a held row");
+        .expect("the audit-keyed table shape is restored with every spent-row shape");
 
     for attempt in ["upgrade", "reinstall"] {
         install_mutation_schema(&migration, &database.runtime_role)
@@ -5003,28 +5031,176 @@ async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones
     let remaining = database
         .admin
         .query(
-            "SELECT key_reference, caller_issuer, caller_subject, key_scope,
-                    response_body IS NULL, receipt_dropped_at IS NOT NULL
-               FROM registry_internal.registry_idempotency",
+            "SELECT key_reference, binding_reference, result_kind, record_reference,
+                    record_revision, result_count, proposal_version, response_status,
+                    caller_issuer, caller_subject, key_scope, idempotency_key,
+                    response_body IS NULL, response_headers,
+                    receipt_dropped_at IS NOT NULL,
+                    receipt_expires_at = created_at + interval '1 microsecond',
+                    erased_at IS NOT NULL
+               FROM registry_internal.registry_idempotency
+              ORDER BY key_reference COLLATE \"C\"",
             &[],
         )
         .await
         .expect("administrator can read spent keys");
+    type Kept = (
+        &'static str,
+        &'static str,
+        Option<&'static str>,
+        Option<i64>,
+        Option<i16>,
+        Option<i64>,
+        i16,
+        bool,
+    );
+    // Key suffix, result kind, record reference, record revision, result
+    // count, proposal version, response status, and whether request
+    // retention had erased the held response: everything the earlier row
+    // carried that the tombstone keeps.
+    let expected: [Kept; 6] = [
+        (
+            "application-erased",
+            "application",
+            Some("sha256:request"),
+            Some(2),
+            Some(1),
+            Some(1),
+            200,
+            true,
+        ),
+        ("batch", "batch", None, None, Some(2), None, 200, false),
+        (
+            "held",
+            "immediate_action",
+            None,
+            None,
+            Some(0),
+            None,
+            200,
+            false,
+        ),
+        (
+            "history-erased",
+            "erased",
+            None,
+            None,
+            None,
+            None,
+            200,
+            false,
+        ),
+        (
+            "record",
+            "record",
+            Some("sha256:record"),
+            Some(3),
+            None,
+            None,
+            201,
+            false,
+        ),
+        (
+            "release",
+            "release",
+            Some("sha256:release"),
+            Some(1),
+            None,
+            None,
+            201,
+            false,
+        ),
+    ];
     assert_eq!(
         remaining.len(),
-        1,
-        "the upgrade keeps audit-keyed spent rows"
+        expected.len(),
+        "the upgrade keeps every audit-keyed spent row"
     );
-    let tombstone = &remaining[0];
-    assert_eq!(tombstone.get::<_, String>(0), "hmac-sha256:held");
+    for (row, (suffix, kind, record, revision, count, proposal, status, erased)) in
+        remaining.iter().zip(expected)
+    {
+        let key = format!("hmac-sha256:{suffix}");
+        assert_eq!(row.get::<_, String>(0), key);
+        assert_eq!(row.get::<_, String>(1), format!("{key}-binding"), "{key}");
+        assert_eq!(row.get::<_, String>(2), kind, "{key}");
+        assert_eq!(row.get::<_, Option<String>>(3).as_deref(), record, "{key}");
+        assert_eq!(row.get::<_, Option<i64>>(4), revision, "{key}");
+        assert_eq!(row.get::<_, Option<i16>>(5), count, "{key}");
+        assert_eq!(row.get::<_, Option<i64>>(6), proposal, "{key}");
+        assert_eq!(row.get::<_, i16>(7), status, "{key}");
+        assert_eq!(
+            row.get::<_, String>(8),
+            "urn:registry-breg:pre-caller-scope",
+            "{key}"
+        );
+        assert_eq!(
+            row.get::<_, String>(9),
+            key,
+            "the subject is the old digest"
+        );
+        assert_eq!(row.get::<_, String>(10), "mutation", "{key}");
+        assert_eq!(row.get::<_, String>(11), "pre-caller-scope", "{key}");
+        assert!(row.get::<_, bool>(12), "{key}: no held response survives");
+        assert_eq!(
+            row.get::<_, Vec<u8>>(13),
+            vec![0, 0],
+            "{key}: no held header survives"
+        );
+        assert!(row.get::<_, bool>(14), "{key}: the receipt is dropped");
+        assert!(
+            row.get::<_, bool>(15),
+            "{key}: the receipt expired at its commit"
+        );
+        assert_eq!(
+            row.get::<_, bool>(16),
+            erased,
+            "{key}: the erasure time is kept"
+        );
+    }
+    let constraints = database
+        .admin
+        .query(
+            "SELECT conname::text, convalidated
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_idempotency'::regclass
+                AND conname IN ('registry_idempotency_caller_shape',
+                                'registry_idempotency_erasure_shape',
+                                'registry_idempotency_result_shape',
+                                'registry_idempotency_result_kind_values')
+              ORDER BY conname",
+            &[],
+        )
+        .await
+        .expect("administrator can read the spent-key constraints");
     assert_eq!(
-        tombstone.get::<_, String>(1),
-        "urn:registry-breg:pre-caller-scope"
+        constraints
+            .iter()
+            .map(|row| (row.get::<_, String>(0), row.get::<_, bool>(1)))
+            .collect::<Vec<_>>(),
+        [
+            "registry_idempotency_caller_shape",
+            "registry_idempotency_erasure_shape",
+            "registry_idempotency_result_kind_values",
+            "registry_idempotency_result_shape",
+        ]
+        .map(|name| (name.to_owned(), true)),
+        "every converted row satisfies the caller-scoped constraints"
     );
-    assert_eq!(tombstone.get::<_, String>(2), "hmac-sha256:held");
-    assert_eq!(tombstone.get::<_, String>(3), "mutation");
-    assert!(tombstone.get::<_, bool>(4), "no held response survives");
-    assert!(tombstone.get::<_, bool>(5), "the receipt is dropped");
+    let caller_index_is_unique = database
+        .admin
+        .query_one(
+            "SELECT indisunique AND indisvalid
+               FROM pg_catalog.pg_index
+              WHERE indexrelid = 'registry_internal.registry_idempotency_caller_key'::regclass",
+            &[],
+        )
+        .await
+        .expect("administrator can read the caller index")
+        .get::<_, bool>(0);
+    assert!(
+        caller_index_is_unique,
+        "the converted rows hold the unique caller index"
+    );
     let refused = migration
         .batch_execute(
             "INSERT INTO registry_internal.registry_idempotency
