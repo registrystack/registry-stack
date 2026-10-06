@@ -32,11 +32,20 @@ the run's own bounds admit is never refused for the envelope that carries it.
 Every operation rechecks current profile authority against the compiled batch
 route. A run id is not a capability: visibility is creator-scoped, another
 caller's run and an unknown run answer the same concealed 404, and a caller
-whose profile no longer satisfies the binding makes no progress. The claim
+whose profile no longer satisfies the binding makes no progress. A run stores
+its creator as the verified token issuer the runtime scopes every caller under
+and the verified principal, and listing, reading, chunk submission, receipt
+recovery, and cancellation decide ownership by comparing those raw values. The
+keyed audit pseudonym of the creator rides only on the run's audit records,
+so rotating `audit.hashKeyRef` changes the pseudonym without hiding a run from
+its creator or showing it to anyone else. The claim
 context a run is bound to covers the caller's task grant when the claims carry
 one, the same member the ordinary idempotency binding carries, so two sibling
 grants are never one authority; every operation re-derives that reference from
-the caller's claims. Run creation also refuses an announced operation the
+the caller's claims. The reference is an unkeyed SHA-256 digest over the
+database id and the canonical verified claim context, the same members the
+spent-key binding digests, so it too survives an audit key rotation. Run
+creation also refuses an announced operation the
 selected profile cannot execute to the end of every chunk, decided exactly as
 an import binding decides it: the profile's operations, the item route for the
 profile, and patch only on a mutable entity. The refused run never exists.
@@ -192,6 +201,12 @@ refusals.
 
 ## Retention
 
+A run has no retention horizon of its own: its row, including the creator's
+issuer and subject, stays for the life of the database, so a run remains
+inspectable and its committed prefix accountable. The raw creator values
+appear in no run or audit response; the audit records carry the keyed
+pseudonym instead.
+
 A chunk receipt holds exactly what the ordinary batch route answers the same
 authorized caller with, and it is erased when the record history it describes
 is erased, through the revision the erasure names: a receipt describing only
@@ -244,7 +259,7 @@ receipt the committed prefix retains.
 The delivery row is `BREG-V1-INGESTION-RUNS` in
 `contracts/definition-of-done.yaml`, the acceptance scenarios are journey
 `BREG-J21` in `contracts/acceptance-scenario-matrix.yaml`, and the security
-rows are `BREG-SEC-75` through `BREG-SEC-82` in
+rows are `BREG-SEC-75` through `BREG-SEC-82` and `BREG-SEC-167` in
 `contracts/security-invariant-matrix.yaml`. The published HTTP reference is
 `docs/site/src/content/docs/reference/breg-api.mdx`; the operator procedure is
 `docs/site/src/content/docs/operate/breg-data.mdx`.

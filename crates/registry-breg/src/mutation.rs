@@ -900,6 +900,12 @@ impl MutationCoordinator {
         self
     }
 
+    /// The verified token issuer every caller is scoped under. Ingestion runs
+    /// store it beside the verified principal as their creator.
+    pub(crate) fn caller_issuer(&self) -> &str {
+        self.idempotency.caller_issuer()
+    }
+
     #[must_use]
     pub(crate) fn with_review_authorities(
         mut self,

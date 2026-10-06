@@ -329,12 +329,16 @@ operation, input digest, chunking algorithm, and the expected item and chunk cou
 worker advances a run: only a chunk submission moves the checkpoint, and every operation rechecks
 the caller's authority against the compiled batch route. A run identifier locates a run and
 grants nothing. Runs are visible to the caller that created them, and another caller's run and
-an unknown run are the same concealed 404.
+an unknown run are the same concealed 404. A run stores its creator as the configured token
+issuer and the verified principal, and every list, read, chunk, receipt, and cancel decision
+compares those, so rotating `audit.hashKeyRef` hides no run from its creator.
 
 A run response carries operational metadata and bounded failure classifications only: never
 source rows, committed record values, or chunk bodies.
 
-{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus and IngestionRefusal;
+{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus, IngestionRefusal,
+    and IngestionRunRecord created_issuer and created_subject;
+    crates/registry-breg/src/postgres/mutation.rs, created_by();
     crates/registry-breg/src/data.rs, ingestion_route() and ingestion_chunk_idempotency_key();
     crates/registry-breg/src/api/mod.rs, router(). */}
 

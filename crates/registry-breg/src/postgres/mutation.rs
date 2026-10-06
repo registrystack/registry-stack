@@ -5,7 +5,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -1007,11 +1006,12 @@ impl PostgresRecordMutationService {
         }
     }
 
-    /// The creator-scoped principal reference of one ingestion caller. The
-    /// scope is the database, stable across package revisions, so a run stays
-    /// visible to its creator across a package change instead of silently
-    /// disappearing, and the same principal in another database yields an
-    /// unrelated reference.
+    /// The audit pseudonym of one ingestion caller, carried by the run's audit
+    /// records. It is keyed under `audit.hashKeyRef` and scoped to the
+    /// database, so the same principal in another database yields an
+    /// unrelated reference. It decides nothing: a run belongs to the verified
+    /// issuer and subject stored with it, so rotating the audit key changes
+    /// this pseudonym without hiding any run from its creator.
     fn ingestion_principal_reference(
         &self,
         principal: &str,
@@ -1027,16 +1027,24 @@ impl PostgresRecordMutationService {
             .map_err(|_| IngestionServiceError::Unavailable)
     }
 
-    /// The keyed reference of the claim context one run is bound to. It
-    /// covers the same members an ordinary mutation's idempotency binding
-    /// covers, with the database rather than the package revision as its
-    /// scope, so a committed chunk's replay still answers across a package
-    /// change while a drifted context cannot replay or continue the run.
+    /// The reference of the claim context one run is bound to. It covers the
+    /// same members an ordinary mutation's idempotency binding covers, with
+    /// the database rather than the package revision as its scope, so a
+    /// committed chunk's replay still answers across a package change while a
+    /// drifted context cannot replay or continue the run. It is unkeyed, so
+    /// rotating the audit key leaves every run's binding unchanged.
     fn ingestion_context_reference(
         &self,
         claims: &ClaimContext,
     ) -> Result<String, IngestionServiceError> {
-        ingestion_context_reference(self.audit.profile(), &self.expected.database_id, claims)
+        ingestion_context_reference(&self.expected.database_id, claims)
+    }
+
+    /// Whether the verified caller is the one that created `run`. The issuer
+    /// is the one the runtime scopes every caller under; the subject is the
+    /// verified principal.
+    fn created_by(&self, run: &ingestion_store::IngestionRunRecord, principal: &str) -> bool {
+        run.created_issuer == self.coordinator.caller_issuer() && run.created_subject == principal
     }
 
     async fn client(&self) -> Result<deadpool_postgres::Client, IngestionServiceError> {
@@ -1061,12 +1069,11 @@ impl PostgresRecordMutationService {
         let Some(principal) = claims.principal() else {
             return Err(IngestionServiceError::RequestInvalid);
         };
-        let principal_reference = self.ingestion_principal_reference(principal)?;
         let run = ingestion_store::load_run(client, run_id)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?
             .ok_or(IngestionServiceError::NotFound)?;
-        if run.entity_id != entity_id || run.created_principal_reference != principal_reference {
+        if run.entity_id != entity_id || !self.created_by(&run, principal) {
             return Err(IngestionServiceError::NotFound);
         }
         Ok(run)
@@ -1259,6 +1266,8 @@ impl PostgresRecordMutationService {
             return Err(IngestionServiceError::RequestInvalid);
         }
         let run = ingestion_store::NewIngestionRun {
+            created_issuer: self.coordinator.caller_issuer().to_owned(),
+            created_subject: principal.to_owned(),
             created_principal_reference: self.ingestion_principal_reference(principal)?,
             package_revision: input.package_revision,
             schema_fingerprint: input.schema_fingerprint,
@@ -1392,7 +1401,6 @@ impl PostgresRecordMutationService {
         let Some(principal) = claims.principal() else {
             return Err(IngestionServiceError::RequestInvalid);
         };
-        let principal_reference = self.ingestion_principal_reference(principal)?;
         let context_reference = self.ingestion_context_reference(&claims)?;
         let limit = if query.limit == 0 {
             ingestion_store::DEFAULT_RUN_PAGE_SIZE
@@ -1416,7 +1424,7 @@ impl PostgresRecordMutationService {
                     .await
                     .map_err(|_| IngestionServiceError::Unavailable)?
                     .filter(|run| {
-                        run.created_principal_reference == principal_reference
+                        self.created_by(run, principal)
                             && run.bound_context_reference == context_reference
                             && run.entity_id == query.entity_id
                     })
@@ -1427,7 +1435,8 @@ impl PostgresRecordMutationService {
         let page = ingestion_store::list_runs(
             &**client,
             &ingestion_store::IngestionRunListFilter {
-                principal_reference: &principal_reference,
+                created_issuer: self.coordinator.caller_issuer(),
+                created_subject: principal,
                 bound_context_reference: &context_reference,
                 entity_id: Some(&query.entity_id),
                 profile_id: None,
@@ -1653,10 +1662,7 @@ impl PostgresRecordMutationService {
         let run = ingestion_store::load_run(&**client, input.run_id)
             .await
             .map_err(|_| IngestionServiceError::Unavailable)?
-            .filter(|run| {
-                run.entity_id == input.entity_id
-                    && run.created_principal_reference == principal_reference
-            })
+            .filter(|run| run.entity_id == input.entity_id && self.created_by(run, principal))
             .ok_or(IngestionServiceError::NotFound)?;
         if run.profile_id != claims.access_profile() {
             return Err(IngestionServiceError::ProfileMismatch);
@@ -2467,24 +2473,21 @@ enum MutationFaultControl {
 /// chunk's replay still answers across a package change while a drifted
 /// context cannot replay or continue the run.
 fn ingestion_context_reference(
-    audit_profile: &AuditProfile,
     database_id: &str,
     claims: &ClaimContext,
 ) -> Result<String, IngestionServiceError> {
-    let mut context = crate::idempotency::canonical_claim_context(audit_profile, claims, "")
+    let mut context = crate::idempotency::binding_claim_context(claims)
         .map_err(|_| IngestionServiceError::Unavailable)?;
     if let Some(grant) = claims.task_grant() {
         context["taskGrant"] =
             serde_json::to_value(grant).map_err(|_| IngestionServiceError::Unavailable)?;
     }
-    let canonical = registry_platform_canonical_json::canonicalize_json(&context)
+    let canonical = crate::idempotency::canonical_text(&context)
         .map_err(|_| IngestionServiceError::Unavailable)?;
-    let canonical =
-        std::str::from_utf8(&canonical).map_err(|_| IngestionServiceError::Unavailable)?;
-    audit_profile
-        .key_hasher()
-        .audit_reference_hash("breg-ingestion-context-v1", database_id, canonical)
-        .map_err(|_| IngestionServiceError::Unavailable)
+    Ok(crate::idempotency::sha256_reference(
+        "breg-ingestion-context-v2",
+        &[database_id, &canonical],
+    ))
 }
 
 fn strict_claim_context(
@@ -2682,16 +2685,13 @@ mod ingestion_context_tests {
     /// inputs: two scope-identical sibling task grants differ only in grant
     /// id, and the reference must separate them exactly the way the ordinary
     /// mutation idempotency binding's taskGrant member does, while a
-    /// grant-free context keeps the reference shape it has always had.
+    /// grant-free context hashes exactly the members that binding covers.
     #[test]
     fn a_sibling_task_grant_changes_the_run_context_reference() {
-        let profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
-            .expect("the test owns a keyed audit profile");
         let claims = fixture_claims();
-        let plain = ingestion_context_reference(&profile, "run-database", &claims)
+        let plain = ingestion_context_reference("run-database", &claims)
             .expect("the grant-free reference derives");
         let first = ingestion_context_reference(
-            &profile,
             "run-database",
             &claims
                 .clone()
@@ -2700,7 +2700,6 @@ mod ingestion_context_tests {
         )
         .expect("the first granted reference derives");
         let second = ingestion_context_reference(
-            &profile,
             "run-database",
             &claims
                 .clone()
@@ -2718,21 +2717,25 @@ mod ingestion_context_tests {
             "a granted context must not answer the grant-free reference"
         );
 
-        // The grant-free shape is stable: a context without a task grant
-        // hashes exactly the member set the reference has always covered, so
-        // references stored before grants could reach a run still answer.
-        let context = crate::idempotency::canonical_claim_context(&profile, &claims, "")
-            .expect("the grant-free canonical context derives");
-        let canonical = registry_platform_canonical_json::canonicalize_json(&context)
-            .expect("the canonical context encodes");
-        let legacy = profile
-            .key_hasher()
-            .audit_reference_hash(
-                "breg-ingestion-context-v1",
-                "run-database",
-                std::str::from_utf8(&canonical).expect("canonical JSON is UTF-8"),
+        // The grant-free shape is the spent-key binding's claim context under
+        // the run's own domain and the database scope. It takes no audit key,
+        // so rotating `audit.hashKeyRef` leaves every stored run reference
+        // answering, and another database yields an unrelated reference.
+        let context = crate::idempotency::binding_claim_context(&claims)
+            .expect("the grant-free claim context derives");
+        let canonical =
+            crate::idempotency::canonical_text(&context).expect("the claim context encodes");
+        assert_eq!(
+            plain,
+            crate::idempotency::sha256_reference(
+                "breg-ingestion-context-v2",
+                &["run-database", &canonical],
             )
-            .expect("the legacy reference derives");
-        assert_eq!(plain, legacy);
+        );
+        assert_ne!(
+            plain,
+            ingestion_context_reference("other-database", &claims)
+                .expect("the other database reference derives")
+        );
     }
 }

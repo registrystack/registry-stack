@@ -40,6 +40,18 @@
   revision an earlier release's immediate action wrote keeps its history
   provenance. A request committed before the upgrade and retried after it
   executes again.
+- Ingestion runs belong to the verified caller that created them, not to its
+  audit pseudonym (#1930). A run stores the configured OIDC issuer and the
+  verified principal, and listing, reading, chunk submission, receipt
+  recovery, and cancellation compare those; the run's bound claim context is
+  an unkeyed SHA-256 digest. Rotating `audit.hashKeyRef` no longer hides an
+  open run from its creator, and another principal still finds none of it.
+- BREAKING: the upgrade discards every stored ingestion run with its chunks
+  and receipts, since a run stored before it names no verified creator. The
+  records committed chunks wrote stay, and an import authority keeps the
+  volume they consumed. Finish or cancel open runs before upgrading. A
+  `bregctl data import` whose run was discarded refuses to resume; import
+  only the uncommitted lines under a fresh checkpoint path.
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up

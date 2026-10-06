@@ -24,7 +24,7 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
-use registry_breg::mutation::MutationFaultPoint;
+use registry_breg::mutation::{install_mutation_schema, MutationFaultPoint};
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
@@ -38,7 +38,7 @@ use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-const PRINCIPAL: &str = "ingestion-principal-must-not-enter-run-rows";
+const PRINCIPAL: &str = "ingestion-principal-must-not-enter-audit";
 const OTHER_PRINCIPAL: &str = "ingestion-other-principal";
 const RECORD_CANARY: &str = "ingestion-record-value-must-not-enter-run-rows";
 const PACKAGE_ID: &str = "ingestion-registry";
@@ -478,6 +478,247 @@ async fn run_access_is_creator_scoped_and_possession_grants_nothing() {
         )
         .await;
     assert_ne!(anonymous.status(), StatusCode::CREATED);
+}
+
+/// Rotating `audit.hashKeyRef` changes the pseudonym later audit entries
+/// carry and nothing about who owns a run: the creator still lists, reads,
+/// continues, completes, and cancels the runs opened under the old key, and
+/// another principal still finds none of them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_audit_key_rotation_keeps_every_run_with_its_verified_creator() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let other = operator_claims(OTHER_PRINCIPAL, "zone-a");
+    let completing_chunks = plan_chunks(&announce_items("rotated-complete", 2), 1);
+    let completing = harness.create_run(&claims, &completing_chunks).await;
+    let first = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{completing}/chunks"),
+            &claims,
+            chunk_body(&completing_chunks, 0),
+        )
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let cancelling_chunks = plan_chunks(&announce_items("rotated-cancel", 1), 1);
+    let cancelling = harness.create_run(&claims, &cancelling_chunks).await;
+
+    let rotated = harness
+        .restart_with_audit_profile(
+            AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+                .expect("the rotated audit profile builds"),
+        )
+        .await;
+
+    let listed = rotated
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    let listed_ids = listed["runs"]
+        .as_array()
+        .expect("runs")
+        .iter()
+        .map(|run| run["runId"].as_str().expect("run id").to_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        listed_ids,
+        BTreeSet::from([completing.clone(), cancelling.clone()]),
+        "the creator lists every run opened under the old audit key"
+    );
+    let read = rotated
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{completing}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(body_json(read).await["run"]["nextChunkIndex"], 1);
+    let receipt = rotated
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{completing}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(receipt.status(), StatusCode::OK);
+    let replayed = rotated
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{completing}/chunks"),
+            &claims,
+            chunk_body(&completing_chunks, 0),
+        )
+        .await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    assert_eq!(body_json(replayed).await["receipt"]["replayed"], true);
+
+    // Another principal finds nothing, under the rotated key as before it.
+    let foreign_list = rotated
+        .get_json("/v1/records/widgets/ingestion-runs", &other)
+        .await;
+    assert_eq!(foreign_list.status(), StatusCode::OK);
+    assert_eq!(body_json(foreign_list).await["runs"], json!([]));
+    for run_id in [&completing, &cancelling] {
+        let foreign_read = rotated
+            .get_json(
+                &format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+                &other,
+            )
+            .await;
+        assert_eq!(foreign_read.status(), StatusCode::NOT_FOUND);
+        let foreign_receipt = rotated
+            .get_json(
+                &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+                &other,
+            )
+            .await;
+        assert_eq!(foreign_receipt.status(), StatusCode::NOT_FOUND);
+        let foreign_cancel = rotated
+            .post_empty(
+                &format!("/v1/records/widgets/ingestion-runs/{run_id}/cancel"),
+                &other,
+            )
+            .await;
+        assert_eq!(foreign_cancel.status(), StatusCode::NOT_FOUND);
+    }
+    let foreign_chunk = rotated
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{completing}/chunks"),
+            &other,
+            chunk_body(&completing_chunks, 1),
+        )
+        .await;
+    assert_eq!(foreign_chunk.status(), StatusCode::NOT_FOUND);
+    assert_eq!(durable_widget_count(&harness).await, 1);
+
+    let completed = rotated
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{completing}/chunks"),
+            &claims,
+            chunk_body(&completing_chunks, 1),
+        )
+        .await;
+    assert_eq!(completed.status(), StatusCode::OK);
+    assert_eq!(body_json(completed).await["run"]["status"], "complete");
+    let cancelled = rotated
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{cancelling}/cancel"),
+            &claims,
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    assert_eq!(body_json(cancelled).await["run"]["status"], "cancelled");
+    assert_eq!(durable_widget_count(&harness).await, 2);
+}
+
+/// A run table from before runs stored their verified creator found runs by
+/// the keyed audit pseudonym alone. The upgrade discards those runs, with
+/// their chunks and receipt links, rather than inventing an owner; the
+/// records their committed chunks wrote stay, and the upgraded table opens,
+/// lists, and keeps runs by the verified creator.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_upgrade_discards_runs_stored_without_a_verified_creator() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let chunks = plan_chunks(&announce_items("pseudonymous-run", 2), 1);
+    let pseudonymous = harness.create_run(&claims, &chunks).await;
+    let first = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{pseudonymous}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let (migration, migration_task) = harness.database.connect_migration().await;
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_ingestion_runs
+                 DROP COLUMN created_issuer,
+                 DROP COLUMN created_subject",
+        )
+        .await
+        .expect("test restores the run table without a verified creator");
+    install_mutation_schema(&migration, &harness.database.runtime_role)
+        .await
+        .expect("the mutation schema upgrades the run table");
+    let creator_columns = migration
+        .query(
+            "SELECT attname::text, attnotnull
+               FROM pg_catalog.pg_attribute
+              WHERE attrelid = 'registry_internal.registry_ingestion_runs'::regclass
+                AND attname IN ('created_issuer', 'created_subject')
+                AND NOT attisdropped
+              ORDER BY attname",
+            &[],
+        )
+        .await
+        .expect("migration reads the run table columns")
+        .iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, bool>(1)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        creator_columns,
+        vec![
+            ("created_issuer".to_owned(), true),
+            ("created_subject".to_owned(), true),
+        ]
+    );
+    assert_eq!(stored_run_count(&harness).await, 0);
+    for table in [
+        "registry_ingestion_run_chunks",
+        "registry_ingestion_run_chunk_records",
+    ] {
+        let remaining: i64 = harness
+            .database
+            .admin
+            .query_one(
+                &format!("SELECT count(*) FROM registry_internal.{table}"),
+                &[],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("administrator counts {table}: {error}"))
+            .get(0);
+        assert_eq!(remaining, 0, "{table} rows go with their discarded run");
+    }
+    assert_eq!(durable_widget_count(&harness).await, 1);
+    let discarded = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{pseudonymous}"),
+            &claims,
+        )
+        .await;
+    assert_eq!(discarded.status(), StatusCode::NOT_FOUND);
+
+    let upgraded = harness
+        .create_run(&claims, &plan_chunks(&announce_items("upgraded-run", 1), 1))
+        .await;
+    install_mutation_schema(&migration, &harness.database.runtime_role)
+        .await
+        .expect("a repeated install keeps the upgraded run table");
+    migration_task.abort();
+    let creator = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT created_subject FROM registry_internal.registry_ingestion_runs
+              WHERE run_id = $1::text::uuid",
+            &[&upgraded],
+        )
+        .await
+        .expect("administrator reads the upgraded run creator");
+    assert_eq!(creator.get::<_, String>(0), PRINCIPAL);
+    let listed = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    let listed_ids = listed["runs"]
+        .as_array()
+        .expect("runs")
+        .iter()
+        .map(|run| run["runId"].as_str().expect("run id").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(listed_ids, vec![upgraded]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3860,8 +4101,9 @@ async fn run_rows_and_audit_never_carry_source_values() {
         .await;
     assert_eq!(committed.status(), StatusCode::OK);
 
-    // The run row, the run audit, and the shared audit journal carry digests,
-    // counts, and hashed references only. The stored chunk receipt is the
+    // The run row carries digests, counts, and its verified creator; the run
+    // audit and the shared audit journal carry digests, counts, and hashed
+    // references only, never the creator. The stored chunk receipt is the
     // replayable batch answer and holds the same profile-bound projection the
     // ordinary batch route returned, so it is out of scope for this sweep.
     for table in ["registry_ingestion_runs"] {
@@ -4021,6 +4263,28 @@ impl IngestionHarness {
             self.field_encryption.clone(),
         )
         .await
+    }
+
+    /// Rebuild the HTTP surface from the same database under another audit
+    /// hash key, as a restarted process after an `audit.hashKeyRef` rotation
+    /// would.
+    async fn restart_with_audit_profile(&self, audit_profile: AuditProfile) -> Surface {
+        let pool = self
+            .database
+            .runtime_config
+            .build_pool()
+            .expect("bounded runtime pool builds");
+        Surface {
+            app: build_router(
+                pool,
+                self.registry.clone(),
+                self.identity.clone(),
+                self.lock_key,
+                self.database.audit(audit_profile),
+                None,
+                self.field_encryption.clone(),
+            ),
+        }
     }
 
     /// Rebuild the HTTP surface without field-encryption key state, as a

@@ -598,7 +598,7 @@ impl SpentKeyCaller {
 
 /// A SHA-256 digest over a domain and length-prefixed parts, so no two
 /// distinct part sequences share a preimage.
-fn sha256_reference(domain: &str, parts: &[&str]) -> String {
+pub(crate) fn sha256_reference(domain: &str, parts: &[&str]) -> String {
     let mut hasher = Sha256::new();
     for part in std::iter::once(domain).chain(parts.iter().copied()) {
         hasher.update((part.len() as u64).to_be_bytes());
@@ -607,7 +607,7 @@ fn sha256_reference(domain: &str, parts: &[&str]) -> String {
     format!("sha256:{}", hex(&hasher.finalize()))
 }
 
-fn canonical_text(value: &Value) -> Result<String, IdempotencyError> {
+pub(crate) fn canonical_text(value: &Value) -> Result<String, IdempotencyError> {
     let canonical = canonicalize_json(value).map_err(|_| IdempotencyError::InvalidInput)?;
     String::from_utf8(canonical).map_err(|_| IdempotencyError::InvalidInput)
 }
@@ -627,7 +627,7 @@ fn audit_reference(
 /// The exact verified authority one protected operation ran under, as the
 /// spent-key binding records it. It holds raw verified values, which the
 /// binding reference digests together with the canonical request digest.
-fn binding_claim_context(context: &ClaimContext) -> Result<Value, IdempotencyError> {
+pub(crate) fn binding_claim_context(context: &ClaimContext) -> Result<Value, IdempotencyError> {
     let principal = context.principal().ok_or(IdempotencyError::InvalidInput)?;
     let mut value = json!({
         "entityId": context.entity_id(),

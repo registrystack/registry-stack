@@ -182,6 +182,13 @@ impl IngestionAttemptOutcome {
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct IngestionRunRecord {
     pub(crate) run_id: Uuid,
+    /// The issuer the runtime scopes callers under and the verified principal
+    /// that created the run. They alone decide who may list, read, continue,
+    /// or cancel it.
+    pub(crate) created_issuer: String,
+    pub(crate) created_subject: String,
+    /// The audit pseudonym of the creator, carried by the run's audit records
+    /// only. It is keyed under `audit.hashKeyRef` and decides nothing.
     pub(crate) created_principal_reference: String,
     /// The digest of the package the run was planned against. A client plans
     /// from the package it holds, so a run binds that digest rather than the
@@ -191,7 +198,7 @@ pub(crate) struct IngestionRunRecord {
     pub(crate) entity_id: String,
     pub(crate) operation: String,
     pub(crate) profile_id: String,
-    /// The keyed reference of the claim context the run was created under.
+    /// The unkeyed reference of the claim context the run was created under.
     /// Chunk submissions and receipt reads must resolve the same reference,
     /// so a drifted context cannot replay or continue another context's run.
     pub(crate) bound_context_reference: String,
@@ -320,6 +327,8 @@ impl IngestionRunRecord {
 
 /// The binding a new run is created under.
 pub(crate) struct NewIngestionRun {
+    pub(crate) created_issuer: String,
+    pub(crate) created_subject: String,
     pub(crate) created_principal_reference: String,
     pub(crate) package_revision: String,
     pub(crate) schema_fingerprint: String,
@@ -454,6 +463,8 @@ pub(crate) async fn install(
         .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_ingestion_runs (
                  run_id uuid PRIMARY KEY,
+                 created_issuer text NOT NULL CHECK (created_issuer <> ''),
+                 created_subject text NOT NULL CHECK (created_subject <> ''),
                  created_principal_reference text NOT NULL
                      CHECK (created_principal_reference <> ''),
                  package_revision text NOT NULL CHECK (package_revision <> ''),
@@ -537,6 +548,24 @@ pub(crate) async fn install(
                  record_revision bigint NOT NULL CHECK (record_revision > 0),
                  PRIMARY KEY (run_id, chunk_index, record_id)
              );
+             DO $breg_ingestion_run_creator$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1
+                       FROM pg_catalog.pg_attribute
+                      WHERE attrelid = 'registry_internal.registry_ingestion_runs'::regclass
+                        AND attname = 'created_issuer'
+                        AND NOT attisdropped
+                 ) THEN
+                     DELETE FROM registry_internal.registry_ingestion_runs;
+                     ALTER TABLE registry_internal.registry_ingestion_runs
+                         ADD COLUMN created_issuer text NOT NULL
+                             CHECK (created_issuer <> ''),
+                         ADD COLUMN created_subject text NOT NULL
+                             CHECK (created_subject <> '');
+                 END IF;
+             END
+             $breg_ingestion_run_creator$;
              CREATE INDEX IF NOT EXISTS registry_ingestion_run_chunk_records_erased_record
                  ON registry_internal.registry_ingestion_run_chunk_records
                      (record_id, record_revision);
@@ -560,6 +589,8 @@ fn parse_run_row(row: &tokio_postgres::Row) -> Option<IngestionRunRecord> {
     let status: String = row.get("status");
     Some(IngestionRunRecord {
         run_id: row.get("run_id"),
+        created_issuer: row.get("created_issuer"),
+        created_subject: row.get("created_subject"),
         created_principal_reference: row.get("created_principal_reference"),
         package_revision: row.get("package_revision"),
         schema_fingerprint: row.get("schema_fingerprint"),
@@ -601,7 +632,8 @@ fn parse_run_row(row: &tokio_postgres::Row) -> Option<IngestionRunRecord> {
 }
 
 const RUN_COLUMNS: &str =
-    "run_id, created_principal_reference, package_revision, schema_fingerprint,
+    "run_id, created_issuer, created_subject, created_principal_reference, package_revision,
+    schema_fingerprint,
     entity_id, operation, profile_id, bound_context_reference, input_digest, input_length,
     item_count, chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
     import_authority_id, status, blocked_reason, next_chunk_index, committed_items, committed_prefix_digest,
@@ -614,7 +646,9 @@ pub(crate) fn validate_new_run(run: &NewIngestionRun) -> Result<(), IngestionSto
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     };
-    if run.created_principal_reference.is_empty()
+    if run.created_issuer.is_empty()
+        || run.created_subject.is_empty()
+        || run.created_principal_reference.is_empty()
         || run.package_revision.is_empty()
         || run.schema_fingerprint.is_empty()
         || run.entity_id.is_empty()
@@ -662,9 +696,10 @@ pub(crate) async fn insert_run(
                       input_length, item_count, chunk_count, chunk_algorithm_version,
                       maximum_items, maximum_bytes, import_authority_id, status, blocked_reason,
                       next_chunk_index, committed_items, committed_prefix_digest,
-                      last_attempt_outcome, last_attempt_chunk_index)
+                      last_attempt_outcome, last_attempt_chunk_index, created_issuer,
+                      created_subject)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                         $17, 'open', NULL, 0, 0, $16, NULL, NULL)
+                         $17, 'open', NULL, 0, 0, $16, NULL, NULL, $18, $19)
                  RETURNING {RUN_COLUMNS}",
             ),
             &[
@@ -685,6 +720,8 @@ pub(crate) async fn insert_run(
                 &run.maximum_bytes,
                 &empty_digest_hex(),
                 &run.import_authority_id,
+                &run.created_issuer,
+                &run.created_subject,
             ],
         )
         .await
@@ -774,10 +811,14 @@ pub(crate) async fn lock_run(
     row.as_ref().and_then(parse_run_row).pipe_some()
 }
 
-/// The filters one bounded, principal-scoped run listing accepts.
+/// The filters one bounded, creator-scoped run listing accepts.
 pub(crate) struct IngestionRunListFilter<'a> {
-    pub(crate) principal_reference: &'a str,
-    /// The keyed reference of the access context the listing caller presents.
+    /// The verified caller: the issuer the runtime scopes callers under and
+    /// the verified principal. A run appears only to the caller that created
+    /// it.
+    pub(crate) created_issuer: &'a str,
+    pub(crate) created_subject: &'a str,
+    /// The reference of the access context the listing caller presents.
     /// A run appears only to the context that created it, so the listing
     /// exposes no more than the per-run surfaces already answer that same
     /// context with.
@@ -810,7 +851,8 @@ pub(crate) async fn list_runs(
     client: &impl GenericClient,
     filter: &IngestionRunListFilter<'_>,
 ) -> Result<IngestionRunPage, IngestionStoreError> {
-    if filter.principal_reference.is_empty()
+    if filter.created_issuer.is_empty()
+        || filter.created_subject.is_empty()
         || filter.bound_context_reference.is_empty()
         || filter.limit <= 0
         || filter.limit > MAX_RUN_PAGE_SIZE
@@ -842,7 +884,8 @@ pub(crate) async fn list_runs(
                          FROM registry_internal.registry_state
                         WHERE singleton
                    ) AS active
-                  WHERE created_principal_reference = $1
+                  WHERE created_issuer = $1
+                    AND created_subject = $10
                     AND bound_context_reference = $9
                     AND ($2::text IS NULL OR entity_id = $2)
                     AND ($3::text IS NULL OR profile_id = $3)
@@ -859,7 +902,7 @@ pub(crate) async fn list_runs(
                   LIMIT $6",
             ),
             &[
-                &filter.principal_reference,
+                &filter.created_issuer,
                 &filter.entity_id,
                 &filter.profile_id,
                 &status,
@@ -868,6 +911,7 @@ pub(crate) async fn list_runs(
                 &after_created_at,
                 &after_run_id,
                 &filter.bound_context_reference,
+                &filter.created_subject,
             ],
         )
         .await
@@ -1406,6 +1450,8 @@ mod tests {
 
     fn run() -> NewIngestionRun {
         NewIngestionRun {
+            created_issuer: "urn:registry-breg:test-issuer".to_owned(),
+            created_subject: "principal".to_owned(),
             created_principal_reference: "principal-reference".to_owned(),
             package_revision: "revision-1".to_owned(),
             schema_fingerprint: "fingerprint-1".to_owned(),
@@ -1427,6 +1473,24 @@ mod tests {
     #[test]
     fn a_consistent_run_binding_is_accepted() {
         assert_eq!(validate_new_run(&run()), Ok(()));
+    }
+
+    #[test]
+    fn a_run_without_its_verified_creator_is_refused() {
+        // Ownership is decided by the creator's issuer and subject, so a run
+        // missing either has no owner and must not be stored.
+        let mut binding = run();
+        binding.created_issuer = String::new();
+        assert_eq!(
+            validate_new_run(&binding),
+            Err(IngestionStoreError::InvalidInput)
+        );
+        let mut binding = run();
+        binding.created_subject = String::new();
+        assert_eq!(
+            validate_new_run(&binding),
+            Err(IngestionStoreError::InvalidInput)
+        );
     }
 
     #[test]
@@ -1498,6 +1562,8 @@ mod tests {
     fn an_open_run_reports_blocked_once_the_active_package_changed() {
         let record = IngestionRunRecord {
             run_id: Uuid::new_v4(),
+            created_issuer: "urn:registry-breg:test-issuer".to_owned(),
+            created_subject: "principal".to_owned(),
             created_principal_reference: "principal-reference".to_owned(),
             package_revision: "revision-1".to_owned(),
             schema_fingerprint: "fingerprint-1".to_owned(),
