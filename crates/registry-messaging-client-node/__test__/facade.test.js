@@ -438,6 +438,38 @@ test('an invalid configuration is a configuration error', () => {
   });
 });
 
+test('a timeout or response bound that is not a whole number in range is a configuration error', () => {
+  const { MessagingClient, MessagingClientError } = require('../client');
+  const baseUrl = 'https://messaging.example/';
+  // A 32-bit conversion would read -1 as 4294967295, 1.5 as 1, 2 ** 32 as 0,
+  // and 2 ** 32 + 1024 as 1024, so each value is checked whole.
+  const accepted = {
+    requestTimeoutMilliseconds: [1500, 2 ** 32],
+    connectTimeoutMilliseconds: [1500, 2 ** 32],
+    maxResponseBytes: [1500],
+  };
+  const refused = {
+    requestTimeoutMilliseconds: [-1, 1.5, '1500'],
+    connectTimeoutMilliseconds: [-1, 1.5, '1500'],
+    maxResponseBytes: [-1, 1.5, 2 ** 32, 2 ** 32 + 1024, '1500'],
+  };
+  for (const [field, values] of Object.entries(accepted)) {
+    for (const value of values) {
+      assert.ok(new MessagingClient({ baseUrl, [field]: value }), `${field} ${value}`);
+    }
+  }
+  for (const [field, values] of Object.entries(refused)) {
+    for (const value of values) {
+      assert.throws(() => new MessagingClient({ baseUrl, [field]: value }), (error) => {
+        assert.ok(error instanceof MessagingClientError, `${field} ${value}`);
+        assert.equal(error.kind, 'configuration', `${field} ${value}`);
+        assert.equal(error.outcomeUnknown, false);
+        return true;
+      });
+    }
+  }
+});
+
 test('bearer tokens never reach error text, fields, or inspection', async (context) => {
   const secret = 'bad token with spaces canary';
   const answered = 'answered-token-canary';

@@ -24,9 +24,9 @@ const INVALID_ARGUMENTS: &str = "Scheduling client arguments are invalid";
 #[napi(object)]
 pub struct SchedulingClientConfig {
     pub base_url: String,
-    pub request_timeout_milliseconds: Option<u32>,
-    pub connect_timeout_milliseconds: Option<u32>,
-    pub max_response_bytes: Option<u32>,
+    pub request_timeout_milliseconds: Option<f64>,
+    pub connect_timeout_milliseconds: Option<f64>,
+    pub max_response_bytes: Option<f64>,
     pub user_agent: Option<String>,
     pub trusted_root_certificates: Option<String>,
     /// How many times a keyed command whose outcome is unknown is resent under
@@ -76,13 +76,13 @@ impl SchedulingClient {
         })?;
         let mut core = CoreConfig::new(base_url);
         if let Some(value) = config.request_timeout_milliseconds {
-            core = core.with_request_timeout(Duration::from_millis(u64::from(value)));
+            core = core.with_request_timeout(Duration::from_millis(whole_number(value)?));
         }
         if let Some(value) = config.connect_timeout_milliseconds {
-            core = core.with_connect_timeout(Duration::from_millis(u64::from(value)));
+            core = core.with_connect_timeout(Duration::from_millis(whole_number(value)?));
         }
         if let Some(value) = config.max_response_bytes {
-            core = core.with_max_response_bytes(u64::from(value));
+            core = core.with_max_response_bytes(whole_number(value)?);
         }
         if let Some(value) = config.user_agent {
             core = core.with_user_agent(value);
@@ -489,6 +489,20 @@ fn binding_error(kind: &'static str, message: &'static str) -> NapiError {
     )
 }
 
+/// A millisecond or byte count as a JavaScript number. Only a whole number in
+/// the safe integer range reaches the client, which applies its own bounds; a
+/// 32-bit conversion would wrap a negative, fractional, or larger number.
+fn whole_number(value: f64) -> Result<u64> {
+    if value.fract() == 0.0 && (0.0..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER as f64).contains(&value) {
+        Ok(value as u64)
+    } else {
+        Err(binding_error(
+            "configuration",
+            "Scheduling client configuration is invalid",
+        ))
+    }
+}
+
 /// The retry ceiling as a JavaScript number. Only a whole number in the
 /// `u8` range reaches the client, which refuses one above its own bound.
 fn mutation_retries(value: f64) -> Result<u8> {
@@ -509,6 +523,19 @@ mod tests {
     #[test]
     fn unsafe_response_integer_is_refused() {
         assert!(ensure_safe_integers(&json!(9_007_199_254_740_992_u64)).is_err());
+    }
+
+    #[test]
+    fn configuration_counts_are_whole_numbers_in_the_safe_range() {
+        assert_eq!(whole_number(1500.0).ok(), Some(1500));
+        assert_eq!(whole_number(4_294_967_296.0).ok(), Some(4_294_967_296));
+        assert_eq!(
+            whole_number(MAXIMUM_JAVASCRIPT_SAFE_INTEGER as f64).ok(),
+            Some(MAXIMUM_JAVASCRIPT_SAFE_INTEGER as u64)
+        );
+        for value in [-1.0, 1.5, 9_007_199_254_740_992.0, f64::NAN, f64::INFINITY] {
+            assert!(whole_number(value).is_err(), "{value}");
+        }
     }
 
     #[test]
