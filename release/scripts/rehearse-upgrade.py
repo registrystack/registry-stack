@@ -73,7 +73,7 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # docs/site/src/content/docs/reference/api-stability.mdx states the same.
 # check_floor_is_current holds it to the release before the workspace version's
 # minor line, so a patch release does not move it.
-FORWARD_PATH_FLOOR = (0, 38, 0)
+FORWARD_PATH_FLOOR = (0, 39, 0)
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
 

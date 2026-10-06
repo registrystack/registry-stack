@@ -739,7 +739,7 @@ gh workflow run release-upgrade-rehearsal.yml \
 ```
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-earliest release this source reads state from, `v0.38.0`, and the script
+earliest release this source reads state from, `v0.39.0`, and the script
 refuses to start from any earlier release rather than skipping the check. It
 also refuses to run when the floor is not the newest release manifest recorded
 as `status: released` below the first release of the workspace version's minor

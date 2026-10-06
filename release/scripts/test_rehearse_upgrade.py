@@ -52,11 +52,11 @@ class ReleaseSelectionTest(unittest.TestCase):
             MODULE.select_from_tag(["v0.34.0"], "0.33.0")
 
     def test_refuses_a_start_before_the_immediate_predecessor(self) -> None:
-        for tag in ("v0.37.0", "v0.33.0", "v0.1.0"):
+        for tag in ("v0.38.0", "v0.33.0", "v0.1.0"):
             with self.subTest(tag=tag), self.assertRaisesRegex(Error, "immediate predecessor"):
-                MODULE.check_forward_path(tag, "0.39.0")
-        MODULE.check_forward_path("v0.38.0", "0.38.0")
-        MODULE.check_forward_path("v0.38.0", "0.39.0")
+                MODULE.check_forward_path(tag, "0.40.0")
+        MODULE.check_forward_path("v0.39.0", "0.39.0")
+        MODULE.check_forward_path("v0.39.0", "0.40.0")
 
     def test_refuses_a_floor_that_is_not_the_release_before_the_workspace_version(self) -> None:
         released = ["0.9.0", "0.37.0", "0.38.0", "0.39.0"]
@@ -174,17 +174,17 @@ class ReleaseSelectionTest(unittest.TestCase):
             bin_dir.mkdir(mode=0o700)
             for binary in binaries:
                 script = bin_dir / binary
-                script.write_text(f"#!/bin/sh\necho '{binary} 0.38.0'\n", encoding="utf-8")
+                script.write_text(f"#!/bin/sh\necho '{binary} 0.39.0'\n", encoding="utf-8")
                 script.chmod(0o755)
 
         with tempfile.TemporaryDirectory() as temporary, \
                 contextlib.redirect_stdout(io.StringIO()), \
                 unittest.mock.patch.object(MODULE, "fetch_release", side_effect=fetch) as fetched, \
                 unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("started")), \
-                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.39.0"):
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.40.0"):
             work = Path(temporary) / "work"
             report = Path(temporary) / "report.json"
-            status = MODULE.main(["--fetch-only", "--from-tag", "v0.38.0", "--platform",
+            status = MODULE.main(["--fetch-only", "--from-tag", "v0.39.0", "--platform",
                                   "linux-amd64", "--product", "breg", "--work-dir", str(work),
                                   "--report", str(report)])
             self.assertEqual(status, 0)
@@ -268,16 +268,16 @@ class ProductSelectionTest(unittest.TestCase):
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stderr(stderr), \
                 unittest.mock.patch.object(MODULE.release_roster, "MESSAGING_FIRST_RELEASE",
-                                           (0, 39, 0)):
+                                           (0, 40, 0)):
             work = Path(temporary) / "work"
             status = MODULE.main([
-                "--from-tag", "v0.38.0", "--platform", "linux-amd64",
+                "--from-tag", "v0.39.0", "--platform", "linux-amd64",
                 "--product", "messaging",
                 "--to-bin-dir", temporary, "--work-dir", str(work),
             ])
             self.assertFalse(work.exists())
         self.assertEqual(status, 1)
-        self.assertIn("messaging was first shipped in v0.39.0, so v0.38.0 holds no",
+        self.assertIn("messaging was first shipped in v0.40.0, so v0.39.0 holds no",
                       stderr.getvalue())
 
 
