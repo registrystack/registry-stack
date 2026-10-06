@@ -130,7 +130,9 @@ export class MessagingClientError extends Error {
    * or a 5xx. When true, recover a keyed request by sending it again under
    * the same idempotency key; a new key could apply it twice. False for a
    * configuration or request defect, a connection never established, and
-   * every 4xx refusal.
+   * every 4xx refusal. It is false for `410 idempotency.expired` too, but
+   * there an earlier submission under the key was accepted and its message
+   * may have been sent: reconcile that submission before choosing a new key.
    */
   readonly outcomeUnknown: boolean
   readonly code?: MessagingProblemCode

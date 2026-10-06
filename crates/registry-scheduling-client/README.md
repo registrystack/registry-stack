@@ -22,7 +22,10 @@ after the request was sent. `SchedulingClientError::is_outcome_unknown()`
 reports those cases, and an oversized or unparseable answer, as true; it is
 false for a request defect, a connection that was never established, and
 every typed 4xx refusal such as `idempotency.key-reused` (409) or
-`idempotency.expired` (410).
+`idempotency.expired` (410). A 410 does not run the command again, but there an
+earlier attempt under the key was answered and may have committed: read an
+appointment by its external reference or identifier before choosing a new key.
+A hold cannot be read and expires on its own, so start a new request.
 
 The client resends a keyed command (hold, appointment create, reschedule,
 cancel) whose outcome is unknown, with the same key, headers, and body bytes,

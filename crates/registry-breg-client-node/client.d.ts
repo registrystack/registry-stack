@@ -1037,7 +1037,9 @@ export interface BaseRegistryClientFailure extends Error {
    * again under the same idempotency key; a new key could apply it twice.
    * False for a configuration or request defect, a credential the token
    * provider could not supply, a connection never established, and every 4xx
-   * refusal.
+   * refusal. It is false for `410 idempotency.expired` too, but there an
+   * earlier attempt under the key committed and only its held response is
+   * gone: read the resource before choosing a new key.
    */
   readonly outcomeUnknown: boolean
 }
@@ -1062,7 +1064,9 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
    * again under the same idempotency key; a new key could apply it twice.
    * False for a configuration or request defect, a credential the token
    * provider could not supply, a connection never established, and every 4xx
-   * refusal.
+   * refusal. It is false for `410 idempotency.expired` too, but there an
+   * earlier attempt under the key committed and only its held response is
+   * gone: read the resource before choosing a new key.
    */
   readonly outcomeUnknown: boolean
 }

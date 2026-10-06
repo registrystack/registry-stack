@@ -55,6 +55,9 @@ once. When the returned `MessagingClientError` still reports
 `outcome_unknown`, the submission may have been accepted: recover by sending it
 again under the same key, because a new key could send the message twice.
 `outcome_unknown` is false for a configuration or request defect, a connection
-never established, and every 4xx refusal.
+never established, and every 4xx refusal. It is false for
+`410 idempotency.expired` too, but there an earlier submission under the key
+was accepted and its message may have been sent: reconcile that submission
+before choosing a new key.
 
 This crate is private and does not publish a standalone Python distribution.

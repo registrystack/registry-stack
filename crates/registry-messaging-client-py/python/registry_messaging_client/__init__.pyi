@@ -183,7 +183,9 @@ class MessagingClientError(Exception):
     # or a 5xx. When True, recover a keyed request by sending it again under
     # the same idempotency key; a new key could apply it twice. False for a
     # configuration or request defect, a connection never established, and
-    # every 4xx refusal.
+    # every 4xx refusal. It is False for 410 idempotency.expired too, but
+    # there an earlier submission under the key was accepted and its message
+    # may have been sent: reconcile that submission before choosing a new key.
     outcome_unknown: bool
 
 class MessagingClient:

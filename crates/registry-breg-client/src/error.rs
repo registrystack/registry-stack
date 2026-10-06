@@ -627,6 +627,10 @@ impl BaseRegistryClientError {
     /// the same request under the same key, which the engine either replays or
     /// executes once; a new key could apply the mutation twice.
     ///
+    /// It is false for `410 idempotency.expired` too, but there an earlier
+    /// attempt under the key committed and only its held response is gone:
+    /// read the resource before choosing a new key.
+    ///
     /// A protocol failure, such as a 3xx answer or an answer that cannot be
     /// parsed or does not meet the contract, counts as unknown conservatively,
     /// as an oversized answer does: the request may have been processed before

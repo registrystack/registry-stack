@@ -86,6 +86,12 @@ impl SchedulingClientError {
     /// same key, which the service either replays or settles; a new key could
     /// apply the command twice.
     ///
+    /// It is false for `410 idempotency.expired` too, but there an earlier
+    /// attempt under the key was answered and may have committed: read an
+    /// appointment by its external reference or identifier before choosing a
+    /// new key. A hold cannot be read and expires on its own, so start a new
+    /// request.
+    ///
     /// A protocol failure, such as a 3xx answer or an answer that cannot be
     /// parsed or does not meet the contract, counts as unknown conservatively,
     /// as an oversized answer does: the request may have been processed before

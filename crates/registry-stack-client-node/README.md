@@ -94,6 +94,9 @@ times, a client option: 0 to 2, default 2, and 0 sends it once. Reads,
 unkeyed calls, and every 4xx refusal are never resent. When the returned error
 still reports `outcomeUnknown`, the mutation may have taken effect: recover by
 sending it again under the same key, because a new key could apply it twice.
+`outcomeUnknown` is false for `410 idempotency.expired`, but there an earlier
+attempt under the key was answered and may have committed: reconcile that
+attempt before choosing a new key.
 See [Unknown outcomes](https://docs.registrystack.org/reference/client-api/#unknown-outcomes-and-the-same-key-retry).
 
 `breg.verifyWebhookDelivery({ method, path, headers, body, key })` authenticates

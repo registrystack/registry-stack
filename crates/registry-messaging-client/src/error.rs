@@ -92,6 +92,10 @@ impl MessagingClientError {
     /// under the same idempotency key, which the service either replays or
     /// settles; a new key could send the message twice.
     ///
+    /// It is false for `410 idempotency.expired` too, but there an earlier
+    /// submission under the key was accepted and its message may have been
+    /// sent: reconcile that submission before choosing a new key.
+    ///
     /// A protocol failure, such as a 3xx answer or an answer that cannot be
     /// parsed or does not meet the contract, counts as unknown conservatively,
     /// as an oversized answer does: the request may have been processed before
