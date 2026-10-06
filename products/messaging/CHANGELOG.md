@@ -15,6 +15,19 @@
   submissions, let in-flight senders finish retrying the submissions whose
   answers they lost, then stop every v0.39.0 runtime; start the new runtime
   only after `apply` succeeds (#1912).
+- `registry-messaging-client` `submit`, which never retried, now resends a
+  submission whose outcome is unknown (a timeout or broken exchange after
+  the request was sent, or a 5xx answer) byte for byte under the same
+  idempotency key, up to 2 times by default. Opt out with
+  `MessagingClientConfig::with_max_mutation_retries(0)` (Node.js
+  `maxMutationRetries`, Python `max_mutation_retries`; 0 to 2).
+  `MessagingClientError::is_outcome_unknown()` (Node.js `outcomeUnknown`,
+  Python `outcome_unknown`) reports a failure whose submission may still
+  have been accepted; recover it with the same request under the same key,
+  never a new key. A 429 limit refusal is never resent. One `submit` can
+  now take up to three request timeouts (30 seconds each by default) plus
+  the waits between attempts: 250 ms then 500 ms, or a server
+  `Retry-After` of at most 5 seconds each (#1913).
 
 ## v0.38.0 - 2026-10-01
 
