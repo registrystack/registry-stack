@@ -20,13 +20,21 @@
 //! bearer-authorized cancellation of one undispatched message, which answers
 //! the same `MessageView`, and the bearer-authorized preview of one template
 //! version, which answers the core's `TemplatePreview` and sends nothing. It
-//! never follows
-//! redirects or retries, reads every response under a bounded
-//! byte ceiling, and lands every failure in one named shape: a configuration
+//! never follows redirects, reads every response under a bounded byte
+//! ceiling, and lands every failure in one named shape: a configuration
 //! defect, a transport failure, a protocol failure, or a validated product
-//! problem surfaced as its typed code. A 429 limit refusal also carries the
-//! bounded wait its `Retry-After` asked for; waiting and retrying stay the
-//! caller's decision.
+//! problem surfaced as its typed code.
+//!
+//! The client never generates an idempotency key. A submission whose outcome
+//! is unknown (a timeout or broken exchange after the request was sent, or a
+//! 5xx answer) is resent, byte for byte and under the same key, at most
+//! `MessagingClientConfig::with_max_mutation_retries` times (2 by default, 0
+//! disables it). Reads, the preview, and the unkeyed cancellation are never
+//! resent. A 5xx answer may follow an acceptance: when
+//! `MessagingClientError::is_outcome_unknown` is still true, the safe
+//! recovery is the same request under the same key, never a new key. A 429
+//! limit refusal is never resent; it carries the bounded wait its
+//! `Retry-After` asked for, and waiting on it stays the caller's decision.
 
 #![deny(unsafe_code)]
 
