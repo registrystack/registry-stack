@@ -640,9 +640,11 @@ rm -f "$invoke_curl_config"
 Use the same `Idempotency-Key`, body, selected access profile, and condition
 after a lost response. Within the original package and authority binding, the
 server returns the stored receipt instead of running the mutation a second time.
-Keys are per caller: the verified issuer and principal, the operation, and the
-key find the consumed key, so another principal's identical key is its own
-invocation. After a successful commit, reusing that key with different input,
+Keys are per caller, not per operation: the verified issuer and principal and
+the key find the consumed key across every ordinary write route, so another
+principal's identical key is its own invocation, and the same caller reusing
+the key on a different action or record write route gets an idempotency
+conflict. After a successful commit, reusing that key with different input,
 conditions, profile, or result permissions returns an idempotency conflict, and
 so does an identical body when the first attempt committed under a different
 package, profile, or claims. The receipt is held for

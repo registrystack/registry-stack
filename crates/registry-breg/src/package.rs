@@ -102,8 +102,8 @@ pub struct PackageManifest {
 #[serde(rename_all = "snake_case")]
 pub enum PackageEngineFeature {
     StatisticalReleaseStore,
-    /// Spent idempotency keys are found by the verified caller, the operation
-    /// scope, and the key, and held responses carry a receipt horizon.
+    /// Spent idempotency keys are found by the verified caller, the key scope,
+    /// and the key, and held responses carry a receipt horizon.
     CallerScopedIdempotency,
 }
 
