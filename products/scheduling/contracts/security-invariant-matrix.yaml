@@ -667,13 +667,14 @@ deferred:
       the service; its expiry, the fact that changes on its own, is re-checked
       inside the capacity transaction (SCHEDULING-SEC-03). Re-reading the
       bounds there only defends against a grant revoked or narrowed at the
-      issuer between the door and the commit. Casework answers that question
-      at GET /v1/task-grants/{grantId}/status, and BREG asks it before its
-      writes, but a status call from Scheduling would put Casework's
-      availability inside every capacity transaction: each commitment would
-      hold its capacity locks while it waits on another product, and would
-      have to refuse while that product is unreachable. Revisit when an
-      adopter needs a revocation to take effect faster than a grant expires.
+      issuer between the door and the commit. Casework answers that question at
+      GET /v1/task-grants/{grantId}/status, and the Base Registry Engine (BReg)
+      asks it before each task-granted write, but a status call from Scheduling
+      would put Casework's availability inside every capacity transaction: each
+      commitment would hold its capacity locks while it waits on another
+      product, and would have to refuse while that product is unreachable.
+      Revisit when an adopter needs a revocation to take effect faster than a
+      grant expires.
     compensatingControl: >-
       Casework, the maintained grant issuer, holds every task grant to a
       lifetime of at most 900 seconds, and the expiry re-check inside the
