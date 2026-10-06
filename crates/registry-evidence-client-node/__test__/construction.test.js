@@ -88,6 +88,14 @@ test('a base URL with an empty path segment is refused', () => {
   );
 });
 
+test('a numeric setting that is not a whole number in range is refused', () => {
+  for (const member of ['requestTimeoutMs', 'connectTimeoutMs', 'maxResponseBytes', 'maxMetadataBytes']) {
+    for (const value of [Number.MAX_SAFE_INTEGER + 1, -1, 1.5, '1500', new Date(0)]) {
+      assertConfigurationRefusal(() => new EvidenceClient(validConfig({ [member]: value })));
+    }
+  }
+});
+
 test('fromProfile returns the public wrapper and preserves consumer subclasses', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evidence-client-node-profile-'));
   try {

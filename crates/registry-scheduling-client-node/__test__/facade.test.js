@@ -624,6 +624,27 @@ test('a timeout or response bound that is not a whole number in range is a confi
   }
 });
 
+test('a configuration value the sanitizer refuses is a configuration error', () => {
+  const { SchedulingClient, SchedulingClientError } = require('../client');
+  const baseUrl = 'https://scheduling.example/';
+  for (const [label, config] of [
+    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a non-finite number', { baseUrl, maxResponseBytes: Infinity }],
+    ['an undefined member', { baseUrl, userAgent: undefined }],
+    ['a function', { baseUrl, userAgent: () => 'scheduling-test' }],
+    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a proxy', new Proxy({ baseUrl }, {})],
+    ['no configuration', undefined],
+  ]) {
+    assert.throws(() => new SchedulingClient(config), (error) => {
+      assert.ok(error instanceof SchedulingClientError, label);
+      assert.equal(error.kind, 'configuration', label);
+      assert.equal(error.outcomeUnknown, false, label);
+      return true;
+    });
+  }
+});
+
 test('bearer tokens never reach error text, fields, or inspection', async (context) => {
   const secret = 'bad token with spaces canary';
   const answeredToken = 'answered-token-canary';

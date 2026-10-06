@@ -373,6 +373,25 @@ test('binding failures expose a stable value-free kind', () => {
   );
 });
 
+test('a configuration value the sanitizer refuses is a configuration error', () => {
+  const baseUrl = 'https://discovery.example.invalid/';
+  for (const [label, options] of [
+    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a non-finite number', { baseUrl, maximumResponseBytes: Infinity }],
+    ['an undefined member', { baseUrl, requestTimeoutMilliseconds: undefined }],
+    ['a function', { baseUrl, requestTimeoutMilliseconds: () => 1500 }],
+    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a proxy', new Proxy({ baseUrl }, {})],
+    ['no configuration', undefined],
+  ]) {
+    assert.throws(() => new DiscoveryClient(options), (error) => {
+      assert.ok(error instanceof DiscoveryClientError, label);
+      assert.equal(error.kind, 'configuration', label);
+      return true;
+    });
+  }
+});
+
 test('object keys count against the bounded JSON bridge', () => {
   const oversizedKey = 'x'.repeat((16 * 1024 * 1024) + 1);
   assert.throws(

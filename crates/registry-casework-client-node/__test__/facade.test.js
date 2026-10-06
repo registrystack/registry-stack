@@ -13,6 +13,27 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CaseworkClientError, 'function');
 });
 
+test('a configuration value the sanitizer refuses is a configuration error', () => {
+  const { CaseworkClient, CaseworkClientError } = require('../client');
+  const baseUrl = 'https://casework.example/';
+  for (const [label, config] of [
+    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a non-finite number', { baseUrl, maxResponseBytes: Infinity }],
+    ['an undefined member', { baseUrl, userAgent: undefined }],
+    ['a function', { baseUrl, userAgent: () => 'casework-test' }],
+    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a proxy', new Proxy({ baseUrl }, {})],
+    ['no configuration', undefined],
+  ]) {
+    assert.throws(() => new CaseworkClient(config), (error) => {
+      assert.ok(error instanceof CaseworkClientError, label);
+      assert.equal(error.kind, 'configuration', label);
+      assert.equal(error.outcomeUnknown, false, label);
+      return true;
+    });
+  }
+});
+
 test('review task context uses the exact route and forwards the optional source profile', async (context) => {
   let observed;
   const server = http.createServer((request, response) => {
