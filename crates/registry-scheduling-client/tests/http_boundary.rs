@@ -532,7 +532,7 @@ async fn create_hold_sends_the_admission_body_under_its_idempotency_key() {
     assert_eq!(complete.value.resource.as_deref(), Some("station-1"));
 
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 1, "a hold is never retried");
+    assert_eq!(observations.len(), 1, "a settled hold is sent once");
     let captured = &observations[0];
     assert_eq!(captured.method, "POST");
     assert_eq!(captured.uri, "/v1/holds");
@@ -839,7 +839,11 @@ async fn edge_answers_stay_edge_talk() {
     ));
 
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 6, "no failure is ever retried");
+    assert_eq!(
+        observations.len(),
+        6,
+        "reads are never resent, and a malformed success would be replayed unchanged"
+    );
     server.abort();
 }
 

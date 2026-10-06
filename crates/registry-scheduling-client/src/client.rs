@@ -5,10 +5,11 @@ use std::fmt;
 use chrono::{DateTime, SecondsFormat, Utc};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
-    build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
+    build_client, read_failure_kind, retry_keyed_mutation, send_failure_kind, KeyedMutationAttempt,
+    OutboundOptions, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, retry_after_seconds, url::append_path_segments, validate_response_headers,
 };
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AppointmentDocument,
@@ -46,6 +47,7 @@ pub struct SchedulingClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     max_response_bytes: u64,
+    max_mutation_retries: u8,
 }
 
 impl fmt::Debug for SchedulingClient {
@@ -54,6 +56,7 @@ impl fmt::Debug for SchedulingClient {
             .debug_struct("SchedulingClient")
             .field("base_url", &"<validated service URL>")
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("max_mutation_retries", &self.max_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -72,6 +75,7 @@ impl SchedulingClient {
             http,
             base_url,
             max_response_bytes: config.max_response_bytes,
+            max_mutation_retries: config.max_mutation_retries,
         })
     }
 
@@ -366,7 +370,37 @@ impl SchedulingClient {
                     SchedulingClientError::invalid_request("the idempotency key is invalid")
                 })?,
             );
-        self.send_json(request, expected_status).await
+        self.send_keyed_json(request, expected_status).await
+    }
+
+    /// Send one idempotency-keyed command, resending the identical request
+    /// under the same key while its outcome stays unknown, at most the
+    /// configured number of times.
+    async fn send_keyed_json<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        expected_status: StatusCode,
+    ) -> Result<SchedulingComplete<T>, SchedulingClientError> {
+        let request = &request;
+        retry_keyed_mutation(self.max_mutation_retries, || async move {
+            let Some(attempt) = request.try_clone() else {
+                return KeyedMutationAttempt::Settled(Err(SchedulingClientError::invalid_request(
+                    "the request could not be prepared for sending",
+                )));
+            };
+            let response = match self.send(attempt).await {
+                Ok(response) => response,
+                Err(error) => return keyed_attempt(Err(error), false, None),
+            };
+            let server_error = response.status().is_server_error();
+            let retry_after = retry_after_seconds(response.headers(), u64::MAX);
+            keyed_attempt(
+                self.json_answer(response, expected_status).await,
+                server_error,
+                retry_after,
+            )
+        })
+        .await
     }
 
     fn authorized(&self, request: RequestBuilder, auth: &SchedulingAuth<'_>) -> RequestBuilder {
@@ -387,6 +421,14 @@ impl SchedulingClient {
         expected_status: StatusCode,
     ) -> Result<SchedulingComplete<T>, SchedulingClientError> {
         let response = self.send(request).await?;
+        self.json_answer(response, expected_status).await
+    }
+
+    async fn json_answer<T: DeserializeOwned>(
+        &self,
+        response: Response,
+        expected_status: StatusCode,
+    ) -> Result<SchedulingComplete<T>, SchedulingClientError> {
         let status = response.status();
         if status != expected_status {
             return Err(self.problem_or_status(response).await);
@@ -520,6 +562,26 @@ pub(crate) fn domain_problem(
         status: status.as_u16(),
         code,
         trace_id,
+    }
+}
+
+/// Classify one attempt of a keyed command for the shared retry loop. Any
+/// failure on a 5xx answer is resent, whatever stage of decoding it reached.
+fn keyed_attempt<T>(
+    result: Result<T, SchedulingClientError>,
+    server_error: bool,
+    retry_after_seconds: Option<u64>,
+) -> KeyedMutationAttempt<T, SchedulingClientError> {
+    match result {
+        Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
+        Err(error) if server_error || error.resend_may_settle() => {
+            KeyedMutationAttempt::Retryable {
+                error,
+                retry_after_seconds,
+            }
+        }
+        Err(error) if error.is_outcome_unknown() => KeyedMutationAttempt::Unknown(error),
+        Err(error) => KeyedMutationAttempt::Settled(Err(error)),
     }
 }
 
