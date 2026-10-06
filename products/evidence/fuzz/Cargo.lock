@@ -1377,7 +1377,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-evidence-authoring"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "rhai",
@@ -1403,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-verifier"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
