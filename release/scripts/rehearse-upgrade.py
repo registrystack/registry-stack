@@ -902,6 +902,7 @@ BREG_KID = "upgrade-rehearsal-issuer"
 BREG_DATABASE_ID = "upgrade-rehearsal-db"
 BREG_ENVIRONMENT = "staging"
 BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
+BREG_EMPTY_PLAN = "apply.package.empty_plan"
 
 
 def instance_claim(side: Side, runtime: Path) -> dict[str, Any] | None:
@@ -1169,6 +1170,24 @@ class Breg:
         return views
 
 
+def breg_rebuild_changes(side: Side, runtime: Path, package: Path) -> bool:
+    """Plan the predecessor rebuilt by this source's compiler. Return False
+    when bregctl refuses it only as having nothing to apply."""
+    result = side.run("bregctl", "--format", "json", "plan", "--runtime-config",
+                      str(runtime), "--package", str(package), check=False)
+    if result.returncode == 0:
+        return True
+    try:
+        codes = [entry.get("code") for entry in json.loads(result.stdout)["diagnostics"]]
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        codes = []
+    if codes == [BREG_EMPTY_PLAN]:
+        return False
+    detail = (result.stderr or result.stdout).strip().splitlines()[-15:]
+    raise RehearsalError("bregctl plan refused the rebuilt predecessor package:\n"
+                         + "\n".join(detail))
+
+
 def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
                   report: dict[str, Any]) -> None:
     breg = Breg(work, keys, postgres)
@@ -1207,13 +1226,15 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
 
     # A package binds the compiler that built it. Rebuild against the verified
     # predecessor and apply a changed package before any read or runtime
-    # startup with the new binaries.
+    # startup with the new binaries. A rebuild always names its predecessor's
+    # digest, so an unchanged registry shows only as bregctl refusing the
+    # rebuild as an empty plan; the operator then keeps the active package.
     predecessor_activation = "initial"
     upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
-    if upgraded_digest != digest:
+    if breg_rebuild_changes(new, breg.runtime, upgraded):
         apply(upgraded, upgraded_digest)
         predecessor_activation = "successor"
-    package = upgraded
+        package = upgraded
     breg.write_runtime(breg.runtime, "registry", package, breg.port)
     claim_after = instance_claim(new, breg.runtime)
     upgraded_views = serve("breg-upgraded.log")

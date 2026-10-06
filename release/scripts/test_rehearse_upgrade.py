@@ -503,96 +503,146 @@ class BregLedgerTest(unittest.TestCase):
         breg.clients = [MODULE.BREG_CLIENT]
         return breg
 
+    EMPTY_PLAN = {"ok": False, "command": "plan", "diagnostics": [
+        {"severity": "error", "code": "apply.package.empty_plan", "path": "package"}]}
+
+    def rehearse_ledger_upgrade(self, root: Path, upgraded_plan: dict[str, Any] | None):
+        """Run rehearse_breg against mocked binaries. `upgraded_plan` is what
+        bregctl plan prints, exiting 1, for the rebuilt predecessor; None plans
+        it as a pending successor."""
+        old = unittest.mock.Mock()
+        new = unittest.mock.Mock()
+        postgres = unittest.mock.Mock()
+        postgres.row_counts.return_value = {"registry_data.records": 1}
+        breg = unittest.mock.Mock()
+        breg.project = root / "project"
+        breg.runtime = root / "runtime.yaml"
+        breg.port = 8000
+        old_package = root / "old-package"
+        upgraded_package = root / "upgraded-package"
+        successor_package = root / "successor-package"
+        old_digest = self.DIGEST
+        upgraded_digest = "sha256:" + "b" * 64
+        successor_digest = "sha256:" + "c" * 64
+        digests = {old_package: old_digest, upgraded_package: upgraded_digest,
+                   successor_package: successor_digest}
+        state = {"package": old_package, "active": old_digest}
+        ledger = [{"applyOrder": 1, "planKind": "initial", "outcome": "applied",
+                   "packageDigest": old_digest, "activationId": "1",
+                   "predecessorPackageDigest": None}]
+        events = []
+        current = {}
+
+        def package(side, build, baseline=None):
+            if side is old:
+                return old_package, old_digest
+            events.append(("package", build.name, baseline))
+            if build.name == "build-upgraded":
+                self.assertEqual(baseline, old_package)
+                return upgraded_package, upgraded_digest
+            return successor_package, successor_digest
+
+        def runtime(path, database, package, port, **kwargs):
+            state["package"] = package
+
+        def plan(target):
+            if target == upgraded_package and upgraded_plan is not None:
+                return 1, upgraded_plan
+            return 0, {"pending": True, "activation": "successor",
+                       "packageDigest": digests[target]}
+
+        def command(binary, *arguments):
+            operation = arguments[2]
+            if operation in ("plan", "apply"):
+                target = Path(arguments[arguments.index("--package") + 1])
+                if operation == "plan":
+                    returncode, printed = plan(target)
+                    if returncode:
+                        raise Error(f"bregctl --format json exited {returncode}")
+                    return printed
+                events.append(("apply", target))
+                predecessor = state["active"]
+                state["active"] = digests[target]
+                order = len(ledger) + 1
+                ledger.append({"applyOrder": order, "planKind": "successor",
+                               "outcome": "applied", "packageDigest": state["active"],
+                               "activationId": str(order),
+                               "predecessorPackageDigest": predecessor})
+            if operation == "status":
+                return {"ledger": ledger, "activePackageDigest": state["active"],
+                        "maintenanceStatus": "ready",
+                        "activationId": ledger[-1]["activationId"]}
+            return {}
+
+        def process(binary, *arguments, check=True):
+            self.assertEqual(arguments[2], "plan")
+            self.assertFalse(check)
+            returncode, printed = plan(Path(arguments[arguments.index("--package") + 1]))
+            return MODULE.subprocess.CompletedProcess(
+                [binary, *arguments], returncode, json.dumps(printed), "")
+
+        def claim(side, path):
+            if side is new:
+                events.append(("claim",))
+                current["package"] = state["package"]
+                current["active"] = state["active"]
+            return {"epoch": 1}
+
+        breg.package.side_effect = package
+        breg.write_runtime.side_effect = runtime
+        breg.seed.return_value = {"records": ["1"]}
+        breg.views.return_value = {"records/1": {"domainData": {"code": "a"}}}
+        new.run_json.side_effect = command
+        new.run.side_effect = process
+        report = {}
+        registry = {"package": {}, "entities": [{"id": "record-group", "fields": []}]}
+        with (unittest.mock.patch.object(MODULE, "Breg", return_value=breg),
+              unittest.mock.patch.object(MODULE, "Service"),
+              unittest.mock.patch.object(MODULE, "instance_claim", side_effect=claim),
+              unittest.mock.patch.object(MODULE, "load_yaml", return_value=registry),
+              unittest.mock.patch.object(MODULE, "dump_yaml")):
+            MODULE.rehearse_breg(root, unittest.mock.Mock(), postgres, old, new, report)
+        packages = {"old": old_package, "upgraded": upgraded_package,
+                    "successor": successor_package}
+        return events, ledger, report, current, packages
+
     def test_a_ledger_upgrade_applies_the_rebuilt_package_before_current_reads(self) -> None:
-        for changed in (True, False):
-            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                old = unittest.mock.Mock()
-                new = unittest.mock.Mock()
-                postgres = unittest.mock.Mock()
-                postgres.row_counts.return_value = {"registry_data.records": 1}
-                breg = unittest.mock.Mock()
-                breg.project = root / "project"
-                breg.runtime = root / "runtime.yaml"
-                breg.port = 8000
-                old_package = root / "old-package"
-                upgraded_package = root / "upgraded-package"
-                successor_package = root / "successor-package"
-                old_digest = self.DIGEST
-                upgraded_digest = "sha256:" + "b" * 64 if changed else old_digest
-                successor_digest = "sha256:" + "c" * 64
-                digests = {old_package: old_digest, upgraded_package: upgraded_digest,
-                           successor_package: successor_digest}
-                state = {"package": old_package, "active": old_digest}
-                ledger = [{"applyOrder": 1, "planKind": "initial", "outcome": "applied",
-                           "packageDigest": old_digest, "activationId": "1",
-                           "predecessorPackageDigest": None}]
-                events = []
+        with tempfile.TemporaryDirectory() as directory:
+            events, ledger, report, current, packages = self.rehearse_ledger_upgrade(
+                Path(directory), None)
+        self.assertEqual(report["breg"]["rowLosses"], [])
+        self.assertEqual(report["breg"]["viewDifferences"], [])
+        self.assertEqual(report["breg"]["ledger"],
+                         ["initial:applied", "successor:applied", "successor:applied"])
+        self.assertLess(events.index(("apply", packages["upgraded"])), events.index(("claim",)))
+        self.assertEqual(current["package"], packages["upgraded"],
+                         "current reads require the rebuilt package")
+        self.assertEqual(current["active"], "sha256:" + "b" * 64,
+                         "a changed package must be applied before current reads")
+        self.assertIn(("package", "build-successor", packages["upgraded"]), events)
 
-                def package(side, build, baseline=None):
-                    if side is old:
-                        return old_package, old_digest
-                    events.append(("package", build.name, baseline))
-                    if build.name == "build-upgraded":
-                        self.assertEqual(baseline, old_package)
-                        return upgraded_package, upgraded_digest
-                    self.assertEqual(baseline, upgraded_package)
-                    return successor_package, successor_digest
+    def test_a_rebuild_with_nothing_to_apply_keeps_the_predecessor_package(self) -> None:
+        # Rebuilding against the predecessor always records fromPackageDigest,
+        # so an unchanged registry shows only as bregctl's empty-plan refusal.
+        with tempfile.TemporaryDirectory() as directory:
+            events, ledger, report, current, packages = self.rehearse_ledger_upgrade(
+                Path(directory), self.EMPTY_PLAN)
+        self.assertEqual(report["breg"]["rowLosses"], [])
+        self.assertEqual(report["breg"]["viewDifferences"], [])
+        self.assertEqual(report["breg"]["ledger"], ["initial:applied", "successor:applied"])
+        self.assertNotIn(("apply", packages["upgraded"]), events)
+        self.assertEqual(current["package"], packages["old"],
+                         "the new runtime serves the predecessor package it kept")
+        self.assertEqual(current["active"], self.DIGEST)
+        self.assertIn(("package", "build-successor", packages["old"]), events)
 
-                def runtime(path, database, package, port, **kwargs):
-                    state["package"] = package
-
-                def command(binary, *arguments):
-                    operation = arguments[2]
-                    if operation in ("plan", "apply"):
-                        target = Path(arguments[arguments.index("--package") + 1])
-                        if operation == "plan":
-                            return {"pending": True, "activation": "successor",
-                                    "packageDigest": digests[target]}
-                        events.append(("apply", target))
-                        predecessor = state["active"]
-                        state["active"] = digests[target]
-                        order = len(ledger) + 1
-                        ledger.append({"applyOrder": order, "planKind": "successor",
-                                       "outcome": "applied", "packageDigest": state["active"],
-                                       "activationId": str(order),
-                                       "predecessorPackageDigest": predecessor})
-                    if operation == "status":
-                        return {"ledger": ledger, "activePackageDigest": state["active"],
-                                "maintenanceStatus": "ready",
-                                "activationId": ledger[-1]["activationId"]}
-                    return {}
-
-                def claim(side, path):
-                    if side is new:
-                        events.append(("claim",))
-                        self.assertEqual(state["package"], upgraded_package,
-                                         "current reads require the rebuilt package")
-                        self.assertEqual(state["active"], upgraded_digest,
-                                         "a changed package must be applied before current reads")
-                    return {"epoch": 1}
-
-                breg.package.side_effect = package
-                breg.write_runtime.side_effect = runtime
-                breg.seed.return_value = {"records": ["1"]}
-                breg.views.return_value = {"records/1": {"domainData": {"code": "a"}}}
-                new.run_json.side_effect = command
-                report = {}
-                registry = {"package": {}, "entities": [{"id": "record-group", "fields": []}]}
-                with (unittest.mock.patch.object(MODULE, "Breg", return_value=breg),
-                      unittest.mock.patch.object(MODULE, "Service"),
-                      unittest.mock.patch.object(MODULE, "instance_claim", side_effect=claim),
-                      unittest.mock.patch.object(MODULE, "load_yaml", return_value=registry),
-                      unittest.mock.patch.object(MODULE, "dump_yaml")):
-                    MODULE.rehearse_breg(root, unittest.mock.Mock(), postgres, old, new, report)
-                self.assertEqual(report["breg"]["rowLosses"], [])
-                self.assertEqual(report["breg"]["viewDifferences"], [])
-                self.assertEqual(len(ledger), 3 if changed else 2)
-                if changed:
-                    self.assertLess(events.index(("apply", upgraded_package)),
-                                    events.index(("claim",)))
-                else:
-                    self.assertNotIn(("apply", upgraded_package), events)
+    def test_a_rebuild_refused_for_another_reason_stops_the_rehearsal(self) -> None:
+        refused = {"ok": False, "command": "plan", "diagnostics": [
+            {"severity": "error", "code": "apply.package.refused", "path": "package"}]}
+        for printed in (refused, {"ok": False, "command": "plan", "diagnostics": []}):
+            with (self.subTest(printed=printed), tempfile.TemporaryDirectory() as directory,
+                  self.assertRaisesRegex(Error, "bregctl plan refused the rebuilt")):
+                self.rehearse_ledger_upgrade(Path(directory), printed)
 
     def test_a_ledger_runtime_names_only_the_package_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
