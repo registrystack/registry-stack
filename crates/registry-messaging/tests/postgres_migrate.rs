@@ -259,6 +259,96 @@ async fn version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys
     );
 }
 
+/// An earlier runtime can still be serving when version 3 is applied. A
+/// record it commits while the upgrade waits for the idempotency table is
+/// discarded with the rest, and the upgrade completes rather than failing
+/// on a row that has no issuer or subject.
+#[tokio::test]
+async fn version_3_discards_a_record_an_earlier_runtime_commits_while_it_waits() {
+    let harness = Harness::start().await;
+    let first_tail = include_str!("../migrations/0001_messaging.sql");
+    let first_tail = &first_tail[first_tail
+        .find("CREATE TABLE messaging_idempotency")
+        .expect("version 1 creates the idempotency table")..];
+    harness
+        .isolated
+        .admin
+        .batch_execute(&format!(
+            "DROP TABLE messaging_idempotency; \
+             DELETE FROM messaging_schema_migrations WHERE version = 3; \
+             {first_tail}"
+        ))
+        .await
+        .expect("the version 2 idempotency table");
+
+    // The earlier runtime's submission is recorded but not yet committed
+    // when the upgrade starts.
+    let base = std::env::var("MESSAGING_TEST_DATABASE_URL")
+        .expect("MESSAGING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let separator = if base.contains('?') { '&' } else { '?' };
+    let scoped = format!(
+        "{base}{separator}options=-csearch_path%3D{}",
+        harness.isolated.schema
+    );
+    let (mut earlier, connection) = tokio_postgres::connect(&scoped, tokio_postgres::NoTls)
+        .await
+        .expect("connect as the earlier runtime");
+    tokio::spawn(async move { connection.await.expect("the earlier runtime's connection") });
+    let in_flight = earlier
+        .transaction()
+        .await
+        .expect("the earlier runtime's transaction");
+    in_flight
+        .execute(
+            "INSERT INTO messaging_idempotency \
+                 (principal, operation, idempotency_key, created_at, expires_at, erased_at) \
+             VALUES ('sha256:' || repeat('a', 64), 'submit-message', 'in-flight', \
+                     now(), now() + interval '30 days', now())",
+            &[],
+        )
+        .await
+        .expect("the earlier runtime's record");
+
+    let request = ApplyRequest::default();
+    let upgrade = apply_activation(&harness.config, &request);
+    let earlier_commits = async {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let waiting: bool = harness
+                    .isolated
+                    .admin
+                    .query_one(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks \
+                          WHERE relation = 'messaging_idempotency'::regclass AND NOT granted)",
+                        &[],
+                    )
+                    .await
+                    .expect("the waiting locks")
+                    .get(0);
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the upgrade waits for the earlier runtime's transaction");
+        in_flight
+            .commit()
+            .await
+            .expect("the earlier runtime commits");
+    };
+    let (applied, ()) = tokio::join!(upgrade, earlier_commits);
+    let applied = applied.expect("messagingctl apply");
+    assert_eq!(applied.schema_versions_applied, [3]);
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_idempotency")
+            .await,
+        0
+    );
+}
+
 /// A free loopback port, released for the runtime to bind.
 fn free_port() -> SocketAddr {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
