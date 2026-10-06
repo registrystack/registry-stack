@@ -59,10 +59,11 @@ invariants:
     partialNote: >-
       Only the grant's expiry is read again inside the transaction. The bounds
       themselves, the service, the location, the action, and the client, are
-      matched once at the service before the transaction opens, and this
-      milestone has no revocation check, so a grant narrowed or withdrawn at the
-      issuer keeps the authority its token carries until the token or the grant
-      deadline passes. See deferred entry SCHEDULING-DEF-01.
+      matched once at the service before the transaction opens, and the
+      runtime does not ask the issuer for the grant's current status, so a
+      grant revoked or narrowed at the issuer keeps the authority its token
+      carries until the token or the grant deadline passes. See deferred entry
+      SCHEDULING-DEF-01.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: a_grant_that_lapses_before_the_commit_never_books
@@ -663,13 +664,24 @@ deferred:
     state: deferred
     reason: >-
       The grant's bounds travel in the presented token and are matched once at
-      the service. Re-reading them inside the transaction only defends against
-      a grant narrowed at the issuer between the door and the commit, which
-      needs a revocation or introspection path this milestone does not have.
-      The expiry, which is the fact that does change on its own, is re-checked.
+      the service; its expiry, the fact that changes on its own, is re-checked
+      inside the capacity transaction (SCHEDULING-SEC-03). Re-reading the
+      bounds there only defends against a grant revoked or narrowed at the
+      issuer between the door and the commit. Casework answers that question
+      at GET /v1/task-grants/{grantId}/status, and BREG asks it before its
+      writes, but a status call from Scheduling would put Casework's
+      availability inside every capacity transaction: each commitment would
+      hold its capacity locks while it waits on another product, and would
+      have to refuse while that product is unreachable. Revisit when an
+      adopter needs a revocation to take effect faster than a grant expires.
     compensatingControl: >-
-      Short grant deadlines. The published reference states the limit plainly
-      rather than claiming the bounds are re-read.
+      Casework, the maintained grant issuer, holds every task grant to a
+      lifetime of at most 900 seconds, and the expiry re-check inside the
+      transaction means a revoked grant commits capacity for at most the rest
+      of that deadline. Scheduling verifies a grant's deadline but does not cap
+      it, so a grant minted by another authority keeps that authority's
+      lifetime. The published reference states the limit and the revisit
+      trigger plainly rather than claiming the bounds are re-read.
     recordedIn: docs/site/src/content/docs/reference/apis/registry-scheduling.mdx
   - id: SCHEDULING-DEF-04
     subject: Channel bound to the verified caller
