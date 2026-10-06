@@ -1,11 +1,12 @@
 //! Bounded same-key retry for idempotency-keyed mutations.
 //!
-//! A product client classifies each attempt with its own error model; this
-//! module owns only the loop, the retry budget, and the wait between attempts.
+//! A product client judges each error with its own error model; this module
+//! owns the rule that turns that judgement into a resend decision, the loop,
+//! the retry budget, and the wait between attempts.
 
 use std::{future::Future, time::Duration};
 
-use http::{header::RETRY_AFTER, HeaderMap};
+use http::{header::RETRY_AFTER, HeaderMap, StatusCode};
 
 /// Same-key retries a client makes, by default, for one idempotency-keyed
 /// mutation whose outcome is unknown.
@@ -65,6 +66,39 @@ pub enum KeyedMutationAttempt<T, E> {
     /// The outcome is unknown, but a resend would be answered the same way,
     /// such as an oversized or unparseable success answer.
     Unknown(E),
+}
+
+/// Classify one attempt of an idempotency-keyed mutation for
+/// [`retry_keyed_mutation`].
+///
+/// `status` and `retry_after` describe the answer, or are `None` and
+/// [`RetryAfter::Absent`] when the send failed before one arrived. The
+/// product client supplies two judgements of its own error:
+/// `outcome_unknown`, whether the mutation may have taken effect, and
+/// `resend_may_settle`, whether resending the identical request could settle
+/// it. A known failure settles the mutation. An unknown outcome is resent
+/// when the answer carried a 5xx status, whatever stage of decoding failed,
+/// or when `resend_may_settle` holds. Any other unknown outcome would be
+/// answered the same way again, so it is returned without a resend.
+pub fn classify_keyed_attempt<T, E>(
+    result: Result<T, E>,
+    status: Option<StatusCode>,
+    retry_after: RetryAfter,
+    outcome_unknown: fn(&E) -> bool,
+    resend_may_settle: fn(&E) -> bool,
+) -> KeyedMutationAttempt<T, E> {
+    let error = match result {
+        Ok(value) => return KeyedMutationAttempt::Settled(Ok(value)),
+        Err(error) => error,
+    };
+    if !outcome_unknown(&error) {
+        return KeyedMutationAttempt::Settled(Err(error));
+    }
+    if status.is_some_and(|status| status.is_server_error()) || resend_may_settle(&error) {
+        KeyedMutationAttempt::Retryable { error, retry_after }
+    } else {
+        KeyedMutationAttempt::Unknown(error)
+    }
 }
 
 /// Run one idempotency-keyed mutation, resending the identical request under
@@ -287,6 +321,91 @@ mod tests {
             http::HeaderValue::from_bytes(b"\xff").expect("an opaque field value"),
         );
         assert_eq!(RetryAfter::from_headers(&opaque), RetryAfter::Unusable);
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Classified {
+        unknown: bool,
+        resend_may_settle: bool,
+    }
+
+    fn classify(
+        result: Result<u32, Classified>,
+        status: Option<u16>,
+        retry_after: RetryAfter,
+    ) -> KeyedMutationAttempt<u32, Classified> {
+        classify_keyed_attempt(
+            result,
+            status.map(|status| StatusCode::from_u16(status).expect("a status code")),
+            retry_after,
+            |error| error.unknown,
+            |error| error.resend_may_settle,
+        )
+    }
+
+    const KNOWN: Classified = Classified {
+        unknown: false,
+        resend_may_settle: false,
+    };
+    const UNKNOWN: Classified = Classified {
+        unknown: true,
+        resend_may_settle: false,
+    };
+    const SETTLEABLE: Classified = Classified {
+        unknown: true,
+        resend_may_settle: true,
+    };
+
+    #[test]
+    fn a_value_or_a_known_failure_settles_the_mutation() {
+        assert!(matches!(
+            classify(Ok(7), Some(201), RetryAfter::Absent),
+            KeyedMutationAttempt::Settled(Ok(7))
+        ));
+        for status in [None, Some(409), Some(500), Some(503)] {
+            assert!(
+                matches!(
+                    classify(Err(KNOWN), status, RetryAfter::Seconds(1)),
+                    KeyedMutationAttempt::Settled(Err(KNOWN))
+                ),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_outcome_on_a_5xx_answer_or_one_a_resend_may_settle_is_retryable() {
+        for (error, status) in [
+            (UNKNOWN, Some(500)),
+            (UNKNOWN, Some(503)),
+            (SETTLEABLE, Some(502)),
+            (SETTLEABLE, None),
+            (SETTLEABLE, Some(201)),
+        ] {
+            assert!(
+                matches!(
+                    classify(Err(error), status, RetryAfter::Seconds(2)),
+                    KeyedMutationAttempt::Retryable {
+                        error: classified,
+                        retry_after: RetryAfter::Seconds(2),
+                    } if classified == error
+                ),
+                "{error:?} {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_unknown_outcome_is_not_resent() {
+        for status in [None, Some(201), Some(302), Some(409)] {
+            assert!(
+                matches!(
+                    classify(Err(UNKNOWN), status, RetryAfter::Absent),
+                    KeyedMutationAttempt::Unknown(UNKNOWN)
+                ),
+                "{status:?}"
+            );
+        }
     }
 
     #[test]
