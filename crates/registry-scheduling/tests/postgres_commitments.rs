@@ -999,8 +999,8 @@ async fn external_references_survive_the_lifecycle_and_filter_only_owned_appoint
 
 /// Issue #1914. An orchestrator that booked under a task grant learns the
 /// outcome after the grant has expired by reading, not by replaying: the
-/// expired grant is refused at the door on every route, a grantless read
-/// token for the same issuer and subject finds the appointment by its
+/// expired grant is refused at the door on every `/v1` route, a grantless
+/// read token for the same issuer and subject finds the appointment by its
 /// external reference, and another principal sees nothing.
 #[tokio::test]
 async fn a_booking_stays_observable_by_reference_after_its_grant_expires() {
@@ -1026,12 +1026,12 @@ async fn a_booking_stays_observable_by_reference_after_its_grant_expires() {
         .expect("an appointment identifier")
         .to_owned();
 
-    // The grant's deadline passes: the capacity clock moves beyond it, and
-    // the booking principal's token now carries a grant whose deadline the
-    // edge judges as passed. The pinned instant is tomorrow at ten, so two
-    // days before it is already behind the system clock the edge reads.
-    let later = pinned_now() + TimeDelta::minutes(20);
-    fx.store.pin_clock(Arc::new(move || later));
+    // The grant's expiry is simulated, not waited for: the same principal
+    // presents a token whose grant deadline lies two days before the pinned
+    // instant (tomorrow at ten), so the edge, which judges the deadline
+    // against the system clock, refuses it as lapsed. No capacity clock is
+    // involved: the lapsed token is refused before any transaction opens,
+    // and the reads that follow consult no clock.
     let mut lapsed_claims = grant_claims();
     lapsed_claims["registry_grant_exp"] = json!(pinned_now().timestamp() - 2 * 86_400);
     let lapsed_object = lapsed_claims
@@ -1058,6 +1058,14 @@ async fn a_booking_stays_observable_by_reference_after_its_grant_expires() {
     assert_eq!(
         problem["code"], "authentication.refused",
         "an expired grant refuses the whole token, its read scope included"
+    );
+    let (status, problem) = fx
+        .get(&format!("/v1/appointments/{appointment_id}"), &lapsed)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{problem}");
+    assert_eq!(
+        problem["code"], "authentication.refused",
+        "an expired grant refuses a read by identifier too"
     );
 
     let same_principal = token(json!({
@@ -1096,6 +1104,172 @@ async fn a_booking_stays_observable_by_reference_after_its_grant_expires() {
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     assert_eq!(refused["code"], "operation.not-authorized");
+}
+
+/// The owner of a hold or an appointment is the pseudonym `audit.hashKeyRef`
+/// keys over the issuer and subject, not the identity itself. This pins what
+/// the operator and recovery documentation warn about: an edge serving the
+/// same deployment under a rotated audit key no longer recognises the caller
+/// that booked. Its listing by external reference answers an empty page, a
+/// read by identifier, a reschedule, and a cancel are refused as another
+/// caller's, and its hold can no longer be released by it, while the claims
+/// themselves stay committed. An empty page proves no booking only while the audit key is
+/// the one the attempt ran under.
+#[tokio::test]
+async fn rotating_the_audit_key_detaches_existing_claims_from_their_owner() {
+    let fx = fixture().await;
+    let reference = case_reference("case-rotation");
+    let reference_uri = appointments_by_reference_uri("case-rotation", 10, None);
+
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let mut referenced = admission(&fx, OFFERING, slot);
+    referenced["externalReferences"] = json!([reference.clone()]);
+    let (status, booked) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "rotation-booking",
+            json!({"hold": null, "admission": referenced}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{booked}");
+    let appointment_id = booked["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier")
+        .to_owned();
+    let revision = booked["revision"].as_u64().expect("a revision");
+    let hold_slot = first_slot(&fx, OFFERING, 600, 740).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "rotation-hold",
+            admission(&fx, OFFERING, hold_slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"]
+        .as_str()
+        .expect("a hold identifier")
+        .to_owned();
+    let reschedule_slot = first_slot(&fx, OFFERING, 900, 1040).await;
+
+    let same_principal = token(json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    }));
+    let (status, page) = fx.get(&reference_uri, &same_principal).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(1),
+        "under the key it booked with, the caller finds its booking: {page}"
+    );
+
+    // The same store, policy, revision, and audit destination, served under
+    // another audit hash key: an operator's `audit.hashKeyRef` rotation.
+    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let digest = policy.policy_digest();
+    let rotated_key = AuditHashSecret::new(vec![0x24; 32]).expect("the rotated audit hash secret");
+    let rotated = router(HttpState {
+        service: Arc::new(
+            SchedulingService::new(
+                fx.store.clone(),
+                policy,
+                SCHEDULING_ID.to_owned(),
+                i64::try_from(fx.revision).expect("a bounded policy revision"),
+                digest,
+                AuditKeyHasher::Keyed(rotated_key),
+                fx.audit.clone(),
+                7,
+            )
+            .with_hooks(fx.hooks.clone()),
+        ),
+        authenticator: Arc::new(authenticator()),
+        store: fx.store.clone(),
+    });
+    let through_rotated = |method: &str, uri: String, token: &str, key: Option<&str>, body| {
+        send(
+            rotated.clone(),
+            method.to_owned(),
+            uri,
+            token.to_owned(),
+            key.map(str::to_owned),
+            body,
+        )
+    };
+
+    let (status, page) =
+        through_rotated("GET", reference_uri.clone(), &same_principal, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page["items"],
+        json!([]),
+        "after the rotation the caller that booked sees an empty page"
+    );
+    let (status, refused) = through_rotated(
+        "GET",
+        format!("/v1/appointments/{appointment_id}"),
+        &same_principal,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "operation.not-authorized");
+    let (status, refused) = through_rotated(
+        "POST",
+        format!("/v1/appointments/{appointment_id}/reschedule"),
+        &fx.agent,
+        Some("rotation-reschedule"),
+        Some(json!({
+            "observedRevision": revision,
+            "admission": admission(&fx, OFFERING, reschedule_slot),
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "operation.not-authorized");
+    let (status, refused) = through_rotated(
+        "POST",
+        format!("/v1/appointments/{appointment_id}/cancel"),
+        &fx.agent,
+        Some("rotation-cancel"),
+        Some(json!({"observedRevision": revision, "reason": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "operation.not-authorized");
+    let (status, refused) = through_rotated(
+        "DELETE",
+        format!("/v1/holds/{hold_id}"),
+        &fx.agent,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "operation.not-authorized");
+
+    // Nothing was released or cancelled: both claims are still committed,
+    // and the original key still finds the booking.
+    for claim_id in [&appointment_id, &hold_id] {
+        let state = fx
+            .admin
+            .query_one(
+                "SELECT state FROM scheduling_claims WHERE claim_id = $1::text::uuid",
+                &[claim_id],
+            )
+            .await
+            .expect("read the claim's state");
+        assert_eq!(state.get::<_, String>(0), "active", "{claim_id}");
+    }
+    let (status, page) = fx.get(&reference_uri, &same_principal).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["items"][0]["appointmentId"], json!(appointment_id));
+    assert_eq!(page["items"][0]["state"], "confirmed");
 }
 
 async fn hook_fixture() -> Fixture {
