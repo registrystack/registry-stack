@@ -87,14 +87,19 @@ pub fn base_url_without_userinfo(base_url: &Url) -> Cow<'_, str> {
 }
 
 /// Why a send failed, in the terms the caller can act on.
+///
+/// A connection that was never established is [`TransportKind::Connect`] even
+/// when it failed by timing out, because no request was sent on it.
+/// [`TransportKind::Timeout`] is a timeout that elapsed after the connection
+/// was established, or the total request timeout elapsing first.
 pub fn send_failure_kind(error: &reqwest::Error) -> TransportKind {
-    if error.is_timeout() {
-        TransportKind::Timeout
-    } else if error.is_connect() {
-        // TLS negotiation failures arrive here too. Separating them would mean
-        // reading a transport error chain whose text this crate must not copy
-        // into a diagnostic.
+    if error.is_connect() {
+        // TLS negotiation failures arrive here too, as does the connect
+        // timeout. Separating them would mean reading a transport error chain
+        // whose text this crate must not copy into a diagnostic.
         TransportKind::Connect
+    } else if error.is_timeout() {
+        TransportKind::Timeout
     } else {
         TransportKind::Exchange
     }
@@ -117,5 +122,61 @@ pub fn read_failure_kind(error: &BoundedReadError) -> TransportKind {
         // about the response size, which is the one thing an adopter would act on
         // by raising their own bound.
         _ => TransportKind::Exchange,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use tokio::net::{TcpListener, TcpSocket, TcpStream};
+
+    use super::*;
+
+    /// A loopback listener that never accepts, with its backlog full, so a
+    /// further connection attempt is neither completed nor refused. The
+    /// returned listener and streams must outlive the attempt.
+    async fn unanswered_address() -> (SocketAddr, TcpListener, Vec<TcpStream>) {
+        let socket = TcpSocket::new_v4().expect("a loopback socket");
+        socket
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .expect("bind a loopback port");
+        let listener = socket.listen(1).expect("listen with the smallest backlog");
+        let address = listener.local_addr().expect("the bound address");
+        // Platforms round the backlog differently, so fill it until a
+        // connection attempt stops completing.
+        let mut held = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_millis(100), TcpStream::connect(address))
+                .await
+            {
+                Ok(Ok(stream)) => held.push(stream),
+                Ok(Err(error)) => panic!("the backlog refused instead of stalling: {error}"),
+                Err(_) => break,
+            }
+            assert!(held.len() < 64, "the listen backlog never filled");
+        }
+        (address, listener, held)
+    }
+
+    #[tokio::test]
+    async fn a_connect_timeout_is_a_connection_failure() {
+        let (address, _listener, _held) = unanswered_address().await;
+        let client = build_client(OutboundOptions {
+            request_timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_millis(200),
+            user_agent: None,
+            trusted_root_certificates: None,
+        })
+        .expect("an outbound client");
+
+        let error = client
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .expect_err("a connection that never completes fails");
+
+        assert!(error.is_connect(), "the connect timeout fired: {error:?}");
+        assert_eq!(send_failure_kind(&error), TransportKind::Connect);
     }
 }
