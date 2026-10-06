@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-10-07"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -283,12 +283,16 @@ item.
 
 ### Idempotency
 
-Send `Idempotency-Key` (at most 256 bytes) on any create, patch, tombstone, batch, request
-action, or immediate action. Request actions and immediate actions require the header.
+Send `Idempotency-Key` (1 to 256 visible ASCII bytes, without a comma or semicolon) on any create,
+patch, tombstone, batch, request action, or immediate action. Request actions and immediate actions
+require the header.
 
-- Keys are per caller. The configured token issuer, the principal value, the operation, and the
-  key find a spent key, so two callers that send the same key never meet, and the same key under
-  another principal is that principal's own request.
+- Keys are per verified caller, in one key space shared by every write that caller sends. The
+  configured token issuer, the principal value, and the key find a spent key, so two callers that
+  send the same key never meet, and the same key under another principal is that principal's own
+  request. A key one caller spent on one write answers `409 idempotency.conflict` on any other
+  write, statistics publication and withdrawal included, because the binding names the route,
+  method, and target record.
 - Only successes are held. A refused or failed attempt spends nothing, so correct the request and
   retry it with the same key.
 - A repeat of the same request under the same key returns the held response without writing
@@ -303,7 +307,10 @@ action, or immediate action. Request actions and immediate actions require the h
   record instead of retrying.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), and precondition_required();
+    crates/registry-breg/src/api/mod.rs, valid_idempotency_key() and MAX_IDEMPOTENCY_KEY_BYTES;
     crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, resolve_binding(), and lock_and_load();
+    crates/registry-breg/src/idempotency.rs, KEY_SCOPE_MUTATION and SpentKeyCaller;
+    crates/registry-breg/src/postgres/statistics.rs, IdempotencyKeyDomain::Caller;
     crates/registry-breg/src/mutation/request.rs;
     crates/registry-breg/src/postgres/mutation.rs;
     crates/registry-breg/src/artifacts.rs, batch_response_schema;
