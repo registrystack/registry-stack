@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Bounded response decoding for the isolated source-adaptation worker.
+//! Bounded response decoding for reviewed scripts.
 //!
 //! This is the one intentional general-value decoder for registry data. Its
-//! output is admitted only to an isolated script worker boundary. Raw
+//! output is admitted only to a reviewed script. Raw
 //! destination bytes remain inaccessible, JSON is strict, and code-owned
 //! structural limits are applied before and after allocation.
 
@@ -15,9 +15,9 @@ use crate::destination::{BoundedDestinationBody, DataDestinationBody};
 
 use super::preflight::{preflight_json, JsonPreflightError};
 
-/// Maximum nesting depth of JSON admitted to a source-adaptation script.
+/// Maximum nesting depth of JSON admitted to a script.
 pub const MAX_SCRIPT_JSON_DEPTH: usize = 32;
-/// Maximum aggregate JSON values admitted to a source-adaptation script.
+/// Maximum aggregate JSON values admitted to a script.
 pub const MAX_SCRIPT_JSON_NODES: usize = 65_536;
 /// Maximum members in any one JSON object admitted to a script.
 pub const MAX_SCRIPT_JSON_OBJECT_MEMBERS: usize = 4_096;
@@ -31,8 +31,6 @@ pub const MAX_SCRIPT_JSON_STRING_BYTES: usize = 1_048_576;
 pub enum ScriptResponseDecodeError {
     #[error("script source response is not strict JSON")]
     InvalidJson,
-    #[error("script source response is not valid UTF-8 text")]
-    InvalidText,
     #[error("script source response exceeds a code-owned structural limit")]
     StructuralLimitExceeded,
 }
@@ -60,31 +58,8 @@ impl std::fmt::Debug for ScriptJsonResponse {
     }
 }
 
-/// UTF-8 text plus the encoded byte count consumed from the source budget.
-pub struct ScriptTextResponse {
-    value: Zeroizing<String>,
-    encoded_bytes: usize,
-}
-
-impl ScriptTextResponse {
-    #[must_use]
-    pub fn into_parts(self) -> (Zeroizing<String>, usize) {
-        (self.value, self.encoded_bytes)
-    }
-}
-
-impl std::fmt::Debug for ScriptTextResponse {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ScriptTextResponse")
-            .field("value", &"[REDACTED]")
-            .field("encoded_bytes", &self.encoded_bytes)
-            .finish()
-    }
-}
-
-/// Consume an opaque destination body and release bounded strict JSON to the
-/// isolated source-adaptation worker.
+/// Consume an opaque destination body and release bounded strict JSON to a
+/// reviewed script.
 ///
 /// Callers must also enforce the authored per-response and aggregate byte
 /// limits before invoking this decoder. This function enforces code-owned
@@ -94,17 +69,6 @@ pub fn decode_script_json(
 ) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
     let BoundedDestinationBody { bytes, slot: _ } = body;
     decode_script_json_bytes(bytes)
-}
-
-/// Decode caller-owned fixture bytes with the production Script JSON kernel.
-///
-/// This entry point exists so an offline fixture cannot accept a response
-/// that the opaque production transport path would reject. It releases the
-/// same bounded parsed value and never exposes transport-owned raw bytes.
-pub fn decode_script_fixture_json(
-    body: Vec<u8>,
-) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
-    decode_script_json_bytes(Zeroizing::new(body))
 }
 
 fn decode_script_json_bytes(
@@ -130,41 +94,6 @@ fn decode_script_json_bytes(
         value: parsed,
         encoded_bytes,
     })
-}
-
-/// Consume an opaque destination body and release bounded UTF-8 text to the
-/// isolated source-adaptation worker.
-pub fn decode_script_text(
-    body: DataDestinationBody,
-) -> Result<ScriptTextResponse, ScriptResponseDecodeError> {
-    let BoundedDestinationBody { bytes, slot: _ } = body;
-    decode_script_text_bytes(bytes)
-}
-
-/// Decode caller-owned fixture bytes with the production Script text kernel.
-///
-/// The one MiB code-owned text ceiling and UTF-8 validation are identical to
-/// the opaque production transport path.
-pub fn decode_script_fixture_text(
-    body: Vec<u8>,
-) -> Result<ScriptTextResponse, ScriptResponseDecodeError> {
-    decode_script_text_bytes(Zeroizing::new(body))
-}
-
-fn decode_script_text_bytes(
-    bytes: Zeroizing<Vec<u8>>,
-) -> Result<ScriptTextResponse, ScriptResponseDecodeError> {
-    let encoded_bytes = bytes.len();
-    if bytes.len() > MAX_SCRIPT_JSON_STRING_BYTES {
-        return Err(ScriptResponseDecodeError::StructuralLimitExceeded);
-    }
-    String::from_utf8(bytes.to_vec())
-        .map(Zeroizing::new)
-        .map(|value| ScriptTextResponse {
-            value,
-            encoded_bytes,
-        })
-        .map_err(|_| ScriptResponseDecodeError::InvalidText)
 }
 
 fn validate_shape(
@@ -242,57 +171,6 @@ mod tests {
         );
         assert!(matches!(
             decode_script_json(body(nested)),
-            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
-        ));
-    }
-
-    #[test]
-    fn decodes_bounded_text() {
-        let (text, encoded_bytes) = decode_script_text(body("plain text")).unwrap().into_parts();
-        assert_eq!(text.as_str(), "plain text");
-        assert_eq!(encoded_bytes, 10);
-        assert!(matches!(
-            decode_script_text(body([0xff])),
-            Err(ScriptResponseDecodeError::InvalidText)
-        ));
-    }
-
-    #[test]
-    fn production_and_fixture_json_paths_reject_the_same_semantic_limits() {
-        let duplicate = br#"{"id":1,"id":2}"#;
-        assert!(matches!(
-            decode_script_json(body(duplicate)),
-            Err(ScriptResponseDecodeError::InvalidJson)
-        ));
-        assert!(matches!(
-            decode_script_fixture_json(duplicate.to_vec()),
-            Err(ScriptResponseDecodeError::InvalidJson)
-        ));
-
-        let nested = format!(
-            "{}0{}",
-            "[".repeat(MAX_SCRIPT_JSON_DEPTH),
-            "]".repeat(MAX_SCRIPT_JSON_DEPTH)
-        );
-        assert!(matches!(
-            decode_script_json(body(&nested)),
-            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
-        ));
-        assert!(matches!(
-            decode_script_fixture_json(nested.into_bytes()),
-            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
-        ));
-    }
-
-    #[test]
-    fn production_and_fixture_text_paths_reject_the_same_size_limit() {
-        let oversized = vec![b'x'; MAX_SCRIPT_JSON_STRING_BYTES + 1];
-        assert!(matches!(
-            decode_script_text(body(&oversized)),
-            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
-        ));
-        assert!(matches!(
-            decode_script_fixture_text(oversized),
             Err(ScriptResponseDecodeError::StructuralLimitExceeded)
         ));
     }

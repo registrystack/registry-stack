@@ -61,8 +61,6 @@ pub const MAX_DESTINATION_PRIVATE_CIDRS: usize = 16;
 pub const MAX_DESTINATION_RESOLVER_ANSWERS: usize = 32;
 /// Maximum operation path-and-query length.
 pub const MAX_DESTINATION_TARGET_BYTES: usize = 4_096;
-/// Maximum decoded bytes in one compiler-owned dynamic path segment.
-pub const MAX_DESTINATION_PATH_SEGMENT_BYTES: usize = 1_024;
 /// Maximum fixed query components on one reviewed request template.
 pub const MAX_DESTINATION_REQUEST_QUERY_COMPONENTS: usize = 32;
 /// Maximum static header count on one operation.
@@ -673,47 +671,6 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
     #[must_use]
     pub fn origin_id(&self) -> &str {
         &self.origin_id
-    }
-
-    /// Convert a relative reference or an exact same-origin absolute URL into
-    /// the canonical relative target accepted by bounded destination requests.
-    ///
-    /// This deliberately reveals no configured origin. Absolute pagination
-    /// links are admitted only when their URL origin exactly matches the frozen
-    /// destination, and the returned target still passes the ordinary target,
-    /// path-authority, request-size, and dispatch checks.
-    pub fn canonicalize_same_origin_target(
-        &self,
-        target: &str,
-    ) -> Result<String, DestinationTargetCanonicalizationError> {
-        if target.starts_with('/') {
-            validate_destination_target(target)
-                .map_err(|_| DestinationTargetCanonicalizationError::InvalidTarget)?;
-            return Ok(target.to_owned());
-        }
-        if target.len()
-            > MAX_DESTINATION_ORIGIN_URL_BYTES.saturating_add(MAX_DESTINATION_TARGET_BYTES)
-        {
-            return Err(DestinationTargetCanonicalizationError::InvalidTarget);
-        }
-        let parsed = Url::parse(target)
-            .map_err(|_| DestinationTargetCanonicalizationError::InvalidTarget)?;
-        if !parsed.username().is_empty()
-            || parsed.password().is_some()
-            || parsed.fragment().is_some()
-            || parsed.origin() != self.origin.origin()
-            || absolute_reference_contains_dot_segment(target)
-        {
-            return Err(DestinationTargetCanonicalizationError::AuthorityDenied);
-        }
-        let mut relative = parsed.path().to_owned();
-        if let Some(query) = parsed.query() {
-            relative.push('?');
-            relative.push_str(query);
-        }
-        validate_destination_target(&relative)
-            .map_err(|_| DestinationTargetCanonicalizationError::InvalidTarget)?;
-        Ok(relative)
     }
 
     /// Frozen non-secret DNS address-family policy.
@@ -1646,14 +1603,6 @@ enum RequestTemplateKind {
     EventDelivery,
 }
 
-enum TargetTemplateInput<'a> {
-    Fixed(&'a str),
-    PathSegment {
-        fixed_path: &'a str,
-        max_value_bytes: usize,
-    },
-}
-
 /// Slot-typed, immutable request shape compiled before any sensitive values exist.
 ///
 /// The template freezes the method, fixed path, query/header names, and reviewed
@@ -1663,7 +1612,6 @@ enum TargetTemplateInput<'a> {
 pub struct BoundedDestinationRequestTemplate<S: DestinationSlot> {
     method: DestinationMethod,
     fixed_path: String,
-    path_segment_max_bytes: Option<usize>,
     query: Vec<QueryValueTemplate>,
     headers: Vec<HeaderValueTemplate>,
     authorization: DestinationAuthorizationTemplate,
@@ -1803,7 +1751,7 @@ impl BoundedDestinationRequestTemplate<CredentialDestination> {
         ];
         Self::new_with_headers(
             RequestTemplateKind::OAuth2ClientCredentials(format),
-            TargetTemplateInput::Fixed(fixed_path),
+            fixed_path,
             &[],
             &headers,
             DestinationAuthorizationTemplate::Forbidden,
@@ -1882,7 +1830,7 @@ impl BoundedDestinationRequestTemplate<EventDestination> {
         ];
         Self::new_with_headers(
             RequestTemplateKind::EventDelivery,
-            TargetTemplateInput::Fixed(fixed_path),
+            fixed_path,
             &[],
             &headers,
             DestinationAuthorizationTemplate::Forbidden,
@@ -1973,7 +1921,6 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
         Ok(Self {
             method: DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post),
             fixed_path: "/".to_owned(),
-            path_segment_max_bytes: None,
             query: Vec::new(),
             headers,
             authorization: DestinationAuthorizationTemplate::Forbidden,
@@ -2011,7 +1958,6 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
             credentials,
         };
         self.render_zeroizing_parts(
-            None,
             &[],
             &[action.as_bytes()],
             None,
@@ -2020,43 +1966,12 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
         )
     }
 
-    /// Compile the maximum request authority available to one reviewed script allow rule.
-    ///
-    /// Query names and values remain script-authored and are bounded at render time. Header
-    /// names and path shape are frozen here. Authentication material remains host-owned.
-    ///
-    /// Only read-only classes are accepted; a side-effecting send compiles
-    /// through [`Self::new_script_send`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_script(
-        method: DestinationMethod,
-        path_rule: &str,
-        request_headers: &[&str],
-        authorization: DestinationAuthorizationTemplate,
-        api_key_header: Option<(&str, usize)>,
-        api_key_query: Option<(&str, usize)>,
-        max_request_bytes: usize,
-    ) -> Result<Self, DestinationRequestError> {
-        if method.is_side_effecting() {
-            return Err(DestinationRequestError::MethodSlotMismatch);
-        }
-        Self::compile_script(
-            method,
-            path_rule,
-            request_headers,
-            authorization,
-            api_key_header,
-            api_key_query,
-            max_request_bytes,
-        )
-    }
-
     /// Compile the maximum request authority of one side-effecting send, such
     /// as submitting work the destination then carries out.
     ///
-    /// The authority is the same as [`Self::new_script`]: a frozen path rule
-    /// and header names, script-authored query members, and host-owned Basic,
-    /// Bearer, API-key header, or API-key query authentication. A POST send
+    /// The authority is a frozen path rule and header names, script-authored
+    /// query members, and host-owned Basic, Bearer, API-key header, or API-key
+    /// query authentication. A POST send
     /// requires a JSON or form body. A GET send forbids a body and exists only
     /// behind [`QueryStringContentAcknowledgement`].
     ///
@@ -2175,7 +2090,6 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
         Ok(Self {
             method,
             fixed_path: path_rule_display(&path_rule),
-            path_segment_max_bytes: None,
             query: Vec::new(),
             headers: Vec::new(),
             authorization,
@@ -2417,7 +2331,6 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequestTemplate<S> {
             .field("slot", &S::DEBUG_NAME)
             .field("method", &self.method)
             .field("fixed_path", &"[REDACTED]")
-            .field("path_segment", &self.path_segment_max_bytes.is_some())
             .field("query_count", &self.query.len())
             .field("header_count", &self.headers.len())
             .field("authorization", &self.authorization)
@@ -2456,52 +2369,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             .collect::<Vec<_>>();
         Self::new_with_headers(
             RequestTemplateKind::General(method),
-            TargetTemplateInput::Fixed(fixed_path),
-            query,
-            &headers,
-            authorization,
-            body,
-            max_request_bytes,
-        )
-    }
-
-    /// Validate and freeze a request with one compiler-owned dynamic path segment.
-    ///
-    /// The fixed path must end in `/`. Rendering accepts exactly one non-empty
-    /// segment, encodes it as a single RFC 3986 path component, and rejects
-    /// path delimiters, traversal segments, control bytes, and pre-encoding.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_path_segment(
-        method: DestinationMethod,
-        fixed_path: &str,
-        path_segment_max_bytes: usize,
-        query: &[(&str, usize)],
-        headers: &[(&str, usize)],
-        authorization: DestinationAuthorizationTemplate,
-        body: DestinationBodyTemplate,
-        max_request_bytes: usize,
-    ) -> Result<Self, DestinationRequestError> {
-        if matches!(
-            method,
-            DestinationMethod::OAuth2ClientCredentialsPost
-                | DestinationMethod::EventPost
-                | DestinationMethod::SideEffectingSend(_)
-        ) {
-            return Err(DestinationRequestError::MethodSlotMismatch);
-        }
-        let headers = headers
-            .iter()
-            .map(|(name, max_value_bytes)| HeaderTemplateInput::Dynamic {
-                name,
-                max_value_bytes: *max_value_bytes,
-            })
-            .collect::<Vec<_>>();
-        Self::new_with_headers(
-            RequestTemplateKind::General(method),
-            TargetTemplateInput::PathSegment {
-                fixed_path,
-                max_value_bytes: path_segment_max_bytes,
-            },
+            fixed_path,
             query,
             &headers,
             authorization,
@@ -2534,7 +2402,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             .collect::<Vec<_>>();
         Self::new_with_headers(
             RequestTemplateKind::General(method),
-            TargetTemplateInput::Fixed(fixed_path),
+            fixed_path,
             query,
             &headers,
             authorization,
@@ -2545,7 +2413,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
 
     fn new_with_headers(
         kind: RequestTemplateKind,
-        target: TargetTemplateInput<'_>,
+        fixed_path: &str,
         query: &[(&str, usize)],
         headers: &[HeaderTemplateInput<'_>],
         authorization: DestinationAuthorizationTemplate,
@@ -2559,21 +2427,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             }
             RequestTemplateKind::EventDelivery => (DestinationMethod::EventPost, None),
         };
-        let (fixed_path, path_segment_max_bytes) = match target {
-            TargetTemplateInput::Fixed(fixed_path) => (fixed_path, None),
-            TargetTemplateInput::PathSegment {
-                fixed_path,
-                max_value_bytes,
-            } => (fixed_path, Some(max_value_bytes)),
-        };
         validate_fixed_destination_path(fixed_path)?;
-        if let Some(max_bytes) = path_segment_max_bytes {
-            if !fixed_path.ends_with('/')
-                || !(1..=MAX_DESTINATION_PATH_SEGMENT_BYTES).contains(&max_bytes)
-            {
-                return Err(DestinationRequestError::InvalidPathSegment);
-            }
-        }
         if query.len() > MAX_DESTINATION_REQUEST_QUERY_COMPONENTS {
             return Err(DestinationRequestError::TooManyQueryComponents);
         }
@@ -2648,11 +2502,6 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         }
 
         let mut target_bytes = fixed_path.len();
-        if let Some(max_bytes) = path_segment_max_bytes {
-            target_bytes = target_bytes
-                .checked_add(max_bytes.saturating_mul(3))
-                .ok_or(DestinationRequestError::TemplateBoundsExceeded)?;
-        }
         let mut retained_query = Vec::with_capacity(query.len());
         for (index, (name, max_value_bytes)) in query.iter().copied().enumerate() {
             if name.is_empty()
@@ -2738,7 +2587,6 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         Ok(Self {
             method,
             fixed_path: fixed_path.to_owned(),
-            path_segment_max_bytes,
             query: retained_query,
             headers: retained_headers,
             authorization,
@@ -2767,44 +2615,6 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         )
     }
 
-    /// Render one path-segment request into the opaque slot-typed capability.
-    pub fn render_with_path_segment(
-        &self,
-        path_segment: &str,
-        query_values: &[&str],
-        header_values: &[&[u8]],
-        authorization: Option<DestinationAuthorizationValue>,
-        body: Option<Vec<u8>>,
-    ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
-        self.render_zeroizing_parts(
-            Some(path_segment),
-            query_values,
-            header_values,
-            authorization,
-            body.map(Zeroizing::new),
-            None,
-        )
-    }
-
-    /// Render one path-segment request while retaining a sensitive body in zeroizing storage.
-    pub fn render_zeroizing_with_path_segment(
-        &self,
-        path_segment: &str,
-        query_values: &[&str],
-        header_values: &[&[u8]],
-        authorization: Option<DestinationAuthorizationValue>,
-        body: Option<Zeroizing<Vec<u8>>>,
-    ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
-        self.render_zeroizing_parts(
-            Some(path_segment),
-            query_values,
-            header_values,
-            authorization,
-            body,
-            None,
-        )
-    }
-
     /// Render a request while retaining a caller-produced sensitive body in zeroizing storage.
     pub fn render_zeroizing(
         &self,
@@ -2813,12 +2623,11 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         authorization: Option<DestinationAuthorizationValue>,
         body: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
-        self.render_zeroizing_parts(None, query_values, header_values, authorization, body, None)
+        self.render_zeroizing_parts(query_values, header_values, authorization, body, None)
     }
 
     fn render_zeroizing_parts(
         &self,
-        path_segment: Option<&str>,
         query_values: &[&str],
         header_values: &[&[u8]],
         authorization: Option<DestinationAuthorizationValue>,
@@ -2827,15 +2636,6 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
     ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
         if self.aws_json_signing.is_some() != aws_sigv4.is_some() {
             return Err(DestinationRequestError::AuthorizationShapeMismatch);
-        }
-        match (self.path_segment_max_bytes, path_segment) {
-            (None, None) => {}
-            (Some(max_bytes), Some(segment))
-                if !segment.is_empty()
-                    && segment.len() <= max_bytes
-                    && valid_dynamic_path_segment(segment) => {}
-            (Some(_), Some(_)) => return Err(DestinationRequestError::InvalidPathSegment),
-            _ => return Err(DestinationRequestError::TemplateValueCountMismatch),
         }
         let dynamic_header_count = self
             .headers
@@ -2901,9 +2701,6 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
 
         let mut target = BoundedTargetWriter::new(self.max_target_bytes);
         target.extend_from_slice(self.fixed_path.as_bytes())?;
-        if let Some(segment) = path_segment {
-            append_path_segment_component(&mut target, segment.as_bytes())?;
-        }
         for (index, (template, value)) in self.query.iter().zip(query_values).enumerate() {
             target.push(if index == 0 { b'?' } else { b'&' })?;
             append_form_component(&mut target, template.name.as_bytes())?;
@@ -3182,11 +2979,6 @@ fn compile_script_path_rule(path: &str) -> Result<ScriptPathRule, DestinationReq
     }
 }
 
-/// Validate one exact, single-segment-wildcard, or terminal-descendants script path rule.
-pub fn validate_script_destination_path_rule(path: &str) -> Result<(), DestinationRequestError> {
-    compile_script_path_rule(path).map(drop)
-}
-
 /// Whether a reviewed script may set this ordinary request header name.
 pub fn is_script_writable_request_header_name(name: &str) -> bool {
     HeaderName::from_str(name)
@@ -3288,14 +3080,6 @@ fn decode_script_component(value: &str) -> Result<String, DestinationRequestErro
     String::from_utf8(output).map_err(|_| DestinationRequestError::InvalidTarget)
 }
 
-fn valid_dynamic_path_segment(segment: &str) -> bool {
-    !matches!(segment, "." | "..")
-        && !segment.chars().any(disallowed_path_scalar)
-        && !segment.bytes().any(|byte| {
-            byte.is_ascii_control() || matches!(byte, b'/' | b'\\' | b'?' | b'%' | b';')
-        })
-}
-
 /// Unicode controls and invisible format characters that cannot be part of a
 /// reviewed path selector. In addition to Unicode `Control`, this closes the
 /// bidi, zero-width, line/paragraph, annotation, and tag controls that could
@@ -3316,23 +3100,6 @@ fn disallowed_path_scalar(character: char) -> bool {
                 | '\u{e0001}'
                 | '\u{e0020}'..='\u{e007f}'
         )
-}
-
-fn append_path_segment_component(
-    output: &mut BoundedTargetWriter,
-    value: &[u8],
-) -> Result<(), DestinationRequestError> {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for byte in value {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b':') {
-            output.push(*byte)?;
-        } else {
-            output.push(b'%')?;
-            output.push(HEX[usize::from(*byte >> 4)])?;
-            output.push(HEX[usize::from(*byte & 0x0f)])?;
-        }
-    }
-    Ok(())
 }
 
 /// One bounded operation request tied to a data or credential destination slot.
@@ -3393,85 +3160,6 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequest<S> {
 }
 
 impl<S: DestinationSlot> BoundedDestinationRequest<S> {
-    /// Return the complete non-credential request effect for a keyed
-    /// pre-dispatch commitment.
-    ///
-    /// Header and body octets are encoded losslessly. The separately retained
-    /// authorization capability is deliberately absent, so callers cannot
-    /// accidentally persist a credential in an audit commitment.
-    #[must_use]
-    pub fn noncredential_effect_value(&self, destination_id: &str) -> serde_json::Value {
-        self.effect_value(destination_id, false, false, false)
-    }
-
-    /// Build an effect while excluding the final reviewed header slot, which
-    /// is reserved for an API-key credential by the reviewed request template.
-    #[must_use]
-    pub fn effect_value_without_api_key_header(&self, destination_id: &str) -> serde_json::Value {
-        self.effect_value(destination_id, true, false, false)
-    }
-
-    /// Build an effect while excluding the final reviewed query slot, which
-    /// is reserved for an API-key credential by the reviewed request template.
-    #[must_use]
-    pub fn effect_value_without_api_key_query(&self, destination_id: &str) -> serde_json::Value {
-        self.effect_value(destination_id, false, true, false)
-    }
-
-    /// Build the non-secret shape of a credential exchange. OAuth request
-    /// bodies are intentionally omitted because they contain credentials.
-    #[must_use]
-    pub fn credential_exchange_effect_value(&self, destination_id: &str) -> serde_json::Value {
-        self.effect_value(destination_id, false, false, true)
-    }
-
-    fn effect_value(
-        &self,
-        destination_id: &str,
-        exclude_last_header: bool,
-        exclude_last_query: bool,
-        exclude_body: bool,
-    ) -> serde_json::Value {
-        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        use base64::Engine as _;
-
-        let method = match self.method {
-            DestinationMethod::Get
-            | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Get(_)) => "GET",
-            DestinationMethod::ReviewedReadOnlyPost
-            | DestinationMethod::OAuth2ClientCredentialsPost
-            | DestinationMethod::EventPost
-            | DestinationMethod::SideEffectingSend(SideEffectingSendMethod::Post) => "POST",
-        };
-        let target = std::str::from_utf8(&self.target)
-            .expect("bounded destination targets are validated UTF-8");
-        let target = if exclude_last_query {
-            target
-                .rsplit_once('&')
-                .map(|(prefix, _)| prefix)
-                .or_else(|| target.rsplit_once('?').map(|(prefix, _)| prefix))
-                .unwrap_or(target)
-        } else {
-            target
-        };
-        let header_count = self
-            .headers
-            .len()
-            .saturating_sub(usize::from(exclude_last_header));
-        serde_json::json!({
-            "destination_id": destination_id,
-            "method": method,
-            "target": target,
-            "headers": self.headers.iter().take(header_count).map(|header| serde_json::json!({
-                "name": header.name.as_str(),
-                "value_base64url": URL_SAFE_NO_PAD.encode(header.value.as_slice()),
-            })).collect::<Vec<_>>(),
-            "body_base64url": (!exclude_body).then_some(self.body.as_ref())
-                .flatten()
-                .map(|body| URL_SAFE_NO_PAD.encode(body.as_slice())),
-        })
-    }
-
     /// Validate and consume a bounded operation shape.
     ///
     /// Static headers cannot set authority, framing, proxy, forwarding,
@@ -3795,8 +3483,6 @@ pub enum DestinationRequestError {
     InvalidTarget,
     #[error("operation target is not canonical")]
     NonCanonicalTarget,
-    #[error("operation path segment is invalid")]
-    InvalidPathSegment,
     #[error("operation has too many headers")]
     TooManyHeaders,
     #[error("operation has too many query components")]
@@ -4041,16 +3727,6 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             .ok_or(DestinationResponseMediaTypeError::NotExactJson)
     }
 
-    /// Require the closed JSON media type forms produced by maintained source
-    /// products: bare `application/json` or the same type with UTF-8 charset.
-    /// Duplicate fields, alternate parameters, and comma-joined values remain
-    /// rejected.
-    pub fn require_json_content_type(&self) -> Result<(), DestinationResponseMediaTypeError> {
-        closed_json_content_type(self.response.headers())
-            .then_some(())
-            .ok_or(DestinationResponseMediaTypeError::NotExactJson)
-    }
-
     /// Consume the response body under both the operation deadline and byte cap.
     pub async fn read_bounded(
         self,
@@ -4107,37 +3783,6 @@ fn exact_json_content_type(headers: &HeaderMap) -> bool {
     )
 }
 
-fn closed_json_content_type(headers: &HeaderMap) -> bool {
-    closed_utf8_json_content_type(headers, "application/json")
-}
-
-fn closed_utf8_json_content_type(headers: &HeaderMap, expected_type: &str) -> bool {
-    let mut values = headers.get_all(CONTENT_TYPE).iter();
-    let (Some(value), None) = (values.next(), values.next()) else {
-        return false;
-    };
-    let Ok(value) = value.to_str() else {
-        return false;
-    };
-    let mut parts = value.split(';');
-    let Some(media_type) = parts.next() else {
-        return false;
-    };
-    if !media_type.trim().eq_ignore_ascii_case(expected_type) {
-        return false;
-    }
-    let Some(parameter) = parts.next() else {
-        return true;
-    };
-    if parts.next().is_some() {
-        return false;
-    }
-    let Some((name, value)) = parameter.split_once('=') else {
-        return false;
-    };
-    name.trim().eq_ignore_ascii_case("charset") && value.trim().eq_ignore_ascii_case("utf-8")
-}
-
 /// Value-free strict response-media-type failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DestinationResponseMediaTypeError {
@@ -4156,15 +3801,6 @@ pub enum DestinationResponseHeaderError {
     DuplicateHeader,
     #[error("a selected response header is not bounded UTF-8 text")]
     InvalidHeaderValue,
-}
-
-/// Value-free failure canonicalizing a script-owned source target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum DestinationTargetCanonicalizationError {
-    #[error("source target is invalid or non-canonical")]
-    InvalidTarget,
-    #[error("source target authority is outside the frozen destination")]
-    AuthorityDenied,
 }
 
 /// Value-free bounded response-read failures.
@@ -4733,21 +4369,6 @@ fn is_forbidden_script_response_header(name: &HeaderName) -> bool {
         || name.as_str().starts_with("x-amzn-")
         || name.as_str().starts_with("x-b3-")
         || name.as_str().starts_with("cf-")
-}
-
-fn absolute_reference_contains_dot_segment(target: &str) -> bool {
-    let Some(authority_start) = target.find("://").map(|index| index + 3) else {
-        return true;
-    };
-    let resource_start = target[authority_start..]
-        .find(['/', '?', '#'])
-        .map_or(target.len(), |index| authority_start + index);
-    let raw_path = target[resource_start..]
-        .split_once(['?', '#'])
-        .map_or(&target[resource_start..], |(path, _)| path);
-    raw_path
-        .split('/')
-        .any(|segment| matches!(segment, "." | ".."))
 }
 
 fn is_valid_header_value(value: &[u8]) -> bool {
@@ -5425,44 +5046,6 @@ mod tests {
     }
 
     #[test]
-    fn closed_json_response_media_type_accepts_only_bare_or_utf8_json() {
-        let mut headers = HeaderMap::new();
-        assert!(!closed_json_content_type(&headers));
-
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        assert!(closed_json_content_type(&headers));
-
-        for accepted in [
-            "application/json; charset=utf-8",
-            "application/json;charset=UTF-8",
-            "Application/JSON ; CHARSET = UTF-8",
-        ] {
-            headers.insert(
-                CONTENT_TYPE,
-                HeaderValue::from_str(accepted).expect("test media type"),
-            );
-            assert!(closed_json_content_type(&headers));
-        }
-
-        for rejected in [
-            "application/json; profile=example",
-            "application/json; charset=utf-8; profile=example",
-            "application/json; charset=us-ascii",
-            "text/json",
-        ] {
-            headers.insert(
-                CONTENT_TYPE,
-                HeaderValue::from_str(rejected).expect("test media type"),
-            );
-            assert!(!closed_json_content_type(&headers));
-        }
-
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        assert!(!closed_json_content_type(&headers));
-    }
-
-    #[test]
     fn production_address_policy_classifies_exactly_like_a_production_destination() {
         let allowlist = ["10.20.0.0/16", "fd00:1::/64"];
         let destination = production(&allowlist);
@@ -5539,34 +5122,6 @@ mod tests {
             Err(DestinationPolicyError::TooManyPrivateCidrs)
         );
         assert!(ProductionAddressPolicy::new(&[]).is_ok());
-    }
-
-    #[test]
-    fn same_origin_target_canonicalization_never_reveals_or_widens_authority() {
-        let policy = production(&[]);
-        assert_eq!(
-            policy.canonicalize_same_origin_target("/Patient?_count=2&_page=1"),
-            Ok("/Patient?_count=2&_page=1".to_owned())
-        );
-        assert_eq!(
-            policy.canonicalize_same_origin_target(
-                "https://registry.example.test/Patient?_count=2&_page=1"
-            ),
-            Ok("/Patient?_count=2&_page=1".to_owned())
-        );
-        for denied in [
-            "https://other.example.test/Patient",
-            "https://user@registry.example.test/Patient",
-            "https://registry.example.test/Patient#fragment",
-            "https://registry.example.test/a/../Patient",
-            "//registry.example.test/Patient",
-            "/Patient/%2f/admin",
-        ] {
-            assert!(
-                policy.canonicalize_same_origin_target(denied).is_err(),
-                "{denied}"
-            );
-        }
     }
 
     #[test]
@@ -6710,127 +6265,6 @@ mod tests {
     }
 
     #[test]
-    fn compiled_path_segment_is_single_bounded_and_canonically_encoded() {
-        let template = DataDestinationRequestTemplate::new_with_path_segment(
-            DestinationMethod::Get,
-            "/api/v2/spp/Individual/",
-            96,
-            &[("_elements", 32)],
-            &[],
-            DestinationAuthorizationTemplate::Bearer {
-                max_value_bytes: 128,
-            },
-            DestinationBodyTemplate::Forbidden,
-            1_024,
-        )
-        .expect("path-segment template validates");
-        let request = template
-            .render_with_path_segment(
-                "urn:openspp:vocab:id-type#national_id|IND-001",
-                &["identifier,active"],
-                &[],
-                Some(
-                    DestinationAuthorizationValue::bearer(b"bounded".to_vec())
-                        .expect("typed bearer"),
-                ),
-                None,
-            )
-            .expect("one encoded segment renders");
-        assert_eq!(
-            request.target.as_slice(),
-            b"/api/v2/spp/Individual/urn:openspp:vocab:id-type%23national_id%7CIND-001?_elements=identifier%2Cactive"
-        );
-        let unicode_request = template
-            .render_with_path_segment(
-                "บุคคล-001",
-                &["identifier"],
-                &[],
-                Some(
-                    DestinationAuthorizationValue::bearer(b"bounded".to_vec())
-                        .expect("typed bearer"),
-                ),
-                None,
-            )
-            .expect("ordinary Unicode remains one encoded segment");
-        assert_eq!(
-            unicode_request.target.as_slice(),
-            b"/api/v2/spp/Individual/%E0%B8%9A%E0%B8%B8%E0%B8%84%E0%B8%84%E0%B8%A5-001?_elements=identifier"
-        );
-        assert!(!format!("{template:?}").contains("Individual"));
-
-        for invalid in [
-            "",
-            ".",
-            "..",
-            "a/b",
-            "a\\b",
-            "a?b",
-            "a%2Fb",
-            "id;x",
-            "..;x",
-            "a\nb",
-            "a\u{0085}b",
-            "a\u{00ad}b",
-            "a\u{034f}b",
-            "a\u{061c}b",
-            "a\u{180e}b",
-            "a\u{200b}b",
-            "a\u{200e}b",
-            "a\u{2028}b",
-            "a\u{2029}b",
-            "a\u{202e}b",
-            "a\u{2060}b",
-            "a\u{2066}b",
-            "a\u{206f}b",
-            "a\u{feff}b",
-            "a\u{fff9}b",
-            "a\u{e0001}b",
-            "a\u{e0020}b",
-        ] {
-            assert_eq!(
-                template
-                    .render_with_path_segment(invalid, &["identifier"], &[], None, None)
-                    .unwrap_err(),
-                DestinationRequestError::InvalidPathSegment
-            );
-        }
-        assert_eq!(
-            template
-                .render(&["identifier"], &[], None, None)
-                .unwrap_err(),
-            DestinationRequestError::TemplateValueCountMismatch
-        );
-        assert_eq!(
-            DataDestinationRequestTemplate::new_with_path_segment(
-                DestinationMethod::Get,
-                "/api/v2/spp/Individual",
-                32,
-                &[],
-                &[],
-                DestinationAuthorizationTemplate::Forbidden,
-                DestinationBodyTemplate::Forbidden,
-                128,
-            )
-            .unwrap_err(),
-            DestinationRequestError::InvalidPathSegment
-        );
-        assert_eq!(
-            DataDestinationRequestTemplate::new_with_path_segment(
-                DestinationMethod::Get,
-                "/record/",
-                MAX_DESTINATION_PATH_SEGMENT_BYTES + 1,
-                &[],
-                &[],
-                DestinationAuthorizationTemplate::Forbidden,
-                DestinationBodyTemplate::Forbidden,
-                MAX_DESTINATION_TARGET_BYTES,
-            )
-            .unwrap_err(),
-            DestinationRequestError::InvalidPathSegment
-        );
-    }
-
-    #[test]
     fn credential_request_template_has_one_closed_slot_and_header_shape() {
         let template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
             "/oauth/token",
@@ -6899,88 +6333,11 @@ mod tests {
     }
 
     #[test]
-    fn request_effect_excludes_credential_exchange_body() {
-        let template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
-            "/oauth/token",
-            OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
-            1_024,
-            2_048,
-        )
-        .expect("closed OAuth template");
-        let request = template
-            .render(
-                &[],
-                &[],
-                None,
-                Some(br#"{"client_secret":"fixture-secret"}"#.to_vec()),
-            )
-            .expect("credential request");
-        let effect = request.credential_exchange_effect_value("credential-origin");
-        assert_eq!(effect["destination_id"], "credential-origin");
-        assert_eq!(effect["target"], "/oauth/token");
-        assert!(effect["body_base64url"].is_null());
-        assert!(!effect.to_string().contains("fixture-secret"));
-    }
-
-    #[test]
-    fn request_effect_excludes_api_key_header_but_commits_other_fields() {
-        let request = DataDestinationRequest::new(
-            DestinationMethod::ReviewedReadOnlyPost,
-            "/records?selector=person-7",
-            vec![
-                (
-                    HeaderName::from_static("x-profile"),
-                    b"reviewed-profile".to_vec(),
-                ),
-                (
-                    HeaderName::from_static("x-api-key"),
-                    b"api-header-secret".to_vec(),
-                ),
-            ],
-            None,
-            Some(b"noncredential-body".to_vec()),
-        )
-        .expect("bounded API-key-header request");
-        let effect = request.effect_value_without_api_key_header("data-origin");
-        let rendered = effect.to_string();
-        assert_eq!(effect["destination_id"], "data-origin");
-        assert_eq!(effect["method"], "POST");
-        assert_eq!(effect["target"], "/records?selector=person-7");
-        assert_eq!(effect["headers"].as_array().map(Vec::len), Some(1));
-        assert!(rendered.contains("x-profile"));
-        assert!(effect["body_base64url"].is_string());
-        assert!(!rendered.contains("api-header-secret"));
-        assert!(!rendered.contains("x-api-key"));
-    }
-
-    #[test]
-    fn request_effect_excludes_api_key_query_but_commits_other_fields() {
-        let request = DataDestinationRequest::new(
-            DestinationMethod::Get,
-            "/records?selector=person-7&api_key=api-query-secret",
-            vec![(
-                HeaderName::from_static("x-profile"),
-                b"reviewed-profile".to_vec(),
-            )],
-            None,
-            None,
-        )
-        .expect("bounded API-key-query request");
-        let effect = request.effect_value_without_api_key_query("data-origin");
-        let rendered = effect.to_string();
-        assert_eq!(effect["destination_id"], "data-origin");
-        assert_eq!(effect["method"], "GET");
-        assert_eq!(effect["target"], "/records?selector=person-7");
-        assert!(rendered.contains("x-profile"));
-        assert!(effect["body_base64url"].is_null());
-        assert!(!rendered.contains("api-query-secret"));
-        assert!(!rendered.contains("api_key"));
-    }
-
-    #[test]
     fn script_transport_enforces_path_header_query_and_api_key_authority() {
-        let template = DataDestinationRequestTemplate::new_script(
-            DestinationMethod::Get,
+        let template = DataDestinationRequestTemplate::new_script_send(
+            SideEffectingSendMethod::Get(
+                QueryStringContentAcknowledgement::acknowledge_content_in_access_logs(),
+            ),
             "/api/*/records/**",
             &["x-country-variant"],
             DestinationAuthorizationTemplate::Forbidden,
@@ -6999,11 +6356,12 @@ mod tests {
                 None,
             )
             .expect("admitted script request");
-        let effect = request.effect_value_without_api_key_query("registry");
-        let rendered = serde_json::to_string(&effect).expect("effect renders");
-        assert!(rendered.contains("tag=a&tag=b"));
-        assert!(rendered.contains("x-country-variant"));
-        assert!(!rendered.contains("secret-key"));
+        assert_eq!(
+            request.target.as_slice(),
+            b"/api/v1/records/one/two?tag=a&tag=b&api_key=secret-key"
+        );
+        assert_eq!(request.headers.len(), 1);
+        assert_eq!(request.headers[0].name.as_str(), "x-country-variant");
 
         for denied in [
             "/api/v1/other",
@@ -8334,8 +7692,6 @@ mod tests {
             DestinationRequestError::BodyPresenceMismatch,
             "a side-effecting POST carries its send in the body"
         );
-        let effect = post_send_request().noncredential_effect_value("provider");
-        assert_eq!(effect["method"], "POST");
     }
 
     #[tokio::test]
@@ -8367,8 +7723,6 @@ mod tests {
                 None,
             )
             .expect("acknowledged side-effecting GET renders");
-        let effect = request.effect_value_without_api_key_query("provider");
-        assert_eq!(effect["method"], "GET");
         let response = policy
             .send(request, Duration::from_secs(2))
             .await
@@ -8410,20 +7764,6 @@ mod tests {
         for send in [SideEffectingSendMethod::Post, acknowledged] {
             let method = DestinationMethod::SideEffectingSend(send);
             assert!(method.is_side_effecting());
-            assert_eq!(
-                DataDestinationRequestTemplate::new_script(
-                    method,
-                    "/messages",
-                    &[],
-                    DestinationAuthorizationTemplate::Forbidden,
-                    None,
-                    None,
-                    16 * 1024,
-                )
-                .unwrap_err(),
-                DestinationRequestError::MethodSlotMismatch,
-                "the read-only script constructor refuses a side-effecting send"
-            );
             let body = if send == SideEffectingSendMethod::Post {
                 DestinationBodyTemplate::Required { max_bytes: 64 }
             } else {
@@ -8433,20 +7773,6 @@ mod tests {
                 DataDestinationRequestTemplate::new(
                     method,
                     "/messages",
-                    &[],
-                    &[],
-                    DestinationAuthorizationTemplate::Forbidden,
-                    body,
-                    1_024,
-                )
-                .unwrap_err(),
-                DestinationRequestError::MethodSlotMismatch
-            );
-            assert_eq!(
-                DataDestinationRequestTemplate::new_with_path_segment(
-                    method,
-                    "/messages/",
-                    64,
                     &[],
                     &[],
                     DestinationAuthorizationTemplate::Forbidden,

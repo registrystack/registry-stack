@@ -585,7 +585,7 @@ impl FetchUrlPolicy {
     /// This compatibility helper proves only that the URL is acceptable at the
     /// moment validation runs. It resolves DNS but discards the DNS evidence, so
     /// it must not be used as the sole guard for a later outbound request. Use
-    /// [`Self::validate_for_immediate_fetch`] and
+    /// [`Self::validate_dns_pinned_for_immediate_fetch`] and
     /// [`ValidatedFetchUrl::immediate_get`] for SSRF-sensitive fetches.
     #[deprecated(
         note = "use validate_dns_pinned_for_immediate_fetch and send from the returned ValidatedFetchUrl"
@@ -593,19 +593,6 @@ impl FetchUrlPolicy {
     pub fn validate(&self, url: &reqwest::Url) -> Result<(), FetchUrlError> {
         self.validate_dns_pinned_for_immediate_fetch(url)
             .map(|_| ())
-    }
-
-    /// Validate an outbound URL and return the DNS evidence from validation.
-    ///
-    /// The returned value is a proof of what this process resolved while
-    /// validating. DNS can change after validation, so callers must construct
-    /// and send the request immediately from this value and should log or audit
-    /// `resolved_ips()` when investigating outbound fetch behavior.
-    pub fn validate_for_immediate_fetch(
-        &self,
-        url: &reqwest::Url,
-    ) -> Result<ValidatedFetchUrl, FetchUrlError> {
-        self.validate_dns_pinned_for_immediate_fetch(url)
     }
 
     /// Validate an outbound URL and return DNS evidence for a pinned request.
@@ -680,7 +667,7 @@ impl FetchUrlPolicy {
 
     /// Validate an outbound URL with a wall-clock bound around DNS resolution.
     ///
-    /// This is the async companion to [`Self::validate_for_immediate_fetch`].
+    /// This is the async companion to [`Self::validate_dns_pinned_for_immediate_fetch`].
     /// It prevents a slow platform DNS lookup from blocking the caller beyond
     /// the supplied timeout. The blocking resolver task may still finish in the
     /// background after this method returns a timeout error.
@@ -1568,7 +1555,7 @@ mod tests {
     fn immediate_get_builds_request_from_validated_url() {
         let url = reqwest::Url::parse("https://93.184.216.34/jwks").expect("url parses");
         let validated = FetchUrlPolicy::strict()
-            .validate_for_immediate_fetch(&url)
+            .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("public HTTPS IP accepted");
 
         let request = validated
@@ -1584,7 +1571,7 @@ mod tests {
     fn immediate_get_with_timeout_uses_explicit_timeout() {
         let url = reqwest::Url::parse("https://93.184.216.34/jwks").expect("url parses");
         let validated = FetchUrlPolicy::strict()
-            .validate_for_immediate_fetch(&url)
+            .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("public HTTPS IP accepted");
         let timeout = Duration::from_secs(7);
 
@@ -1601,7 +1588,7 @@ mod tests {
     fn immediate_post_builds_request_from_validated_url() {
         let url = reqwest::Url::parse("https://93.184.216.34/token").expect("url parses");
         let validated = FetchUrlPolicy::strict()
-            .validate_for_immediate_fetch(&url)
+            .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("public HTTPS IP accepted");
 
         let request = validated
@@ -1874,7 +1861,7 @@ mod tests {
     fn fetch_url_policy_blocks_dns_rebinding_to_private_range() {
         let url = reqwest::Url::parse("https://localhost/jwks").expect("url parses");
         let err = FetchUrlPolicy::strict()
-            .validate_for_immediate_fetch(&url)
+            .validate_dns_pinned_for_immediate_fetch(&url)
             .expect_err("strict policy rejects hostnames resolving to loopback");
         assert!(
             matches!(
