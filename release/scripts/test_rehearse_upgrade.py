@@ -490,6 +490,52 @@ class CaseworkPackageTest(unittest.TestCase):
                 self.assertEqual(side.run_json.call_count, 1)
 
 
+class MessagingUpgradeTest(unittest.TestCase):
+    DIGEST = "sha256:" + "b" * 64
+
+    def messaging(self, root: Path) -> object:
+        messaging = MODULE.Messaging.__new__(MODULE.Messaging)
+        messaging.runtime = root / "runtime.yaml"
+        return messaging
+
+    def plan(self, change: str, pending: list[int], active: str | None = DIGEST
+             ) -> dict[str, Any]:
+        return {"packageDigest": self.DIGEST, "activeDigest": active, "change": change,
+                "pendingSchemaVersions": pending}
+
+    def test_schema_versions_pending_for_the_active_package_are_applied(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            messaging = self.messaging(Path(directory))
+            side = unittest.mock.Mock()
+            settled = self.plan("none", [])
+            side.run_json.side_effect = [self.plan("activate", [3]), settled]
+            self.assertEqual(messaging.upgrade(side), settled)
+            runtime = ["--runtime-config", str(messaging.runtime)]
+            plan = unittest.mock.call("messagingctl", "--format", "json", "plan", *runtime)
+            self.assertEqual(side.run_json.call_args_list, [plan, plan])
+            side.run.assert_called_once_with("messagingctl", "apply", *runtime)
+
+    def test_a_plan_with_nothing_pending_is_answered_without_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            messaging = self.messaging(Path(directory))
+            side = unittest.mock.Mock()
+            settled = self.plan("none", [])
+            side.run_json.return_value = settled
+            self.assertEqual(messaging.upgrade(side), settled)
+            side.run_json.assert_called_once()
+            side.run.assert_not_called()
+
+    def test_a_lost_activation_is_never_applied_over(self) -> None:
+        for planned in (self.plan("activate", [3], None),
+                        self.plan("activate", [3], "sha256:" + "c" * 64)):
+            with self.subTest(planned=planned), tempfile.TemporaryDirectory() as directory:
+                messaging = self.messaging(Path(directory))
+                side = unittest.mock.Mock()
+                side.run_json.return_value = planned
+                self.assertEqual(messaging.upgrade(side), planned)
+                side.run.assert_not_called()
+
+
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class BregLedgerTest(unittest.TestCase):

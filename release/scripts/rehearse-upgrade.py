@@ -1661,6 +1661,20 @@ class Messaging:
             views[f"message/{message_id}"] = body
         return views
 
+    def upgrade(self, side: Side) -> dict[str, Any]:
+        """Plan with `side` and, when the package already active only has
+        schema versions pending, apply them with the migration credential, the
+        upgrade step the Messaging changelog names. Returns the plan after any
+        apply, which names the package on disk with nothing left to change
+        when the upgrade kept the activation."""
+        config = ["--runtime-config", str(self.runtime)]
+        planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
+        if planned.get("pendingSchemaVersions") and planned.get(
+                "activeDigest") == planned.get("packageDigest"):
+            side.run("messagingctl", "apply", *config)
+            planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
+        return planned
+
 
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
                        report: dict[str, Any]) -> None:
@@ -1687,10 +1701,10 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     before_counts = postgres.row_counts("messaging")
 
     new.run("messagingctl", "check", "--runtime-config", str(messaging.runtime))
-    # The ledger must still name the package on disk: a dry run that reports
-    # a change means the upgrade lost the activation.
-    ledger = new.run_json("messagingctl", "--format", "json", "plan", "--runtime-config",
-                          str(messaging.runtime))
+    # The ledger must still name the package on disk: a plan that reports a
+    # change once any new schema versions are applied means the upgrade lost
+    # the activation.
+    ledger = messaging.upgrade(new)
     differences = []
     if ledger.get("change") != "none" or ledger.get("activeDigest") != ledger.get(
             "packageDigest"):
