@@ -2183,7 +2183,100 @@ tombstones and leaves the spent row.
 - **Ingestion chunk replays do not use the horizon.** A chunk replays from
   the run's own chunk receipt, which the run retains; the spent row behind it
   is never the source of that reply.
-- **Other keyed references still bind ownership.** Ingestion run ownership
-  (`created_principal_reference`) is a keyed hash under `audit.hashKeyRef`,
-  so rotating the key hides an open run from its creator. It is outside the
-  spent-key scope of this change.
+- **Ingestion run ownership follows the same rule.** Runs are owned by the
+  verified caller as well; see
+  [Ingestion run ownership by the verified caller](#ingestion-run-ownership-by-the-verified-caller).
+
+## Ingestion run ownership by the verified caller
+
+The change moves ingestion run ownership off the audit hash key and onto the
+verified caller (#1930; `crates/registry-breg/src/ingestion_store.rs`,
+`crates/registry-breg/src/postgres/mutation.rs`). It touches authorization
+(who may list, read, continue, recover, or cancel a run), data minimization
+(the raw issuer and principal are persisted on the run row), audit integrity
+(what rotating `audit.hashKeyRef` changes), and deployment defaults (an
+upgrade that discards stored runs). The invariant is BREG-SEC-167.
+
+### Threat
+
+1. A run was found by `created_principal_reference`, a keyed hash under
+   `audit.hashKeyRef`, and bound to a keyed claim context reference. Rotating
+   the key hid every open run from its creator, so a bulk import could not
+   resume, recover a lost chunk receipt, or be cancelled: a pseudonymization
+   control decided who owns a run.
+2. Moving ownership off the keyed hash must not let another principal list,
+   read, continue, recover, or cancel a run.
+
+### Enforcement and defaults
+
+- **Owner.** `registry_ingestion_runs` stores `created_issuer`, the
+  configured `authentication.oidc.issuer` the runtime scopes every caller
+  under (`MutationCoordinator::caller_issuer`), and `created_subject`, the
+  verified principal. Both are `NOT NULL` and non-empty. `created_by`
+  compares both raw values; `visible_run` (read, cancel, receipt recovery),
+  chunk submission, the listing filter, and the listing cursor all decide
+  ownership through it, and another caller's run stays the concealed 404 it
+  was.
+- **Context.** `bound_context_reference` is an unkeyed SHA-256 over the
+  domain `breg-ingestion-context-v2`, the database id, and the canonical raw
+  verified claim context (principal, selected profile, purpose, row
+  boundaries, submitter targets, and task grant), the same members the
+  spent-key binding digests. Every operation still re-derives it and refuses
+  a drifted context with `ingestion.profile_mismatch`.
+- **Audit key.** Nothing that finds or binds a run reads `audit.hashKeyRef`.
+  `created_principal_reference` stays on the run and on its audit records as
+  the creator's pseudonym; rotating the key changes it for later audit
+  records only.
+- **Upgrade.** `ingestion_store::install` runs on every schema install,
+  including an engine-capability successor apply. When the run table lacks
+  `created_issuer`, it deletes every stored run, which cascades to
+  `registry_ingestion_run_chunks` and `registry_ingestion_run_chunk_records`,
+  and adds both columns `NOT NULL`. A run stored before names no verified
+  creator, so none is guessed. Committed records and revisions stay, and an
+  import authority keeps the volume its runs consumed, because that count
+  lives on the authority row. The server-derived chunk idempotency keys the
+  discarded runs spent stay spent; a new run has a new run id and so new
+  keys.
+
+### Data minimization
+
+The run row now stores the creator's raw issuer and principal value, where it
+stored only a keyed hash. They appear in no run response and no audit record:
+responses carry run metadata only, and audit records carry the keyed
+pseudonym. Runs have no retention horizon or erasure path of their own, so
+the raw values stay with the run for the life of the database, as the run's
+committed counts and digests do. The context reference is unkeyed, so
+someone who can read the table can confirm a guessed low-entropy claim value
+against it; that reader already sees the raw principal beside it.
+
+### Tests
+
+- `tests/postgres_ingestion_runs.rs`:
+  `an_audit_key_rotation_keeps_every_run_with_its_verified_creator` opens two
+  runs, rotates the audit key, and proves the creator still lists both, reads
+  one, recovers and replays its committed chunk, completes it, and cancels
+  the other, while another principal lists none and gets 404 on read,
+  receipt, chunk, and cancel without a write;
+  `the_upgrade_discards_runs_stored_without_a_verified_creator` restores the
+  run table without the creator columns under a run with a committed chunk,
+  reinstalls, and proves the run, its chunks, and its receipt links are gone,
+  the committed record stays, both columns are `NOT NULL`, and a new run is
+  stored with its creator and listed; and
+  `run_access_is_creator_scoped_and_possession_grants_nothing`.
+- `src/ingestion_store.rs`: `a_run_without_its_verified_creator_is_refused`.
+- `src/postgres/mutation.rs`:
+  `a_sibling_task_grant_changes_the_run_context_reference` pins the unkeyed
+  context reference to the spent-key claim context and the database scope.
+
+### Accepted residuals
+
+- **The upgrade discards stored runs.** An import interrupted across the
+  upgrade cannot resume its run; its committed records stay, and the
+  operator imports only the uncommitted remainder under a fresh checkpoint
+  path, as after a closed import authority. Nobody runs Base Registry Engine
+  in production yet.
+- **Issuer or principal mapping changes re-scope runs.** After a change of
+  `authentication.oidc.issuer` or of the principal claim, an open run belongs
+  to no current caller; finish or cancel open runs before such a change.
+- **Raw creator values stay with the run.** No run retention exists, so the
+  issuer and principal stay as long as the run row does.

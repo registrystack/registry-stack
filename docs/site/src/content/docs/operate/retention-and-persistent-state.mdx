@@ -231,6 +231,12 @@ remain, up to 100,000 rows a minute; a run that stops at that bound logs a warni
 remaining backlog. The job keeps running after a later package turns `accessLog` off, and a package
 change never extends an existing row's expiry. Database backups keep their own copies of these rows.
 
+Ingestion runs live in `registry_internal.registry_ingestion_runs`, with their chunks and chunk
+receipts beside them. A run row holds the verified issuer and principal value of the caller that
+created it, which decide who may list, read, continue, or cancel the run, and runs have no
+retention horizon: no command removes a run or its creator values. `bregctl history erase` erases
+the chunk receipts that describe the erased revisions and leaves the run and its counts.
+
 Import and export checkpoints live on the operator host, not in the database. `bregctl data import`
 writes a checkpoint file beside a `.state` sidecar it owns, and `bregctl data export` writes its
 output file beside a checkpoint that binds the package revision, schema fingerprint, entity,
@@ -251,6 +257,7 @@ every activation, and store secrets separately.
     crates/registry-breg/src/audit.rs;
     crates/registry-breg/src/webhook.rs;
     crates/registry-breg/src/subject_access_log.rs, run_retention() and expire_tick();
+    crates/registry-breg/src/ingestion_store.rs, install() and scrub_receipts_for_records();
     products/breg/ACCESS-LOG.md;
     crates/registry-breg/src/runtime_config.rs, DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
     and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS;

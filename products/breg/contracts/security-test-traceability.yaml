@@ -167,3 +167,4 @@ traceability:
   - {"id": "BREG-SEC-164", "state": "enforced", "negativeId": "BREG-NEG-164", "negativeTest": {"path": "crates/registry-breg/tests/postgres_mutation.rs", "name": "real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent"}}
   - {"id": "BREG-SEC-165", "state": "enforced", "negativeId": "BREG-NEG-165", "negativeTest": {"path": "crates/registry-breg/tests/postgres_mutation.rs", "name": "real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key"}}
   - {"id": "BREG-SEC-166", "state": "enforced", "negativeId": "BREG-NEG-166", "negativeTest": {"path": "crates/registry-breg/src/idempotency.rs", "name": "a_policy_refuses_every_issuer_the_engine_reserves"}}
+  - {"id": "BREG-SEC-167", "state": "enforced", "negativeId": "BREG-NEG-167", "negativeTest": {"path": "crates/registry-breg/tests/postgres_ingestion_runs.rs", "name": "an_audit_key_rotation_keeps_every_run_with_its_verified_creator"}}
