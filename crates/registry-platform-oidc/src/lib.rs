@@ -924,12 +924,6 @@ impl TokenVerifierConfig {
     }
 
     #[must_use]
-    pub fn with_scope_map(mut self, scope_map: Option<HashMap<String, Vec<String>>>) -> Self {
-        self.scope_map = scope_map;
-        self
-    }
-
-    #[must_use]
     /// Restrict which assertion authority each client may exchange from.
     pub fn with_assertion_issuers(
         mut self,
@@ -959,12 +953,6 @@ impl TokenVerifierConfig {
     #[must_use]
     pub fn with_leeway(mut self, leeway: Duration) -> Self {
         self.leeway = leeway;
-        self
-    }
-
-    #[must_use]
-    pub fn with_userinfo_requires_exp(mut self, userinfo_requires_exp: bool) -> Self {
-        self.userinfo_requires_exp = userinfo_requires_exp;
         self
     }
 }
@@ -1455,34 +1443,6 @@ fn scope_values(value: &Value, separator: char) -> Result<Vec<String>, OidcError
             .collect(),
         _ => Err(OidcError::InvalidToken),
     }
-}
-
-pub async fn fetch_userinfo_jwt_with_policy(
-    endpoint: &str,
-    access_token: &str,
-    fetch_url_policy: &FetchUrlPolicy,
-    timeout: Duration,
-    max_doc_bytes: u64,
-) -> Result<String, OidcError> {
-    let url = Url::parse(endpoint).map_err(|_| OidcError::InvalidUrl)?;
-    let validated_url = fetch_url_policy
-        .validate_for_immediate_fetch_with_timeout(&url, timeout)
-        .await?;
-    let resp = validated_url
-        .immediate_get()?
-        .bearer_auth(access_token)
-        .header(reqwest::header::ACCEPT, "application/jwt")
-        .timeout(timeout)
-        .send()
-        .await
-        .map_err(OidcError::Transport)?;
-    if !resp.status().is_success() {
-        return Err(OidcError::HttpStatus(resp.status().as_u16()));
-    }
-    let body = read_bounded(resp, max_doc_bytes.max(1)).await?;
-    String::from_utf8(body)
-        .map(|value| value.trim().to_string())
-        .map_err(|_| OidcError::Parse)
 }
 
 fn audience_intersects(audience: &Audience, accepted: &[String]) -> bool {
