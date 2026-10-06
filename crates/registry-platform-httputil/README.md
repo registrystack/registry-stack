@@ -54,12 +54,19 @@ Outbound HTTP utilities for registry services.
   `Settled` ends the loop, `Retryable` is resent after 250 ms and then 500 ms,
   or after a `Retry-After` that is longer and at most
   `MAXIMUM_MUTATION_RETRY_AFTER_SECONDS` (5), and `Unknown` ends the loop
-  because an identical resend could not settle it. A longer requested wait
-  ends the retries. The count is the caller's, `DEFAULT_MUTATION_RETRIES` (2)
-  by default and at most `MAXIMUM_MUTATION_RETRIES` (2), and 0 sends once. A
-  refusal that answers a resend returns the earlier unknown-outcome error,
-  since it does not prove the earlier attempt left no effect. The loop never
-  builds a request or a key; the closure resends the caller's exact bytes.
+  because an identical resend could not settle it. A longer requested wait,
+  or a `Retry-After` that `RetryAfter::from_headers` finds unusable (an
+  HTTP date, a fraction, a duplicate field), ends the retries. The count is
+  the caller's, `DEFAULT_MUTATION_RETRIES` (2) by default, clamped to
+  `MAXIMUM_MUTATION_RETRIES` (2), and 0 sends once. A refusal that answers a
+  resend returns the earlier unknown-outcome error, since it does not prove
+  the earlier attempt left no effect. The loop never builds a request or a
+  key; the closure resends the caller's exact bytes.
+- `client::classify_keyed_attempt`, the one rule that turns an attempt into a
+  `KeyedMutationAttempt` from the client's own judgement of its error and the
+  answer's status line: a known outcome settles, an unknown one is resent on
+  a 5xx answer or when a resend may settle it, and an answer with a 4xx
+  status line is never resent, even when its body could not be read.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
   forwarding.
 - `url::append_path_segments` for safe path construction.
