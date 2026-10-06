@@ -95,6 +95,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-scheduling` | PostgreSQL-backed Scheduling runtime and the `scheduling` binary |
 | `crates/registry-schedulingctl` | Scheduling authoring and local operator tooling and the `schedulingctl` binary |
 | `crates/registry-scheduling-client` | Bounded Rust Scheduling client over the runtime's HTTP contract |
+| `crates/registry-scheduling-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
+| `crates/registry-scheduling-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-messaging-core` | Source-neutral Messaging access decisions, package model, wire DTOs, and problem codes |
 | `crates/registry-messaging` | PostgreSQL-backed Messaging runtime and the `messaging` binary |
 | `crates/registry-messagingctl` | Messaging operator tooling and the `messagingctl` binary |
@@ -167,9 +169,10 @@ authority. The source-neutral core and generic clients must not depend on BReg
 protocol types, and BReg must not depend on Casework.
 
 Registry Scheduling is implemented by `registry-scheduling`,
-`registry-scheduling-core`, `registry-schedulingctl`, and its Rust client
-crate. Its product contracts, generated schemas, examples, and focused gates
-live under `products/scheduling`.
+`registry-scheduling-core`, `registry-schedulingctl`, its Rust client crate,
+and that client's Node.js and Python bindings, `registry-scheduling-client-node`
+and `registry-scheduling-client-py`. Its product contracts, generated schemas,
+examples, and focused gates live under `products/scheduling`.
 Scheduling sells capacity only over supply the operator anchored: resource
 pools and published windows are runtime records the policy references by
 identifier, a hold or appointment is a claim against that supply inside one
