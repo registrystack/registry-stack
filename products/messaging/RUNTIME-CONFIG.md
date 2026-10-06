@@ -114,10 +114,11 @@ uses its own destination: applied operator commands write a sibling
 stdout machine-readable.
 
 `audit.hashKeyRef` supplies the key for minimized identifier references. It
-does not sign or chain the journal. Preserve this key across the transition:
-the same derivation produces caller pseudonyms used by idempotency tombstones,
-so rotation frees keys spent under the previous pseudonym. External tamper
-evidence and complete off-host retention are deployment responsibilities.
+does not sign or chain the journal. Rotating it changes the caller and
+recipient pseudonyms later audit records carry, so records written before and
+after the rotation no longer join on them; it frees no idempotency key, which
+is scoped to the caller's issuer and subject. External tamper evidence and
+complete off-host retention are deployment responsibilities.
 `retainDays` removes local sealed segments; ship required records before
 that retention expires. A failed writer remains unhealthy until restart and
 makes `/ready` fail.
@@ -142,8 +143,9 @@ Each period counts from the moment the message reached a terminal state
 still waiting in a retry keeps its payload. `payloadDays` after that moment
 the rendered parts and the recipient contact are erased and the message
 record stays; `recordDays` after it the record is deleted with its attempts
-and receipts. The idempotency key stays spent, held only under the caller's
-keyed pseudonym, and a repeat of it is refused with `idempotency.expired`.
+and receipts. The idempotency key stays spent, held only with the caller's
+issuer and subject and its times, and a repeat of it is refused with
+`idempotency.expired`.
 `submissionReceiptDays` after acceptance the stored submission receipt is
 dropped and a repeat of its key is refused with `idempotency.expired`. A
 message that is queued, sending, or in an unknown outcome is never erased,

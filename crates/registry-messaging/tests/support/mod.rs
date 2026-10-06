@@ -46,6 +46,7 @@ pub const ISSUER: &str = "https://identity.example.test";
 pub const AUDIENCE: &str = "urn:example:messaging";
 const TOKEN_SECRET: &[u8] = b"01234567890123456789012345678901";
 const AUDIT_SECRET: &str = "an-audit-master-secret-of-32-bytes!";
+const ROTATED_AUDIT_SECRET: &str = "a-rotated-audit-master-secret-of-32-bytes";
 
 /// A deterministic direct-audit sink that accepts `accepted_writes` entries
 /// and refuses the next one while retaining the accepted envelopes.
@@ -452,6 +453,14 @@ impl Harness {
     /// service and limits built again, as a restarted runtime builds them:
     /// nothing held in memory by the first survives into it.
     pub async fn restarted_app(&self) -> Router {
+        self.app_with_access_profiles(self.package.access_profiles().clone())
+            .await
+    }
+
+    /// A restarted router whose callers resolve to `profiles` instead of the
+    /// package's own access profiles, as after an activation that changed
+    /// what a caller may send.
+    pub async fn app_with_access_profiles(&self, profiles: AccessProfiles) -> Router {
         let schema = self.store.current_schema().await.expect("the schema");
         let messages = MessageStore::new(
             self.store.clone(),
@@ -475,7 +484,7 @@ impl Harness {
             authenticator: Arc::new(MessagingAuthenticator::new(
                 verifier(),
                 keys(),
-                self.package.access_profiles().clone(),
+                profiles,
                 false,
             )),
             readiness: Readiness::Store {
@@ -590,6 +599,17 @@ pub fn test_audit(writer: AuditWriter) -> Arc<MessagingAudit> {
         AUDIT_SECRET.as_bytes().to_vec(),
     ))
     .expect("the audit profile");
+    Arc::new(MessagingAudit::new(writer, profile.key_hasher()))
+}
+
+/// A journal under a different audit reference key, as a runtime restarted
+/// after an `audit.hashKeyRef` rotation builds it: every principal and
+/// recipient pseudonym it computes differs from the ones `test_audit` does.
+pub fn rotated_test_audit(writer: AuditWriter) -> Arc<MessagingAudit> {
+    let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+        ROTATED_AUDIT_SECRET.as_bytes().to_vec(),
+    ))
+    .expect("the rotated audit profile");
     Arc::new(MessagingAudit::new(writer, profile.key_hasher()))
 }
 

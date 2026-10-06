@@ -190,9 +190,10 @@ which checks `/metrics` is absent from the public listener.
 The shared `AuditWriter` emits minimized request and response envelopes to a
 per-process JSON Lines stream. File acceptance includes fsync; stdout is
 best-effort. The hash key still derives the same caller and recipient
-references, including caller-scoped idempotency tombstones. It no longer
-chains or signs log entries. Tamper evidence, aggregation, and complete
-retention outside local `retainDays` are deployment responsibilities.
+references. It no longer chains or signs log entries, and it scopes no
+idempotency key: rotating it changes pseudonyms only (MESSAGING-DEC-17).
+Tamper evidence, aggregation, and complete retention outside local
+`retainDays` are deployment responsibilities.
 
 A fresh invocation correlation joins request and response. A caller's reusable
 Idempotency-Key is not that correlation. The writer must accept the request
@@ -269,18 +270,48 @@ with an unknown member, a missing required member, a recipient of the wrong
 channel, or a malformed or out-of-window instant is
 `422 request.unprocessable`, as in Scheduling and the preview route; nothing
 is recorded either way. The `Idempotency-Key` header is required and bounded, and is scoped to the
-caller's keyed pseudonym of its issuer and subject, so a caller cannot probe
-another caller's keys and the stored key names the caller only under the
-audit hash key.
+caller's verified issuer and subject, as in Scheduling and Casework, so a
+caller cannot probe another caller's keys, and the same subject under
+another issuer is another caller (MESSAGING-DEC-17). The scope does not
+depend on the audit hash key: rotating `audit.hashKeyRef` changes the
+pseudonyms the journal writes and frees no spent key, so an exact retry
+across a rotation replays its receipt or is refused as expired and never
+sends again.
 The request hash covers the canonical request body: the same key with
 another body is `409 idempotency.key-reused`, and a key older than
 `retention.submissionReceiptDays` is `410 idempotency.expired`. A replay is
 authorized and rendered again against the active package before the stored
 receipt is answered, so a key cannot outlive the caller's authority
-(MESSAGING-DEC-07). One transaction records the key, the message, its
+(MESSAGING-DEC-07). The consequence for a caller is that an exact retry
+refused with 403 or 422 after a package or profile change proves nothing
+about the first attempt, which may have been accepted and may be sending; an
+operator drains senders before activating a package that narrows what they
+may send. One transaction records the key, the message, its
 payload, its dispatch job, and the acceptance audit; concurrent submissions
 under one key produce exactly one message, which the `postgres_messages`
 suite proves.
+
+Review note, data minimization (security-sensitive, accepted 2026-10-06).
+The spent-key row stores the caller's raw issuer and subject instead of a
+keyed pseudonym, and the row outlives the message: when retention deletes a
+record after `recordDays`, its idempotency tombstone keeps the issuer, the
+subject, the key, and its times indefinitely. Before schema version 3 the
+tombstone held only the pseudonym. The tradeoff is accepted because the
+pseudonym scope let every audit key rotation free every spent key and so
+reopen duplicate sends; the issuer and subject name a calling service
+principal, not a recipient; the message row already held both for
+`recordDays`; and the tombstone keeps no request hash, receipt, message,
+recipient reference, or content. The audit journal and the rate limiter
+keep the pseudonym. Schema version 3 moved every spent key whose
+message was still held onto that message's submitter. A key it could not
+attribute (one whose message retention had deleted, one naming no held
+message, or the older of two records one caller held under two pseudonyms
+after an earlier rotation) was preserved unchanged, pseudonym included, in
+`legacy_messaging_idempotency`, outside the runtime's grants and read by
+nothing; those keys are free again, and a legacy row that named a message
+keeps its request hash and receipt until the operator drops the table
+(`postgres_migrate.rs`,
+`version_3_scopes_spent_keys_to_the_caller_and_preserves_every_record`).
 
 Tests: MESSAGING-SEC-01 and -02 in `contracts/security-test-traceability.yaml`.
 
@@ -767,11 +798,11 @@ acceptance plus `payloadDays`. Past `payloadDays` the recipient and the
 rendered parts are nulled and the content-free record stays; past
 `recordDays` the record is deleted with its payload, job, attempts, and
 delivery receipts; its idempotency row stays with the message, the request
-hash, and any stored receipt nulled, holding only the caller's keyed
-pseudonym and the key, so a repeat is still `410 idempotency.expired`
-(MESSAGING-DEC-17). Rotating the audit hash key re-keys the pseudonyms and
-so frees the keys spent under the previous one. Past `submissionReceiptDays` the stored receipt is
-dropped and a repeat of its key is `410 idempotency.expired`.
+hash, and any stored receipt nulled, holding only the caller's issuer and
+subject and the key, so a repeat is still `410 idempotency.expired`
+(MESSAGING-DEC-17), whatever audit hash key the runtime holds then. Past
+`submissionReceiptDays` the stored receipt is dropped and a repeat of its key
+is `410 idempotency.expired`.
 
 An applied run erases in batches of at most 1,000 of each kind, oldest
 first, and ends at the first batch shorter than that. Each batch is one

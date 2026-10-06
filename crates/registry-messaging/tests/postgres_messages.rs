@@ -21,17 +21,18 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use registry_messaging::dispatch::dispatcher;
 use registry_messaging::messages::{
-    MessageStore, MessageStoreError, OperatorAction, SettleOutcome,
+    prepare_submission, MessageStore, MessageStoreError, OperatorAction, SettleOutcome,
 };
 use registry_messaging::runtime::message_reader;
-use registry_messaging_core::READY_PATH;
+use registry_messaging_core::{AccessProfiles, ActorKind, Caller, CallerIdentity, READY_PATH};
 use registry_platform_audit::AuditWriter;
 use registry_platform_dispatch::postgres::Claim;
 use registry_platform_dispatch::{SendOutcome, Sent};
 use serde_json::{json, Value};
 use support::{
-    email_submission, operator_token, sender_token, sender_token_for, sms_submission, submit_to,
-    test_audit, token, Harness, RefusingAuditSink, NAME, OTHER_SENDER_PRINCIPAL, RECIPIENT,
+    email_submission, operator_token, rotated_test_audit, sender_token, sender_token_for,
+    sms_submission, submit_to, test_audit, token, Harness, RefusingAuditSink, NAME,
+    OTHER_SENDER_PRINCIPAL, RECIPIENT, SENDER_PRINCIPAL,
 };
 use tower::ServiceExt as _;
 use uuid::Uuid;
@@ -297,6 +298,172 @@ async fn an_idempotency_key_replays_one_request_and_refuses_another() {
             .await,
         2
     );
+}
+
+#[tokio::test]
+async fn an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again() {
+    let harness = Harness::start().await;
+    let sender = sender_token();
+    let first = harness.submit(&sender, "key-1", &email_submission()).await;
+    assert_eq!(first.0, StatusCode::ACCEPTED, "{}", first.1);
+
+    // A runtime restarted after an `audit.hashKeyRef` rotation computes
+    // another pseudonym for the same caller. The spent key belongs to the
+    // caller's issuer and subject, so the rotation does not free it.
+    let journal = RefusingAuditSink::after(usize::MAX);
+    let rotated = harness
+        .app_with_audit(rotated_test_audit(AuditWriter::from_line_sink(Box::new(
+            journal.clone(),
+        ))))
+        .await;
+    let (status, _, replay) =
+        submit_to(rotated.clone(), &sender, "key-1", &email_submission()).await;
+    assert_eq!((status, replay), first);
+
+    let mut different = email_submission();
+    different["correlationId"] = json!("case-43");
+    let (status, _, problem) = submit_to(rotated.clone(), &sender, "key-1", &different).await;
+    assert_problem(
+        &(status, problem),
+        StatusCode::CONFLICT,
+        "idempotency.key-reused",
+    );
+    // The key is still the caller's own: another sender's same key, under
+    // the rotated key, records its own message.
+    let (status, _, other) = submit_to(
+        rotated.clone(),
+        &sender_token_for(OTHER_SENDER_PRINCIPAL),
+        "key-1",
+        &email_submission(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{other}");
+    assert_ne!(other["id"], first.1["id"]);
+
+    harness
+        .execute(
+            "UPDATE messaging_idempotency SET expires_at = now() - interval '1 second' \
+              WHERE message_id = $1",
+            &[&Uuid::parse_str(first.1["id"].as_str().unwrap()).unwrap()],
+        )
+        .await;
+    for body in [email_submission(), different] {
+        let (status, _, problem) = submit_to(rotated.clone(), &sender, "key-1", &body).await;
+        assert_problem(&(status, problem), StatusCode::GONE, "idempotency.expired");
+    }
+
+    // One message and one dispatch job for the first caller's key, and one
+    // for the other sender's.
+    for table in ["messaging_messages", "messaging_dispatch_jobs"] {
+        assert_eq!(
+            harness
+                .count(&format!("SELECT count(*) FROM {table}"))
+                .await,
+            2,
+            "{table}"
+        );
+    }
+    // The journal still names callers only by their pseudonyms.
+    let entries = journal.entries();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["record"]["event"] == "messaging.message.replayed"),
+        "{entries:?}"
+    );
+    support::assert_absent("the rotated journal", &Value::Array(entries));
+}
+
+#[tokio::test]
+async fn an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject() {
+    let harness = Harness::start().await;
+    let first = harness
+        .submit(&sender_token(), "key-1", &email_submission())
+        .await;
+    assert_eq!(first.0, StatusCode::ACCEPTED, "{}", first.1);
+
+    // The same subject under another issuer is another caller, and its key
+    // is its own.
+    let caller = Caller {
+        identity: CallerIdentity {
+            issuer: "https://another-identity.example.test".to_owned(),
+            subject: SENDER_PRINCIPAL.to_owned(),
+        },
+        actor_kind: Some(ActorKind::Service),
+        profile: harness
+            .package
+            .access_profiles()
+            .get("case-notices")
+            .expect("the starter sender profile")
+            .clone(),
+    };
+    let submission = prepare_submission(
+        &harness.package,
+        &caller,
+        &serde_json::to_vec(&email_submission()).unwrap(),
+    )
+    .expect("the prepared submission");
+    let answer = harness
+        .service
+        .submit(&caller, "key-1", &submission)
+        .await
+        .expect("the other issuer's submission");
+    assert!(!answer.replayed);
+    assert_ne!(answer.message_id.to_string(), first.1["id"]);
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        2
+    );
+}
+
+#[tokio::test]
+async fn an_exact_retry_the_caller_may_no_longer_send_is_refused_while_the_first_attempt_stands() {
+    let harness = Harness::start().await;
+    let sender = sender_token();
+    let first = harness.submit(&sender, "key-1", &email_submission()).await;
+    assert_eq!(first.0, StatusCode::ACCEPTED, "{}", first.1);
+    let message_id = Uuid::parse_str(first.1["id"].as_str().unwrap()).unwrap();
+
+    // An activation removes the template from the caller's access profile.
+    // A retry is authorized again before its key is looked up, so the exact
+    // retry is refused although the first attempt was accepted and is
+    // queued to send.
+    let narrowed = AccessProfiles::new(
+        harness
+            .package
+            .access_profiles()
+            .iter()
+            .cloned()
+            .map(|mut profile| {
+                profile
+                    .templates
+                    .retain(|template| template != "appointment-reminder");
+                profile
+            })
+            .collect(),
+    )
+    .expect("the narrowed access profiles");
+    let narrowed_app = harness.app_with_access_profiles(narrowed).await;
+    let (status, _, problem) = submit_to(narrowed_app, &sender, "key-1", &email_submission()).await;
+    assert_problem(
+        &(status, problem),
+        StatusCode::FORBIDDEN,
+        "profile.not-authorized",
+    );
+    assert_eq!(harness.state(message_id).await, "pending");
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        1
+    );
+
+    // Under a profile that allows it again, the same retry answers the first
+    // attempt's receipt: the refusal said nothing about that attempt.
+    let replay = harness.submit(&sender, "key-1", &email_submission()).await;
+    assert_eq!(replay, first);
 }
 
 #[tokio::test]
