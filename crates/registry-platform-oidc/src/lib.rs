@@ -911,16 +911,6 @@ impl TokenVerifierConfig {
         }
     }
 
-    /// Legacy access-token verifier preset retained pending item-level cleanup.
-    pub fn registry_relay_access_profile(
-        issuer: impl Into<String>,
-        audiences: Vec<String>,
-        allowed_algorithms: Vec<Algorithm>,
-        allowed_typ: Vec<String>,
-    ) -> Self {
-        Self::access_token_profile(issuer, audiences, allowed_algorithms, allowed_typ)
-    }
-
     #[must_use]
     pub fn with_scope_claim(mut self, scope_claim: impl Into<String>) -> Self {
         self.scope_claim = scope_claim.into();
@@ -969,17 +959,6 @@ impl TokenVerifierConfig {
     #[must_use]
     pub fn with_leeway(mut self, leeway: Duration) -> Self {
         self.leeway = leeway;
-        self
-    }
-
-    #[must_use]
-    pub fn with_related_token_typ(
-        mut self,
-        allowed_id_typ: Vec<String>,
-        allowed_userinfo_typ: Vec<String>,
-    ) -> Self {
-        self.allowed_id_typ = allowed_id_typ;
-        self.allowed_userinfo_typ = allowed_userinfo_typ;
         self
     }
 
@@ -1820,7 +1799,7 @@ mod tests {
 
     #[test]
     fn token_verifier_profiles_set_safe_related_token_defaults() {
-        let config = TokenVerifierConfig::registry_relay_access_profile(
+        let config = TokenVerifierConfig::access_token_profile(
             "https://issuer.example",
             vec!["registry-api".to_string()],
             vec![Algorithm::EdDSA],
