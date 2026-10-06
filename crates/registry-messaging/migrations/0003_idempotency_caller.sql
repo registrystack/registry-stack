@@ -7,8 +7,12 @@
 -- naming the caller by pseudonym; only the key's scope changes.
 --
 -- Records written under the pseudonym scope are discarded, not re-keyed,
--- so every key spent before this version can be used again.
+-- so every key spent before this version can be used again. The table is
+-- locked before the records are discarded, so a record an earlier runtime
+-- still serving commits while this version waits is discarded with the
+-- rest instead of failing the new NOT NULL columns.
 
+LOCK TABLE messaging_idempotency IN ACCESS EXCLUSIVE MODE;
 DELETE FROM messaging_idempotency;
 
 ALTER TABLE messaging_idempotency DROP CONSTRAINT messaging_idempotency_pkey;
