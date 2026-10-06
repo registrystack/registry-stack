@@ -67,8 +67,6 @@ Outbound HTTP utilities for registry services.
   answer's status line: a known outcome settles, an unknown one is resent on
   a 5xx answer or when a resend may settle it, and an answer with a 4xx
   status line is never resent, even when its body could not be read.
-- `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
-  forwarding.
 - `url::append_path_segments` for safe path construction.
 - `FetchUrlPolicy` for SSRF-resistant outbound URL validation and DNS evidence.
 - `ValidatedFetchUrl` for immediate GET requests pinned to DNS evidence observed
@@ -149,15 +147,6 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
   metadata targets. Keeping `deny_cloud_metadata = true` denies those ranges;
   set it to `false` only for explicit, trusted fixtures or deployments that
   intentionally fetch such endpoints.
-
-## Proxy Header Filtering
-
-- `ProxyHeaderPolicy::strict` strips hop-by-hop headers, `Connection`-nominated
-  headers, `Authorization`, `Cookie`, `Host`, `Forwarded`, `X-Forwarded-*`, and
-  `X-Real-IP`.
-- Let the trusted proxy adapter inject verified forwarding and authority
-  headers after filtering. Preserve caller-supplied forwarding or host headers
-  only when that is an intentional compatibility boundary.
 
 ## Features
 
