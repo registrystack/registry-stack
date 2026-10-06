@@ -184,6 +184,7 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RetentionConfig;
     use registry_platform_config::blocks::SECRET_REFERENCE_PATTERN;
 
     #[test]
@@ -342,6 +343,37 @@ mod tests {
             "tab\tinside",
         ] {
             assert!(!with_id(refused), "{refused:?} must be refused");
+        }
+    }
+
+    /// Issue #1916: every retention period the schema accepts is one the
+    /// runtime starts on, and every one it refuses is one the runtime refuses.
+    #[test]
+    fn the_schema_states_the_retention_bounds_the_runtime_enforces() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let retention = serde_json::json!({
+            "$defs": document["$defs"],
+            "$ref": "#/$defs/RetentionConfig"
+        });
+        let validator = jsonschema::JSONSchema::compile(&retention).unwrap();
+        let periods = [0, 1, 7, 30, 31, 365, u16::MAX];
+        for attempt_receipt_days in periods {
+            for hook_payload_days in periods {
+                let config = RetentionConfig {
+                    attempt_receipt_days,
+                    hook_payload_days,
+                };
+                let document = serde_json::json!({
+                    "attemptReceiptDays": attempt_receipt_days,
+                    "hookPayloadDays": hook_payload_days,
+                });
+                assert_eq!(
+                    validator.is_valid(&document),
+                    config.check().is_ok(),
+                    "the schema and the runtime disagree on {document}"
+                );
+            }
         }
     }
 

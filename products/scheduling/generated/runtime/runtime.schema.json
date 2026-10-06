@@ -460,18 +460,18 @@
       "properties": {
         "attemptReceiptDays": {
           "default": 7,
-          "description": "How long a stored idempotency receipt stays replayable.",
+          "description": "How long a stored idempotency receipt stays replayable, at least one\nday.",
           "format": "uint16",
           "maximum": 65535,
-          "minimum": 0,
+          "minimum": 1,
           "type": "integer"
         },
         "hookPayloadDays": {
           "default": 7,
-          "description": "Lifetime of canonical hook envelopes retained for retry and\ndead-letter inspection.",
+          "description": "Lifetime of canonical hook envelopes retained for retry and\ndead-letter inspection, from one through thirty days.",
           "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
+          "maximum": 30,
+          "minimum": 1,
           "type": "integer"
         }
       },

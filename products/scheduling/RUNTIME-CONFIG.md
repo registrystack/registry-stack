@@ -234,8 +234,8 @@ bindings are allowed so retained events captured under an earlier policy can
 finish with their exact original binding. Startup refuses if a retained event's
 binding is no longer available.
 
-`retention.attemptReceiptDays` covers idempotency attempt receipts; listing
-cursors keep their fixed fifteen-minute lifetime. `retention.hookPayloadDays`
+`retention.attemptReceiptDays` covers idempotency attempt receipts and is at
+least one day; listing cursors keep their fixed fifteen-minute lifetime. `retention.hookPayloadDays`
 sets the canonical observer payload's retry and dead-letter lifetime from 1
 through 30 days. Both configured values default to seven days, which is not a
 jurisdictional recommendation. Appointment, history, and reminder outbox
