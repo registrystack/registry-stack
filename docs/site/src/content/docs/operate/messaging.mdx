@@ -297,7 +297,7 @@ keeps its payload:
 | Period ends | What is erased |
 | --- | --- |
 | `payloadDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
-| `recordDays` after the terminal state | The message record, with its attempts and receipts. The idempotency key stays spent, held only under the caller's keyed pseudonym, and a repeat of it is refused with `idempotency.expired` |
+| `recordDays` after the terminal state | The message record, with its attempts and receipts. The idempotency key stays spent, held only with the caller's issuer and subject and its times, and a repeat of it is refused with `idempotency.expired` |
 | `submissionReceiptDays` after acceptance | The stored submission receipt. A repeat of its key is refused with `idempotency.expired` |
 
 A message that is queued, sending, or held in an unknown outcome is never erased, whatever its age.
@@ -333,13 +333,18 @@ characters satisfy. A reference that cannot resolve is refused by name, and the 
 appear in a message or a log.
 
 :::caution[Preserve the audit reference key]
-The key derives minimized caller and recipient references, including the caller pseudonym that
-scopes spent idempotency keys. Keep the same key across upgrades. Rotating it changes that identity
-and frees previously spent keys under the new pseudonym. The stream is not signed or hash-chained;
-ship records to append-only storage if you require external tamper evidence.
+The key derives the minimized caller and recipient references the audit journal carries. Keep the
+same key across upgrades: rotating it changes those references, so records written before and after
+the rotation no longer join on them. A rotation frees no spent idempotency key, because a key
+belongs to the caller's issuer and subject: an exact retry across a rotation answers its stored
+receipt or is refused with `idempotency.expired`, and never sends again. The stream is not signed or
+hash-chained; ship records to append-only storage if you require external tamper evidence.
 :::
 
 {/* Evidence: crates/registry-messaging/src/audit.rs; crates/registry-platform-audit/src/lib.rs;
+    crates/registry-messaging/src/messages.rs, lookup_key();
+    crates/registry-messaging/tests/postgres_messages.rs,
+    an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again;
     products/messaging/contracts/recorded-decisions.yaml, MESSAGING-DEC-17. */}
 
 ## Check the runtime file
@@ -463,6 +468,23 @@ Once `apply` records a new digest, every runtime that restarts on the old packag
 refuses to start. Record a package only when every serving host has the new directory in place, and
 restart them together.
 :::
+
+:::caution[Drain senders before you activate a package]
+A repeated submission is authorized and rendered again under the package the runtime serves before
+its idempotency key is looked up. After an activation that narrows what a caller may send, such as
+removing a template or sender profile from its access profile or a locale from a template, an exact
+retry of a message the old package accepted is refused, for example with
+`403 profile.not-authorized` or `422 template.locale-unavailable`, while the first attempt stays
+accepted and may already be sending. A `403` or `422` answer to an exact retry therefore does not
+show that the first attempt failed, and a caller that resubmits under a new key sends the message
+twice. Before you run `messagingctl apply`, stop new submissions from the senders the change
+affects and let them finish retrying the submissions whose answers they lost.
+:::
+
+{/* Evidence: crates/registry-messaging/src/messages.rs, prepare_submission() and lookup_key();
+    crates/registry-messaging/tests/postgres_messages.rs,
+    an_exact_retry_the_caller_may_no_longer_send_is_refused_while_the_first_attempt_stands;
+    products/messaging/contracts/recorded-decisions.yaml, MESSAGING-DEC-07. */}
 
 A restart against a package the ledger does not name fails with both digests:
 
