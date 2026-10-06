@@ -1169,7 +1169,7 @@
                 "const": "idempotency.expired"
               },
               "detail": {
-                "const": "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
+                "const": "The stored response for this idempotency key has expired. Read the appointment by its external reference or its identifier to learn the original outcome before choosing a new key."
               },
               "status": {
                 "const": 410
