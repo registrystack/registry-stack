@@ -50,6 +50,10 @@ pub const RETIRED_PACKAGE_MANIFEST_FILE: &str = "scheduling.package.json";
 /// value, and the deployed value is what the audit entries record.
 pub const DEFAULT_ATTEMPT_RECEIPT_DAYS: u16 = 7;
 
+/// The longest a canonical hook envelope may be retained for retry and
+/// dead-letter inspection.
+pub const MAX_HOOK_PAYLOAD_DAYS: u16 = 30;
+
 /// The envelope every Scheduling runtime configuration carries.
 pub const SCHEDULING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: SCHEDULING_RUNTIME_API_VERSION,
@@ -256,12 +260,15 @@ const fn default_hook_maximum_attempts() -> u8 {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetentionConfig {
-    /// How long a stored idempotency receipt stays replayable.
+    /// How long a stored idempotency receipt stays replayable, at least one
+    /// day.
     #[serde(default = "default_attempt_receipt_days")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
     pub attempt_receipt_days: u16,
     /// Lifetime of canonical hook envelopes retained for retry and
-    /// dead-letter inspection.
+    /// dead-letter inspection, from one through thirty days.
     #[serde(default = "default_hook_payload_days")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_HOOK_PAYLOAD_DAYS)))]
     pub hook_payload_days: u16,
 }
 
@@ -271,6 +278,18 @@ impl Default for RetentionConfig {
             attempt_receipt_days: DEFAULT_ATTEMPT_RECEIPT_DAYS,
             hook_payload_days: default_hook_payload_days(),
         }
+    }
+}
+
+impl RetentionConfig {
+    /// Refuse a period the retention sweep does not honour.
+    pub fn check(&self) -> Result<(), RuntimeConfigError> {
+        if self.attempt_receipt_days == 0
+            || !(1..=MAX_HOOK_PAYLOAD_DAYS).contains(&self.hook_payload_days)
+        {
+            return Err(RuntimeConfigError::InvalidRetention);
+        }
+        Ok(())
     }
 }
 
@@ -446,11 +465,7 @@ impl RuntimeConfig {
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             return Err(RuntimeConfigError::InvalidDatabaseReference);
         }
-        if self.retention.attempt_receipt_days == 0
-            || !(1..=30).contains(&self.retention.hook_payload_days)
-        {
-            return Err(RuntimeConfigError::InvalidRetention);
-        }
+        self.retention.check()?;
         if let Some(reminders) = &self.destinations.reminders {
             if !valid_destination_url(&reminders.url) {
                 return Err(RuntimeConfigError::InvalidDestination);
@@ -702,7 +717,9 @@ pub enum RuntimeConfigError {
     InvalidDatabaseReference,
     #[error("{0}")]
     InvalidAuditDestination(#[source] AuditDestinationError),
-    #[error("retention.attemptReceiptDays must be at least one day")]
+    #[error(
+        "retention.attemptReceiptDays must be at least one day, and retention.hookPayloadDays from one through thirty days"
+    )]
     InvalidRetention,
     #[error("destinations.reminders.url is not a valid destination URL")]
     InvalidDestination,
@@ -1108,12 +1125,20 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
                 RuntimeConfigError::InvalidRetention,
             ),
             (
+                serde_json::json!({"hookPayloadDays": 0}),
+                RuntimeConfigError::InvalidRetention,
+            ),
+            (
+                serde_json::json!({"hookPayloadDays": MAX_HOOK_PAYLOAD_DAYS + 1}),
+                RuntimeConfigError::InvalidRetention,
+            ),
+            (
                 serde_json::json!({"reminders": {"url": "not-a-url"}}),
                 RuntimeConfigError::InvalidDestination,
             ),
         ] {
             let mut document = operator_value(&package, "development-loopback");
-            if patch.get("attemptReceiptDays").is_some() {
+            if patch.get("attemptReceiptDays").is_some() || patch.get("hookPayloadDays").is_some() {
                 document["retention"] = patch;
             } else if patch.get("reminders").is_some() {
                 document["destinations"] = patch;
