@@ -57,9 +57,13 @@ up, so a key never outlives the caller's authority. An exact retry can therefore
 example with `403 profile.not-authorized` or `422 template.locale-unavailable` after the deployment
 activated a package that narrows what the caller may send, while the first attempt stays accepted
 and may already be sending. A `403` or `422` answer to an exact retry does not show that the first
-attempt failed; do not resubmit under a new key on that answer alone.
+attempt failed; do not resubmit under a new key on that answer alone. To recover the first
+attempt's receipt, have the operator restore the caller's access with an active package that again
+lists the sender profile, template, and locale, then retry under the same key within
+`retention.submissionReceiptDays`: the retry passes authorization and answers the stored receipt,
+which carries the first attempt's message `id`.
 
-{/* Evidence: crates/registry-messaging/src/messages.rs, prepare_submission();
+{/* Evidence: crates/registry-messaging/src/messages.rs, prepare_submission() and replay();
     crates/registry-messaging/tests/postgres_messages.rs,
     an_exact_retry_the_caller_may_no_longer_send_is_refused_while_the_first_attempt_stands;
     products/messaging/contracts/recorded-decisions.yaml, MESSAGING-DEC-07. */}
