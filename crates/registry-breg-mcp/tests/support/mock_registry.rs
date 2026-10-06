@@ -13,7 +13,7 @@
 // The unit tests and each integration target use different parts of it.
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
@@ -63,6 +63,10 @@ struct Registry {
     /// revision it was bound under, the application it created, and the
     /// creation record it replays.
     created: BTreeMap<String, (u64, Uuid, Value)>,
+    /// The consumed keys whose held response has passed the receipt
+    /// horizon. A real engine keeps such a key spent and refuses to replay
+    /// it.
+    expired: BTreeSet<String>,
     /// The active package revision. A real engine binds every idempotency
     /// key to it, so a key first answered under another revision conflicts.
     package_revision: u64,
@@ -161,6 +165,13 @@ impl MockRegistry {
     /// Activate another package revision, as an operator upgrade would.
     pub fn activate_package(&self) {
         self.state.lock().package_revision += 1;
+    }
+
+    /// Pass the receipt horizon of every key answered so far, as time does.
+    pub fn expire_receipts(&self) {
+        let mut registry = self.state.lock();
+        let consumed: Vec<String> = registry.created.keys().cloned().collect();
+        registry.expired.extend(consumed);
     }
 
     pub fn applications(&self) -> BTreeMap<Uuid, Application> {
@@ -428,17 +439,22 @@ async fn create_application(
     let key = header_text(&headers, "idempotency-key");
     // A consumed key replays the response recorded when it was first
     // answered, whatever state the application has reached since, but only
-    // under the package revision it was bound to.
-    let (package_revision, consumed) = {
+    // under the package revision it was bound to and within its receipt
+    // horizon.
+    let (package_revision, consumed, expired) = {
         let registry = state.lock();
         (
             registry.package_revision,
             registry.created.get(&key).cloned(),
+            registry.expired.contains(&key),
         )
     };
     if let Some((bound_revision, identifier, created)) = consumed {
         if bound_revision != package_revision {
             return problem(BRegProblemCode::IdempotencyConflict);
+        }
+        if expired {
+            return problem(BRegProblemCode::IdempotencyExpired);
         }
         return created_response(identifier, &created);
     }

@@ -506,6 +506,39 @@ async fn a_start_steps_past_a_key_the_registry_will_not_replay() {
     assert!(fixture.registry.applications().contains_key(&application));
 }
 
+/// Past its receipt horizon a key stays spent but is no longer replayed, so
+/// an identical start steps past it and opens a new draft one position on,
+/// and a retry walks the same chain to that draft.
+#[tokio::test]
+async fn a_start_steps_past_a_key_whose_receipt_expired() {
+    let (audit, capture) = ToolAuditLog::capture();
+    let fixture = Fixture::start_with_audit(Some(audit)).await;
+    let caller = fixture.caller(CITIZEN_A);
+    let start = || fixture.call(&caller, START_APPLICATION, start_arguments());
+    let first = started_identifier(&start().await);
+
+    fixture.registry.expire_receipts();
+    let second = start().await;
+    assert_eq!(second["application"]["status"], "prepared");
+    let second = started_identifier(&second);
+    assert_ne!(second, first);
+    let entries = capture.entries();
+    let last = entries.last().expect("audited");
+    assert_eq!(last["phase"], "response");
+    assert_eq!(last["record"]["outcome"], "ok");
+    let keys: Vec<String> = fixture
+        .writes()
+        .into_iter()
+        .map(|seen| seen.idempotency_key.expect("key"))
+        .collect();
+    assert_eq!(keys.len(), 3);
+    assert_eq!(keys[1], keys[0]);
+    assert_ne!(keys[2], keys[0]);
+
+    assert_eq!(started_identifier(&start().await), second);
+    assert_eq!(fixture.registry.applications().len(), 2);
+}
+
 #[tokio::test]
 async fn a_retried_start_reuses_its_idempotency_key() {
     let fixture = Fixture::start().await;

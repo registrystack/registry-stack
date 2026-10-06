@@ -426,23 +426,26 @@ impl Gateway {
         else {
             return Err(ToolError::new(ToolErrorCode::ServiceUnavailable));
         };
-        // The registry keeps every idempotency key it has seen, so the same
-        // values always replay the same draft. A start walks a chain of keys
-        // derived from those values and stops at the first application that
-        // is still open: a retry lands on the draft its first attempt made,
-        // and a citizen whose last identical application closed gets a new
-        // one. Closed is terminal, so every caller walks the same chain to
-        // the same draft and one retried call never opens two.
+        // The registry keeps every idempotency key it has seen spent, and
+        // within the receipt horizon the same values replay the same draft.
+        // A start walks a chain of keys derived from those values and stops
+        // at the first application that is still open: a retry lands on the
+        // draft its first attempt made, and a citizen whose last identical
+        // application closed gets a new one. Closed is terminal, so every
+        // caller walks the same chain to the same draft and one retried call
+        // never opens two.
         //
         // The registry binds each key to the package revision active when it
         // was first answered, and a key bound under an earlier revision, or
         // one whose closed application retention erased, is refused as a
-        // conflict without creating anything. The walk steps
-        // past such a key the way it steps past a closed application, so a
-        // start after a package activation opens a new draft, even beside
-        // one still open under the earlier revision. Every activation that
-        // meets identical values therefore spends one more position of the
-        // same bound.
+        // conflict without creating anything. A key past the receipt horizon
+        // (`idempotency.receiptRetentionDays`) is refused as expired, also
+        // without creating anything. The walk steps past such a key the way
+        // it steps past a closed application, so a start after a package
+        // activation or past the horizon opens a new draft, even beside one
+        // still open. Every activation or receipt horizon crossed between
+        // identical starts therefore spends one more position of the same
+        // bound.
         for position in 0..=MAX_CLOSED_REPEATS {
             let key = idempotency_key(
                 &self.keys,
@@ -458,7 +461,13 @@ impl Gateway {
             {
                 Ok(created) => created,
                 Err(error)
-                    if error.problem_code() == Some(BRegProblemCode::IdempotencyConflict) =>
+                    if matches!(
+                        error.problem_code(),
+                        Some(
+                            BRegProblemCode::IdempotencyConflict
+                                | BRegProblemCode::IdempotencyExpired
+                        )
+                    ) =>
                 {
                     continue;
                 }
