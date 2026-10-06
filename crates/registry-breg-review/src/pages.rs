@@ -386,7 +386,10 @@ pub(crate) async fn submit(
                 )
                 .unwrap_or_else(|response| response)
             }
-            Some(BRegProblemCode::IdempotencyConflict) => {
+            // A key past the receipt horizon stays spent: an earlier submit
+            // under it committed, and this one runs nothing. It is neither a
+            // refusal that changed nothing nor an outcome worth retrying.
+            Some(BRegProblemCode::IdempotencyConflict | BRegProblemCode::IdempotencyExpired) => {
                 if let Err(response) = finish_audit(&app, operation, Outcome::Refused).await {
                     return response;
                 }

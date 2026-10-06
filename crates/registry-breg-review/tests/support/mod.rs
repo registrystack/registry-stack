@@ -121,6 +121,9 @@ pub struct MockRegistry {
     next_draft_read: Mutex<Option<Injected>>,
     /// A problem the registry answers the next submit with, before any effect.
     next_submit_problem: Mutex<Option<BRegProblemCode>>,
+    /// Whether every held submit response has passed the receipt horizon, so
+    /// a replay of its key is refused as expired while the key stays spent.
+    receipts_expired: AtomicBool,
 }
 
 /// An answer injected in place of the one the mock would give.
@@ -185,6 +188,7 @@ impl MockRegistry {
             target_list_first: AtomicBool::new(false),
             next_draft_read: Mutex::new(None),
             next_submit_problem: Mutex::new(None),
+            receipts_expired: AtomicBool::new(false),
         }
     }
 
@@ -257,6 +261,12 @@ impl MockRegistry {
     /// the submit takes any effect.
     pub fn refuse_next_submit(&self, code: BRegProblemCode) {
         *self.next_submit_problem.lock().unwrap() = Some(code);
+    }
+
+    /// Every held submit response passes the receipt horizon: a replay of
+    /// its key is answered `idempotency.expired` and runs nothing again.
+    pub fn expire_receipts(&self) {
+        self.receipts_expired.store(true, Ordering::Release);
     }
 
     pub fn pause_next_metadata_response(&self) {
@@ -407,6 +417,7 @@ fn problem(code: BRegProblemCode) -> Response {
         401 => "Unauthorized",
         404 => "Not Found",
         409 => "Conflict",
+        410 => "Gone",
         412 => "Precondition Failed",
         415 => "Unsupported Media Type",
         422 => "Unprocessable Content",
@@ -852,10 +863,13 @@ async fn submit_draft(
         return problem(BRegProblemCode::PreconditionRequired);
     };
     if let Some((bound, receipt)) = replays.get(&key) {
-        if *bound == if_match {
-            return receipt_response(receipt);
+        if *bound != if_match {
+            return problem(BRegProblemCode::IdempotencyConflict);
         }
-        return problem(BRegProblemCode::IdempotencyConflict);
+        if registry.receipts_expired.load(Ordering::Acquire) {
+            return problem(BRegProblemCode::IdempotencyExpired);
+        }
+        return receipt_response(receipt);
     }
     if let Some(code) = registry.next_submit_problem.lock().unwrap().take() {
         return problem(code);

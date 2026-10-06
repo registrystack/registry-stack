@@ -576,6 +576,48 @@ async fn an_uncertain_submit_retries_the_original_action_and_idempotency_key_onc
         .any(|entry| entry["record"]["outcome"] == "ok"));
 }
 
+/// A retry after the receipt horizon meets a key the registry keeps spent:
+/// the first submit committed and nothing runs again. The page must not say
+/// nothing changed, nor invite another try of the same key.
+#[tokio::test]
+async fn a_retry_past_the_receipt_horizon_is_a_definite_conflict() {
+    let harness = Harness::start().await;
+    let (cookie, page) = harness.review().await;
+    let csrf = page.input("csrf").unwrap();
+    let view = page.input("view").unwrap();
+    let form = [("csrf", csrf.as_str()), ("view", view.as_str())];
+    harness
+        .environment
+        .registry
+        .lose_next_submit_response_after_commit();
+    let uncertain = harness.post(&submit_path(), Some(&cookie), &form).await;
+    assert_eq!(uncertain.error_code(), Some("registry-unavailable"));
+    harness.environment.registry.expire_receipts();
+
+    let expired = harness.post(&submit_path(), Some(&cookie), &form).await;
+    assert_eq!(expired.status, StatusCode::CONFLICT, "{}", expired.body);
+    assert_eq!(expired.error_code(), Some("request-conflict"));
+    assert!(
+        !expired.body.contains("nothing was changed"),
+        "{}",
+        expired.body
+    );
+    assert!(!expired.body.contains("Try again"), "{}", expired.body);
+    assert_eq!(harness.environment.registry.submits(), 2);
+    assert_eq!(harness.environment.registry.submit_effects(), 1);
+
+    let mut outcomes = Vec::new();
+    for _ in 0..100 {
+        outcomes = response_outcomes(&harness.environment.audit_text(), "submit");
+        if outcomes.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    outcomes.sort();
+    assert_eq!(outcomes, ["refused", "unfinished"]);
+}
+
 #[tokio::test]
 async fn rendered_record_values_are_inert_markup() {
     let harness = Harness::start().await;
