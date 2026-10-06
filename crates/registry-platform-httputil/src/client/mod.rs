@@ -31,8 +31,8 @@ pub use private_key_jwt::{
     MAXIMUM_SCOPE_PARAMETER_BYTES, MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
 pub use retry::{
-    retry_keyed_mutation, KeyedMutationAttempt, DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES,
-    MAXIMUM_MUTATION_RETRY_AFTER_SECONDS,
+    retry_keyed_mutation, KeyedMutationAttempt, RetryAfter, DEFAULT_MUTATION_RETRIES,
+    MAXIMUM_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRY_AFTER_SECONDS,
 };
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};
 

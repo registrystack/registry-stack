@@ -5,6 +5,8 @@
 
 use std::{future::Future, time::Duration};
 
+use http::{header::RETRY_AFTER, HeaderMap};
+
 /// Same-key retries a client makes, by default, for one idempotency-keyed
 /// mutation whose outcome is unknown.
 pub const DEFAULT_MUTATION_RETRIES: u8 = 2;
@@ -16,6 +18,39 @@ pub const MAXIMUM_MUTATION_RETRY_AFTER_SECONDS: u64 = 5;
 
 const FIRST_RETRY_DELAY: Duration = Duration::from_millis(250);
 
+/// The `Retry-After` field of one answer, as a same-key retry reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryAfter {
+    /// The answer carried no `Retry-After` field.
+    Absent,
+    /// Exactly one RFC 9110 delta-seconds field, zero included.
+    Seconds(u64),
+    /// A field the client cannot honor: an HTTP-date, a duplicate field line,
+    /// or any other value outside delta-seconds. The server asked for a wait,
+    /// but not one this client can measure, so it ends the retries.
+    Unusable,
+}
+
+impl RetryAfter {
+    /// Read the `Retry-After` field of an answer.
+    #[must_use]
+    pub fn from_headers(headers: &HeaderMap) -> Self {
+        let mut values = headers.get_all(RETRY_AFTER).iter();
+        let value = match (values.next(), values.next()) {
+            (None, _) => return Self::Absent,
+            (Some(value), None) => value,
+            (Some(_), Some(_)) => return Self::Unusable,
+        };
+        let Ok(value) = value.to_str() else {
+            return Self::Unusable;
+        };
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Self::Unusable;
+        }
+        value.parse().map_or(Self::Unusable, Self::Seconds)
+    }
+}
+
 /// How one attempt of an idempotency-keyed mutation ended.
 #[derive(Debug)]
 pub enum KeyedMutationAttempt<T, E> {
@@ -24,12 +59,9 @@ pub enum KeyedMutationAttempt<T, E> {
     Settled(Result<T, E>),
     /// The outcome is unknown and resending the identical request under the
     /// same key may settle it: a timeout or broken exchange after the request
-    /// was sent, or a 5xx answer. `retry_after_seconds` is the server's
-    /// delta-seconds `Retry-After`, when it sent exactly one.
-    Retryable {
-        error: E,
-        retry_after_seconds: Option<u64>,
-    },
+    /// was sent, or a 5xx answer. `retry_after` is that answer's
+    /// `Retry-After` field, [`RetryAfter::Absent`] when no answer arrived.
+    Retryable { error: E, retry_after: RetryAfter },
     /// The outcome is unknown, but a resend would be answered the same way,
     /// such as an oversized or unparseable success answer.
     Unknown(E),
@@ -42,10 +74,10 @@ pub enum KeyedMutationAttempt<T, E> {
 /// Every `attempt` must send byte-identical content with the same key and
 /// headers. Retry number `n` (zero-based) waits `250 ms * 2^n`, or the server's
 /// `Retry-After` when that is longer and at most
-/// [`MAXIMUM_MUTATION_RETRY_AFTER_SECONDS`]; a longer requested wait ends the
-/// retries. A settled error that follows an unknown outcome does not prove the
-/// earlier attempt left no effect, so the earlier unknown error is returned in
-/// its place.
+/// [`MAXIMUM_MUTATION_RETRY_AFTER_SECONDS`]; a longer requested wait, or a
+/// [`RetryAfter::Unusable`] one, ends the retries. A settled error that
+/// follows an unknown outcome does not prove the earlier attempt left no
+/// effect, so the earlier unknown error is returned in its place.
 pub async fn retry_keyed_mutation<T, E, F, Fut>(max_retries: u8, mut attempt: F) -> Result<T, E>
 where
     F: FnMut() -> Fut,
@@ -61,14 +93,11 @@ where
                 return Err(earlier_unknown.unwrap_or(error));
             }
             KeyedMutationAttempt::Unknown(error) => return Err(error),
-            KeyedMutationAttempt::Retryable {
-                error,
-                retry_after_seconds,
-            } => {
+            KeyedMutationAttempt::Retryable { error, retry_after } => {
                 if retries >= max_retries {
                     return Err(error);
                 }
-                let Some(delay) = retry_delay(retries, retry_after_seconds) else {
+                let Some(delay) = retry_delay(retries, retry_after) else {
                     return Err(error);
                 };
                 tokio::time::sleep(delay).await;
@@ -79,12 +108,13 @@ where
     }
 }
 
-fn retry_delay(retry: u8, retry_after_seconds: Option<u64>) -> Option<Duration> {
+fn retry_delay(retry: u8, retry_after: RetryAfter) -> Option<Duration> {
     let backoff = FIRST_RETRY_DELAY.saturating_mul(1u32 << retry.min(16));
-    match retry_after_seconds {
-        Some(seconds) if seconds > MAXIMUM_MUTATION_RETRY_AFTER_SECONDS => None,
-        Some(seconds) => Some(backoff.max(Duration::from_secs(seconds))),
-        None => Some(backoff),
+    match retry_after {
+        RetryAfter::Unusable => None,
+        RetryAfter::Seconds(seconds) if seconds > MAXIMUM_MUTATION_RETRY_AFTER_SECONDS => None,
+        RetryAfter::Seconds(seconds) => Some(backoff.max(Duration::from_secs(seconds))),
+        RetryAfter::Absent => Some(backoff),
     }
 }
 
@@ -130,7 +160,7 @@ mod tests {
                 Self::Refused => KeyedMutationAttempt::Settled(Err(Failure::Refused(call))),
                 Self::Retryable => KeyedMutationAttempt::Retryable {
                     error: Failure::Unknown(call),
-                    retry_after_seconds: None,
+                    retry_after: RetryAfter::Absent,
                 },
                 Self::Unknown => KeyedMutationAttempt::Unknown(Failure::Unknown(call)),
             }
@@ -204,36 +234,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_requested_wait_above_the_bound_ends_the_retries() {
-        let calls = Cell::new(0u32);
-        let result: Result<u32, Failure> = retry_keyed_mutation(2, || {
-            calls.set(calls.get() + 1);
-            async {
-                KeyedMutationAttempt::Retryable {
-                    error: Failure::Unknown(0),
-                    retry_after_seconds: Some(MAXIMUM_MUTATION_RETRY_AFTER_SECONDS + 1),
+    async fn a_requested_wait_above_the_bound_or_unusable_ends_the_retries() {
+        for retry_after in [
+            RetryAfter::Seconds(MAXIMUM_MUTATION_RETRY_AFTER_SECONDS + 1),
+            RetryAfter::Unusable,
+        ] {
+            let calls = Cell::new(0u32);
+            let result: Result<u32, Failure> = retry_keyed_mutation(2, || {
+                calls.set(calls.get() + 1);
+                async move {
+                    KeyedMutationAttempt::Retryable {
+                        error: Failure::Unknown(0),
+                        retry_after,
+                    }
                 }
-            }
-        })
-        .await;
-        assert_eq!(result, Err(Failure::Unknown(0)));
-        assert_eq!(calls.get(), 1);
+            })
+            .await;
+            assert_eq!(result, Err(Failure::Unknown(0)), "{retry_after:?}");
+            assert_eq!(calls.get(), 1, "{retry_after:?}");
+        }
+    }
+
+    fn retry_after(values: &[&'static str]) -> RetryAfter {
+        let mut headers = HeaderMap::new();
+        for value in values {
+            headers.append(RETRY_AFTER, http::HeaderValue::from_static(value));
+        }
+        RetryAfter::from_headers(&headers)
+    }
+
+    #[test]
+    fn only_one_delta_seconds_field_is_a_usable_wait() {
+        assert_eq!(retry_after(&[]), RetryAfter::Absent);
+        assert_eq!(retry_after(&["0"]), RetryAfter::Seconds(0));
+        assert_eq!(retry_after(&["3"]), RetryAfter::Seconds(3));
+        assert_eq!(retry_after(&["60"]), RetryAfter::Seconds(60));
+        for unusable in [
+            &["Wed, 21 Oct 2026 07:28:00 GMT"][..],
+            &["1", "1"],
+            &[""],
+            &["soon"],
+            &["1.5"],
+            &["+1"],
+            &["-1"],
+            &["18446744073709551616"],
+        ] {
+            assert_eq!(retry_after(unusable), RetryAfter::Unusable, "{unusable:?}");
+        }
+        let mut opaque = HeaderMap::new();
+        opaque.insert(
+            RETRY_AFTER,
+            http::HeaderValue::from_bytes(b"\xff").expect("an opaque field value"),
+        );
+        assert_eq!(RetryAfter::from_headers(&opaque), RetryAfter::Unusable);
     }
 
     #[test]
     fn the_wait_doubles_and_honors_a_bounded_retry_after() {
-        assert_eq!(retry_delay(0, None), Some(Duration::from_millis(250)));
-        assert_eq!(retry_delay(1, None), Some(Duration::from_millis(500)));
-        assert_eq!(retry_delay(0, Some(0)), Some(Duration::from_millis(250)));
-        assert_eq!(retry_delay(1, Some(3)), Some(Duration::from_secs(3)));
+        use RetryAfter::{Absent, Seconds};
+        assert_eq!(retry_delay(0, Absent), Some(Duration::from_millis(250)));
+        assert_eq!(retry_delay(1, Absent), Some(Duration::from_millis(500)));
+        assert_eq!(retry_delay(0, Seconds(0)), Some(Duration::from_millis(250)));
+        assert_eq!(retry_delay(1, Seconds(0)), Some(Duration::from_millis(500)));
+        assert_eq!(retry_delay(1, Seconds(3)), Some(Duration::from_secs(3)));
         assert_eq!(
-            retry_delay(0, Some(MAXIMUM_MUTATION_RETRY_AFTER_SECONDS)),
+            retry_delay(0, Seconds(MAXIMUM_MUTATION_RETRY_AFTER_SECONDS)),
             Some(Duration::from_secs(MAXIMUM_MUTATION_RETRY_AFTER_SECONDS))
         );
         assert_eq!(
-            retry_delay(0, Some(MAXIMUM_MUTATION_RETRY_AFTER_SECONDS + 1)),
+            retry_delay(0, Seconds(MAXIMUM_MUTATION_RETRY_AFTER_SECONDS + 1)),
             None
         );
-        assert!(retry_delay(u8::MAX, None).is_some());
+        assert_eq!(retry_delay(0, RetryAfter::Unusable), None);
+        assert!(retry_delay(u8::MAX, Absent).is_some());
     }
 }
