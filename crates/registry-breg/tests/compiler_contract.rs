@@ -5330,6 +5330,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "action.refused",
             "authentication.refused",
             "idempotency.conflict",
+            "idempotency.expired",
             "ingestion.chunk_mismatch",
             "ingestion.profile_mismatch",
             "ingestion.receipt_erased",
