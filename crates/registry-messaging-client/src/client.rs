@@ -10,8 +10,8 @@ use registry_messaging_core::{
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
-    build_client, read_failure_kind, send_failure_kind, BearerToken, OutboundOptions,
-    ServiceBaseUrl,
+    build_client, read_failure_kind, retry_keyed_mutation, send_failure_kind, BearerToken,
+    KeyedMutationAttempt, OutboundOptions, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
     read_bounded, retry_after_seconds, url::append_path_segments, validate_response_headers,
@@ -46,6 +46,7 @@ pub struct MessagingClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     max_response_bytes: u64,
+    max_mutation_retries: u8,
 }
 
 impl fmt::Debug for MessagingClient {
@@ -54,6 +55,7 @@ impl fmt::Debug for MessagingClient {
             .debug_struct("MessagingClient")
             .field("base_url", &"<validated service URL>")
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("max_mutation_retries", &self.max_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -72,6 +74,7 @@ impl MessagingClient {
             http,
             base_url,
             max_response_bytes: config.max_response_bytes,
+            max_mutation_retries: config.max_mutation_retries,
         })
     }
 
@@ -91,10 +94,21 @@ impl MessagingClient {
     /// Submit one message under `idempotency_key`. The runtime answers the
     /// receipt of the accepted message; the same key and request answer the
     /// stored receipt again, and the same key with a different request
-    /// answers the typed `ProblemCode::IdempotencyKeyReused`.
+    /// answers the typed `ProblemCode::IdempotencyKeyReused`. A key is scoped
+    /// to the caller's verified issuer and subject, so another caller's
+    /// identical key names a different submission.
     ///
-    /// The caller chooses the key and retries with it: the client never
-    /// invents one and never retries. A key that is empty, longer than
+    /// The caller chooses the key; the client never invents one. When the
+    /// outcome is unknown, after a timeout or broken exchange or on a 5xx
+    /// answer, the client resends the identical request under the same key,
+    /// at most `MessagingClientConfig::with_max_mutation_retries` times (2 by
+    /// default; 0 disables it). An error for which
+    /// `MessagingClientError::is_outcome_unknown` is true may still have
+    /// accepted the message: recover with the same key and request, never a
+    /// new key. The runtime authorizes and renders a replay before it looks
+    /// up the key, so a 403 or 422 answering an exact retry does not show
+    /// that the first attempt failed; never resubmit it under a new key, and
+    /// read the message status instead. A key that is empty, longer than
     /// `MAXIMUM_IDEMPOTENCY_KEY_BYTES`, or carries a byte outside visible
     /// ASCII is refused before a request is sent. A templated submission's
     /// identifier and version must also follow the package naming grammar.
@@ -132,7 +146,7 @@ impl MessagingClient {
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
             .body(body);
-        self.json_answer(request, StatusCode::ACCEPTED).await
+        self.send_keyed_json(request, StatusCode::ACCEPTED).await
     }
 
     /// One message as the caller may see it: its derived status, the
@@ -275,6 +289,44 @@ impl MessagingClient {
         expected: StatusCode,
     ) -> Result<MessagingComplete<T>, MessagingClientError> {
         let response = self.send(request).await?;
+        self.json_response(response, expected).await
+    }
+
+    /// Send one idempotency-keyed request, resending the identical request
+    /// under the same key while its outcome stays unknown, at most the
+    /// configured number of times.
+    async fn send_keyed_json<T: DeserializeOwned>(
+        &self,
+        request: reqwest::RequestBuilder,
+        expected: StatusCode,
+    ) -> Result<MessagingComplete<T>, MessagingClientError> {
+        let request = &request;
+        retry_keyed_mutation(self.max_mutation_retries, || async move {
+            let Some(attempt) = request.try_clone() else {
+                return KeyedMutationAttempt::Settled(Err(MessagingClientError::invalid_request(
+                    "the request could not be prepared for sending",
+                )));
+            };
+            let response = match self.send(attempt).await {
+                Ok(response) => response,
+                Err(error) => return keyed_attempt(Err(error), false, None),
+            };
+            let server_error = response.status().is_server_error();
+            let retry_after = retry_after_seconds(response.headers(), u64::MAX);
+            keyed_attempt(
+                self.json_response(response, expected).await,
+                server_error,
+                retry_after,
+            )
+        })
+        .await
+    }
+
+    async fn json_response<T: DeserializeOwned>(
+        &self,
+        response: Response,
+        expected: StatusCode,
+    ) -> Result<MessagingComplete<T>, MessagingClientError> {
         let status = response.status();
         if status != expected {
             return Err(self.problem_or_status(response).await);
@@ -385,6 +437,27 @@ pub(crate) fn domain_problem(
         code,
         trace_id,
         retry_after_seconds: retry_after.filter(|_| status == StatusCode::TOO_MANY_REQUESTS),
+    }
+}
+
+/// Classify one attempt of an idempotency-keyed request for the same-key retry.
+/// `server_error` marks an attempt answered with a 5xx status, whatever its
+/// body, and `retry_after_seconds` is that answer's `Retry-After` wait.
+fn keyed_attempt<T>(
+    result: Result<T, MessagingClientError>,
+    server_error: bool,
+    retry_after_seconds: Option<u64>,
+) -> KeyedMutationAttempt<T, MessagingClientError> {
+    match result {
+        Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
+        Err(error) if server_error || error.resend_may_settle() => {
+            KeyedMutationAttempt::Retryable {
+                error,
+                retry_after_seconds,
+            }
+        }
+        Err(error) if error.is_outcome_unknown() => KeyedMutationAttempt::Unknown(error),
+        Err(error) => KeyedMutationAttempt::Settled(Err(error)),
     }
 }
 

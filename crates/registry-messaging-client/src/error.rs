@@ -60,7 +60,8 @@ pub enum MessagingClientError {
         /// The wait, in whole seconds, a 429 refusal asked for in
         /// `Retry-After`, bounded by `MAXIMUM_RETRY_AFTER_SECONDS`. Always
         /// `None` on any other status, and on a 429 whose header was absent
-        /// or outside the bound. The client never waits or retries itself.
+        /// or outside the bound. The client never waits on a 429 or retries
+        /// it; the wait is the caller's to honor.
         retry_after_seconds: Option<u64>,
     },
     #[error("Registry Messaging returned an invalid response")]
@@ -78,6 +79,39 @@ impl MessagingClientError {
 
     pub(crate) fn invalid_request(reason: &'static str) -> Self {
         Self::InvalidRequest { reason }
+    }
+
+    /// Whether the request may have taken effect although this error was
+    /// returned.
+    ///
+    /// True for a timeout or broken exchange after the request was sent, an
+    /// oversized or unparseable answer, and a 5xx answer: a 5xx may follow a
+    /// commit. False for a request defect, a connection that was never
+    /// established, and every typed 4xx refusal, including a 429 limit. When
+    /// it is true, the safe recovery for a submission is the same request
+    /// under the same idempotency key, which the service either replays or
+    /// settles; a new key could send the message twice.
+    #[must_use]
+    pub fn is_outcome_unknown(&self) -> bool {
+        match self {
+            Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
+            Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
+            Self::Problem { status, .. } => *status >= 500,
+            Self::Protocol { .. } => true,
+        }
+    }
+
+    /// Whether resending the identical request under the same key may settle
+    /// an unknown outcome. An oversized or unparseable non-5xx answer would be
+    /// replayed unchanged, so it is not resent.
+    pub(crate) fn resend_may_settle(&self) -> bool {
+        match self {
+            Self::Transport { kind } => {
+                matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
+            }
+            Self::Problem { status, .. } | Self::Protocol { status, .. } => *status >= 500,
+            Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
+        }
     }
 }
 
@@ -227,6 +261,97 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn the_unknown_outcome_predicate_separates_maybe_committed_from_refused() {
+        let problem = |status, code| MessagingClientError::Problem {
+            status,
+            code,
+            trace_id: None,
+            retry_after_seconds: None,
+        };
+        let protocol = |status, failure| MessagingClientError::Protocol {
+            status,
+            failure,
+            trace_id: None,
+        };
+        let transport = |kind| MessagingClientError::Transport { kind };
+        let unknown = [
+            transport(TransportKind::Timeout),
+            transport(TransportKind::Exchange),
+            transport(TransportKind::ResponseTooLarge),
+            problem(503, ProblemCode::ServiceUnavailable),
+            protocol(502, MessagingProtocolFailure::Status),
+            protocol(202, MessagingProtocolFailure::Body),
+            protocol(202, MessagingProtocolFailure::TraceContext),
+        ];
+        for error in &unknown {
+            assert!(error.is_outcome_unknown(), "{error:?}");
+        }
+        let settled = [
+            MessagingClientError::configuration("fixture reason"),
+            MessagingClientError::invalid_request("fixture reason"),
+            transport(TransportKind::Connect),
+            problem(401, ProblemCode::AuthenticationRefused),
+            problem(403, ProblemCode::ProfileNotAuthorized),
+            problem(409, ProblemCode::IdempotencyKeyReused),
+            problem(410, ProblemCode::IdempotencyExpired),
+            problem(422, ProblemCode::TemplateDataInvalid),
+            problem(429, ProblemCode::RateLimitExceeded),
+        ];
+        for error in &settled {
+            assert!(!error.is_outcome_unknown(), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_timeout_a_broken_exchange_or_a_5xx_is_resent() {
+        let resent = [
+            MessagingClientError::Transport {
+                kind: TransportKind::Timeout,
+            },
+            MessagingClientError::Transport {
+                kind: TransportKind::Exchange,
+            },
+            MessagingClientError::Problem {
+                status: 503,
+                code: ProblemCode::ServiceUnavailable,
+                trace_id: None,
+                retry_after_seconds: None,
+            },
+            MessagingClientError::Protocol {
+                status: 500,
+                failure: MessagingProtocolFailure::Status,
+                trace_id: None,
+            },
+        ];
+        for error in &resent {
+            assert!(error.resend_may_settle(), "{error:?}");
+        }
+        let kept = [
+            MessagingClientError::Transport {
+                kind: TransportKind::Connect,
+            },
+            MessagingClientError::Transport {
+                kind: TransportKind::ResponseTooLarge,
+            },
+            MessagingClientError::Protocol {
+                status: 202,
+                failure: MessagingProtocolFailure::Body,
+                trace_id: None,
+            },
+            MessagingClientError::Problem {
+                status: 409,
+                code: ProblemCode::IdempotencyKeyReused,
+                trace_id: None,
+                retry_after_seconds: None,
+            },
+            MessagingClientError::invalid_request("fixture reason"),
+        ];
+        for error in &kept {
+            assert!(!error.resend_may_settle(), "{error:?}");
+        }
     }
 
     #[test]

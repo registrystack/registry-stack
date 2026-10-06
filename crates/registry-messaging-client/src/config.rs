@@ -3,8 +3,8 @@
 use std::{fmt, time::Duration};
 
 use registry_platform_httputil::client::{
-    ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
-    MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
+    ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MUTATION_RETRIES, DEFAULT_REQUEST_TIMEOUT,
+    MAXIMUM_MUTATION_RETRIES, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
 };
 use url::Url;
 
@@ -24,6 +24,7 @@ pub struct MessagingClientConfig {
     pub(crate) max_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Vec<u8>>,
+    pub(crate) max_mutation_retries: u8,
 }
 
 impl MessagingClientConfig {
@@ -36,6 +37,7 @@ impl MessagingClientConfig {
             max_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
+            max_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
 
@@ -69,6 +71,16 @@ impl MessagingClientConfig {
         self
     }
 
+    /// How many times a submission whose outcome is unknown is resent,
+    /// identically and under the same idempotency key, before its error is
+    /// returned. Defaults to 2, accepts at most 2, and 0 disables the
+    /// resend.
+    #[must_use]
+    pub fn with_max_mutation_retries(mut self, value: u8) -> Self {
+        self.max_mutation_retries = value;
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<ServiceBaseUrl, MessagingClientError> {
         let base_url = ServiceBaseUrl::new(self.base_url.clone()).map_err(|_| {
             MessagingClientError::configuration("the service base URL is not usable")
@@ -92,6 +104,11 @@ impl MessagingClientConfig {
                 "the trusted root certificate bundle exceeds the accepted bound",
             ));
         }
+        if self.max_mutation_retries > MAXIMUM_MUTATION_RETRIES {
+            return Err(MessagingClientError::configuration(
+                "the mutation retry count exceeds the accepted bound",
+            ));
+        }
         Ok(base_url)
     }
 }
@@ -109,6 +126,7 @@ impl fmt::Debug for MessagingClientConfig {
                 "trusted_root_certificates_present",
                 &self.trusted_root_certificates.is_some(),
             )
+            .field("max_mutation_retries", &self.max_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -148,6 +166,8 @@ mod tests {
             MessagingClientConfig::new(
                 Url::parse("https://user:pass@messaging.example.invalid/").expect("fixture URL"),
             ),
+            MessagingClientConfig::new(url.clone())
+                .with_max_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1),
         ];
         for config in refused {
             assert!(
@@ -157,6 +177,12 @@ mod tests {
                 ),
                 "{config:?}"
             );
+        }
+        for retries in 0..=MAXIMUM_MUTATION_RETRIES {
+            assert!(MessagingClientConfig::new(url.clone())
+                .with_max_mutation_retries(retries)
+                .validate()
+                .is_ok());
         }
         assert!(MessagingClientConfig::new(url).validate().is_ok());
     }
