@@ -124,7 +124,9 @@ skip the target read, a replayed submit returns the first receipt while the
 target is unchanged, and a stale view renders the current state with a notice
 and status 409 instead of submitting. A view is stale when it is unknown, when
 the target's revision has changed since it was rendered, or when the registry
-refuses the draft's precondition.
+refuses the draft's precondition. A retry after the registry's receipt horizon
+finds its key still spent and the first receipt gone, so the page answers
+`request-conflict` (409) rather than saying nothing changed.
 
 ## Security model
 
