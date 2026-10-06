@@ -31,6 +31,10 @@
   now take up to three request timeouts (30 seconds each by default) plus
   the waits between attempts: 250 ms then 500 ms, or a server
   `Retry-After` of at most 5 seconds each (#1913).
+- The Node.js client reports a rejected constructor setting (an unsafe
+  integer, an undefined member, or a value of the wrong type) as kind
+  `configuration`, where it reported `invalid_request`. Code that branches on
+  `kind` sees the change.
 
 ## v0.38.0 - 2026-10-01
 

@@ -44,12 +44,15 @@ source profile. The two authorities remain separate even when one client instanc
 
 A revisioned mutation carries the item or directory revision the caller displayed in `If-Match`. A
 retriable create or mutation carries an `Idempotency-Key` the caller chooses, bounded to 128 bytes, and
-Casework never retries one on the caller's behalf. After a lost response, the attempt recovery routes
-return the original attempt under the same key, so recovery does not depend on the attempt identifier
-reaching the caller.
+the Casework service never retries one on the caller's behalf. The Casework clients do resend a keyed
+mutation whose outcome is unknown, under the same key, as the
+[same-key retry](../../client-api/#unknown-outcomes-and-the-same-key-retry) describes. After a lost
+response, the attempt recovery routes return the original attempt under the same key, so recovery does
+not depend on the attempt identifier reaching the caller.
 
 {/* Evidence: crates/registry-casework-core/src/http.rs, IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER, and
-    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES; crates/registry-casework/src/http.rs, recover_by_key(). */}
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES; crates/registry-casework/src/http.rs, recover_by_key();
+    crates/registry-casework-client/src/client.rs, send_keyed_json and send_keyed_empty. */}
 
 Recovering an attempt that has no settled outcome is not a lookup: Casework sends the attempt's
 prepared source action again under the original key with the caller's current token, so the source

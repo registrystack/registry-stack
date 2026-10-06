@@ -53,6 +53,10 @@
   expired grant refuses its whole token on every `/v1` route, so the caller
   reads with a token for the same issuer and subject that carries the read
   scope and no grant, listing by external reference or reading by identifier.
+- The Node.js client reports a rejected constructor setting (an unsafe
+  integer, an undefined member, or a value of the wrong type) as kind
+  `configuration`, where it reported `invalid_request`. Code that branches on
+  `kind` sees the change.
 
 ## v0.39.0 - 2026-10-06
 

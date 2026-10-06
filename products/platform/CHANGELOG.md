@@ -3,7 +3,8 @@
 ## Unreleased
 
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
-  Messaging, and Scheduling clients share: `client::retry_keyed_mutation`,
+  Casework, Messaging, and Scheduling clients share:
+  `client::retry_keyed_mutation`,
   `DEFAULT_MUTATION_RETRIES` and `MAXIMUM_MUTATION_RETRIES` (both 2),
   `MAXIMUM_MUTATION_RETRY_AFTER_SECONDS` (5), the `KeyedMutationAttempt`
   outcome, `RetryAfter`, which reads one delta-seconds `Retry-After` field,
@@ -14,11 +15,12 @@
 - `registry-platform-httputil` `client::send_failure_kind` reports a connect
   timeout as `TransportKind::Connect`, where it reported `Timeout`, because no
   request was sent on a connection that was never established. The BReg,
-  Messaging, and Scheduling clients therefore treat a connect timeout as a
-  known failure and never resend it. The Casework, review, Discovery, and
+  Casework, Messaging, and Scheduling clients therefore treat a connect
+  timeout as a known failure and never resend it; Casework's
+  `mutation_class` reports it as `Deterministic`. The review, Discovery, and
   Evidence clients and the token exchanges change only the reported kind,
-  from `timeout` to `connect`; Casework and review still classify the failure
-  as ambiguous.
+  from `timeout` to `connect`; the review client still classifies the
+  failure as ambiguous.
 
 ## v0.39.0 - 2026-10-06
 
