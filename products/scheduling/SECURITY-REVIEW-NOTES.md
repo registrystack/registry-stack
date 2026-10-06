@@ -749,10 +749,11 @@ audit rows silently.
 ## Grant status stays out of the capacity transaction
 
 Casework answers a resource server's question about a task grant's
-current status at `GET /v1/task-grants/{grantId}/status`, and BREG asks it
-before its writes. Scheduling does not ask, and SCHEDULING-DEF-01 stays
-deferred with its reason restated. This is an authorization decision, so
-it is recorded here; the runtime and its tests are unchanged.
+current status at `GET /v1/task-grants/{grantId}/status`, and the Base
+Registry Engine (BReg) asks it before each task-granted write. Scheduling
+does not ask, and SCHEDULING-DEF-01 stays deferred with its reason
+restated. This is an authorization decision, so it is recorded here; the
+runtime and its tests are unchanged.
 
 **Threat.** A grant revoked at Casework, or invalidated there because its
 holder lost eligibility or its template retired, still commits capacity at
@@ -764,15 +765,19 @@ active.
 seconds from its approval (`TASK_GRANT_LIFETIME_SECONDS` in
 `crates/registry-casework-core/src/task_grant.rs`, which every task
 template is held to), and Scheduling re-checks the grant's expiry inside
-the capacity transaction, after every lock wait and immediately before the
-claim commits (SCHEDULING-SEC-03). The exposure is therefore the rest of
-one short deadline. A status call would put Casework's availability inside
-every capacity transaction: each commitment would hold its capacity locks
-while it waits on another product, and would have to refuse while that
-product is unreachable, because answering without the status would make
-the check decorative. Asking before the transaction opens, as BREG does,
-keeps the locks free but still leaves the window between the check and the
-commit, so it narrows the exposure without closing it.
+the capacity transaction, after every lock wait and immediately before
+the claim commits (SCHEDULING-SEC-03). The exposure is therefore the rest
+of one short deadline. A status call would put Casework's availability
+inside every capacity transaction: each commitment would hold its
+capacity locks while it waits on another product, and would have to
+refuse while that product is unreachable, because answering without the
+status would make the check decorative. BReg accepts that cost for most
+of its writes: it asks inside the write's transaction, waits at most five
+seconds, and refuses the write when no answer arrives in that time. For a
+change-request apply and an Evidence-guarded action it asks before the
+transaction opens and re-checks only the grant's expiry inside it, which
+keeps the locks free but leaves the window between the answer and the
+commit, so that shape narrows the exposure without closing it.
 
 **Revisit trigger.** An adopter needs a revocation to take effect faster
 than a grant expires. Closing the deferral then adds a Scheduling adapter
@@ -789,9 +794,10 @@ proof that the compensating expiry re-check holds.
 **Accepted residual.** The 900-second ceiling is Casework's, not
 Scheduling's. Scheduling verifies a grant's deadline but does not cap how
 far ahead it lies, and its token verifier sets no maximum token lifetime,
-so a deployment that accepts grants minted by another authority takes that
-authority's grant lifetime as its revocation window. Such a deployment
-should hold that authority to deadlines no longer than Casework's.
+so a deployment that accepts grants minted by another authority takes
+that authority's grant lifetime as its revocation window. Holding that
+authority to deadlines no longer than Casework's is the deployment's
+responsibility; Scheduling does not enforce it.
 
 ## Known deferrals
 
