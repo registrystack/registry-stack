@@ -1999,8 +1999,9 @@ and adds the operator command `bregctl idempotency-retention erase-expired`
 `crates/registry-breg/src/runtime_config.rs`). It touches authorization (who
 may replay a held response), data minimization (raw caller identifiers are
 now persisted), audit integrity (what rotating `audit.hashKeyRef` changes),
-and deployment defaults (a seven-day horizon and an upgrade that discards
-spent keys). The invariants are BREG-SEC-162 through BREG-SEC-164.
+and deployment defaults (a seven-day horizon and an upgrade that turns
+earlier spent keys into tombstones no caller can find). The invariants are
+BREG-SEC-162 through BREG-SEC-164.
 
 ### Threat
 
@@ -2019,16 +2020,23 @@ spent keys). The invariants are BREG-SEC-162 through BREG-SEC-164.
 ### Enforcement and defaults
 
 - **Identity.** A spent row is found by `key_reference`, an unkeyed SHA-256
-  over the domain `breg-idempotency-key-v2` and the length-prefixed operation
+  over the domain `breg-idempotency-key-v2` and the length-prefixed key
   scope, issuer, subject, and key, and by a unique index on those four raw
   columns. Mutation keys, immediate-action keys, and the server-derived
-  ingestion chunk keys use the configured `authentication.issuer` and the
-  verified principal. A hook proposal application is spent by the delivery
-  itself: issuer `urn:registry-breg:hook-delivery`, which no token verifier
-  accepts, subject the compiled delivery id, and the delivery's idempotency
-  key, so no caller can reserve, replay, or collide with it. A coordinator
-  built without a runtime configuration scopes keys under
-  `urn:registry-breg:embedded-issuer`.
+  ingestion chunk keys use the configured `authentication.oidc.issuer` and
+  the verified principal. The key scope is not the operation: every ordinary
+  write (record mutations, batches, change-request routes, statistical
+  releases, and immediate actions) spends caller keys in the one `mutation`
+  scope, so a caller reusing a key on a different write route finds the
+  spent row and is refused `409 idempotency.conflict` by its binding.
+  Ingestion chunk keys use the `ingestion_chunk` scope. A hook proposal
+  application is spent by the delivery itself, in the `hook_proposal` scope:
+  issuer `urn:registry-breg:hook-delivery`, subject the compiled delivery id,
+  and the delivery's idempotency key. The configured issuer must be an
+  `https` URL or a loopback `http` URL, so no verified token carries that
+  issuer and no caller can reserve, replay, or collide with a delivery's
+  application. A coordinator built without a runtime configuration scopes
+  keys under `urn:registry-breg:embedded-issuer`.
 - **Binding.** `binding_reference` is an unkeyed SHA-256 over the canonical
   exact binding: method, route, target, package revision, response fields,
   canonical request digest, the raw verified claim context (principal,
@@ -2051,7 +2059,7 @@ spent keys). The invariants are BREG-SEC-162 through BREG-SEC-164.
   bounds how long held bytes stay stored, as `evidence-retention
   erase-expired` does for retained assertions. It runs under the migration
   credential, takes the registry lock, verifies identity, catalog, and
-  readiness, and sets the body and headers to null with
+  readiness, and sets the body to null and the headers to an empty set with
   `receipt_dropped_at`, keeping caller, key, binding, and times. The runtime
   role holds only `SELECT` and `INSERT` on the table, so no request path can
   drop or rewrite a held response. The request entry
@@ -2061,17 +2069,38 @@ spent keys). The invariants are BREG-SEC-162 through BREG-SEC-164.
 - **Upgrade.** The engine feature `caller_scoped_idempotency` makes a
   rebuilt v0.39.0 package an engine-capability successor, so the apply runs
   the schema install. When `registry_idempotency` lacks the caller columns,
-  the install truncates it with `CASCADE`, which also empties
-  `registry_immediate_action_results`,
-  `registry_immediate_action_applications`, and
-  `registry_request_idempotency_links`, and then adds the caller-keyed shape.
-  No old row is converted: none records the caller it belongs to.
+  the install adds them and converts every existing row into a tombstone
+  before setting them `NOT NULL`. No row is deleted and no table is emptied.
+  A tombstone keeps its `key_reference` (the earlier audit-keyed
+  `hmac-sha256:` digest), binding, result kind, result references, erasure
+  time, and commit time. It takes the reserved issuer
+  `urn:registry-breg:pre-caller-scope`, its own `key_reference` as subject,
+  the `mutation` scope, and the constant key `pre-caller-scope`, so the
+  caller index holds. Its held response body becomes null and its headers an
+  empty set, `receipt_dropped_at` is the upgrade time, and its horizon ends
+  one microsecond after its commit. `registry_immediate_action_results`,
+  `registry_immediate_action_applications`,
+  `registry_action_evidence_uses`, and
+  `registry_request_idempotency_links` keep every row. The stored action
+  results are what keep a revision an engine before v0.39.0 journaled under
+  a compiled effect identifier readable in history; emptying them made that
+  read answer `503 source.unavailable`. No caller reaches a tombstone: lookup
+  is by a `sha256:` key reference, which never equals an `hmac-sha256:` one,
+  and `IdempotencyPolicy::new` refuses the reserved issuer as the configured
+  one, which must be an `https` or loopback `http` URL anyway. The kept
+  request idempotency links are read only by request retention, which counts
+  and erases held bodies a tombstone no longer has, and by the replay check
+  of a key that was found, which a tombstone never is.
 
 ### Data minimization
 
 `registry_internal.registry_idempotency` now stores the raw issuer,
 principal value, and key of every spent row for as long as the registry keeps
-the row; previously it stored only a keyed hash. The audit journal is
+the row; previously it stored only a keyed hash. No command deletes a spent
+row. Request-retention erase (`bregctl request-retention erase`) sets a
+linked row's held body to null and marks it erased, and leaves the raw
+issuer, subject, and key in that row, kept indefinitely; the receipt sweep
+and `history erase` leave them in the same way. The audit journal is
 unchanged and carries keyed references only. The binding digest is unkeyed,
 so someone who can read the table can confirm a guessed low-entropy claim
 value, such as a purpose or a row boundary, against it; that reader already
@@ -2086,12 +2115,20 @@ tombstones and leaves the spent row.
   `real_postgres_idempotency_keys_are_scoped_per_caller`,
   `real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent`,
   and
-  `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_discards_spent_rows`.
+  `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows`.
 - `tests/postgres_migration.rs`:
-  `a_pre_caller_scoped_empty_successor_discards_audit_keyed_spent_keys`
+  `a_pre_caller_scoped_empty_successor_tombstones_audit_keyed_spent_keys`
   applies a package without the engine feature, restores the old table
-  shape with a held row, and proves the successor apply discards it and
-  verifies the catalog.
+  shape with a held row, and proves the successor apply keeps it as a
+  tombstone without its held response and verifies the catalog.
+- `tests/postgres_immediate_actions.rs`:
+  `the_caller_scoped_idempotency_upgrade_keeps_legacy_action_revisions_readable`
+  restores the old table shape under a committed immediate action whose
+  revision carries the compiled effect identifier, installs the caller
+  shape, and proves the revision still reads, every spent key, application,
+  and action result is kept, and the exact retry runs as a fresh request.
+- `src/idempotency.rs`:
+  `a_policy_refuses_the_issuer_earlier_spent_keys_are_converted_under`.
 - `tests/postgres_batch.rs` proves over HTTP that another principal's batch
   under the same key executes as its own request and that an expired exact
   retry answers `410 idempotency.expired` without effects.
@@ -2102,14 +2139,14 @@ tombstones and leaves the spent row.
 
 ### Accepted residuals
 
-- **The upgrade discards spent keys.** A request committed before the
-  upgrade and retried after it executes again, and a hook delivery in flight
-  across the upgrade can apply its proposal again. Nobody runs Base Registry
-  Engine in production yet, so no record is preserved or converted. Entity
-  uniqueness constraints still refuse a duplicate create where the project
-  declares them.
+- **The upgrade forgets which caller spent each key.** A tombstone is never
+  found again, so a request committed before the upgrade and retried after
+  it executes again, and a hook delivery in flight across the upgrade can
+  apply its proposal again. Nobody runs Base Registry Engine in production
+  yet, so no earlier key is carried over. Entity uniqueness constraints still
+  refuse a duplicate create where the project declares them.
 - **Issuer or principal mapping changes re-scope keys.** A retry across a
-  change of `authentication.issuer` or of the principal claim is another
+  change of `authentication.oidc.issuer` or of the principal claim is another
   caller's fresh request. The operator guide says to resolve uncertain writes
   before such a change.
 - **Spent rows are never deleted.** The horizon bounds held bytes, not the
