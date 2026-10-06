@@ -257,3 +257,8 @@ entries:
       - {path: crates/registry-schedulingctl/src/lib.rs, name: an_unavailable_audit_is_an_operational_failure_and_an_unaudited_apply_says_it_applied}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_records_one_row_per_activation_and_a_previous_package_is_a_new_row, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}
+  - id: SCHEDULING-SEC-33
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent}
+      - {path: crates/registry-scheduling/src/store/attempt_key.rs, name: the_attempt_key_reference_is_a_length_prefixed_domain_digest}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_callers, features: [postgres-test]}

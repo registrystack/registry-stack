@@ -237,8 +237,11 @@ it under the same key.
 
 Once a task grant has expired, the token that carries it is refused with `authentication.refused` on
 every `/v1` route, its read scope included, and once the stored response has passed
-`retention.attemptReceiptDays`, a retry answers `410 idempotency.expired`. In both cases, observe the
-outcome by reading:
+`retention.attemptReceiptDays`, a retry answers `410 idempotency.expired`. The sweep that erases the
+stored response also clears the token issuer, subject, and key it was filed under, and keeps only a
+SHA-256 digest of them and the command, so the key stays spent for that caller: a changed request
+under it is still `409 idempotency.key-reused`, and another caller's identical key is unrelated. In
+both cases, observe the outcome by reading:
 
 - After a create, present a token for the same issuer and subject that carries the read scope and no
   task grant, and call `GET /v1/appointments` with `externalReferenceProduct`,
@@ -261,7 +264,11 @@ booking only if the audit key has not been rotated since the attempt.
     get_appointment(), and owned_booking(); crates/registry-platform-oidc/src/authorization_claims.rs,
     grant_claims(); crates/registry-scheduling/tests/postgres_commitments.rs,
     a_booking_stays_observable_by_reference_after_its_grant_expires and
-    rotating_the_audit_key_detaches_existing_claims_from_their_owner. */}
+    rotating_the_audit_key_detaches_existing_claims_from_their_owner;
+    crates/registry-scheduling/src/store.rs, erase_expired_attempts();
+    crates/registry-scheduling/src/store/attempt_key.rs, attempt_key_reference();
+    crates/registry-scheduling/tests/postgres_commitments.rs,
+    a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent. */}
 
 ## Problem codes
 

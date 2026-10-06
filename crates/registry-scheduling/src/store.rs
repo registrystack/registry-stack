@@ -63,11 +63,13 @@ use crate::config::{describe_secret_failure, DatabaseConfig};
 use crate::hooks::{ActivatedHooks, HookCaptureError};
 
 mod activation;
+mod attempt_key;
 use activation::{apply_migrations_in, check_active_package_in, schema_state_in};
 pub use activation::{
     policy_pool_ids, Activation, ActivationOutcome, ActivationPlan, ActivationRequest,
     ActivePackage, DeployedPolicy, RoleMode, SchemaState, SINGLE_ROLE_STATEMENT,
 };
+pub use attempt_key::attempt_key_reference;
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
 const FACTS_REVISION_MIGRATION: &str =
@@ -90,9 +92,12 @@ const ACTIVATIONS_MIGRATION_VERSION: i64 = 9;
 const EXTERNAL_REFERENCES_MIGRATION: &str =
     include_str!("../migrations/0010_external_references.sql");
 const EXTERNAL_REFERENCES_MIGRATION_VERSION: i64 = 10;
+const ATTEMPT_KEY_REFERENCE_MIGRATION: &str =
+    include_str!("../migrations/0011_attempt_key_reference.sql");
+const ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION: i64 = 11;
 
 /// Every schema version in ledger order.
-const SCHEMA_VERSIONS: [i64; 10] = [
+const SCHEMA_VERSIONS: [i64; 11] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
@@ -103,6 +108,7 @@ const SCHEMA_VERSIONS: [i64; 10] = [
     AUDIT_WRITER_MIGRATION_VERSION,
     ACTIVATIONS_MIGRATION_VERSION,
     EXTERNAL_REFERENCES_MIGRATION_VERSION,
+    ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION,
 ];
 
 /// Serializes schema migration and package activation on one transaction
@@ -598,6 +604,19 @@ pub struct Commitment<'c> {
     /// The task grant's `exp`, re-checked inside the capacity transaction.
     pub grant_exp_unix: Option<u64>,
     pub hooks: Option<&'c ActivatedHooks>,
+}
+
+impl Commitment<'_> {
+    /// The digest this commitment's idempotency attempt is stored and found
+    /// under for `scope`.
+    fn key_reference(&self, scope: &str) -> String {
+        attempt_key_reference(
+            self.actor_issuer,
+            self.actor_subject,
+            scope,
+            self.idempotency_key,
+        )
+    }
 }
 
 /// The policy-resolved supply an admission runs against.
@@ -2254,11 +2273,13 @@ impl PostgresStore {
         let transaction = client.transaction().await?;
         let written = transaction
             .execute(
-                "INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
-                 idempotency_key, request_hash, state, status_code, receipt, expires_at) \
-                 VALUES($1,$2,$3,$4,$5,$6,'refused',$7,$8,$9) ON CONFLICT DO NOTHING",
+                "INSERT INTO scheduling_attempts(attempt_id, key_reference, actor_issuer, \
+                 actor_subject, scope, idempotency_key, request_hash, state, status_code, receipt, \
+                 expires_at) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,'refused',$8,$9,$10) ON CONFLICT DO NOTHING",
                 &[
                     &Uuid::new_v4(),
+                    &commitment.key_reference(scope),
                     &commitment.actor_issuer,
                     &commitment.actor_subject,
                     &scope,
@@ -2287,10 +2308,12 @@ impl PostgresStore {
         }
     }
 
-    /// Erase idempotency receipts past their retention period. The answer is
-    /// dropped, the row is kept and stamped erased: a key that answered once
-    /// stays spent, so a retry after the period is refused as expired rather
-    /// than executed again as a fresh request.
+    /// Erase idempotency receipts past their retention period. The answer and
+    /// the raw issuer, subject, and key are dropped together; the row is kept
+    /// under its key reference and stamped erased. A key that answered once
+    /// stays spent for its caller, so a retry after the period is refused as
+    /// expired rather than executed again as a fresh request, and the row is
+    /// never deleted.
     ///
     /// This is the only retention the sweep enforces beside listing cursors.
     /// Appointments, history, and the delivery outbox are not swept, and
@@ -2300,7 +2323,8 @@ impl PostgresStore {
         let client = self.client().await?;
         Ok(client
             .execute(
-                "UPDATE scheduling_attempts SET erased_at=$1, receipt=NULL \
+                "UPDATE scheduling_attempts SET erased_at=$1, receipt=NULL, \
+                 actor_issuer=NULL, actor_subject=NULL, idempotency_key=NULL \
                  WHERE expires_at <= $1 AND erased_at IS NULL",
                 &[&now],
             )
@@ -2969,14 +2993,8 @@ async fn replay_stored_attempt(
     let row = transaction
         .query_opt(
             "SELECT request_hash, state, status_code, receipt, expires_at, erased_at \
-             FROM scheduling_attempts \
-             WHERE actor_issuer=$1 AND actor_subject=$2 AND scope=$3 AND idempotency_key=$4",
-            &[
-                &commitment.actor_issuer,
-                &commitment.actor_subject,
-                &scope,
-                &commitment.idempotency_key,
-            ],
+             FROM scheduling_attempts WHERE key_reference=$1",
+            &[&commitment.key_reference(scope)],
         )
         .await?;
     let Some(row) = row else {
@@ -3667,11 +3685,13 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
     ) -> Result<(), CommitError> {
         let written = self
             .execute(
-                "INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
-                 idempotency_key, request_hash, state, status_code, receipt, expires_at) \
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING",
+                "INSERT INTO scheduling_attempts(attempt_id, key_reference, actor_issuer, \
+                 actor_subject, scope, idempotency_key, request_hash, state, status_code, receipt, \
+                 expires_at) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING",
                 &[
                     &attempt_id,
+                    &commitment.key_reference(scope),
                     &commitment.actor_issuer,
                     &commitment.actor_subject,
                     &scope,

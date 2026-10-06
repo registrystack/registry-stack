@@ -81,8 +81,10 @@ audit entries. The threats this surface answers:
 - Retention defaults (attempt receipt days, cursor minutes) are
   placeholders: a jurisdiction must approve real retention periods before
   production use. Retention sweeps idempotency attempt receipts and
-  cursors only; appointments, history, and outbox rows are never swept in
-  this milestone (SCHEDULING-DEF-06, recorded in `RUNTIME-CONFIG.md`).
+  cursors only, and clears an attempt's raw caller and key with its receipt
+  (SCHEDULING-SEC-33); appointments, history, and outbox rows are never
+  swept in this milestone (SCHEDULING-DEF-06, recorded in
+  `RUNTIME-CONFIG.md`).
   Rotated audit files are removed after `audit.retainDays`, 90 days by
   default, which is equally a placeholder.
 - Reminder intents with no configured destination stay local and readable
@@ -798,6 +800,57 @@ so a deployment that accepts grants minted by another authority takes
 that authority's grant lifetime as its revocation window. Holding that
 authority to deadlines no longer than Casework's is the deployment's
 responsibility; Scheduling does not enforce it.
+
+## A spent key forgets its caller
+
+An idempotency attempt kept its verified token issuer, subject, and raw
+key for as long as the row existed, and the row is never deleted: a key
+whose receipt is erased stays spent, so a retry after the horizon is
+refused rather than executed again. This touches data minimization, so it
+is recorded here (SCHEDULING-SEC-33).
+
+**Threat.** The identifiers a caller presented outlive the receipt they
+were retained for, so the database holds every caller's raw issuer and
+subject and every key it ever chose, indefinitely. Clearing them naively
+would free the key, so the same caller's retry after the horizon would
+book a second time.
+
+**Enforcement.** An attempt is identified and kept unique by a key
+reference: SHA-256 over the domain `scheduling-idempotency-key-v1` and the
+issuer, subject, command scope, and key, each prefixed by its UTF-8 byte
+length as a big-endian 64-bit integer (`attempt_key_reference` in
+`crates/registry-scheduling/src/store/attempt_key.rs`, the same
+construction as BReg's request references without a dependency on BReg).
+The replay lookup and the unique constraint use only that reference.
+`erase_expired_attempts` in `crates/registry-scheduling/src/store.rs`
+drops the receipt and clears the raw issuer, subject, and key in one
+statement, and `scheduling_attempts_raw_caller_check` holds all three
+non-empty while the receipt is retained and all three NULL once it is
+erased. Migration 11 computes the same digest in SQL for every existing
+row, so a key spent before the upgrade stays spent, and clears the raw
+values from rows already erased.
+
+**Tests.** `crates/registry-scheduling/tests/postgres_commitments.rs`:
+`a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent`
+(the same caller's exact retry answers `idempotency.expired`, a changed
+retry `idempotency.key-reused`, another caller's identical key is fresh,
+and a row inside its horizon is untouched).
+`crates/registry-scheduling/src/store/attempt_key.rs`:
+`the_attempt_key_reference_is_a_length_prefixed_domain_digest`.
+`crates/registry-schedulingctl/tests/activation_postgres.rs`:
+`attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_callers`
+(the SQL digest equals the Rust one, including for a non-ASCII subject,
+and the constraint refuses a raw caller on an erased row or a cleared one
+on a live row).
+
+**Accepted residual.** The reference is an unkeyed digest, kept forever.
+Anyone who can read the table and already knows a caller's issuer,
+subject, and the exact key can confirm that the attempt was made, and a
+caller that chooses guessable keys makes that confirmation cheap. The
+row also keeps the command scope, request hash, outcome status, and
+timestamps. Keying the digest with the audit hash key would make a key
+rotation free every spent key, which is the double booking this row
+exists to refuse.
 
 ## Known deferrals
 

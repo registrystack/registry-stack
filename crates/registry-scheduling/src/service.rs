@@ -81,8 +81,10 @@ const ISSUER_CLASS: &str = "scheduling-issuer-v1";
 pub struct Caller {
     /// The verified actor kind: `human`, `agent`, or `service`.
     pub actor_kind: String,
-    /// The verified token issuer and subject. The idempotency attempts key
-    /// on this pair; every other record carries the pseudonym.
+    /// The verified token issuer and subject. An idempotency attempt is
+    /// identified by a digest over this pair, its command, and its key, and
+    /// carries the raw pair only while its receipt is retained; every other
+    /// record carries the pseudonym.
     pub issuer: String,
     pub subject: String,
     /// The verified task grant, when the token carried one.

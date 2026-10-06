@@ -249,7 +249,11 @@ seven days, which is not a jurisdictional recommendation. Appointment, history,
 and reminder outbox retention remain deferred; `audit.retainDays` bounds
 rotated audit files. An idempotency receipt past its period is erased, so an
 exact retry after expiry answers `idempotency.expired` with HTTP 410 instead of
-replaying the first answer.
+replaying the first answer. The same sweep clears the attempt's raw token
+issuer, subject, and key; the row stays, identified only by a SHA-256 digest of
+those three and the command, and is never deleted. The key therefore stays
+spent for that caller: a changed retry is still refused with
+`idempotency.key-reused`, and another caller's identical key is fresh.
 
 See the complete maintained
 [`runtime.example.yaml`](examples/standalone-exact-time/runtime.example.yaml),

@@ -1498,7 +1498,8 @@ def verify_source(repository_root: Path) -> None:
         marker(auth_source, text, "auth")
     for text in (
         "pub enum CommitError",
-        "WHERE actor_issuer=$1 AND actor_subject=$2 AND scope=$3 AND idempotency_key=$4",
+        "FROM scheduling_attempts WHERE key_reference=$1",
+        "attempt_key_reference(\n            self.actor_issuer,\n            self.actor_subject,\n            scope,\n            self.idempotency_key,\n        )",
     ):
         marker(store_source, text, "store")
     # The commitment verdict, not the store, names the caller's problem.

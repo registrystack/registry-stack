@@ -658,6 +658,28 @@ invariants:
     negativeTest:
       path: crates/registry-schedulingctl/tests/activation_postgres.rs
       name: apply_refuses_to_activate_without_its_audit_destination
+  - id: SCHEDULING-SEC-33
+    state: enforced
+    threat: >-
+      A spent idempotency key keeps the verified issuer, subject, and raw key
+      in the database for as long as the row exists, so the identifier a
+      caller presented outlives the receipt it was retained for; or clearing
+      them frees the key, so a retry after the horizon books a second time.
+    enforcementPoint: >-
+      An attempt is identified and kept unique by a SHA-256 key reference over
+      a domain separator and the length-prefixed issuer, subject, command
+      scope, and key. The retention sweep that erases a receipt clears the
+      raw issuer, subject, and key in the same statement, and a check
+      constraint holds all three present exactly while the receipt is.
+    refusal: >-
+      Answer the same caller's exact retry after the horizon with
+      idempotency.expired and a changed retry with idempotency.key-reused,
+      treat another caller's identical key as fresh, leave a row inside its
+      horizon untouched, and refuse any write that keeps a raw caller on an
+      erased row or clears one from a live row.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction
@@ -716,8 +738,9 @@ deferred:
     reason: >-
       Retention windows for committed scheduling data are a product question
       this milestone does not answer. Idempotency receipts do expire and
-      tombstone; nothing else in the database is swept. Rotated audit files
-      are removed after audit.retainDays.
+      tombstone, and the sweep clears the raw caller and key with them
+      (SCHEDULING-SEC-33); nothing else in the database is swept. Rotated
+      audit files are removed after audit.retainDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.
