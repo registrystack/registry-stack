@@ -29,9 +29,8 @@ mod writer;
 pub use writer::{
     AuditDestination, AuditDestinationError, AuditDestinationKind, AuditEntry, AuditPhase,
     AuditRequest, AuditSegments, AuditUnavailable, AuditUnavailableReason, AuditWriter,
-    FileDestination, SealedSegment, ABSOLUTE_AUDIT_PATH_PATTERN, AUDIT_PATH_SEGMENT_PATTERN,
-    DEFAULT_AUDIT_RETAIN_DAYS, DEFAULT_AUDIT_ROTATE_BYTES, MAX_AUDIT_RETAIN_DAYS,
-    MIN_AUDIT_ROTATE_BYTES,
+    FileDestination, SealedSegment, ABSOLUTE_AUDIT_PATH_PATTERN, DEFAULT_AUDIT_RETAIN_DAYS,
+    DEFAULT_AUDIT_ROTATE_BYTES, MAX_AUDIT_RETAIN_DAYS, MIN_AUDIT_ROTATE_BYTES,
 };
 
 use std::{

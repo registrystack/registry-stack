@@ -43,10 +43,6 @@ pub const MIN_AUDIT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// Largest accepted retention, in days.
 pub const MAX_AUDIT_RETAIN_DAYS: u32 = 36_500;
 
-/// One path segment other than `..`: the segments a [`FileDestination`] path
-/// may use. A `.` segment is allowed because it names no component.
-pub const AUDIT_PATH_SEGMENT_PATTERN: &str = r"(?:[^/.][^/]*|\.(?:[^/.][^/]*|\.[^/]+)?)";
-
 /// The JSON Schema pattern of a path [`FileDestination::new`] accepts: an
 /// absolute path with no `..` segment that ends in a file name, stated for
 /// runtime configuration schemas so an editor refuses what startup refuses.
@@ -3967,12 +3963,9 @@ mod tests {
     #[test]
     fn the_schema_path_pattern_accepts_exactly_the_file_destination_paths() {
         let pattern = regex::Regex::new(ABSOLUTE_AUDIT_PATH_PATTERN).expect("pattern compiles");
-        let segment = regex::Regex::new(&format!("^{AUDIT_PATH_SEGMENT_PATTERN}$"))
-            .expect("segment pattern compiles");
         let segments = ["a", ".", "..", "...", ".a", "..a", "a..", "a.b", " "];
         let mut paths = vec![String::new(), "/".to_owned(), "//".to_owned()];
         for first in segments {
-            assert_eq!(segment.is_match(first), first != "..", "{first:?}");
             paths.push(first.to_owned());
             paths.push(format!("/{first}"));
             paths.push(format!("/{first}/"));
