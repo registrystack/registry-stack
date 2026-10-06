@@ -8,6 +8,9 @@ source_repos:
   - registry-evidence
   - registry-manifest
   - registry-discovery
+  - registry-casework
+  - registry-scheduling
+  - registry-messaging
 last_reviewed: "2026-10-03"
 doc_type: explanation
 locale: en
@@ -42,12 +45,89 @@ native Evidence client.
 
 ## Workflow orchestration
 
-Workflow engines such as OpenFn can call maintained product APIs. Keep credentials and product
-policy in the owning boundary. A workflow may coordinate calls, but it does not become the
-authorization source or system of record.
+Any orchestrator can call maintained product APIs: an outbox service beside your application, a
+workflow engine, or a scheduled job. Keep credentials and product policy in the owning boundary. A
+workflow may coordinate calls, but it does not become the authorization source or system of record.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs; crates/registry-evidence/src/server.rs;
     crates/registry-manifest-core/src/lib.rs; crates/registry-discovery-client/src/selection.rs. */}
+
+Take one journey: register an establishment in BReg, then book its inspection in Registry
+Scheduling<DocsetProduct product="registry-messaging"> and notify its contact through Registry
+Messaging</DocsetProduct>. Each step calls a different product, any answer can be lost, and the
+journey can wait between steps for a person or a free slot. The same rules let you resume any step
+safely:
+
+1. Derive each step's `Idempotency-Key` from the source event and the step, for example
+   `<event-id>:register` and `<event-id>:book`, and persist it before the first send. A random key
+   makes a resumed step a second request, and a key built from personal data copies that data into
+   the product's idempotency records. Every product in this journey accepts a key of at most 128
+   visible ASCII characters without a comma or semicolon.
+2. Retry under the persisted key. The maintained clients for these products already resend a
+   mutation whose outcome is unknown under the same key, at most twice by default, as
+   [unknown outcomes](../../reference/client-api/#unknown-outcomes-and-the-same-key-retry)
+   describes. When the error still reports an unknown outcome, your later retries reuse that key;
+   a new key can apply the step twice.
+3. When a step acts on a human approval, obtain a task grant for that step close to when it runs,
+   instead of holding one grant across a wait. A Registry Casework grant lasts at most 900 seconds,
+   and each assertion minted from it at most 60 seconds. Persist only the grant ID, never an
+   assertion or an access token. A grant that expires before its step completes needs a new
+   approval and a new grant.
+4. Observe each outcome with an ordinary read token for the same principal, not with the step's
+   grant, which may have expired by the time you look.
+5. Keep references in the orchestrator's state: the event ID, each step's key and grant ID, record
+   IDs and revisions, appointment IDs<DocsetProduct product="registry-messaging">, message
+   IDs</DocsetProduct>, and external references. Never keep a token or personal data there; read a
+   contact from the source of record when the step that needs it runs.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, valid_idempotency_key();
+    crates/registry-scheduling-core/src/naming.rs, MAXIMUM_IDEMPOTENCY_KEY_BYTES;
+    crates/registry-scheduling/src/http.rs, idempotency_key();
+    crates/registry-messaging/src/messages.rs, valid_idempotency_key();
+    crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation and
+    DEFAULT_MUTATION_RETRIES; crates/registry-casework-core/src/task_grant.rs,
+    TASK_GRANT_LIFETIME_SECONDS and TASK_ASSERTION_LIFETIME_SECONDS;
+    crates/registry-casework/src/task_grants.rs, task_assertion();
+    products/casework/TASK_GRANTS.md, "Preview and approve". */}
+
+The products differ in where a grant is needed and how you find an outcome you never received.
+
+From BReg, keep the record identifier and revision identifier a write returns. How long BReg
+replays a key, and what an exact retry answers after that, is documented in
+[Deploy a registry](../../operate/breg/).
+
+{/* Evidence: crates/registry-record/src/lib.rs, record_identifier and revision_identifier. */}
+
+Scheduling commits capacity only under a live grant that covers the offering's service, location,
+and action. Send `externalReferences` naming the BReg record with the booking. Once the grant has
+expired, call `GET /v1/appointments` filtered by that reference with a read token for the same
+issuer and subject; the listing returns only the caller's own appointments, so book and observe
+under one principal.
+[Recover an unknown outcome](../../reference/apis/registry-scheduling/#recover-an-unknown-outcome)
+gives the receipt horizon and its refusals.
+
+{/* Evidence: crates/registry-scheduling/src/service.rs, require_permission() and
+    list_appointments(); crates/registry-scheduling-core/src/wire.rs, ExternalReference;
+    crates/registry-scheduling/src/store.rs, list_appointments_by_external_reference();
+    crates/registry-scheduling/tests/postgres_commitments.rs,
+    a_booking_stays_observable_by_reference_after_its_grant_expires. */}
+
+<DocsetProduct product="registry-messaging">
+
+Messaging takes no task grant: the sender's access profile decides. Keep the message `id` from the
+`202` receipt and call `GET /v1/messages/{message_id}` as the principal that submitted it. An exact
+retry is authorized and rendered again before its key is looked up, so a `403` or `422` answer to
+it does not show that the first submission failed.
+[The Messaging contract boundary](../../reference/apis/registry-messaging/#contract-boundary) gives
+the key horizon and its refusals.
+
+{/* Evidence: crates/registry-messaging-core/src/access.rs, resolve();
+    crates/registry-messaging-core/src/wire.rs, MessageReceipt;
+    crates/registry-messaging-core/src/visibility.rs, check_message_visibility();
+    crates/registry-messaging/src/messages.rs, prepare_submission();
+    products/messaging/contracts/recorded-decisions.yaml, MESSAGING-DEC-07. */}
+
+</DocsetProduct>
 
 ## Next
 
