@@ -8,10 +8,13 @@
   exact retry across a rotation replays its receipt or is refused with
   `410 idempotency.expired`, and never sends again. A deleted record's
   idempotency tombstone now holds the caller's issuer and subject. Audit
-  records keep the pseudonym. Run `messagingctl apply` with this release
-  before starting the new runtime; the upgrade discards existing
-  idempotency records, so every key spent before it can be used again
-  (#1912).
+  records keep the pseudonym. The upgrade discards existing idempotency
+  records, so every key spent before it can be used again, and a retry the
+  new runtime receives under a discarded key sends its message a second
+  time. Before you run `messagingctl apply` with this release, stop new
+  submissions, let in-flight senders finish retrying the submissions whose
+  answers they lost, then stop every v0.39.0 runtime; start the new runtime
+  only after `apply` succeeds (#1912).
 
 ## v0.38.0 - 2026-10-01
 
