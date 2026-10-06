@@ -1106,38 +1106,45 @@ async fn a_booking_stays_observable_by_reference_after_its_grant_expires() {
     assert_eq!(refused["code"], "operation.not-authorized");
 }
 
-/// The owner of a hold or an appointment is the pseudonym `audit.hashKeyRef`
-/// keys over the issuer and subject, not the identity itself. This pins what
-/// the operator and recovery documentation warn about: an edge serving the
-/// same deployment under a rotated audit key no longer recognises the caller
-/// that booked. Its listing by external reference answers an empty page, a
-/// read by identifier, a reschedule, and a cancel are refused as another
-/// caller's, and its hold can no longer be released by it, while the claims
-/// themselves stay committed. An empty page proves no booking only while the audit key is
-/// the one the attempt ran under.
+/// The owner of a hold or an appointment is the verified issuer and subject
+/// that booked it, not the pseudonym `audit.hashKeyRef` keys over them. This
+/// pins what the operator and recovery documentation promise: an edge serving
+/// the same deployment under a rotated audit key still recognises the caller
+/// that booked. Its listing by external reference, a cursor it was handed
+/// before the rotation, a read by identifier, a reschedule, a cancel, a hold
+/// release, and its hold ceiling all still find its claims, and another
+/// principal is refused exactly as before the rotation.
 #[tokio::test]
-async fn rotating_the_audit_key_detaches_existing_claims_from_their_owner() {
+async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
     let fx = fixture().await;
     let reference = case_reference("case-rotation");
     let reference_uri = appointments_by_reference_uri("case-rotation", 10, None);
 
-    let slot = first_slot(&fx, OFFERING, 300, 440).await;
-    let mut referenced = admission(&fx, OFFERING, slot);
-    referenced["externalReferences"] = json!([reference.clone()]);
-    let (status, booked) = fx
-        .post(
-            "/v1/appointments",
-            &fx.agent,
-            "rotation-booking",
-            json!({"hold": null, "admission": referenced}),
-        )
-        .await;
-    assert_eq!(status, StatusCode::CREATED, "{booked}");
-    let appointment_id = booked["appointmentId"]
+    let mut booked = Vec::new();
+    for (start, key) in [(300, "rotation-booking"), (450, "rotation-second")] {
+        let slot = first_slot(&fx, OFFERING, start, start + 140).await;
+        let mut referenced = admission(&fx, OFFERING, slot);
+        referenced["externalReferences"] = json!([reference.clone()]);
+        let (status, appointment) = fx
+            .post(
+                "/v1/appointments",
+                &fx.agent,
+                key,
+                json!({"hold": null, "admission": referenced}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{appointment}");
+        booked.push(appointment);
+    }
+    let appointment_id = booked[0]["appointmentId"]
         .as_str()
         .expect("an appointment identifier")
         .to_owned();
-    let revision = booked["revision"].as_u64().expect("a revision");
+    let revision = booked[0]["revision"].as_u64().expect("a revision");
+    let second_id = booked[1]["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier")
+        .to_owned();
     let hold_slot = first_slot(&fx, OFFERING, 600, 740).await;
     let (status, hold) = fx
         .post(
@@ -1160,13 +1167,18 @@ async fn rotating_the_audit_key_detaches_existing_claims_from_their_owner() {
         "registry_scopes": "scheduling-read",
         "registry_actor_kind": "service",
     }));
-    let (status, page) = fx.get(&reference_uri, &same_principal).await;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    assert_eq!(
-        page["items"].as_array().map(Vec::len),
-        Some(1),
-        "under the key it booked with, the caller finds its booking: {page}"
-    );
+    let (status, first_page) = fx
+        .get(
+            &appointments_by_reference_uri("case-rotation", 1, None),
+            &same_principal,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first_page}");
+    let cursor = first_page["nextCursor"]
+        .as_str()
+        .expect("a second page under the key it booked with")
+        .to_owned();
+    let first_listed = first_page["items"][0]["appointmentId"].clone();
 
     // The same store, policy, revision, and audit destination, served under
     // another audit hash key: an operator's `audit.hashKeyRef` rotation.
@@ -1201,18 +1213,26 @@ async fn rotating_the_audit_key_detaches_existing_claims_from_their_owner() {
         )
     };
 
-    let (status, page) =
-        through_rotated("GET", reference_uri.clone(), &same_principal, None, None).await;
+    // Another principal is refused under the rotated key exactly as it was
+    // under the original one, and changes nothing.
+    let other = agent_token_for("principal-other");
+    let (status, page) = through_rotated("GET", reference_uri.clone(), &other, None, None).await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    assert_eq!(
-        page["items"],
-        json!([]),
-        "after the rotation the caller that booked sees an empty page"
-    );
+    assert_eq!(page["items"], json!([]), "another principal sees nothing");
+    let (status, refused) = through_rotated(
+        "GET",
+        appointments_by_reference_uri("case-rotation", 1, Some(&cursor)),
+        &other,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["code"], "cursor.invalid");
     let (status, refused) = through_rotated(
         "GET",
         format!("/v1/appointments/{appointment_id}"),
-        &same_principal,
+        &other,
         None,
         None,
     )
@@ -1222,8 +1242,8 @@ async fn rotating_the_audit_key_detaches_existing_claims_from_their_owner() {
     let (status, refused) = through_rotated(
         "POST",
         format!("/v1/appointments/{appointment_id}/reschedule"),
-        &fx.agent,
-        Some("rotation-reschedule"),
+        &other,
+        Some("rotation-foreign-reschedule"),
         Some(json!({
             "observedRevision": revision,
             "admission": admission(&fx, OFFERING, reschedule_slot),
@@ -1235,26 +1255,17 @@ async fn rotating_the_audit_key_detaches_existing_claims_from_their_owner() {
     let (status, refused) = through_rotated(
         "POST",
         format!("/v1/appointments/{appointment_id}/cancel"),
-        &fx.agent,
-        Some("rotation-cancel"),
+        &other,
+        Some("rotation-foreign-cancel"),
         Some(json!({"observedRevision": revision, "reason": null})),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     assert_eq!(refused["code"], "operation.not-authorized");
-    let (status, refused) = through_rotated(
-        "DELETE",
-        format!("/v1/holds/{hold_id}"),
-        &fx.agent,
-        None,
-        None,
-    )
-    .await;
+    let (status, refused) =
+        through_rotated("DELETE", format!("/v1/holds/{hold_id}"), &other, None, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     assert_eq!(refused["code"], "operation.not-authorized");
-
-    // Nothing was released or cancelled: both claims are still committed,
-    // and the original key still finds the booking.
     for claim_id in [&appointment_id, &hold_id] {
         let state = fx
             .admin
@@ -1266,10 +1277,111 @@ async fn rotating_the_audit_key_detaches_existing_claims_from_their_owner() {
             .expect("read the claim's state");
         assert_eq!(state.get::<_, String>(0), "active", "{claim_id}");
     }
-    let (status, page) = fx.get(&reference_uri, &same_principal).await;
+
+    // The caller that booked still lists, pages, and reads its claims.
+    let (status, page) =
+        through_rotated("GET", reference_uri.clone(), &same_principal, None, None).await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    assert_eq!(page["items"][0]["appointmentId"], json!(appointment_id));
-    assert_eq!(page["items"][0]["state"], "confirmed");
+    assert_eq!(
+        page["items"].as_array().map(Vec::len),
+        Some(2),
+        "after the rotation the caller that booked still finds both bookings: {page}"
+    );
+    let (status, second_page) = through_rotated(
+        "GET",
+        appointments_by_reference_uri("case-rotation", 1, Some(&cursor)),
+        &same_principal,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second_page}");
+    let mut listed = vec![
+        first_listed,
+        second_page["items"][0]["appointmentId"].clone(),
+    ];
+    listed.sort_by_key(ToString::to_string);
+    let mut expected = vec![json!(appointment_id), json!(second_id)];
+    expected.sort_by_key(ToString::to_string);
+    assert_eq!(
+        listed, expected,
+        "the cursor handed out before the rotation still pages"
+    );
+    let (status, read) = through_rotated(
+        "GET",
+        format!("/v1/appointments/{appointment_id}"),
+        &same_principal,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["appointmentId"], json!(appointment_id));
+
+    // Its hold made before the rotation still counts against its ceiling of
+    // two: one more hold is admitted, and the next is refused.
+    let (status, admitted) = through_rotated(
+        "POST",
+        "/v1/holds".to_owned(),
+        &fx.agent,
+        Some("rotation-ceiling-second"),
+        Some(admission(
+            &fx,
+            OFFERING,
+            first_slot(&fx, OFFERING, 1100, 1240).await,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{admitted}");
+    let (status, refused) = through_rotated(
+        "POST",
+        "/v1/holds".to_owned(),
+        &fx.agent,
+        Some("rotation-ceiling-third"),
+        Some(admission(
+            &fx,
+            OFFERING,
+            first_slot(&fx, OFFERING, 1300, 1440).await,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "capacity.exhausted");
+
+    // And it still acts on them.
+    let (status, rescheduled) = through_rotated(
+        "POST",
+        format!("/v1/appointments/{appointment_id}/reschedule"),
+        &fx.agent,
+        Some("rotation-reschedule"),
+        Some(json!({
+            "observedRevision": revision,
+            "admission": admission(&fx, OFFERING, reschedule_slot),
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rescheduled}");
+    let rescheduled_revision = rescheduled["revision"].as_u64().expect("a revision");
+    assert_eq!(rescheduled_revision, revision + 1);
+    let (status, cancelled) = through_rotated(
+        "POST",
+        format!("/v1/appointments/{appointment_id}/cancel"),
+        &fx.agent,
+        Some("rotation-cancel"),
+        Some(json!({"observedRevision": rescheduled_revision, "reason": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled");
+    let (status, released) = through_rotated(
+        "DELETE",
+        format!("/v1/holds/{hold_id}"),
+        &fx.agent,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{released}");
 }
 
 async fn hook_fixture() -> Fixture {

@@ -139,9 +139,10 @@ invariants:
       One caller reads or pages another caller's appointment, history, or
       listing by guessing an identifier or replaying a cursor.
     enforcementPoint: >-
-      owned_booking on the appointment read and history paths; actor predicates
-      on filtered appointment listings; and cursors that are opaque version 4
-      UUIDs bound to their listing context, actor, and exact filter and expiring
+      owned_booking on the appointment read and history paths; verified owner
+      predicates on filtered appointment listings; and cursors that are opaque
+      version 4 UUIDs bound to their listing context, owner, and exact filter
+      and expiring
       fifteen minutes out, with ownership re-checked before a cursor is
       honoured.
     refusal: >-
@@ -680,6 +681,29 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent
+  - id: SCHEDULING-SEC-34
+    state: enforced
+    threat: >-
+      Claim ownership keyed on the audit pseudonym detaches every hold and
+      appointment from its booker when the audit hash key rotates, so an
+      orchestrator reads an empty page as no booking and books again, and the
+      per-caller hold ceiling stops counting holds the caller already has; or
+      the owner leaks into a receipt, outbox payload, or observer projection.
+    enforcementPoint: >-
+      A claim stores the verified issuer and subject that booked it under a
+      check constraint holding both present and non-empty or both absent.
+      ClaimRow::is_owned_by, owned_booking, the external reference listing,
+      the hold-ceiling lock and count, and the listing cursor context all
+      decide on that pair; the pseudonym decides nothing. The owner is never
+      serialized.
+    refusal: >-
+      Keep the booker's listing, cursor, read, reschedule, cancel, release,
+      and hold ceiling across a rotation; answer another principal with an
+      empty page, cursor.invalid, and operation.not-authorized; own no claim
+      written before migration 12; and refuse a partial or empty owner.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: rotating_the_audit_key_keeps_existing_claims_with_their_owner
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction
@@ -739,8 +763,10 @@ deferred:
       Retention windows for committed scheduling data are a product question
       this milestone does not answer. Idempotency receipts do expire and
       tombstone, and the sweep clears the raw caller and key with them
-      (SCHEDULING-SEC-33); nothing else in the database is swept. Rotated
-      audit files are removed after audit.retainDays.
+      (SCHEDULING-SEC-33); nothing else in the database is swept, so a hold
+      or appointment keeps its owner's verified issuer and subject for as
+      long as it exists (SCHEDULING-SEC-34). Rotated audit files are removed
+      after audit.retainDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.

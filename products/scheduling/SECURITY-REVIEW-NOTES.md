@@ -84,7 +84,8 @@ audit entries. The threats this surface answers:
   cursors only, and clears an attempt's raw caller and key with its receipt
   (SCHEDULING-SEC-33); appointments, history, and outbox rows are never
   swept in this milestone (SCHEDULING-DEF-06, recorded in
-  `RUNTIME-CONFIG.md`).
+  `RUNTIME-CONFIG.md`), so a hold or appointment keeps its owner's raw
+  issuer and subject (SCHEDULING-SEC-34).
   Rotated audit files are removed after `audit.retainDays`, 90 days by
   default, which is equally a placeholder.
 - Reminder intents with no configured destination stay local and readable
@@ -851,6 +852,56 @@ row also keeps the command scope, request hash, outcome status, and
 timestamps. Keying the digest with the audit hash key would make a key
 rotation free every spent key, which is the double booking this row
 exists to refuse.
+
+## A claim is owned by its verified caller
+
+A hold or appointment was owned by the audit-keyed pseudonym of the issuer
+and subject that booked it, so rotating `audit.hashKeyRef` detached every
+existing claim from its booker. This touches ownership and data
+minimization, so it is recorded here (SCHEDULING-SEC-34).
+
+**Threat.** After a key rotation the booker gets an empty listing and is
+refused on read, confirm, reschedule, cancel, and release, while its claims
+keep their capacity. An orchestrator recovering an unknown outcome reads an
+empty page as no booking and books again, and the per-caller hold ceiling
+stops counting the holds the caller already has.
+
+**Enforcement.** Migration 12 adds `owner_issuer` and `owner_subject` to
+`scheduling_claims`, and `scheduling_claims_owner_check` holds both present
+and non-empty or both absent. Every claim the runtime writes stores the
+verified pair from the commitment. `ClaimRow::is_owned_by` in
+`crates/registry-scheduling/src/store.rs` decides hold confirm and release
+and appointment reschedule and cancel; `owned_booking` in `service.rs`
+decides the read and history; `list_appointments_by_external_reference`
+filters on the stored pair; `lock_caller_and_count_active_holds` locks and
+counts on it; and the listing cursor context binds a digest of it. The
+pseudonym stays on the claim and in history and audit, where it decides
+nothing. The owner is `#[serde(skip)]`, so receipts, outbox payloads, and
+observer projections never carry it.
+
+**Tests.** `crates/registry-scheduling/tests/postgres_commitments.rs`:
+`rotating_the_audit_key_keeps_existing_claims_with_their_owner` (after a
+rotation the booker lists, pages with a cursor issued before it, reads,
+reschedules, cancels, releases, and is still held to its hold ceiling;
+another principal gets an empty page, `cursor.invalid`, and
+`operation.not-authorized`, and the claims stay active).
+`crates/registry-scheduling/src/service.rs`:
+`a_success_replay_receipt_projects_through_the_same_document` (an owned
+claim serializes exactly as an unowned one).
+`crates/registry-scheduling/src/hooks.rs`:
+`projections_disclose_only_the_requested_closed_fields` (owner canaries
+never reach a projection).
+`crates/registry-schedulingctl/tests/activation_postgres.rs`:
+`claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner`.
+
+**Accepted residual.** The raw issuer and subject stay on the claim for as
+long as it exists, and claims have no retention sweep (SCHEDULING-DEF-06);
+a future claim retention must clear both columns, which the constraint
+allows. A claim written before migration 12 recorded only the pseudonym,
+from which the owner cannot be recovered: it keeps its capacity and
+history and is owned by no caller, so no API caller can read, confirm,
+reschedule, cancel, or release it. Before 1.0 there are no adopters whose
+claims this strands.
 
 ## Known deferrals
 

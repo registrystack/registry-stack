@@ -66,8 +66,9 @@ pub const MAXIMUM_PAGE_LIMIT: usize = 200;
 const MAXIMUM_AVAILABILITY_SPAN_DAYS: i64 = 62;
 
 /// The audit reference class for a booking caller, hashed over the verified
-/// issuer and subject pair. Claims, history, and the idempotency ceiling all
-/// key on this pseudonym, never on the raw identity.
+/// issuer and subject pair. History and audit carry this pseudonym, never the
+/// raw identity; ownership of a claim is decided on the verified pair instead,
+/// so rotating the audit hash key leaves every claim with its owner.
 const PRINCIPAL_CLASS: &str = "scheduling-principal-v1";
 
 /// The audit reference class for the authority that minted a credential
@@ -81,10 +82,11 @@ const ISSUER_CLASS: &str = "scheduling-issuer-v1";
 pub struct Caller {
     /// The verified actor kind: `human`, `agent`, or `service`.
     pub actor_kind: String,
-    /// The verified token issuer and subject. An idempotency attempt is
-    /// identified by a digest over this pair, its command, and its key, and
-    /// carries the raw pair only while its receipt is retained; every other
-    /// record carries the pseudonym.
+    /// The verified token issuer and subject. A hold or appointment stores
+    /// this pair as its owner, and every ownership decision compares it. An
+    /// idempotency attempt is identified by a digest over this pair, its
+    /// command, and its key, and carries the raw pair only while its receipt
+    /// is retained. History and audit carry the pseudonym instead.
     pub issuer: String,
     pub subject: String,
     /// The verified task grant, when the token carried one.
@@ -92,7 +94,7 @@ pub struct Caller {
 }
 
 impl Caller {
-    /// The pseudonymized actor reference claims and history carry.
+    /// The pseudonymized actor reference history and audit carry.
     pub fn actor_pseudonym(
         &self,
         hasher: &AuditKeyHasher,
@@ -839,8 +841,8 @@ impl SchedulingService {
 
     /// List this caller's appointments carrying one opaque external record
     /// reference. Ownership is applied on every page; the cursor also binds
-    /// the same actor and exact reference so it cannot be moved across either
-    /// boundary.
+    /// a digest of the same verified caller and the exact reference so it
+    /// cannot be moved across either boundary.
     pub async fn list_appointments(
         &self,
         caller: &Caller,
@@ -849,11 +851,11 @@ impl SchedulingService {
         limit: Option<usize>,
         now: DateTime<Utc>,
     ) -> Result<PageDocument<AppointmentDocument>, ServiceError> {
-        let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
+        let owner_hash = canonical_hash(&json!([&caller.issuer, &caller.subject]))?;
         let reference_hash = canonical_hash(&serde_json::to_value(reference).map_err(|_| {
             ServiceError::internal("the external reference could not be canonicalized")
         })?)?;
-        let context = format!("appointments:{actor}:{reference_hash}");
+        let context = format!("appointments:{owner_hash}:{reference_hash}");
         let position = self.resolve_position(cursor, &context, now).await?;
         let after_id = id_position(position)?
             .map(|value| Uuid::parse_str(&value))
@@ -863,7 +865,8 @@ impl SchedulingService {
         let mut claims = self
             .store
             .list_appointments_by_external_reference(
-                &actor,
+                &caller.issuer,
+                &caller.subject,
                 reference,
                 after_id,
                 i64::try_from(limit + 1).unwrap_or(i64::MAX),
@@ -1123,8 +1126,7 @@ impl SchedulingService {
         let Some(claim) = self.booking(appointment_id).await? else {
             return Ok(None);
         };
-        let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        if claim.actor != actor {
+        if !claim.is_owned_by(&caller.issuer, &caller.subject) {
             return Ok(None);
         }
         Ok(Some(claim))
@@ -2878,7 +2880,26 @@ mod tests {
             reason: None,
             created_at: at(0, 0),
             closed_at: None,
+            owner: None,
         };
+        // A receipt is the serialized claim, and the verified owner is never
+        // part of it: the claim written with an owner and the one read back
+        // without serialize identically.
+        let owned = ClaimRow {
+            owner: Some(crate::store::ClaimOwner {
+                issuer: "https://issuer.test".to_owned(),
+                subject: "subject-owner".to_owned(),
+            }),
+            ..claim.clone()
+        };
+        assert_eq!(
+            serde_json::to_value(&owned).expect("a serialized claim"),
+            serde_json::to_value(&claim).expect("a serialized claim"),
+        );
+        assert!(owned.is_owned_by("https://issuer.test", "subject-owner"));
+        assert!(!owned.is_owned_by("https://issuer.test", "subject-other"));
+        assert!(!owned.is_owned_by("https://other.test", "subject-owner"));
+        assert!(!claim.is_owned_by("https://issuer.test", "subject-owner"));
         let mut receipt = json!({
             "kind": "booking",
             "claim": claim.clone(),

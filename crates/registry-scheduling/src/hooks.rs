@@ -1159,7 +1159,7 @@ mod tests {
     use registry_scheduling_core::LedgerKind;
 
     use super::*;
-    use crate::store::ClaimState;
+    use crate::store::{ClaimOwner, ClaimState};
 
     #[test]
     fn projections_disclose_only_the_requested_closed_fields() {
@@ -1185,6 +1185,10 @@ mod tests {
             reason: Some("secret-reason".to_owned()),
             created_at: now,
             closed_at: None,
+            owner: Some(ClaimOwner {
+                issuer: "secret-issuer".to_owned(),
+                subject: "secret-subject".to_owned(),
+            }),
         };
         let projection = [
             "appointmentId",
@@ -1209,6 +1213,8 @@ mod tests {
             "secret-duplicate-key",
             "secret-actor",
             "secret-reason",
+            "secret-issuer",
+            "secret-subject",
         ] {
             assert!(!serialized.contains(canary), "projection leaked {canary}");
         }
@@ -1238,6 +1244,7 @@ mod tests {
             reason: Some("private reason".to_owned()),
             created_at: now,
             closed_at: Some(now),
+            owner: None,
         };
         let projection = ["appointmentId", "revision", "state"].map(str::to_owned);
 
