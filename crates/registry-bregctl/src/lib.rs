@@ -4408,6 +4408,16 @@ fn statistics_client_diagnostic(
             };
             (code, "statistics", message)
         }
+        // The registry holds a receipt only for a committed request, so an
+        // expired one proves an earlier request under this key took effect.
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::IdempotencyExpired,
+            ..
+        } => (
+            BRegProblemCode::IdempotencyExpired.code(),
+            "--idempotency-key",
+            "an earlier request under this idempotency key committed and its held response expired; read the release instead of retrying, the key will not run again",
+        ),
         BaseRegistryClientError::Problem { code, .. } => (code.code(), "statistics", code.detail()),
         BaseRegistryClientError::Transport { .. } => (
             "statistics.transport.failed",
@@ -13503,6 +13513,11 @@ mod tests {
                 "idempotency.conflict",
             ),
             (
+                Some(BRegProblemCode::IdempotencyExpired),
+                None,
+                "idempotency.expired",
+            ),
+            (
                 Some(BRegProblemCode::RequestTimeout),
                 None,
                 "request.timeout",
@@ -13528,6 +13543,7 @@ mod tests {
                         401 => "Unauthorized",
                         404 => "Not Found",
                         409 => "Conflict",
+                        410 => "Gone",
                         422 => "Unprocessable Entity",
                         504 => "Gateway Timeout",
                         _ => unreachable!(),
@@ -13594,6 +13610,18 @@ mod tests {
                         .as_str()
                         .unwrap()
                         .contains("publish after"));
+                }
+                // A key past its receipt horizon names the key and says the
+                // earlier request committed, so the operator reads rather than retries.
+                if problem == Some(BRegProblemCode::IdempotencyExpired) {
+                    assert_eq!(
+                        rendered["diagnostics"][0]["path"], "--idempotency-key",
+                        "{rendered}"
+                    );
+                    assert!(rendered["diagnostics"][0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("committed"));
                 }
             }
         }
