@@ -217,7 +217,10 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
         .execute(
             "UPDATE registry_internal.registry_idempotency
                 SET response_body = NULL,
-                    receipt_dropped_at = transaction_timestamp()
+                    receipt_dropped_at = transaction_timestamp(),
+                    caller_issuer = NULL,
+                    caller_subject = NULL,
+                    idempotency_key = NULL
               WHERE key_reference = 'dropped-record-key'",
             &[],
         )

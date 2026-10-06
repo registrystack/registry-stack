@@ -4811,7 +4811,10 @@ async fn real_postgres_idempotency_keys_are_scoped_per_caller() {
 
 /// A held response is kept for the receipt horizon. A retry after it is
 /// refused as expired and never executed, before and after the operator
-/// sweep drops the held body; the key stays spent throughout.
+/// sweep drops the held body and clears the raw caller and key; the key stays
+/// spent throughout, by its digest. A changed retry is still a conflict,
+/// another caller's identical key is that caller's own fresh key, and a row
+/// inside its horizon is untouched.
 #[cfg(feature = "tooling")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent() {
@@ -4865,6 +4868,22 @@ async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keep
         .await
         .expect("administrator ages one receipt past its horizon");
     let committed = durable_counts(&database, table).await;
+    let spent_columns = "SELECT key_reference, binding_reference, key_scope, result_kind,
+                                created_at::text, receipt_expires_at::text
+                           FROM registry_internal.registry_idempotency";
+    let spent =
+        |row: &tokio_postgres::Row| (0..6).map(|i| row.get::<_, String>(i)).collect::<Vec<_>>();
+    let horizon_spent = spent(
+        &database
+            .admin
+            .query_one(
+                &format!("{spent_columns} WHERE idempotency_key = 'horizon-key'"),
+                &[],
+            )
+            .await
+            .expect("administrator can read the aged spent key"),
+    );
+    let horizon_reference = horizon_spent[0].clone();
 
     let retry = || {
         create_request(
@@ -4914,10 +4933,11 @@ async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keep
     let rows = database
         .admin
         .query(
-            "SELECT idempotency_key, response_body IS NULL, receipt_dropped_at IS NOT NULL
+            "SELECT key_reference = $1, caller_issuer IS NOT NULL, caller_subject,
+                    idempotency_key, response_body IS NULL, receipt_dropped_at IS NOT NULL
                FROM registry_internal.registry_idempotency
-              ORDER BY idempotency_key",
-            &[],
+              ORDER BY created_at",
+            &[&horizon_reference],
         )
         .await
         .expect("administrator can inspect spent keys");
@@ -4925,27 +4945,88 @@ async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keep
         .iter()
         .map(|row| {
             (
-                row.get::<_, String>(0),
+                row.get::<_, bool>(0),
                 row.get::<_, bool>(1),
-                row.get::<_, bool>(2),
+                row.get::<_, Option<String>>(2),
+                row.get::<_, Option<String>>(3),
+                row.get::<_, bool>(4),
+                row.get::<_, bool>(5),
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         rows,
         vec![
-            ("fresh-key".to_owned(), false, false),
-            ("horizon-key".to_owned(), true, true),
-        ]
+            (true, false, None, None, true, true),
+            (
+                false,
+                true,
+                Some(PRINCIPAL_CANARY.to_owned()),
+                Some("fresh-key".to_owned()),
+                false,
+                false
+            ),
+        ],
+        "the sweep clears the raw caller and key past the horizon only"
+    );
+    assert_eq!(
+        spent(
+            &database
+                .admin
+                .query_one(
+                    &format!("{spent_columns} WHERE key_reference = $1"),
+                    &[&horizon_reference],
+                )
+                .await
+                .expect("the spent row remains after the sweep"),
+        ),
+        horizon_spent,
+        "the digest, binding, scope, kind, and times are kept"
     );
     assert_eq!(
         coordinator.execute(&mut client, retry()).await,
         Err(MutationError::IdempotencyExpired)
     );
     assert_eq!(
+        coordinator
+            .execute(
+                &mut client,
+                create_request(
+                    &plan,
+                    "horizon-key",
+                    &claims,
+                    RECORD_POSITIVE,
+                    "changed-label",
+                    Some(1),
+                ),
+            )
+            .await,
+        Err(MutationError::IdempotencyConflict),
+        "a changed retry of the cleared key is still a conflict"
+    );
+    assert_eq!(
         effect_counts(durable_counts(&database, table).await),
         effect_counts(committed)
     );
+    let other_caller = mutation_claims(&compiled, "second-caller-subject", "zone-a");
+    let other = coordinator
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "horizon-key",
+                &other_caller,
+                RECORD_POSITIVE,
+                "other-caller-label",
+                Some(1),
+            ),
+        )
+        .await
+        .expect("another caller's identical key is its own fresh key");
+    assert!(!other.replayed());
+    let after_other = durable_counts(&database, table).await;
+    assert_eq!(after_other.current, committed.current + 1);
+    assert_eq!(after_other.idempotency, committed.idempotency + 1);
     let sweep_entries = database
         .audit_entries()
         .into_iter()
@@ -4954,6 +5035,150 @@ async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keep
     assert_eq!(sweep_entries.len(), 4, "{sweep_entries:?}");
     assert_eq!(sweep_entries[1]["record"]["outcome"], "erased");
     assert_eq!(sweep_entries[1]["record"]["erased"], 1);
+    drop(client);
+    database.cleanup().await;
+}
+
+/// The receipt sweep clears the raw issuer, subject, and key of every spent
+/// row past its horizon, including one whose held response request
+/// retention already erased, and keeps its digest, binding, scope, kind, and
+/// times, so neither key is freed. No raw caller outlives its horizon.
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key() {
+    use registry_breg::idempotency_retention::IdempotencyRetentionOperatorService;
+    use registry_breg::postgres::ExpectedManagedCatalog;
+
+    let database = TestDatabase::create(2).await;
+    let (compiled, identity, pool) = prepared_mutation_registry(&database).await;
+    let plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
+        .expect("create plan comes from the compiled inventory");
+    let claims = mutation_claims(&compiled, PRINCIPAL_CANARY, "zone-a");
+    let table = &compiled.entities()["widget"].physical_table;
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+    let coordinator = audited_coordinator(&database, &identity);
+    for (key, label) in [("held-key", "held-label"), ("erased-key", "erased-label")] {
+        coordinator
+            .execute(
+                &mut client,
+                create_request(&plan, key, &claims, RECORD_POSITIVE, label, Some(1)),
+            )
+            .await
+            .expect("the first attempt executes");
+    }
+    database
+        .admin
+        .batch_execute(
+            "UPDATE registry_internal.registry_idempotency
+                SET created_at = CURRENT_TIMESTAMP - INTERVAL '9 days',
+                    receipt_expires_at = CURRENT_TIMESTAMP - INTERVAL '2 days';
+             UPDATE registry_internal.registry_idempotency
+                SET response_body = NULL,
+                    erased_at = CURRENT_TIMESTAMP
+              WHERE idempotency_key = 'erased-key';",
+        )
+        .await
+        .expect("administrator ages both receipts and erases one held response");
+    let spent = |rows: Vec<tokio_postgres::Row>| {
+        rows.iter()
+            .map(|row| {
+                (
+                    (0..6).map(|i| row.get::<_, String>(i)).collect::<Vec<_>>(),
+                    row.get::<_, bool>(6),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let spent_rows = "SELECT key_reference, binding_reference, key_scope, result_kind,
+                             created_at::text, receipt_expires_at::text,
+                             caller_issuer IS NULL AND caller_subject IS NULL
+                                 AND idempotency_key IS NULL
+                        FROM registry_internal.registry_idempotency
+                       ORDER BY key_reference";
+    let before = spent(
+        database
+            .admin
+            .query(spent_rows, &[])
+            .await
+            .expect("administrator can read the spent keys"),
+    );
+    assert!(before.iter().all(|(_, cleared)| !cleared));
+    let committed = durable_counts(&database, table).await;
+
+    let sweep = IdempotencyRetentionOperatorService::new_for_test(
+        identity.clone(),
+        ExpectedManagedCatalog::compiled(&compiled),
+        RegistryLockKey::derive(PACKAGE_ID).expect("lock id is bounded"),
+        database.migration_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x5e; 32].into())
+                .expect("test owns a strong keyed audit profile"),
+        ),
+    );
+    assert_eq!(
+        sweep
+            .erase_expired(chrono::Utc::now())
+            .await
+            .expect("the sweep drops both expired receipts"),
+        2
+    );
+    let after = spent(
+        database
+            .admin
+            .query(spent_rows, &[])
+            .await
+            .expect("both spent rows remain after the sweep"),
+    );
+    assert_eq!(
+        after,
+        before
+            .into_iter()
+            .map(|(kept, _)| (kept, true))
+            .collect::<Vec<_>>(),
+        "the raw caller and key are cleared and everything else is kept"
+    );
+    assert_eq!(
+        coordinator
+            .execute(
+                &mut client,
+                create_request(
+                    &plan,
+                    "held-key",
+                    &claims,
+                    RECORD_POSITIVE,
+                    "held-label",
+                    Some(1),
+                ),
+            )
+            .await,
+        Err(MutationError::IdempotencyExpired)
+    );
+    assert_eq!(
+        coordinator
+            .execute(
+                &mut client,
+                create_request(
+                    &plan,
+                    "erased-key",
+                    &claims,
+                    RECORD_POSITIVE,
+                    "erased-label",
+                    Some(1),
+                ),
+            )
+            .await,
+        Err(MutationError::IdempotencyConflict),
+        "a key whose held response was erased stays spent"
+    );
+    assert_eq!(
+        effect_counts(durable_counts(&database, table).await),
+        effect_counts(committed)
+    );
     drop(client);
     database.cleanup().await;
 }
@@ -5129,17 +5354,21 @@ async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones
         assert_eq!(row.get::<_, Option<i64>>(6), proposal, "{key}");
         assert_eq!(row.get::<_, i16>(7), status, "{key}");
         assert_eq!(
-            row.get::<_, String>(8),
-            "urn:registry-breg:pre-caller-scope",
-            "{key}"
+            row.get::<_, Option<String>>(8),
+            None,
+            "{key}: no issuer is kept"
         );
         assert_eq!(
-            row.get::<_, String>(9),
-            key,
-            "the subject is the old digest"
+            row.get::<_, Option<String>>(9),
+            None,
+            "{key}: no subject is kept"
         );
         assert_eq!(row.get::<_, String>(10), "mutation", "{key}");
-        assert_eq!(row.get::<_, String>(11), "pre-caller-scope", "{key}");
+        assert_eq!(
+            row.get::<_, Option<String>>(11),
+            None,
+            "{key}: no key is kept"
+        );
         assert!(row.get::<_, bool>(12), "{key}: no held response survives");
         assert_eq!(
             row.get::<_, Vec<u8>>(13),
@@ -5214,6 +5443,60 @@ async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones
         refused.is_err(),
         "a spent key without its caller scope is refused"
     );
+    // The raw caller and key are present together exactly while the receipt
+    // is, and absent together once it is dropped.
+    for (label, issuer, subject, key, dropped, accepted) in [
+        ("cleared", None, None, None::<&str>, true, true),
+        ("cleared-held", None, None, None, false, false),
+        (
+            "dropped-with-caller",
+            Some("https://issuer.example"),
+            Some("subject"),
+            Some("key"),
+            true,
+            false,
+        ),
+        (
+            "partly-cleared",
+            Some("https://issuer.example"),
+            None,
+            None,
+            true,
+            false,
+        ),
+        (
+            "keyless",
+            Some("https://issuer.example"),
+            Some("subject"),
+            None,
+            true,
+            false,
+        ),
+    ] {
+        let body = (!dropped).then_some("{}".as_bytes());
+        let inserted = migration
+            .execute(
+                "INSERT INTO registry_internal.registry_idempotency
+                     (key_reference, binding_reference, result_kind, result_count,
+                      response_status, response_body, response_headers,
+                      caller_issuer, caller_subject, key_scope, idempotency_key,
+                      receipt_expires_at, receipt_dropped_at)
+                 VALUES ($1, 'sha256:shape-binding', 'immediate_action', 0,
+                         200, $2, '\\x0000', $3, $4, 'mutation', $5,
+                         transaction_timestamp() + interval '1 day',
+                         CASE WHEN $6 THEN transaction_timestamp() END)",
+                &[
+                    &format!("sha256:{label}"),
+                    &body,
+                    &issuer,
+                    &subject,
+                    &key,
+                    &dropped,
+                ],
+            )
+            .await;
+        assert_eq!(inserted.is_ok(), accepted, "{label}: {inserted:?}");
+    }
     migration_task.abort();
     database.cleanup().await;
 }

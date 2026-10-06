@@ -3,10 +3,11 @@
 //! horizon.
 //!
 //! The runtime already refuses an exact retry past the horizon when it reads
-//! the spent key, whether or not this sweep has run. The sweep only removes
-//! the held bytes; every spent row keeps its caller, key, binding, and times,
-//! so the key stays spent and the retry is still refused rather than
-//! executed.
+//! the spent key, whether or not this sweep has run. The sweep removes the
+//! held bytes and the raw issuer, subject, and key; every spent row keeps its
+//! key reference, binding, scope, result references, and times, so the key
+//! stays spent by its digest and the retry is still refused rather than
+//! executed. Spent rows themselves are kept indefinitely.
 
 use std::{path::Path, time::Duration};
 

@@ -24,15 +24,17 @@
   exact retry past that horizon answers the new `410 idempotency.expired` and
   is never executed. The new `bregctl idempotency-retention erase-expired
   --runtime-config PATH --before RFC3339` drops held responses past their
-  horizon and keeps each key spent. The spent-key table now stores the raw
-  issuer, principal, and key; see `SECURITY-REVIEW-NOTES.md`.
+  horizon, with the raw issuer, principal, and key the spent-key table stores
+  until then, and keeps each key spent by its digest: the same caller's exact
+  retry still answers `410 idempotency.expired` and a changed retry `409
+  idempotency.conflict`. The spent rows themselves are kept indefinitely; see
+  `SECURITY-REVIEW-NOTES.md`.
 - BREAKING: the caller-keyed idempotency store is a new engine capability, so
   a package an earlier release built no longer loads. Rebuild it unchanged
   with this `bregctl package --baseline-package <deployed package>` and apply
   it once before starting the upgraded runtime.
 - The upgrade keeps existing idempotency records as tombstones no caller can
-  find: each moves under the reserved issuer
-  `urn:registry-breg:pre-caller-scope` and loses its held response and
+  find: each carries no raw caller or key and loses its held response and
   receipt, while the immediate action results, immediate action
   applications, and request idempotency links that reference it stay, so a
   revision an earlier release's immediate action wrote keeps its history

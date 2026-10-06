@@ -961,8 +961,8 @@ async fn the_caller_scoped_idempotency_upgrade_keeps_legacy_action_revisions_rea
     let tombstone = database
         .admin
         .query_one(
-            "SELECT caller_issuer, caller_subject = key_reference, key_scope,
-                    response_body IS NULL, response_headers,
+            "SELECT caller_issuer IS NULL, caller_subject IS NULL AND idempotency_key IS NULL,
+                    key_scope, response_body IS NULL, response_headers,
                     receipt_dropped_at IS NOT NULL,
                     receipt_expires_at > created_at
                         AND receipt_expires_at <= created_at + interval '1 second'
@@ -972,11 +972,8 @@ async fn the_caller_scoped_idempotency_upgrade_keeps_legacy_action_revisions_rea
         )
         .await
         .expect("administrator reads the converted spent key");
-    assert_eq!(
-        tombstone.get::<_, String>(0),
-        "urn:registry-breg:pre-caller-scope"
-    );
-    assert!(tombstone.get::<_, bool>(1), "the subject is the old digest");
+    assert!(tombstone.get::<_, bool>(0), "no issuer is kept");
+    assert!(tombstone.get::<_, bool>(1), "no subject or key is kept");
     assert_eq!(tombstone.get::<_, String>(2), "mutation");
     assert!(tombstone.get::<_, bool>(3), "no held response survives");
     assert_eq!(

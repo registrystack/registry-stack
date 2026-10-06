@@ -750,22 +750,19 @@ async fn a_pre_caller_scoped_empty_successor_tombstones_audit_keyed_spent_keys()
     let tombstone = database
         .admin
         .query_one(
-            "SELECT caller_issuer, caller_subject, key_scope,
-                    response_body IS NULL, receipt_dropped_at IS NOT NULL
+            "SELECT caller_issuer IS NULL AND caller_subject IS NULL
+                        AND idempotency_key IS NULL,
+                    key_scope, response_body IS NULL, receipt_dropped_at IS NOT NULL
                FROM registry_internal.registry_idempotency
               WHERE key_reference = 'hmac-sha256:held'",
             &[],
         )
         .await
         .expect("administrator reads the converted spent key");
-    assert_eq!(
-        tombstone.get::<_, String>(0),
-        "urn:registry-breg:pre-caller-scope"
-    );
-    assert_eq!(tombstone.get::<_, String>(1), "hmac-sha256:held");
-    assert_eq!(tombstone.get::<_, String>(2), "mutation");
-    assert!(tombstone.get::<_, bool>(3), "no held response survives");
-    assert!(tombstone.get::<_, bool>(4), "the receipt is dropped");
+    assert!(tombstone.get::<_, bool>(0), "no raw caller or key is kept");
+    assert_eq!(tombstone.get::<_, String>(1), "mutation");
+    assert!(tombstone.get::<_, bool>(2), "no held response survives");
+    assert!(tombstone.get::<_, bool>(3), "the receipt is dropped");
     verify_catalog_identity_for_catalog(
         &database.admin,
         &upgraded,
