@@ -3,8 +3,8 @@
 mod client;
 
 pub use client::{
-    response_trace_id, ProblemDefinition, ProblemDocument, ProblemDocumentError,
-    ResponseTraceError, TraceId, TraceIdError,
+    response_trace_id, ProblemDocument, ProblemDocumentError, ResponseTraceError, TraceId,
+    TraceIdError,
 };
 
 #[cfg(feature = "server")]

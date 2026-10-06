@@ -118,27 +118,6 @@ impl ProblemDocument {
             problem.field_path,
         ))
     }
-
-    /// Match every product-owned public member against one closed definition.
-    #[must_use]
-    pub fn matches(&self, definition: &ProblemDefinition<'_>) -> bool {
-        self.type_uri == definition.type_uri
-            && self.title == definition.title
-            && self.status == definition.status
-            && self.detail == definition.detail
-            && self.code == definition.code
-    }
-
-    /// Return the one product-owned definition matching every public member.
-    #[must_use]
-    pub fn definition_index(&self, definitions: &[ProblemDefinition<'_>]) -> Option<usize> {
-        let mut matches = definitions
-            .iter()
-            .enumerate()
-            .filter(|(_, definition)| self.matches(definition));
-        let (index, _) = matches.next()?;
-        matches.next().is_none().then_some(index)
-    }
 }
 
 #[derive(Deserialize)]
@@ -166,16 +145,6 @@ where
         ));
     }
     Ok(Some(value))
-}
-
-/// A product-owned closed Problem definition. The shared crate owns no catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProblemDefinition<'a> {
-    pub type_uri: &'a str,
-    pub title: &'a str,
-    pub status: u16,
-    pub detail: &'a str,
-    pub code: &'a str,
 }
 
 /// Value-free strict Problem parsing failure.
@@ -245,54 +214,54 @@ mod tests {
 
     #[test]
     fn problem_parsing_is_exact_bounded_and_product_owned() {
-        const DEFINITION: ProblemDefinition<'static> = ProblemDefinition {
-            type_uri: "https://id.example/problems/resource/not-found",
-            title: "Resource not found",
+        let expected = ProblemDocument {
+            type_uri: "https://id.example/problems/resource/not-found".to_owned(),
+            title: "Resource not found".to_owned(),
             status: 404,
-            detail: "the requested resource was not found",
-            code: "resource.not_found",
+            detail: "the requested resource was not found".to_owned(),
+            code: "resource.not_found".to_owned(),
+            trace_id: TraceId::parse(TRACE_ID).unwrap(),
         };
         let body = serde_json::to_vec(&json!({
-            "type": DEFINITION.type_uri, "title": DEFINITION.title,
-            "status": DEFINITION.status, "detail": DEFINITION.detail,
-            "code": DEFINITION.code, "traceId": TRACE_ID,
+            "type": expected.type_uri, "title": expected.title,
+            "status": expected.status, "detail": expected.detail,
+            "code": expected.code, "traceId": TRACE_ID,
         }))
         .unwrap();
         let parsed = ProblemDocument::parse_exact(&body, body.len()).unwrap();
-        assert_eq!(parsed.definition_index(&[DEFINITION]), Some(0));
-        assert_eq!(parsed.definition_index(&[DEFINITION, DEFINITION]), None);
+        assert_eq!(parsed, expected);
         assert!(ProblemDocument::parse_exact(&body, body.len() - 1).is_err());
         let with_extra = serde_json::to_vec(&json!({
-            "type": DEFINITION.type_uri, "title": DEFINITION.title,
-            "status": DEFINITION.status, "detail": DEFINITION.detail,
-            "code": DEFINITION.code, "traceId": TRACE_ID, "canary": true,
+            "type": expected.type_uri, "title": expected.title,
+            "status": expected.status, "detail": expected.detail,
+            "code": expected.code, "traceId": TRACE_ID, "canary": true,
         }))
         .unwrap();
         assert!(ProblemDocument::parse_exact(&with_extra, 4096).is_err());
 
         let located = serde_json::to_vec(&json!({
-            "type": DEFINITION.type_uri, "title": DEFINITION.title,
-            "status": DEFINITION.status, "detail": DEFINITION.detail,
-            "code": DEFINITION.code, "traceId": TRACE_ID,
+            "type": expected.type_uri, "title": expected.title,
+            "status": expected.status, "detail": expected.detail,
+            "code": expected.code, "traceId": TRACE_ID,
             "fieldPath": "/input/declaredField",
         }))
         .unwrap();
         assert!(ProblemDocument::parse_exact(&located, 4096).is_err());
         let (document, field_path) =
             ProblemDocument::parse_with_field_path(&located, 4096).unwrap();
-        assert_eq!(document.definition_index(&[DEFINITION]), Some(0));
+        assert_eq!(document, expected);
         assert_eq!(field_path.as_deref(), Some("/input/declaredField"));
         for refused in [
             json!({
-                "type": DEFINITION.type_uri, "title": DEFINITION.title,
-                "status": DEFINITION.status, "detail": DEFINITION.detail,
-                "code": DEFINITION.code, "traceId": TRACE_ID,
+                "type": expected.type_uri, "title": expected.title,
+                "status": expected.status, "detail": expected.detail,
+                "code": expected.code, "traceId": TRACE_ID,
                 "fieldPath": null,
             }),
             json!({
-                "type": DEFINITION.type_uri, "title": DEFINITION.title,
-                "status": DEFINITION.status, "detail": DEFINITION.detail,
-                "code": DEFINITION.code, "traceId": TRACE_ID,
+                "type": expected.type_uri, "title": expected.title,
+                "status": expected.status, "detail": expected.detail,
+                "code": expected.code, "traceId": TRACE_ID,
                 "fieldPath": "x".repeat(257),
             }),
         ] {
