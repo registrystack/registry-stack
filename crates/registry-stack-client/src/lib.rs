@@ -5,19 +5,23 @@
 
 pub mod breg {
     pub use registry_breg_client::{
-        verify_webhook_delivery, BRegAttachmentClassification, BRegAttachmentError,
-        BRegAttachmentSlot, BRegAttachmentSlotValue, BRegAttachmentState, BRegAttachmentUpload,
+        verify_webhook_delivery, BRegActionInvocationRequest, BRegActionReceipt,
+        BRegActionResultReference, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
+        BRegAttachmentClassification, BRegAttachmentError, BRegAttachmentSlot,
+        BRegAttachmentSlotValue, BRegAttachmentState, BRegAttachmentUpload,
         BRegAttachmentVerificationStatus, BRegComplete, BRegContinuation,
         BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest, BRegDirectWrite,
-        BRegEtag, BRegIdempotencyKey, BRegLifecycleAction, BRegLifecycleActionReceipt,
-        BRegLifecycleAuthority, BRegLifecycleOperation, BRegListRequest, BRegLookupRequest,
-        BRegMetadata, BRegMetadataSelectionError, BRegMutationRequestError, BRegOperationKind,
-        BRegPage, BRegPatchBinding, BRegPatchBuilder, BRegPatchRequest, BRegPlanRefusal,
-        BRegProbeStatus, BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat,
-        BRegRecordOptions, BRegRequestError, BRegRequestMetadata, BRegRequestResultReference,
-        BRegResponseMetadata, BRegRetainedRequestHistoryPage, BRegRetainedRequestProposal,
-        BRegVerifiedWebhookDelivery, BRegWebhookDelivery, BRegWebhookVerificationError,
-        BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError, Uuid,
+        BRegEtag, BRegIdempotencyKey, BRegImmediateActionBinding, BRegImmediateActionError,
+        BRegLifecycleAction, BRegLifecycleActionReceipt, BRegLifecycleAuthority,
+        BRegLifecycleOperation, BRegListRequest, BRegLookupRequest, BRegMetadata,
+        BRegMetadataSelectionError, BRegMutationRequestError, BRegOperationKind, BRegPage,
+        BRegPatchBinding, BRegPatchBuilder, BRegPatchRequest, BRegPlanRefusal, BRegPreparedAction,
+        BRegPreparedCreate, BRegPreparedLifecycle, BRegProbeStatus, BRegProblemCode,
+        BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
+        BRegRequestError, BRegRequestMetadata, BRegRequestResultReference, BRegResponseMetadata,
+        BRegRetainedRequestHistoryPage, BRegRetainedRequestProposal, BRegVerifiedWebhookDelivery,
+        BRegWebhookDelivery, BRegWebhookVerificationError, BaseRegistryClient,
+        BaseRegistryClientConfig, BaseRegistryClientError, Uuid,
     };
 }
 
