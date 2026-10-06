@@ -133,8 +133,9 @@ const HOOK_DELIVERY_ISSUER: &str = "urn:registry-breg:hook-delivery";
 /// caller columns are installed. Such a row keeps its audit-keyed digest as
 /// its key reference, which no key reference this engine derives can equal,
 /// and its receipt is dropped. A runtime's configured issuer is an `https`
-/// URL, and [`IdempotencyPolicy::new`] refuses this one, so no caller's key is
-/// ever scoped under it either.
+/// URL, or a loopback `http` URL for local development, never a `urn:`, and
+/// [`IdempotencyPolicy::new`] refuses this one, so no caller's key is ever
+/// scoped under it either.
 pub(crate) const PRE_CALLER_SCOPE_ISSUER: &str = "urn:registry-breg:pre-caller-scope";
 /// How many days a held response is kept when the runtime configuration does
 /// not choose.
