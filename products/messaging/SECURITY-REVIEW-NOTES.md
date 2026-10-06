@@ -295,17 +295,23 @@ Review note, data minimization (security-sensitive, accepted 2026-10-06).
 The spent-key row stores the caller's raw issuer and subject instead of a
 keyed pseudonym, and the row outlives the message: when retention deletes a
 record after `recordDays`, its idempotency tombstone keeps the issuer, the
-subject, the key, and its times indefinitely. Before schema version 3 the
-tombstone held only the pseudonym. The tradeoff is accepted because the
-pseudonym scope let every audit key rotation free every spent key and so
-reopen duplicate sends; the issuer and subject name a calling service
-principal, not a recipient; the message row already held both for
-`recordDays`; and the tombstone keeps no request hash, receipt, message,
-recipient reference, or content. The audit journal and the rate limiter
-keep the pseudonym. Schema version 3 discarded every idempotency record
-written under the pseudonym scope, request hashes and receipts included, so
-no pseudonym-keyed row survives the upgrade and every key spent before it
-is free again (`postgres_migrate.rs`,
+subject, the key, and its times indefinitely. No command erases a
+tombstone's issuer and subject: neither the runtime's retention sweep nor
+`messagingctl retention erase-expired` deletes the row, because the row is
+what keeps its key spent. Before schema version 3 the tombstone held only
+the pseudonym. The issuer and subject name the authenticated caller, not a
+recipient, and that caller is not always a service: an access profile may
+admit a human or agent actor, or read the principal from a claim other
+than `sub`, so under such a profile the stored subject may identify a
+person, such as a staff member's email address. The tradeoff is accepted
+because the pseudonym scope let every audit key rotation free every spent
+key and so reopen duplicate sends; the message row already held the issuer
+and subject for `recordDays`; and the tombstone keeps no request hash,
+receipt, message, recipient reference, or content. The audit journal and
+the rate limiter keep the pseudonym. Schema version 3 discarded every
+idempotency record written under the pseudonym scope, request hashes and
+receipts included, so no pseudonym-keyed row survives the upgrade and every
+key spent before it is free again (`postgres_migrate.rs`,
 `version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`).
 
 Tests: MESSAGING-SEC-01 and -02 in `contracts/security-test-traceability.yaml`.
