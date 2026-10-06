@@ -26,8 +26,8 @@
     "normalize:loader": "node scripts/normalize-napi-loader.js"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.10.5",
-    "@types/node": "22.20.4",
+    "@napi-rs/cli": "3.10.6",
+    "@types/node": "22.20.5",
     "typescript": "6.0.3"
   }
 }
