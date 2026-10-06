@@ -197,9 +197,9 @@ class ReleaseSelectionTest(unittest.TestCase):
 
 
 class ProductSelectionTest(unittest.TestCase):
-    # Messaging has not joined a release (release_roster.MESSAGING_FIRST_RELEASE
-    # is None). The inclusion tests patch a hypothetical first release so the
-    # Messaging leg stays covered without any production knob.
+    # The tests patch a fixed first release over
+    # release_roster.MESSAGING_FIRST_RELEASE, so the Messaging leg is covered
+    # without depending on the release that actually first shipped it.
     HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
 
     def setUp(self) -> None:
