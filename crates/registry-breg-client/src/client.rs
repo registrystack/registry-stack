@@ -2212,9 +2212,10 @@ fn snapshot_extensions(
 
 /// Classify one attempt of an idempotency-keyed mutation with the shared
 /// rule. A failure with an unknown outcome on a 5xx answer, a timeout, or a
-/// broken exchange may settle on a resend; any other unknown outcome would be
-/// answered the same way again. A typed 5xx the engine returns only with the
-/// attempt rolled back is a known failure and is never resent.
+/// broken exchange may settle on a resend, unless the answer's status line
+/// was 4xx; any other unknown outcome would be answered the same way again.
+/// A typed 5xx the engine returns only with the attempt rolled back is a
+/// known failure and is never resent.
 fn keyed_attempt<T>(
     result: Result<T, BaseRegistryClientError>,
     status: Option<StatusCode>,

@@ -97,7 +97,9 @@ impl SchedulingClientError {
 
     /// Whether resending the identical request under the same key may settle
     /// an unknown outcome. An oversized or unparseable non-5xx answer would be
-    /// replayed unchanged, so it is not resent.
+    /// replayed unchanged, so it is not resent. A transport failure carries no
+    /// status, so the shared classifier, which sees the answer's status line,
+    /// still refuses to resend a timeout or broken exchange after a 4xx one.
     pub(crate) fn resend_may_settle(&self) -> bool {
         match self {
             Self::Transport { kind } => {

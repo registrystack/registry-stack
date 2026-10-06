@@ -4,6 +4,7 @@
 //! service that answers each request with the next scripted answer.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,7 @@ use registry_scheduling_client::{
     PartyCounts, ProblemCode, RescheduleAppointmentRequest, SchedulingAuth, SchedulingClient,
     SchedulingClientConfig, SchedulingClientError, TransportKind,
 };
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use url::Url;
 
 const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
@@ -475,4 +477,97 @@ async fn a_refusal_after_an_unknown_outcome_keeps_the_outcome_unknown() {
     assert!(error.is_outcome_unknown());
     assert_eq!(script.observations().len(), 2);
     server.abort();
+}
+
+/// How a raw 409 answer ends after its status line, its headers, and the
+/// first bytes of its declared body.
+#[derive(Clone, Copy, Debug)]
+enum Unfinished {
+    /// The server holds the connection open, so the client's timeout
+    /// elapses while it reads the body.
+    Stall,
+    /// The server closes the connection, so the body ends early.
+    Close,
+}
+
+/// Serve a 409 problem answer whose body never arrives in full, counting
+/// the requests it answers.
+async fn serve_unfinished_conflict(
+    ending: Unfinished,
+) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address").to_string();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let answered = Arc::clone(&requests);
+    let server = tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            read_request(&mut stream).await;
+            answered.fetch_add(1, Ordering::SeqCst);
+            let head = format!(
+                "HTTP/1.1 409 Conflict\r\ncontent-type: application/problem+json\r\n\
+                 traceparent: {TRACEPARENT}\r\ncache-control: no-store\r\n\
+                 content-length: 400\r\n\r\n{{\"type\":"
+            );
+            stream.write_all(head.as_bytes()).await.expect("answer");
+            match ending {
+                Unfinished::Stall => held.push(stream),
+                Unfinished::Close => drop(stream),
+            }
+        }
+    });
+    (address, requests, server)
+}
+
+/// Read one request's head and its declared body.
+async fn read_request(stream: &mut tokio::net::TcpStream) {
+    let mut received = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let head_end = loop {
+        if let Some(end) = received.windows(4).position(|window| window == b"\r\n\r\n") {
+            break end + 4;
+        }
+        let read = stream.read(&mut chunk).await.expect("read request");
+        assert!(read > 0, "the request ended early");
+        received.extend_from_slice(&chunk[..read]);
+    };
+    let head = String::from_utf8_lossy(&received[..head_end]).to_ascii_lowercase();
+    let body_length: usize = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .map_or(0, |value| value.trim().parse().expect("content length"));
+    while received.len() < head_end + body_length {
+        let read = stream.read(&mut chunk).await.expect("read request body");
+        assert!(read > 0, "the request body ended early");
+        received.extend_from_slice(&chunk[..read]);
+    }
+}
+
+/// Once the status line says 4xx, the service has answered, so the request
+/// is never resent. A body that then fails to arrive leaves the refusal
+/// unread, so the outcome is reported as unknown, like an unparseable 4xx.
+#[tokio::test]
+async fn an_unreadable_4xx_answer_is_unknown_but_never_resent() {
+    for (ending, expected) in [
+        (Unfinished::Stall, TransportKind::Timeout),
+        (Unfinished::Close, TransportKind::Exchange),
+    ] {
+        let (address, requests, server) = serve_unfinished_conflict(ending).await;
+        let client = client(config(&address).with_request_timeout(Duration::from_millis(500)));
+        let token = token();
+        let error = client
+            .create_hold(SchedulingAuth::new(&token), "hold-7", &admission())
+            .await
+            .expect_err("the refusal body never arrives");
+        assert!(
+            matches!(error, SchedulingClientError::Transport { kind } if kind == expected),
+            "{ending:?}: {error:?}"
+        );
+        assert!(error.is_outcome_unknown(), "{ending:?}");
+        assert_eq!(requests.load(Ordering::SeqCst), 1, "{ending:?}");
+        server.abort();
+    }
 }

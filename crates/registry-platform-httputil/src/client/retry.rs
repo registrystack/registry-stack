@@ -76,10 +76,13 @@ pub enum KeyedMutationAttempt<T, E> {
 /// product client supplies two judgements of its own error:
 /// `outcome_unknown`, whether the mutation may have taken effect, and
 /// `resend_may_settle`, whether resending the identical request could settle
-/// it. A known failure settles the mutation. An unknown outcome is resent
-/// when the answer carried a 5xx status, whatever stage of decoding failed,
-/// or when `resend_may_settle` holds. Any other unknown outcome would be
-/// answered the same way again, so it is returned without a resend.
+/// it. A known failure settles the mutation. An unknown outcome on a 4xx
+/// answer is never resent: the status line has already refused the request,
+/// so a failure reading the rest of the answer, such as a timeout or a
+/// broken exchange, leaves only the refusal's detail unread. Otherwise an unknown outcome is resent when the answer carried a 5xx
+/// status, whatever stage of decoding failed, or when `resend_may_settle`
+/// holds. Any other unknown outcome would be answered the same way again, so
+/// it is returned without a resend.
 pub fn classify_keyed_attempt<T, E>(
     result: Result<T, E>,
     status: Option<StatusCode>,
@@ -93,6 +96,9 @@ pub fn classify_keyed_attempt<T, E>(
     };
     if !outcome_unknown(&error) {
         return KeyedMutationAttempt::Settled(Err(error));
+    }
+    if status.is_some_and(|status| status.is_client_error()) {
+        return KeyedMutationAttempt::Unknown(error);
     }
     if status.is_some_and(|status| status.is_server_error()) || resend_may_settle(&error) {
         KeyedMutationAttempt::Retryable { error, retry_after }
@@ -392,6 +398,21 @@ mod tests {
                 ),
                 "{error:?} {status:?}"
             );
+        }
+    }
+
+    #[test]
+    fn an_unknown_outcome_on_a_4xx_answer_is_never_resent() {
+        for error in [UNKNOWN, SETTLEABLE] {
+            for status in [400, 409, 429, 499] {
+                assert!(
+                    matches!(
+                        classify(Err(error), Some(status), RetryAfter::Seconds(1)),
+                        KeyedMutationAttempt::Unknown(classified) if classified == error
+                    ),
+                    "{error:?} {status}"
+                );
+            }
         }
     }
 
