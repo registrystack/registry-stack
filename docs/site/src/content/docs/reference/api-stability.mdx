@@ -190,7 +190,7 @@ The promise is machine-checked where a checker exists:
   and Evidence Gateway runtimes continue the audit files the previous release wrote, and the
   rehearsal fails when a file was empty before the upgrade or holds fewer entries after it than
   before plus the number the upgraded runtime must write. It refuses to start from a release
-  before `v0.38.0`. Scheduling state is not rehearsed: the rehearsal has no Scheduling leg.
+  before `v0.39.0`. Scheduling state is not rehearsed: the rehearsal has no Scheduling leg.
 
 {/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), and check_forward_path(). */}
 
