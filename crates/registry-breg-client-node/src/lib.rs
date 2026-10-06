@@ -438,14 +438,27 @@ impl PreparedAction {
     }
 }
 
-fn mapped_error(value: Value) -> NapiError {
+/// Raise a described failure. A failure that does not report its outcome
+/// followed no exchange that could have taken effect, so its outcome is known.
+fn mapped_error(mut value: Value) -> NapiError {
+    if let Some(object) = value.as_object_mut() {
+        object.entry("outcomeUnknown").or_insert(Value::Bool(false));
+    }
     NapiError::from_reason(serde_json::to_string(&value).unwrap_or_else(|_| {
-        r#"{"kind":"protocol","message":"the failure could not be described"}"#.to_owned()
+        r#"{"kind":"protocol","message":"the failure could not be described","outcomeUnknown":true}"#
+            .to_owned()
     }))
 }
 
+/// A failure the binding detects itself. Only a protocol failure follows an
+/// exchange, a result the binding cannot represent, so only it leaves the
+/// outcome unknown.
 fn binding_error(kind: &'static str, message: impl Into<String>) -> NapiError {
-    mapped_error(json!({"kind": kind, "message": message.into()}))
+    mapped_error(json!({
+        "kind": kind,
+        "message": message.into(),
+        "outcomeUnknown": kind == "protocol",
+    }))
 }
 
 fn protocol_code(value: BRegProtocolFailure) -> &'static str {
@@ -488,7 +501,8 @@ fn token_error_value(error: TokenError) -> Value {
 }
 
 fn client_error(error: BaseRegistryClientError) -> NapiError {
-    let value = match error {
+    let outcome_unknown = error.is_outcome_unknown();
+    let mut value = match error {
         BaseRegistryClientError::Configuration { reason } => {
             json!({"kind": "configuration", "message": reason})
         }
@@ -556,6 +570,7 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             "message": "Base Registry Engine client returned an unsupported failure",
         }),
     };
+    value["outcomeUnknown"] = Value::Bool(outcome_unknown);
     mapped_error(value)
 }
 
@@ -922,6 +937,7 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
             "maxResponseBytes",
             "userAgent",
             "trustedRootCertificates",
+            "maxMutationRetries",
         ],
         "configuration",
         "client configuration contains an unsupported field",
@@ -963,6 +979,22 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
         "maxResponseBytes must be a non-negative integer",
     )? {
         config = config.with_max_response_bytes(value);
+    }
+    if let Some(value) = optional_u64(
+        object,
+        "maxMutationRetries",
+        "configuration",
+        "maxMutationRetries must be a whole number from 0 to 2",
+    )? {
+        // Only a value in the `u8` range reaches the client, which refuses one
+        // above its own bound.
+        let value = u8::try_from(value).map_err(|_| {
+            binding_error(
+                "configuration",
+                "maxMutationRetries must be a whole number from 0 to 2",
+            )
+        })?;
+        config = config.with_max_mutation_retries(value);
     }
     if let Some(value) = optional_string(
         object,
@@ -3346,7 +3378,9 @@ impl BaseRegistryClient {
         })
     }
 
-    /// Invoke one metadata-selected immediate action without automatic retry.
+    /// Invoke one metadata-selected immediate action. An invocation whose
+    /// outcome is unknown is resent identically under the same key, at most
+    /// `maxMutationRetries` times.
     #[napi]
     pub async fn invoke_action(
         &self,
@@ -3410,8 +3444,9 @@ impl BaseRegistryClient {
         )
     }
 
-    /// Explicitly send a recovered invocation under its original key, without
-    /// automatic retry.
+    /// Explicitly send a recovered invocation under its original key. An
+    /// invocation whose outcome is unknown is resent identically under that
+    /// key, at most `maxMutationRetries` times.
     #[napi]
     pub async fn execute_recovered_action(
         &self,
@@ -3549,7 +3584,9 @@ impl BaseRegistryClient {
         complete_value(value, metadata)
     }
 
-    /// Execute one metadata-selected atomic batch without automatic retry.
+    /// Execute one metadata-selected atomic batch. A batch whose outcome is
+    /// unknown is resent identically under the same key, at most
+    /// `maxMutationRetries` times.
     #[napi]
     pub async fn batch_records(
         &self,

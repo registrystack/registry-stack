@@ -12,6 +12,8 @@ import {
 } from '../client'
 
 const client = new MessagingClient({ baseUrl: 'https://messaging.example.test/' })
+const once = new MessagingClient({ baseUrl: 'https://messaging.example.test/', maxMutationRetries: 0 })
+void once
 const token: string = 'header.payload.signature'
 const messageId = '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d'
 const templated: SubmitMessageRequest = {
@@ -90,3 +92,9 @@ void segmentsOf
 
 // @ts-expect-error a preview names its locale
 void client.preview(token, 'appointment-reminder', '1', { data: {} })
+
+function mayHaveTakenEffect(error: MessagingClientError): boolean {
+  const unknown: boolean = error.outcomeUnknown
+  return unknown
+}
+void mayHaveTakenEffect

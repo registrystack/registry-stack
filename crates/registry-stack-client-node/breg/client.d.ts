@@ -137,6 +137,15 @@ export interface BaseRegistryClientConfig {
   maxResponseBytes?: SafeInteger | null
   userAgent?: string | null
   trustedRootCertificates?: string | null
+  /**
+   * How many times a keyed mutation (create, patch, attachment upload or
+   * delete, lifecycle action, immediate action, batch, tombstone, statistics
+   * publish or withdraw) whose outcome is unknown is resent, identically and
+   * under the same idempotency key, before its error is returned: a whole
+   * number from 0 to 2, default 2; 0 sends it once. Any other value is a
+   * `configuration` error.
+   */
+  maxMutationRetries?: SafeInteger | null
 }
 
 export type RecordFormat = 'json' | 'json-ld'
@@ -1019,6 +1028,18 @@ export interface BaseRegistryClientFailure extends Error {
   readonly traceId?: string
   readonly transportKind?: string
   readonly tokenKind?: string
+  /**
+   * Whether the request may have taken effect although this error was raised:
+   * a timeout or broken exchange after sending, an unusable answer, or a 5xx
+   * other than `action.handler_failed` and
+   * `statistical_dataset.domain_violation`, which the engine returns only with
+   * the attempt rolled back. When true, recover a keyed mutation by sending it
+   * again under the same idempotency key; a new key could apply it twice.
+   * False for a configuration or request defect, a credential the token
+   * provider could not supply, a connection never established, and every 4xx
+   * refusal.
+   */
+  readonly outcomeUnknown: boolean
 }
 
 export declare class BaseRegistryClientError extends Error implements BaseRegistryClientFailure {
@@ -1032,6 +1053,18 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
   readonly traceId?: string
   readonly transportKind?: string
   readonly tokenKind?: string
+  /**
+   * Whether the request may have taken effect although this error was raised:
+   * a timeout or broken exchange after sending, an unusable answer, or a 5xx
+   * other than `action.handler_failed` and
+   * `statistical_dataset.domain_violation`, which the engine returns only with
+   * the attempt rolled back. When true, recover a keyed mutation by sending it
+   * again under the same idempotency key; a new key could apply it twice.
+   * False for a configuration or request defect, a credential the token
+   * provider could not supply, a connection never established, and every 4xx
+   * refusal.
+   */
+  readonly outcomeUnknown: boolean
 }
 
 export declare class BaseRegistryClient {

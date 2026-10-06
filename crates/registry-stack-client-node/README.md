@@ -84,10 +84,17 @@ descriptions grant no authority, so select the opaque create, patch, and
 lifecycle authorities from that same contract before executing a mutation.
 Methods ending in `Json` keep values exact across the Node number boundary:
 they accept domain JSON text and return `valueJson` alongside the usual
-trace, ETag, location, and opaque continuation. The client never retries a
-mutation automatically. See
+trace, ETag, location, and opaque continuation. See
 [Exact JSON in Node](https://docs.registrystack.org/reference/client-api/#exact-json-in-node)
 for the full rules.
+
+A keyed BReg, Messaging, or Scheduling mutation whose outcome is unknown is
+resent identically under the same idempotency key up to `maxMutationRetries`
+times, a client option: 0 to 2, default 2, and 0 sends it once. Reads,
+unkeyed calls, and every 4xx refusal are never resent. When the returned error
+still reports `outcomeUnknown`, the mutation may have taken effect: recover by
+sending it again under the same key, because a new key could apply it twice.
+See [Unknown outcomes](https://docs.registrystack.org/reference/client-api/#unknown-outcomes-and-the-same-key-retry).
 
 `breg.verifyWebhookDelivery({ method, path, headers, body, key })` authenticates
 the exact bytes of one Version 1 webhook delivery. The result returns

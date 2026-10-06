@@ -10,8 +10,17 @@ Every message operation accepts a bearer token for that call; `health` and
 sent. `cancel` takes a message identifier and `preview` a template identifier,
 version, and `{ locale, data }` request; each refuses a malformed name before a
 request is sent. The binding does not retain credentials, never invents an
-idempotency key, and never retries a submission or a cancellation. A
-submission over its access profile's request rate or daily limit fails with
-`rate-limit.exceeded` or `quota.exceeded` and status 429, and
-`retryAfterSeconds` carries the wait the runtime asked for, at most one day;
-it is absent on every other failure.
+idempotency key, and never resends a cancellation. A submission over its
+access profile's request rate or daily limit fails with `rate-limit.exceeded`
+or `quota.exceeded` and status 429, and `retryAfterSeconds` carries the wait
+the runtime asked for, at most one day; it is absent on every other failure.
+The client never waits on a 429 or retries it.
+
+A submission whose outcome is unknown (a timeout or broken exchange after it
+was sent, an unusable answer, or a 5xx) is resent identically under the same
+key up to `maxMutationRetries` times: 0 to 2, default 2, and 0 sends it once.
+When the returned `MessagingClientError` still reports `outcomeUnknown`, the
+submission may have been accepted: recover by sending it again under the same
+key, because a new key could send the message twice. `outcomeUnknown` is false
+for a configuration or request defect, a connection never established, and
+every 4xx refusal.

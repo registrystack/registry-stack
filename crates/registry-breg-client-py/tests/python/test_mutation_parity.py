@@ -549,6 +549,10 @@ class MutationParityTests(unittest.TestCase):
         )
 
     def test_immediate_action_recovers_after_a_lost_response(self) -> None:
+        # The process gives up after the lost answer instead of resending it.
+        self.client = BaseRegistryClient(
+            f"http://127.0.0.1:{self.server.server_port}", max_mutation_retries=0
+        )
         binding = self.contract.select_immediate_action(
             "rename-company", "company-writer"
         )
@@ -567,6 +571,7 @@ class MutationParityTests(unittest.TestCase):
         with self.assertRaises(BaseRegistryClientError) as lost_response:
             self.client.invoke_action(binding, inputs, "rename-lost", conditions)
         self.assertEqual(lost_response.exception.kind, "transport")
+        self.assertIs(lost_response.exception.outcome_unknown, True)
         lost = self.requests[-1]
         self.assertEqual(lost[2]["idempotency-key"], "rename-lost")
 

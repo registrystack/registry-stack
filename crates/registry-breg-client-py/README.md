@@ -95,8 +95,21 @@ client.batch_records(
 ```
 
 All action inputs, conditions, batch fields, item counts, correction context,
-and byte limits are validated by the Rust client before network I/O. Mutations
-are sent once and are never retried automatically.
+and byte limits are validated by the Rust client before network I/O.
+
+A keyed mutation (create, patch, attachment upload or delete, lifecycle
+action, immediate action, batch, tombstone, statistics publish or withdraw)
+whose outcome is unknown is resent identically under the same key up to
+`max_mutation_retries` times, a `BaseRegistryClient` keyword: 0 to 2, default
+2, and 0 sends it once. The outcome is unknown after a timeout or broken
+exchange once the request was sent, an unusable answer, or a 5xx other than
+`action.handler_failed` and `statistical_dataset.domain_violation`, which the
+engine returns only with the attempt rolled back. When the returned
+`BaseRegistryClientError` still reports `outcome_unknown`, the mutation may
+have taken effect: recover by sending it again under the same key, because a
+new key could apply it twice. `outcome_unknown` is false for a configuration
+or request defect, a credential the token provider could not supply, a
+connection never established, and every 4xx refusal, none of which is resent.
 
 ## Recovering interrupted mutations
 

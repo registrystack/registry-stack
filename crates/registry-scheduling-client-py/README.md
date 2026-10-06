@@ -35,18 +35,27 @@ The client keeps service configuration, but never a bearer token. Supply it
 explicitly on each call. `create_hold`, `create_appointment`,
 `reschedule_appointment`, and `cancel_appointment` require the idempotency key
 chosen by the caller, 1 to 128 visible ASCII characters; the binding refuses
-any other key before a request is sent, and never invents or replaces a key or
-retries a mutation. Offering selectors, hold and appointment identifiers,
-cursors, page limits, external references, and instants are checked before a
-request is sent; instants are RFC 3339 strings, normalized to UTC. Request
-documents refuse a member the contract does not declare. Results use the
+any other key before a request is sent, and never invents or replaces a key.
+Offering selectors, hold and appointment identifiers, cursors, page limits,
+external references, and instants are checked before a request is sent;
+instants are RFC 3339 strings, normalized to UTC. Request documents refuse a
+member the contract does not declare. Results use the
 canonical Rust client's camel-case wire DTOs inside a
 `{"kind": "complete", "value": ..., "trace_id": ...}` envelope.
 
 `SchedulingClientError` preserves the problem code, its pinned title and
 detail, the status, and trace context, so a caller handles exhausted capacity,
 an expired hold, a stale revision, or a reused idempotency key explicitly. A
-code outside the closed catalogue is a protocol failure. The client never waits
-or retries.
+code outside the closed catalogue is a protocol failure.
+
+A keyed command (hold, appointment create, reschedule, cancel) whose outcome is
+unknown (a timeout or broken exchange after it was sent, an unusable answer,
+or a 5xx) is resent identically under the same key up to
+`max_mutation_retries` times: 0 to 2, default 2, and 0 sends it once. Reads and
+the unkeyed hold release are never resent. When the returned
+`SchedulingClientError` still reports `outcome_unknown`, the command may have
+taken effect: recover by sending it again under the same key, because a new
+key could apply it twice. `outcome_unknown` is false for a configuration or
+request defect, a connection never established, and every 4xx refusal.
 
 This crate is private and does not publish a standalone Python distribution.

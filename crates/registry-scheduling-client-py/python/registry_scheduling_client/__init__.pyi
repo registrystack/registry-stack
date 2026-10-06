@@ -233,9 +233,16 @@ class SchedulingClientError(Exception):
     trace_id: str | None
     transport_kind: str | None
     protocol_failure: SchedulingProtocolFailure | None
+    # Whether the request may have taken effect although this error was
+    # raised: a timeout or broken exchange after sending, an unusable answer,
+    # or a 5xx. When True, recover a keyed request by sending it again under
+    # the same idempotency key; a new key could apply it twice. False for a
+    # configuration or request defect, a connection never established, and
+    # every 4xx refusal.
+    outcome_unknown: bool
 
 class SchedulingClient:
-    def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None) -> None: ...
+    def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, max_mutation_retries: int | None = None) -> None: ...
     def get_scheduling(self, token: str) -> Complete[SchedulingServiceDocument]: ...
     def list_services(self, token: str, cursor: str | None = None) -> Complete[PageDocument[ServiceDocument]]: ...
     def list_offerings(self, token: str, cursor: str | None = None) -> Complete[PageDocument[OfferingDocument]]: ...

@@ -32,8 +32,8 @@ preview = client.preview(
 The client keeps service configuration, but never a bearer token. Supply it
 explicitly on each call; `health` and `ready` take none. A submission requires
 the idempotency key chosen by the caller, 1 to 128 visible ASCII characters;
-the binding refuses any other key before a request is sent, and never invents
-or replaces a key or retries a submission or a cancellation. A message
+the binding refuses any other key before a request is sent, never invents or
+replaces a key, and never resends a cancellation. A message
 identifier, template identifier, or version outside the runtime's grammar is
 refused before a request is sent. Results use the canonical Rust
 client's camel-case wire DTOs inside a
@@ -46,6 +46,15 @@ template refusal explicitly. A submission over its access profile's request
 rate or daily limit answers `rate-limit.exceeded` or `quota.exceeded` with
 status 429, and `retry_after_seconds` carries the wait the runtime asked for,
 at most one day; it is `None` on every other failure. The client never waits
-or retries.
+on a 429 or retries it.
+
+A submission whose outcome is unknown (a timeout or broken exchange after it
+was sent, an unusable answer, or a 5xx) is resent identically under the same
+key up to `max_mutation_retries` times: 0 to 2, default 2, and 0 sends it
+once. When the returned `MessagingClientError` still reports
+`outcome_unknown`, the submission may have been accepted: recover by sending it
+again under the same key, because a new key could send the message twice.
+`outcome_unknown` is false for a configuration or request defect, a connection
+never established, and every 4xx refusal.
 
 This crate is private and does not publish a standalone Python distribution.

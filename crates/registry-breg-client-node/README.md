@@ -29,12 +29,13 @@ agent, pass the exact Casework assertion endpoint, a Casework-only bootstrap,
 and the approved exchange resource and scopes. A remote grant refresh obtains
 a fresh authority assertion and can be refused after revocation. The client performs one
 exchange per method, never follows redirects, never uses ambient proxy
-configuration, never retries, and never follows links automatically.
+configuration, and never follows links automatically; the one resend is the
+bounded same-key retry of a keyed mutation described under the actions below.
 
-Failures are `BaseRegistryClientError` values with a stable `kind` and, where
-available, `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `traceId`,
-`transportKind`, and `tokenKind`. Errors do not expose token, private-key,
-record, or lifecycle payload values.
+Failures are `BaseRegistryClientError` values with a stable `kind`, a boolean
+`outcomeUnknown`, and, where available, `code`, `planRefusal`, `refusalCode`,
+`fieldPath`, `status`, `traceId`, `transportKind`, and `tokenKind`. Errors do
+not expose token, private-key, record, or lifecycle payload values.
 
 ## Webhook verification
 
@@ -112,9 +113,18 @@ Do not round unsupported input to make it pass. JSON whitespace and equivalent
 number spellings may be canonicalized; the promise concerns values and types.
 
 Actions retain their original opaque authority and exact retry semantics.
-A lost response is still uncertain, and the caller must explicitly choose
-whether to retry the same action with the same idempotency key. The client
-performs no automatic mutation retry.
+A keyed mutation (create, patch, attachment upload or delete, lifecycle
+action, immediate action, batch, tombstone, statistics publish or withdraw)
+whose outcome is unknown is resent identically under the same key up to
+`maxMutationRetries` times: 0 to 2, default 2, and 0 sends it once. The
+outcome is unknown after a timeout or broken exchange once the request was
+sent, an unusable answer, or a 5xx other than `action.handler_failed` and
+`statistical_dataset.domain_violation`, which the engine returns only with the
+attempt rolled back. When the returned error still reports `outcomeUnknown`,
+the mutation may have taken effect, and the caller must explicitly choose
+whether to retry the same action with the same idempotency key; a new key
+could apply it twice. Reads, unkeyed calls, connection failures, and every 4xx
+refusal are never resent.
 
 ## Specialized reads
 

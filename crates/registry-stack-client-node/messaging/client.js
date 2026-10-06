@@ -12,6 +12,7 @@ class MessagingClientError extends Error {
     super(envelope.message);
     this.name = 'MessagingClientError';
     this.kind = envelope.kind;
+    this.outcomeUnknown = envelope.outcomeUnknown === true;
     for (const field of ['code', 'title', 'detail', 'status', 'traceId', 'retryAfterSeconds', 'transportKind', 'protocolFailure']) {
       if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
