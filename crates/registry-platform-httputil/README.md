@@ -49,6 +49,17 @@ Outbound HTTP utilities for registry services.
   scope check stays authoritative.
 - Shared strict response-header bounds and exact-one delta-seconds
   `Retry-After` parsing.
+- `client::retry_keyed_mutation`, the bounded same-key resend loop shared by
+  the product clients. Each attempt reports a `KeyedMutationAttempt`:
+  `Settled` ends the loop, `Retryable` is resent after 250 ms and then 500 ms,
+  or after a `Retry-After` that is longer and at most
+  `MAXIMUM_MUTATION_RETRY_AFTER_SECONDS` (5), and `Unknown` ends the loop
+  because an identical resend could not settle it. A longer requested wait
+  ends the retries. The count is the caller's, `DEFAULT_MUTATION_RETRIES` (2)
+  by default and at most `MAXIMUM_MUTATION_RETRIES` (2), and 0 sends once. A
+  refusal that answers a resend returns the earlier unknown-outcome error,
+  since it does not prove the earlier attempt left no effect. The loop never
+  builds a request or a key; the closure resends the caller's exact bytes.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
   forwarding.
 - `url::append_path_segments` for safe path construction.
