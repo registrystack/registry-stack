@@ -10,7 +10,7 @@
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
 export declare class SchedulingClient {
-  constructor(config: SchedulingClientConfig)
+  constructor(config: any)
   getScheduling(token: string): Promise<SchedulingOutcome>
   listServices(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
   listOfferings(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
@@ -26,20 +26,6 @@ export declare class SchedulingClient {
   appointmentHistory(token: string, appointmentId: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
   listResources(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
   listLocations(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
-}
-
-export interface SchedulingClientConfig {
-  baseUrl: string
-  requestTimeoutMilliseconds?: number
-  connectTimeoutMilliseconds?: number
-  maxResponseBytes?: number
-  userAgent?: string
-  trustedRootCertificates?: string
-  /**
-   * How many times a keyed command whose outcome is unknown is resent under
-   * the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
-   */
-  maxMutationRetries?: number
 }
 
 export interface SchedulingOutcome {

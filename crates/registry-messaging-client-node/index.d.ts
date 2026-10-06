@@ -10,27 +10,13 @@
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
 export declare class MessagingClient {
-  constructor(config: MessagingClientConfig)
+  constructor(config: any)
   health(): Promise<MessagingOutcome>
   ready(): Promise<MessagingOutcome>
   submit(token: string, idempotencyKey: string, request: any): Promise<MessagingOutcome>
   message(token: string, messageId: string): Promise<MessagingOutcome>
   cancel(token: string, messageId: string): Promise<MessagingOutcome>
   preview(token: string, templateId: string, version: string, request: any): Promise<MessagingOutcome>
-}
-
-export interface MessagingClientConfig {
-  baseUrl: string
-  requestTimeoutMilliseconds?: number
-  connectTimeoutMilliseconds?: number
-  maxResponseBytes?: number
-  userAgent?: string
-  trustedRootCertificates?: string
-  /**
-   * How many times a submission whose outcome is unknown is resent under
-   * the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
-   */
-  maxMutationRetries?: number
 }
 
 export interface MessagingOutcome {
