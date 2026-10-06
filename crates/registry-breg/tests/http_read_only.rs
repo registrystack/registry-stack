@@ -2543,6 +2543,51 @@ async fn health_and_readiness_are_operational_and_independent() {
 }
 
 #[tokio::test]
+async fn head_is_refused_on_governed_reads_and_answered_only_by_probes() {
+    let harness = Harness::new(true);
+    harness.readiness.0.store(true, Ordering::SeqCst);
+    let record = "/v1/records/cases/00000000-0000-4000-8000-000000000001";
+    let served = harness.send(Method::GET, record, None).await;
+    assert_eq!(served.status(), StatusCode::OK);
+    let reads = harness.records.calls();
+    let unaccepted = problem_shape(harness.send(Method::PUT, record, None).await).await;
+    for uri in [record, "/openapi.json", "/v1/registry", "/v1/schemas/case"] {
+        let response = harness.send(Method::GET, uri, None).await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri} is served to GET");
+        let response = harness.send(Method::HEAD, uri, None).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(
+            response.headers()[CONTENT_TYPE],
+            "application/problem+json",
+            "{uri} answers HEAD with the concealed refusal"
+        );
+        assert!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body")
+                .is_empty(),
+            "{uri}"
+        );
+        let unaccepted_here = problem_shape(harness.send(Method::PUT, uri, None).await).await;
+        assert_eq!(
+            unaccepted_here, unaccepted,
+            "{uri} refuses HEAD as it refuses PUT"
+        );
+    }
+    assert_eq!(
+        harness.records.calls(),
+        reads + 1,
+        "only the GET reached the record service"
+    );
+    assert_eq!(harness.records.refusal_calls(), 0);
+
+    for uri in ["/health", "/healthz", "/ready"] {
+        let response = harness.send(Method::HEAD, uri, None).await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri} answers HEAD");
+    }
+}
+
+#[tokio::test]
 async fn profile_and_resource_concealment_complete_before_record_io() {
     let harness = Harness::new(true);
     let anonymous_protected = harness

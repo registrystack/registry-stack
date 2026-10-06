@@ -1175,6 +1175,126 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
     database.cleanup().await;
 }
 
+/// A HEAD request to a statistical read is refused down the same concealed
+/// path as any other method the route does not accept: it is journaled as a
+/// HEAD refusal under the fixed unknown-route identity, never as a GET read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn head_on_statistical_reads_is_refused_and_journaled_as_head() {
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-statistics-head-1",
+        },
+    )
+    .await
+    .expect("runtime identity initializes");
+    migration_task.abort();
+
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let trace = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = statistics_router(
+        pool,
+        compiled,
+        identity,
+        lock_key,
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x73; 32].into())
+                .expect("audit profile is keyed"),
+        ),
+        trace.clone(),
+        None,
+    );
+    let period = month_code(Utc::now().date_naive());
+    let reads = [
+        (
+            format!(
+                "/v1/statistics/records-by-category:live?accessProfile=analyst&from={period}&to={period}"
+            ),
+            claims("analyst", true),
+        ),
+        (
+            "/v1/statistics/records-by-category/releases?accessProfile=reader".to_owned(),
+            claims("reader", false),
+        ),
+        (
+            format!(
+                "/v1/statistics/records-by-category/releases:series?accessProfile=reader&from={period}&to={period}"
+            ),
+            claims("reader", false),
+        ),
+        (
+            format!("/v1/statistics/records-by-category/releases/{period}?accessProfile=reader"),
+            claims("reader", false),
+        ),
+        (
+            format!(
+                "/v1/statistics/records-by-category/releases/{period}/versions/1?accessProfile=reader"
+            ),
+            claims("reader", false),
+        ),
+    ];
+    for (uri, caller) in &reads {
+        let before = database.audit_records().len();
+        let head = send(
+            &app,
+            Method::HEAD,
+            uri,
+            Some(caller.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(head.status(), StatusCode::NOT_FOUND, "{uri}");
+        let records = database.audit_records();
+        assert_eq!(records.len(), before + 1, "{uri} journals one refusal");
+        let refusal = &records[before];
+        assert_eq!(refusal["phase"], "refusal", "{uri}");
+        assert_eq!(refusal["method"], "HEAD", "{uri}");
+        assert_eq!(refusal["operationId"], "statistics.unknown", "{uri}");
+    }
+    assert!(
+        trace.lock().unwrap().is_empty(),
+        "a refused HEAD performs no statistical work"
+    );
+
+    let (live, analyst) = &reads[0];
+    let before = database.audit_records().len();
+    let served = send(
+        &app,
+        Method::GET,
+        live,
+        Some(analyst.clone()),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        served.status(),
+        StatusCode::OK,
+        "the same read is served to GET"
+    );
+    let records = database.audit_records();
+    assert!(
+        records[before..]
+            .iter()
+            .all(|record| record["method"] == "GET"),
+        "a served read is journaled under the method the caller sent"
+    );
+    database.assert_every_audit_request_answered_once();
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publication_rejects_a_snapshot_older_than_the_locked_release_head() {
     let database = TestDatabase::create(3).await;

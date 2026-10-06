@@ -124,9 +124,6 @@ pub fn router(service: Arc<HttpService>) -> Router {
 
 fn route_set(service: Arc<HttpService>) -> Router {
     let mut app = Router::new()
-        .route("/health", get(health))
-        .route("/healthz", get(health))
-        .route("/ready", get(ready))
         .route("/openapi.json", get(openapi))
         .route("/v1/registry", get(registry_metadata))
         .route("/v1/schemas/{entity_id}", get(entity_schema));
@@ -222,9 +219,33 @@ fn route_set(service: Arc<HttpService>) -> Router {
         .merge(gis::routes())
         .merge(statistics::routes(&service))
         .merge(ingestion::routes(&service))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&service),
+            refuse_head,
+        ))
+        // The operational probes return no registry data and are added after
+        // the HEAD refusal, so probe tooling may still send HEAD to them.
+        .route("/health", get(health))
+        .route("/healthz", get(health))
+        .route("/ready", get(ready))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(service)
+}
+
+/// axum's `get` also answers HEAD by running the whole read under the
+/// route's GET identity and discarding the body. No governed operation
+/// publishes HEAD, so a HEAD takes the concealed path of any other method a
+/// route does not accept.
+async fn refuse_head(
+    State(service): State<Arc<HttpService>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    if request.method() == axum::http::Method::HEAD {
+        return axum::handler::Handler::call(not_found, request, service).await;
+    }
+    next.run(request).await
 }
 
 /// Construct the production network router. Bearer admission and complete

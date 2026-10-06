@@ -676,6 +676,59 @@ async fn gis_item_reads_write_a_subject_access_log_entry_per_feature() {
     harness.cleanup().await;
 }
 
+/// HEAD on a GIS read takes the concealed path of any method the route does
+/// not accept: no features are read, nothing is journaled under the route's
+/// GET identity, and no subject access is logged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn head_on_gis_reads_is_refused_without_a_journaled_read() {
+    let harness = SpatialHarness::create(compiled_spatial_registry_with_access_log()).await;
+    seed_spatial_rows(&harness).await;
+    let app = harness.router(None, cursor_codec());
+    let items = "/v1/gis/collections/service-site.map-reader/items?bbox=100.25,13.25,100.25,13.25&limit=20&f=json";
+    for uri in [
+        "/v1/gis",
+        "/v1/gis/api",
+        "/v1/gis/conformance",
+        "/v1/gis/collections",
+        "/v1/gis/collections/service-site.map-reader",
+        items,
+    ] {
+        let journal_before = harness.database.audit_records().len();
+        let unaccepted = send_method(&app, Method::PUT, uri, Some(claims(["zone-a"]))).await;
+        let head = send_method(&app, Method::HEAD, uri, Some(claims(["zone-a"]))).await;
+        assert_eq!(head.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(
+            head.status(),
+            unaccepted.status(),
+            "{uri} refuses HEAD as it refuses PUT"
+        );
+        assert!(body_bytes(head).await.is_empty(), "{uri}");
+        assert_eq!(
+            harness.database.audit_records().len(),
+            journal_before,
+            "{uri} refuses before any journaled read"
+        );
+    }
+    let logged: i64 = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_subject_access_log",
+            &[],
+        )
+        .await
+        .expect("access-log rows are readable by the administrator")
+        .get(0);
+    assert_eq!(logged, 0, "a refused HEAD logs no subject access");
+    let served = send(&app, items, Some(claims(["zone-a"])), None).await;
+    assert_eq!(
+        served.status(),
+        StatusCode::OK,
+        "the same read is served to GET"
+    );
+    harness.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_spatial_response_budget_refuses_oversized_payloads_atomically() {
     let harness = SpatialHarness::create(compiled_spatial_registry()).await;
@@ -1234,6 +1287,24 @@ async fn send(
         builder = builder.header(header::ACCEPT, accept);
     }
     let mut request = builder.body(Body::empty()).expect("request builds");
+    if let Some(claims) = claims {
+        request.extensions_mut().insert(claims);
+    }
+    let mut app = app.clone();
+    app.call(request).await.expect("router returns a response")
+}
+
+async fn send_method(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    claims: Option<VerifiedRequestClaims>,
+) -> Response<Body> {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::empty())
+        .expect("request builds");
     if let Some(claims) = claims {
         request.extensions_mut().insert(claims);
     }

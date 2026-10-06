@@ -1073,3 +1073,148 @@ async fn snapshot_and_revision_reads_write_subject_access_log_entries() {
     drop(idp);
     db.cleanup().await;
 }
+
+/// Sends a request whose response body need not be JSON, as a HEAD answer
+/// never is.
+async fn send_raw(app: &Router, token: &str, method: Method, uri: &str) -> (StatusCode, Vec<u8>) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, bytes.to_vec())
+}
+
+/// HEAD on a governed read takes the concealed path of any method the route
+/// does not accept: the same status as PUT, no read performed, nothing
+/// journaled under the route's GET identity, and no subject access logged.
+async fn assert_head_is_refused_like_an_unaccepted_method(
+    db: &TestDatabase,
+    app: &Router,
+    token: &str,
+    uri: &str,
+) {
+    let journal_before = db.audit_entries().len();
+    let access_before = access_log_rows(db).await;
+    let (unaccepted, _) = send_raw(app, token, Method::PUT, uri).await;
+    let (head, body) = send_raw(app, token, Method::HEAD, uri).await;
+    assert_eq!(head, StatusCode::NOT_FOUND, "{uri}");
+    assert_eq!(head, unaccepted, "{uri} refuses HEAD as it refuses PUT");
+    assert!(body.is_empty(), "{uri}");
+    let journal = db.audit_entries();
+    assert_eq!(
+        journal.len(),
+        journal_before,
+        "{uri} refuses before any journaled read: {:#?}",
+        &journal[journal_before..]
+    );
+    assert_eq!(
+        access_log_rows(db).await,
+        access_before,
+        "{uri} logs no subject access"
+    );
+}
+
+#[tokio::test]
+async fn head_on_record_reads_is_refused_without_a_journaled_read() {
+    let (db, app, idp) = setup().await;
+    let agency = token(&idp, "agency", "officer");
+    for uri in [
+        format!("/v1/records/entries/{RECORD_A}"),
+        "/v1/records/entries?$top=1".to_owned(),
+    ] {
+        assert_head_is_refused_like_an_unaccepted_method(&db, &app, &agency, &uri).await;
+    }
+    let (status, _) = send_raw(
+        &app,
+        &agency,
+        Method::GET,
+        &format!("/v1/records/entries/{RECORD_A}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the same read is served to GET");
+    assert_eq!(access_log_rows(&db).await, 1);
+    db.assert_every_audit_request_answered_once();
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn head_on_subject_access_log_reads_is_refused_without_a_journaled_read() {
+    let (db, app, idp) = setup().await;
+    let agency = token(&idp, "agency", "officer");
+    let owner = token(&idp, "portal", SUBJECT);
+    let (status, _) = send_raw(
+        &app,
+        &agency,
+        Method::GET,
+        &format!("/v1/records/entries/{RECORD_A}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let uri = format!("/v1/records/entries/{RECORD_A}/access-log");
+    assert_head_is_refused_like_an_unaccepted_method(&db, &app, &owner, &uri).await;
+    let (status, log) = history(&app, &owner, RECORD_A, "").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the same read is served to GET: {log}"
+    );
+    assert_eq!(log["events"].as_array().map(Vec::len), Some(1));
+    db.assert_every_audit_request_answered_once();
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn head_on_history_reads_is_refused_without_a_journaled_read() {
+    let (db, app, idp, _) = setup_with_history().await;
+    let steward = token(&idp, "agency", "steward");
+    let reader = token(&idp, "agency", "officer");
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/records/entries?accessProfile=steward")
+        .header("authorization", format!("Bearer {steward}"))
+        .header("content-type", "application/json")
+        .header("idempotency-key", "history-head-create")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"data":{"subject":SUBJECT,"label":"protected-label"}}))
+                .unwrap(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+            .unwrap();
+    let record = created["data"]["recordIdentifier"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for uri in [
+        format!("/v1/records/entries/{record}/revisions"),
+        "/v1/records/entries:snapshot".to_owned(),
+    ] {
+        assert_head_is_refused_like_an_unaccepted_method(&db, &app, &reader, &uri).await;
+    }
+    assert!(logged_operations(&db, &record).await.is_empty());
+    let (status, _) = send_raw(
+        &app,
+        &reader,
+        Method::GET,
+        &format!("/v1/records/entries/{record}/revisions"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the same read is served to GET");
+    assert_eq!(logged_operations(&db, &record).await.len(), 1);
+    db.assert_every_audit_request_answered_once();
+    drop(app);
+    drop(idp);
+    db.cleanup().await;
+}
