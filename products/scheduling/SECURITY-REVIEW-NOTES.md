@@ -46,9 +46,11 @@ audit entries. The threats this surface answers:
    request's own entry time: a transaction delayed by contention cannot
    carry a lapsed grant to a commit. The full bounds are matched once
    at the service before the transaction opens; re-reading them inside
-   would only defend against narrowing at the issuer, which needs a
-   revocation path this milestone does not have (matrix deferral
-   SCHEDULING-DEF-01, recorded in the published reference).
+   would only defend against a grant revoked or narrowed at the issuer,
+   and the runtime does not ask the issuer for a grant's status (matrix
+   deferral SCHEDULING-DEF-01, recorded in the published reference and
+   reasoned in "Grant status stays out of the capacity transaction"
+   below).
 3. **A deployment is reached over a public interface by accident.** The
    listener must bind a private address or an explicitly declared
    container network; anything else refuses to start.
@@ -744,10 +746,58 @@ the guard needs a decision on a schema floor, because without one an
 unsupported upgrade from before the audit writer would drop unpublished
 audit rows silently.
 
+## Grant status stays out of the capacity transaction
+
+Casework answers a resource server's question about a task grant's
+current status at `GET /v1/task-grants/{grantId}/status`, and BREG asks it
+before its writes. Scheduling does not ask, and SCHEDULING-DEF-01 stays
+deferred with its reason restated. This is an authorization decision, so
+it is recorded here; the runtime and its tests are unchanged.
+
+**Threat.** A grant revoked at Casework, or invalidated there because its
+holder lost eligibility or its template retired, still commits capacity at
+Scheduling until its deadline passes: the token the agent already holds
+carries the bounds, and Scheduling never asks whether the grant is still
+active.
+
+**Decision.** Keep the deferral. A grant Casework mints lives at most 900
+seconds from its approval (`TASK_GRANT_LIFETIME_SECONDS` in
+`crates/registry-casework-core/src/task_grant.rs`, which every task
+template is held to), and Scheduling re-checks the grant's expiry inside
+the capacity transaction, after every lock wait and immediately before the
+claim commits (SCHEDULING-SEC-03). The exposure is therefore the rest of
+one short deadline. A status call would put Casework's availability inside
+every capacity transaction: each commitment would hold its capacity locks
+while it waits on another product, and would have to refuse while that
+product is unreachable, because answering without the status would make
+the check decorative. Asking before the transaction opens, as BREG does,
+keeps the locks free but still leaves the window between the check and the
+commit, so it narrows the exposure without closing it.
+
+**Revisit trigger.** An adopter needs a revocation to take effect faster
+than a grant expires. Closing the deferral then adds a Scheduling adapter
+over `registry-casework-client`, which relaxes the MVP dependency sentence
+in `AGENTS.md` and `products/scheduling/scripts/check_dependency_direction.py`
+in the same change, and promotes SCHEDULING-DEF-01 to an enforced row with
+the negative test that earns it.
+
+**Tests.** None change. `a_grant_that_lapses_before_the_commit_never_books`
+and `every_mutation_rechecks_expiry_after_its_writes` (SCHEDULING-SEC-03,
+`crates/registry-scheduling/tests/postgres_commitments.rs`) remain the
+proof that the compensating expiry re-check holds.
+
+**Accepted residual.** The 900-second ceiling is Casework's, not
+Scheduling's. Scheduling verifies a grant's deadline but does not cap how
+far ahead it lies, and its token verifier sets no maximum token lifetime,
+so a deployment that accepts grants minted by another authority takes that
+authority's grant lifetime as its revocation window. Such a deployment
+should hold that authority to deadlines no longer than Casework's.
+
 ## Known deferrals
 
 The matrix records four deferrals with their compensating controls.
-SCHEDULING-DEF-01 is stated in threat 2 above; the other three are
+SCHEDULING-DEF-01 is stated in threat 2 above and reasoned in "Grant
+status stays out of the capacity transaction"; the other three are
 restated here as the index the matrix's `recordedIn` points at:
 
 - **SCHEDULING-DEF-04, the channel is not bound to the verified caller.**

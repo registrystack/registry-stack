@@ -91,12 +91,17 @@ commitment is decided under. A grant that expired between the door and the
 commit cannot take capacity, and the attempt answers
 `operation.not-authorized` like any other authority refusal.
 
-The bounds themselves are not read again at that point, and this milestone
-has no revocation check, so a grant narrowed or withdrawn at the issuer after
-its token was minted keeps the authority its token carries until the token or
-the grant deadline passes. Keep grant deadlines short. Re-checking the full
-bounds inside the capacity transaction is a recorded deferral, not a promise
-this milestone keeps.
+The bounds themselves are not read again at that point, and Scheduling does
+not ask the issuer whether the grant is still active, so a grant revoked or
+narrowed at the issuer after its token was minted keeps the authority its
+token carries until the token or the grant deadline passes. Casework holds
+every grant it mints to at most 900 seconds; Scheduling verifies a grant's
+deadline but does not cap it, so hold grants from any other authority to
+deadlines as short. Casework answers a grant's current status at
+`GET /v1/task-grants/{grantId}/status`, but asking it would put Casework's
+availability inside every capacity transaction. Checking grant status there
+is a recorded deferral, revisited when an adopter needs a revocation to take
+effect faster than a grant expires.
 
 ## What the audit records
 
