@@ -48,8 +48,7 @@ mod message;
 mod validate;
 
 pub use declaration::{
-    HookDeclaration, HookDeclarationError, HookHandlerKind, HookHandlerSource, HookPhase,
-    HooksDocument, HOOK_HANDLER_ABI_V1,
+    HookDeclaration, HookHandlerKind, HookHandlerSource, HookPhase, HOOK_HANDLER_ABI_V1,
 };
 pub use envelope::{
     Causation, EnvelopeLimits, EventSubject, HookCausationError, HookEnvelope, HookEnvelopeError,
