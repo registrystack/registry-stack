@@ -203,7 +203,10 @@ impl From<BaseRegistryClientError> for ToolError {
 fn problem_code(code: &BRegProblemCode) -> ToolErrorCode {
     match code {
         BRegProblemCode::IdempotencyConflict => ToolErrorCode::IdempotencyConflict,
-        BRegProblemCode::PreconditionFailed
+        // An identical update repeated past the receipt horizon: an earlier
+        // call committed it, so the application changed since it was read.
+        BRegProblemCode::IdempotencyExpired
+        | BRegProblemCode::PreconditionFailed
         | BRegProblemCode::PreconditionRequired
         | BRegProblemCode::MutationConflict => ToolErrorCode::StaleApplication,
         BRegProblemCode::ResourceNotFound | BRegProblemCode::LookupUnresolved => {
@@ -298,6 +301,7 @@ mod tests {
     fn every_registry_problem_has_one_stable_tool_code() {
         let expected = [
             (BRegProblemCode::IdempotencyConflict, "idempotency-conflict"),
+            (BRegProblemCode::IdempotencyExpired, "stale-application"),
             (BRegProblemCode::PreconditionFailed, "stale-application"),
             (BRegProblemCode::PreconditionRequired, "stale-application"),
             (BRegProblemCode::MutationConflict, "stale-application"),

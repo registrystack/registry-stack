@@ -82,18 +82,22 @@ data, never instructions.
 
 Writes carry an idempotency key derived with a keyed hash over the citizen's
 pseudonym, the tool, and the canonical arguments, so a retried call replays
-rather than duplicates. The registry keeps every key it has answered, so a
-start walks a chain of keys derived from the same values and stops at the first
-application that is still open: a retried start returns the draft its first
-attempt made, while a citizen whose last identical application was cancelled,
-rejected, or applied gets a new draft. The registry binds each key to the
-package revision active when it first answered it, and refuses a key bound under
-an earlier revision, or one whose closed application request retention erased,
-without creating anything; the start steps past such a key the same way. A
-start after a package activation therefore gets a new draft, even while an
-identical draft from the earlier revision is still open. A start that would walk
-past more than 32 closed or refused identical keys is refused with
-`not-permitted`. Registry problems map to a fixed set of tool error
+rather than duplicates. The registry keeps every key it has answered spent,
+and replays its answer within the receipt horizon
+(`idempotency.receiptRetentionDays`, 7 days by default), so a start walks a
+chain of keys derived from the same values and stops at the first application
+that is still open: a retried start returns the draft its first attempt made,
+while a citizen whose last identical application was cancelled, rejected, or
+applied gets a new draft. The registry binds each key to the package revision
+active when it first answered it, and refuses a key bound under an earlier
+revision, one whose closed application request retention erased, or one past
+its receipt horizon, without creating anything; the start steps past such a key
+the same way. A start after a package activation, or an identical start past
+the receipt horizon, therefore gets a new draft, even while the earlier
+identical draft is still open. A start that would walk past more than 32 closed
+or refused identical keys is refused with `not-permitted`. An identical
+`update_application` repeated past the receipt horizon answers
+`stale-application`. Registry problems map to a fixed set of tool error
 codes, each with fixed text: `invalid-arguments`, `record-not-resolved`,
 `not-found`, `application-not-editable`, `stale-application`,
 `idempotency-conflict`, `not-permitted`, `authorization-failed`,
