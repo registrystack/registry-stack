@@ -303,8 +303,9 @@ require the header.
   under, so a byte-identical body can also return `409` when the first attempt committed under a
   different package, profile, or claims.
 - After the horizon, the same request returns `410 idempotency.expired` and is never executed: the
-  key stays spent although its held response is gone. The first attempt committed, so read the
-  record instead of retrying.
+  key stays spent although its held response is gone. Once the operator drops the expired receipt,
+  the registry keeps a digest of the caller and key instead of the raw values, and the answers stay
+  the same. The first attempt committed, so read the record instead of retrying.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), and precondition_required();
     crates/registry-breg/src/api/mod.rs, valid_idempotency_key() and MAX_IDEMPOTENCY_KEY_BYTES;

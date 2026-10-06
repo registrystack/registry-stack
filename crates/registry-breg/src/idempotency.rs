@@ -121,6 +121,10 @@ impl HeldResponse {
     }
 }
 
+/// The namespace of every issuer the engine scopes keys under itself.
+/// [`IdempotencyPolicy::new`] refuses any issuer in it, so a configured
+/// issuer never shares a scope with the engine's own keys.
+const RESERVED_ISSUER_PREFIX: &str = "urn:registry-breg:";
 /// The issuer a coordinator scopes caller keys under when no verified token
 /// issuer is configured, as in an embedded coordinator that serves no HTTP
 /// surface. A runtime started from its configuration always scopes keys under
@@ -129,14 +133,6 @@ pub const EMBEDDED_CALLER_ISSUER: &str = "urn:registry-breg:embedded-issuer";
 /// The issuer hook proposal keys are scoped under. No token verifier accepts
 /// it, so no caller can reach a hook delivery's key.
 const HOOK_DELIVERY_ISSUER: &str = "urn:registry-breg:hook-delivery";
-/// The issuer a spent key an earlier engine wrote is converted under when the
-/// caller columns are installed. Such a row keeps its audit-keyed digest as
-/// its key reference, which no key reference this engine derives can equal,
-/// and its receipt is dropped. A runtime's configured issuer is an `https`
-/// URL, or a loopback `http` URL for local development, never a `urn:`, and
-/// [`IdempotencyPolicy::new`] refuses this one, so no caller's key is ever
-/// scoped under it either.
-pub(crate) const PRE_CALLER_SCOPE_ISSUER: &str = "urn:registry-breg:pre-caller-scope";
 /// How many days a held response is kept when the runtime configuration does
 /// not choose.
 pub const DEFAULT_RECEIPT_RETENTION_DAYS: u16 = 7;
@@ -158,15 +154,16 @@ pub struct IdempotencyPolicy {
 
 impl IdempotencyPolicy {
     /// Scope caller keys under `caller_issuer` and keep each held response
-    /// for `receipt_retention_days` days after its commit. The issuer earlier
-    /// spent keys are converted under is refused.
+    /// for `receipt_retention_days` days after its commit. Every issuer the
+    /// engine reserves for its own keys is refused; the embedded policy is
+    /// [`IdempotencyPolicy::default`].
     pub fn new(
         caller_issuer: impl Into<String>,
         receipt_retention_days: u16,
     ) -> Result<Self, IdempotencyError> {
         let caller_issuer = caller_issuer.into();
         if caller_issuer.is_empty()
-            || caller_issuer == PRE_CALLER_SCOPE_ISSUER
+            || caller_issuer.starts_with(RESERVED_ISSUER_PREFIX)
             || !(1..=MAX_RECEIPT_RETENTION_DAYS).contains(&receipt_retention_days)
         {
             return Err(IdempotencyError::InvalidInput);
@@ -1178,9 +1175,12 @@ async fn affected_snapshot_references(
         .collect())
 }
 
-/// Drop the held response of every spent key whose receipt horizon passed at
-/// or before `before`. The row keeps its caller, key, binding, and times, so
-/// the key stays spent and an exact retry is still refused as expired.
+/// Drop the receipt of every spent key whose horizon passed at or before
+/// `before`: its held response, and the raw issuer, subject, and key. The row
+/// keeps its key reference, binding, scope, result references, and times, so
+/// the key stays spent by its digest and an exact retry is still refused as
+/// expired. A row whose held response an erasure already removed is dropped
+/// the same way, so no raw caller outlives its horizon.
 #[cfg(feature = "tooling")]
 pub(crate) async fn drop_expired_receipts(
     transaction: &Transaction<'_>,
@@ -1192,17 +1192,19 @@ pub(crate) async fn drop_expired_receipts(
             "UPDATE registry_internal.registry_idempotency
                 SET response_body = NULL,
                     response_headers = $2,
-                    receipt_dropped_at = transaction_timestamp()
+                    receipt_dropped_at = transaction_timestamp(),
+                    caller_issuer = NULL,
+                    caller_subject = NULL,
+                    idempotency_key = NULL
               WHERE receipt_expires_at <= LEAST($1, transaction_timestamp())
-                AND receipt_dropped_at IS NULL
-                AND response_body IS NOT NULL",
+                AND receipt_dropped_at IS NULL",
             &[&before, &headers],
         )
         .await
         .map_err(map_database_error)
 }
 
-/// Whether a held response past its horizon at `cutoff` remains.
+/// Whether a receipt past its horizon at `cutoff` remains undropped.
 #[cfg(feature = "tooling")]
 pub(crate) async fn expired_receipts_remain(
     client: &tokio_postgres::Client,
@@ -1214,7 +1216,6 @@ pub(crate) async fn expired_receipts_remain(
                  SELECT 1 FROM registry_internal.registry_idempotency
                   WHERE receipt_expires_at <= $1
                     AND receipt_dropped_at IS NULL
-                    AND response_body IS NOT NULL
              )",
             &[&cutoff],
         )
@@ -1325,15 +1326,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_policy_refuses_the_issuer_earlier_spent_keys_are_converted_under() {
-        assert_eq!(
-            IdempotencyPolicy::new(PRE_CALLER_SCOPE_ISSUER, DEFAULT_RECEIPT_RETENTION_DAYS),
-            Err(IdempotencyError::InvalidInput)
-        );
+    fn a_policy_refuses_every_issuer_the_engine_reserves() {
+        for reserved in [
+            "",
+            EMBEDDED_CALLER_ISSUER,
+            HOOK_DELIVERY_ISSUER,
+            "urn:registry-breg:any-later-use",
+        ] {
+            assert_eq!(
+                IdempotencyPolicy::new(reserved, DEFAULT_RECEIPT_RETENTION_DAYS),
+                Err(IdempotencyError::InvalidInput),
+                "{reserved}"
+            );
+        }
         assert!(IdempotencyPolicy::new(
             "https://issuer.example.test",
             DEFAULT_RECEIPT_RETENTION_DAYS
         )
         .is_ok());
+        assert_eq!(
+            IdempotencyPolicy::default().caller_issuer(),
+            EMBEDDED_CALLER_ISSUER,
+            "the embedded policy is built without the configured-issuer check"
+        );
     }
 }

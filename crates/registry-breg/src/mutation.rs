@@ -55,7 +55,7 @@ use crate::idempotency::{
     resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
     HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy,
     PermittedResponseHeader, StoredResultMetadata, MAX_HELD_BODY_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
-    MAX_IMMEDIATE_ACTION_RESULTS, PRE_CALLER_SCOPE_ISSUER,
+    MAX_IMMEDIATE_ACTION_RESULTS,
 };
 use crate::ingestion_store::{
     record_attempt, IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus,
@@ -297,16 +297,18 @@ pub async fn install_mutation_schema(
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    // A spent key is found by its caller: the verified issuer and subject, the
-    // key scope, and the key. Rows an earlier engine found by an audit-keyed
-    // digest carry no caller and can never be found again. They are kept as
-    // tombstones rather than emptied, because an immediate action's stored
-    // results and application rows hang off them, and a revision an earlier
-    // engine journaled under a compiled effect identifier reads its provenance
-    // from those results. Each such row moves under the reserved issuer, with
-    // its digest as its subject so the caller index holds, its receipt dropped,
-    // and its held response and headers removed. The erasure shape is installed
-    // here because it reads the receipt columns.
+    // A spent key is found by its digest over the verified issuer and subject,
+    // the key scope, and the key. The raw issuer, subject, and key are kept
+    // beside it exactly while the receipt is, and are absent together once it
+    // is dropped.
+    // Rows an earlier engine found by an audit-keyed digest carry no caller
+    // and can never be found again. They are kept as tombstones rather than
+    // emptied, because an immediate action's stored results and application
+    // rows hang off them, and a revision an earlier engine journaled under a
+    // compiled effect identifier reads its provenance from those results. Each
+    // such row is converted already dropped: no raw caller or key, its receipt
+    // expired at its commit, and its held response and headers removed. The
+    // erasure shape is installed here because it reads the receipt columns.
     migration
         .batch_execute(&format!(
             "DO $breg_idempotency_caller$
@@ -326,19 +328,13 @@ pub async fn install_mutation_schema(
                          ADD COLUMN receipt_expires_at timestamptz,
                          ADD COLUMN receipt_dropped_at timestamptz;
                      UPDATE registry_internal.registry_idempotency
-                        SET caller_issuer = '{PRE_CALLER_SCOPE_ISSUER}',
-                            caller_subject = key_reference,
-                            key_scope = 'mutation',
-                            idempotency_key = 'pre-caller-scope',
+                        SET key_scope = 'mutation',
                             receipt_expires_at = created_at + interval '1 microsecond',
                             receipt_dropped_at = transaction_timestamp(),
                             response_body = NULL,
                             response_headers = decode('0000', 'hex');
                      ALTER TABLE registry_internal.registry_idempotency
-                         ALTER COLUMN caller_issuer SET NOT NULL,
-                         ALTER COLUMN caller_subject SET NOT NULL,
                          ALTER COLUMN key_scope SET NOT NULL,
-                         ALTER COLUMN idempotency_key SET NOT NULL,
                          ALTER COLUMN receipt_expires_at SET NOT NULL;
                  END IF;
              END
@@ -347,11 +343,20 @@ pub async fn install_mutation_schema(
                  DROP CONSTRAINT IF EXISTS registry_idempotency_caller_shape;
              ALTER TABLE registry_internal.registry_idempotency
                  ADD CONSTRAINT registry_idempotency_caller_shape CHECK (
-                     caller_issuer <> '' AND caller_subject <> ''
-                     AND key_scope IN ('mutation', 'ingestion_chunk', 'hook_proposal')
-                     AND idempotency_key <> ''
-                     AND octet_length(idempotency_key) <= {MAX_IDEMPOTENCY_KEY_BYTES}
+                     key_scope IN ('mutation', 'ingestion_chunk', 'hook_proposal')
                      AND receipt_expires_at > created_at
+                     AND (
+                         (receipt_dropped_at IS NULL
+                             AND caller_issuer IS NOT NULL AND caller_subject IS NOT NULL
+                             AND idempotency_key IS NOT NULL
+                             AND caller_issuer <> '' AND caller_subject <> ''
+                             AND idempotency_key <> ''
+                             AND octet_length(idempotency_key) <= {MAX_IDEMPOTENCY_KEY_BYTES})
+                         OR
+                         (receipt_dropped_at IS NOT NULL
+                             AND caller_issuer IS NULL AND caller_subject IS NULL
+                             AND idempotency_key IS NULL)
+                     )
                  ),
                  ADD CONSTRAINT registry_idempotency_erasure_shape CHECK (
                      (response_body IS NULL) =

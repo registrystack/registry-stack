@@ -24,11 +24,11 @@ exactly what each one destroys.
 
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
-| `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key with the raw issuer, principal value, and key it was sent under, so a retry answers `409 idempotency.conflict`. |
-| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, the held idempotency responses, request revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that request, record history, and each spent idempotency key with the raw issuer, principal value, and key it was sent under, so a retry answers `409 idempotency.conflict`. |
+| `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
+| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, the held idempotency responses, request revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that request, record history, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
 | `request-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, request detail, and durable deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
-| `idempotency-retention erase-expired` | The held responses of spent idempotency keys whose receipt horizon has passed. | Every spent key, with its caller, binding, and times, so an exact retry is still refused rather than executed. |
+| `idempotency-retention erase-expired` | The held responses of spent idempotency keys whose receipt horizon has passed, and the raw issuer, principal value, and key each was sent under. | Every spent key, as a digest of its caller and key with its request binding and times, kept indefinitely, so a retry is still refused rather than executed. |
 
 `history rebaseline`, `request-retention list`, and `request-retention dry-run` remove nothing:
 the rebaseline writes one baseline commit, and the others only read. A saved export or a snapshot
@@ -347,9 +347,12 @@ configuration chooses another value between 1 and 365. A horizon is fixed when t
 so changing the setting applies to later writes only.
 
 Past the horizon an exact retry answers `410 idempotency.expired` and never executes, whether or not
-the held response is still stored. The key itself stays spent for good, with its caller, key,
-request binding, and times; only the held response is dropped. Schedule the drop on the operator
-host, under the migration authority and the exclusive registry lock the rest of this page uses:
+the held response is still stored. The key itself stays spent for good. The drop removes the held
+response and the raw issuer, principal value, and key, and keeps a digest of them with the request
+binding and times, so the same caller's exact retry still answers `410 idempotency.expired`, a
+changed retry answers `409 idempotency.conflict`, and another caller's identical key is that
+caller's own fresh key. Schedule the drop on the operator host, under the migration authority and
+the exclusive registry lock the rest of this page uses:
 
 ```sh
 bregctl idempotency-retention erase-expired \
@@ -357,17 +360,20 @@ bregctl idempotency-retention erase-expired \
   --before 2026-01-01T00:00:00Z
 ```
 
-The command drops every held response whose horizon passed at or before the cutoff, and none still
+The command drops every receipt whose horizon passed at or before the cutoff, and none still
 inside its horizon: a cutoff later than the database transaction time reaches only expired
-responses, and a cutoff in the future is refused. The runtime configuration path must be absolute.
+receipts, and a cutoff in the future is refused. A receipt whose held response `request-retention
+erase` already removed is dropped the same way, so its raw caller and key are cleared too. The runtime configuration path must be absolute.
 The report carries a count and no values, and a second run with the same cutoff drops nothing. The
 run verifies the expected registry identity, catalog, and readiness while it holds the registry
 transaction lock, and the configured runtime credential cannot perform it.
 
-A spent key keeps the raw issuer, principal value, and key it was sent under, beside the record
-history it produced, for as long as the registry keeps the row. `history erase` replaces the held
-responses that could replay erased revisions with refusal tombstones; it does not forget that the
-key was spent.
+Until its receipt is dropped, a spent key keeps the raw issuer, principal value, and key it was sent
+under, beside the record history it produced. Nothing clears them earlier, so schedule the drop to
+match `idempotency.receiptRetentionDays`. The digest row that keeps the key spent is never deleted:
+an immediate action's results and application hang off it, and revision history reads their
+provenance from them. `history erase` replaces the held responses that could replay erased
+revisions with refusal tombstones; it does not forget that the key was spent.
 
 {/* Evidence: crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, lock_and_load(), and
     drop_expired_receipts();
@@ -377,7 +383,8 @@ key was spent.
     crates/registry-breg/src/runtime_config.rs, IdempotencyConfig;
     crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;
     crates/registry-breg/tests/postgres_mutation.rs,
-    real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent. */}
+    real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent and
+    real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key. */}
 
 ## Keep the audit journal
 
@@ -401,8 +408,8 @@ can leave a request entry without a response.
 
 Operator commands follow the same rule. `evidence-retention erase-expired` records the cutoff it
 was given in its request entry and the number of assertions it erased in its response;
-`idempotency-retention erase-expired` records its cutoff and the number of held responses it
-dropped the same way.
+`idempotency-retention erase-expired` records its cutoff and the number of receipts it dropped
+the same way.
 `request-retention erase` deletes the external attachment objects before it records its response,
 which states how many objects still wait for deletion; when that deletion pass itself fails, the
 count is `null` and the command reports the failure. If the erasure committed but its response

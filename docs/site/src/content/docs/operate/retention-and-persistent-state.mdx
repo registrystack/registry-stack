@@ -202,13 +202,17 @@ payloads, and intake rows of one proposal version, and leaves the value-free lif
 request. It applies only where the request entity declared `retention.mode: operator_erase`; the
 default, `retain`, keeps every proposal version and refuses operator erasure.
 
-Spent idempotency keys live in `registry_internal.registry_idempotency`, one row per key, with the
-raw issuer, principal value, and key the write was sent under. Neither erasure removes that row:
-both drop or tombstone only the held response, so a retry answers `409 idempotency.conflict`. A
-held response stays replayable for `idempotency.receiptRetentionDays`, 7 days by default, and
-`bregctl idempotency-retention erase-expired` drops the ones past that horizon while the key stays
-spent. [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses)
-gives the command and its limits.
+Spent idempotency keys live in `registry_internal.registry_idempotency`, one row per key, found by
+a digest of the verified issuer, principal value, and key. Until its receipt is dropped, the row
+also holds those raw values. Neither erasure removes that row or its raw values: both drop or
+tombstone only the held response, so a retry answers `409 idempotency.conflict`. A held response
+stays replayable for `idempotency.receiptRetentionDays`, 7 days by default, and
+`bregctl idempotency-retention erase-expired` drops the ones past that horizon, together with the
+raw issuer, principal value, and key, while the digest keeps the key spent. The digest row is kept
+indefinitely, because the results and application of an immediate action hang off it and revision
+history reads its provenance from them.
+[Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses) gives
+the command and its limits.
 
 Audit retention uses the shared file writer described in [Audit retention](#audit-retention).
 History erasure leaves those files untouched. The database records committed erasure coverage in
@@ -251,6 +255,17 @@ every activation, and store secrets separately.
     crates/registry-breg/src/runtime_config.rs, DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
     and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS;
     crates/registry-bregctl/src/data_lifecycle.rs. */}
+
+## Spent idempotency keys
+
+Base Registry Engine, Registry Messaging, and Registry Scheduling each keep a row for every
+idempotency key a caller spent, so a retry is answered rather than run again. Until the product's
+receipt horizon, that row holds the raw issuer, subject, and key beside the held response. After
+each product's receipt horizon the raw caller and key are cleared and a digest keeps the key spent:
+a retry under it is still refused, and the same key sent by another caller is that caller's own
+fresh key. Base Registry Engine clears them when the operator runs
+`bregctl idempotency-retention erase-expired`; Messaging and Scheduling clear them in their
+retention sweeps.
 
 ## What remains outside the product
 

@@ -651,8 +651,13 @@ package, profile, or claims. The receipt is held for
 `idempotency.receiptRetentionDays` (7 days by default); after that the retry
 returns `410 idempotency.expired`. A package change, an erased response, or an
 expired receipt can prevent replay, but never makes the consumed key eligible
-to execute again. A different key is a separate invocation; configure entity
-uniqueness constraints for domain-level duplicate prevention.
+to execute again. When the operator runs `bregctl idempotency-retention
+erase-expired`, an expired receipt loses its held response and the raw issuer,
+principal, and key; the consumed key stays spent by its digest, and the row is
+kept indefinitely with the action results and application it owns, which
+revision history reads for provenance. A different key is a separate
+invocation; configure entity uniqueness constraints for domain-level duplicate
+prevention.
 
 The condition read does not grant ordinary `GET`, list, lookup, field
 projection, or revision-history access. Missing and out-of-bound exact targets
