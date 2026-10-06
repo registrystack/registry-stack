@@ -128,6 +128,25 @@ test('constructors reject unsupported fields and unsafe integers', () => {
   }), (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration');
 });
 
+test('a configuration value the sanitizer refuses is a configuration error', () => {
+  for (const [label, config] of [
+    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a non-finite number', { baseUrl, maxResponseBytes: Infinity }],
+    ['an undefined member', { baseUrl, userAgent: undefined }],
+    ['a function', { baseUrl, userAgent: () => 'breg-test' }],
+    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a proxy', new Proxy({ baseUrl }, {})],
+    ['no configuration', undefined],
+  ]) {
+    assert.throws(() => new BaseRegistryClient(config), (error) => {
+      assert.ok(error instanceof BaseRegistryClientError, label);
+      assert.equal(error.kind, 'configuration', label);
+      assert.equal(error.outcomeUnknown, false, label);
+      return true;
+    });
+  }
+});
+
 test('nullable private-key JWT durations use provider defaults', () => {
   const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const clientKey = privateKey.export({ format: 'jwk' });

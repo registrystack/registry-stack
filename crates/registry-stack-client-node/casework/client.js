@@ -40,38 +40,38 @@ function normalized(error, fallbackKind) {
   return error;
 }
 
-function cloneJson(value, budget, depth) {
-  if (depth > MAX_JSON_DEPTH || ++budget.nodes > MAX_JSON_NODES) throw normalized({}, 'invalid_request');
+function cloneJson(value, budget, depth, kind) {
+  if (depth > MAX_JSON_DEPTH || ++budget.nodes > MAX_JSON_NODES) throw normalized({}, kind);
   if (value === null || typeof value === 'boolean') return value;
   if (typeof value === 'string') {
     budget.bytes += Buffer.byteLength(value, 'utf8');
-    if (budget.bytes > MAX_JSON_STRING_BYTES) throw normalized({}, 'invalid_request');
+    if (budget.bytes > MAX_JSON_STRING_BYTES) throw normalized({}, kind);
     return value;
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
-      throw normalized({}, 'invalid_request');
+      throw normalized({}, kind);
     }
     return value;
   }
   if (value === undefined || typeof value !== 'object' || isProxy(value)) {
-    throw normalized({}, 'invalid_request');
+    throw normalized({}, kind);
   }
   const array = Array.isArray(value);
   const prototype = Object.getPrototypeOf(value);
   if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) {
-    throw normalized({}, 'invalid_request');
+    throw normalized({}, kind);
   }
-  if (budget.active.has(value)) throw normalized({}, 'invalid_request');
+  if (budget.active.has(value)) throw normalized({}, kind);
   budget.active.add(value);
   try {
-    if (array) return value.map((member) => cloneJson(member, budget, depth + 1));
+    if (array) return value.map((member) => cloneJson(member, budget, depth + 1, kind));
     const result = Object.create(null);
     for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') throw normalized({}, 'invalid_request');
+      if (typeof key !== 'string') throw normalized({}, kind);
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !Object.hasOwn(descriptor, 'value')) throw normalized({}, 'invalid_request');
-      if (descriptor.enumerable) result[key] = cloneJson(descriptor.value, budget, depth + 1);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) throw normalized({}, kind);
+      if (descriptor.enumerable) result[key] = cloneJson(descriptor.value, budget, depth + 1, kind);
     }
     return result;
   } finally {
@@ -79,8 +79,10 @@ function cloneJson(value, budget, depth) {
   }
 }
 
-function sanitize(value) {
-  return cloneJson(value, { nodes: 0, bytes: 0, active: new WeakSet() }, 0);
+// A refusal is reported as `kind`: `configuration` for the constructor's
+// settings, `invalid_request` for a method's arguments.
+function sanitize(value, kind) {
+  return cloneJson(value, { nodes: 0, bytes: 0, active: new WeakSet() }, 0, kind);
 }
 
 const NativeCaseworkClient = native.CaseworkClient;
@@ -88,7 +90,7 @@ const NativeCaseworkClient = native.CaseworkClient;
 class CaseworkClient {
   constructor(config) {
     try {
-      this.native = new NativeCaseworkClient(sanitize(config));
+      this.native = new NativeCaseworkClient(sanitize(config, 'configuration'));
     } catch (error) {
       throw normalized(error, 'configuration');
     }
@@ -171,7 +173,7 @@ for (const [method, jsonIndexes] of [
   CaseworkClient.prototype[method] = function (...args) {
     try {
       for (const index of jsonIndexes) {
-        if (args[index] !== undefined && args[index] !== null) args[index] = sanitize(args[index]);
+        if (args[index] !== undefined && args[index] !== null) args[index] = sanitize(args[index], 'invalid_request');
       }
       return this.native[method](...args).catch((error) => { throw normalized(error); });
     } catch (error) {
