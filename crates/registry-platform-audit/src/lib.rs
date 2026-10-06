@@ -63,9 +63,10 @@ impl AuditProfile {
     /// Production profile backed by caller-owned master secret bytes.
     ///
     /// The bytes are used exactly as supplied, without trimming or decoding,
-    /// and are zeroized after the identifier-hash sub-key is derived. This is
-    /// the byte-backed counterpart to [`Self::production_from_env`] for file
-    /// and external secret providers.
+    /// and are zeroized after the identifier-hash sub-key is derived. The
+    /// identifier key is an HKDF-derived sub-key of the master secret, bound to
+    /// a per-purpose `info` label (AUDIT-03), so a leak of the derived sub-key
+    /// does not reveal the master.
     pub fn production_from_secret_bytes(
         master_secret: Zeroizing<Vec<u8>>,
     ) -> Result<Self, AuditError> {
@@ -74,17 +75,6 @@ impl AuditProfile {
             IDENTIFIER_KEY_DERIVATION_INFO,
         )?);
         Ok(Self { key_hasher })
-    }
-
-    /// Production profile backed by the HMAC secret in `env_var_name`.
-    ///
-    /// The identifier key is an HKDF-derived sub-key of the master env secret,
-    /// bound to a per-purpose `info` label (AUDIT-03). A leak of the derived
-    /// sub-key does not reveal the master.
-    pub fn production_from_env(env_var_name: &str) -> Result<Self, AuditError> {
-        Ok(Self {
-            key_hasher: AuditKeyHasher::from_env_derived(env_var_name)?,
-        })
     }
 
     /// Explicit test and local-development profile.
@@ -260,15 +250,6 @@ impl AuditKeyHasher {
         )?))
     }
 
-    /// Load an identifier hasher whose key is an HKDF-derived sub-key of the
-    /// master env secret, bound to the identifier `info` label (AUDIT-03).
-    pub fn from_env_derived(env_var_name: &str) -> Result<Self, AuditError> {
-        Ok(Self::Keyed(derive_subkey_from_env(
-            env_var_name,
-            IDENTIFIER_KEY_DERIVATION_INFO,
-        )?))
-    }
-
     /// Explicit unkeyed mode for tests and local development.
     #[must_use]
     pub fn unkeyed_dev_only() -> Self {
@@ -386,7 +367,6 @@ pub mod redact {
     #[derive(Debug, Clone, Default)]
     pub struct QueryRedactor {
         sensitive_fields: BTreeSet<String>,
-        hasher: Option<AuditKeyHasher>,
     }
 
     impl QueryRedactor {
@@ -402,20 +382,6 @@ pub mod redact {
                     .into_iter()
                     .map(|field| field.into().to_ascii_lowercase())
                     .collect(),
-                hasher: None,
-            }
-        }
-
-        /// Construct a redactor that hashes sensitive lookup values.
-        #[must_use]
-        pub fn with_hasher<I, S>(hasher: AuditKeyHasher, sensitive_fields: I) -> Self
-        where
-            I: IntoIterator<Item = S>,
-            S: Into<String>,
-        {
-            Self {
-                hasher: Some(hasher),
-                ..Self::new(sensitive_fields)
             }
         }
 
@@ -440,23 +406,18 @@ pub mod redact {
             for pair in query.split('&').filter(|pair| !pair.is_empty()) {
                 let (raw_name, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
                 let name = decode_query_component(raw_name)?;
-                let value = decode_query_component(raw_value)?;
+                // The value is decoded only to refuse an invalid encoding; no
+                // part of it is recorded.
+                decode_query_component(raw_value)?;
                 let (field, op) = split_field_operator(&name);
                 let field_key = field.to_ascii_lowercase();
 
-                let entry = if is_secret_param_name(field) {
-                    json!({ "op": "redacted" })
-                } else if self.sensitive_fields.contains(&field_key) {
-                    match &self.hasher {
-                        Some(hasher) => json!({
-                            "op": op,
-                            "value_hash": hasher.sensitive_value_hash(field, &value),
-                        }),
-                        None => json!({ "op": "redacted" }),
-                    }
-                } else {
-                    json!({ "op": op })
-                };
+                let entry =
+                    if is_secret_param_name(field) || self.sensitive_fields.contains(&field_key) {
+                        json!({ "op": "redacted" })
+                    } else {
+                        json!({ "op": op })
+                    };
 
                 out.insert(name, entry);
             }
@@ -528,32 +489,12 @@ fn hkdf_expand_sha256(prk: &[u8], info: &[u8]) -> Vec<u8> {
     derived
 }
 
-/// Derive a domain-separated [`AuditHashSecret`] sub-key from a master env
-/// secret using [`hkdf_expand_sha256`] (AUDIT-03).
+/// Derive one domain-separated [`AuditHashSecret`] sub-key from exact
+/// caller-owned master bytes using [`hkdf_expand_sha256`] (AUDIT-03).
 ///
 /// A leak of one derived sub-key reveals neither the master secret nor the
 /// sibling sub-key, because each is a one-way HMAC over an independent `info`
 /// label.
-fn derive_subkey_from_env(env_var_name: &str, info: &[u8]) -> Result<AuditHashSecret, AuditError> {
-    if env_var_name.trim().is_empty() {
-        return Err(AuditError::EmptyEnvVarName);
-    }
-    let value = Zeroizing::new(read_secret_env(env_var_name)?);
-    if value.is_empty() {
-        return Err(AuditError::EmptySecret {
-            name: env_var_name.to_string(),
-        });
-    }
-    derive_subkey_from_secret_bytes(value.as_bytes(), info).map_err(|error| match error {
-        AuditError::WeakSecret { min_bytes, .. } => AuditError::WeakSecret {
-            name: env_var_name.to_string(),
-            min_bytes,
-        },
-        error => error,
-    })
-}
-
-/// Derive one domain-separated sub-key from exact caller-owned master bytes.
 ///
 /// The public byte-backed profile constructors retain the `Zeroizing` owner
 /// while this helper borrows the bytes, so both success and failure scrub the
@@ -709,11 +650,8 @@ mod tests {
         secret.extend_from_slice(MARKER.as_bytes());
         env::set_var(NAME, OsString::from_vec(secret));
 
-        let errors = [
-            AuditKeyHasher::from_env(NAME).expect_err("identifier loader rejects non-Unicode"),
-            derive_subkey_from_env(NAME, IDENTIFIER_KEY_DERIVATION_INFO)
-                .expect_err("derived loader rejects non-Unicode"),
-        ];
+        let errors =
+            [AuditKeyHasher::from_env(NAME).expect_err("identifier loader rejects non-Unicode")];
         env::remove_var(NAME);
 
         for error in errors {
@@ -824,19 +762,14 @@ mod tests {
 
     #[test]
     fn query_redactor_redacts_secrets_and_hashes_sensitive_fields() {
-        let redactor =
-            QueryRedactor::with_hasher(AuditKeyHasher::unkeyed_dev_only(), ["email", "person_id"]);
+        let redactor = QueryRedactor::new(["email", "person_id"]);
         let redacted = redactor
             .redact_query("email=jeremi%40example.test&token=secret&limit=10&person_id.gte=abc");
 
         assert_eq!(redacted["token"]["op"], "redacted");
         assert_eq!(redacted["limit"]["op"], "eq");
-        assert_eq!(redacted["email"]["op"], "eq");
-        assert!(redacted["email"]["value_hash"]
-            .as_str()
-            .expect("hash")
-            .starts_with(UNKEYED_HASH_PREFIX));
-        assert_eq!(redacted["person_id.gte"]["op"], "gte");
+        assert_eq!(redacted["email"]["op"], "redacted");
+        assert_eq!(redacted["person_id.gte"]["op"], "redacted");
         assert!(!redacted.to_string().contains("jeremi"));
         assert!(!redacted.to_string().contains("secret"));
         assert!(!redacted.to_string().contains("abc"));
@@ -887,15 +820,13 @@ mod tests {
 
     #[test]
     fn production_profile_derives_an_identifier_key_distinct_from_the_master() {
-        // AUDIT-03: the identifier key is a derived sub-key of the master env
+        // AUDIT-03: the identifier key is a derived sub-key of the master
         // secret and never the master itself.
-        let name = "REGISTRY_PLATFORM_AUDIT_KDF_TEST_SECRET";
         let master = "0123456789abcdef0123456789abcdef-master";
-        env::set_var(name, master);
 
         let ident_key =
-            derive_subkey_from_env(name, IDENTIFIER_KEY_DERIVATION_INFO).expect("identifier key");
-        env::remove_var(name);
+            derive_subkey_from_secret_bytes(master.as_bytes(), IDENTIFIER_KEY_DERIVATION_INFO)
+                .expect("identifier key");
 
         assert_ne!(ident_key.as_bytes(), master.as_bytes());
         // HKDF-Expand over SHA-256 yields a single 32-byte block.
@@ -904,17 +835,16 @@ mod tests {
 
     #[test]
     fn production_profile_key_derivation_is_deterministic_and_stable() {
-        // AUDIT-03: the same env secret must yield the same derived sub-key, so
-        // keyed references stay correlatable across process restarts.
-        let name = "REGISTRY_PLATFORM_AUDIT_KDF_STABLE_SECRET";
+        // AUDIT-03: the same master secret must yield the same derived sub-key,
+        // so keyed references stay correlatable across process restarts.
         let master = "stable-master-secret-0123456789abcdef";
-        env::set_var(name, master);
 
         let ident_a =
-            derive_subkey_from_env(name, IDENTIFIER_KEY_DERIVATION_INFO).expect("identifier a");
+            derive_subkey_from_secret_bytes(master.as_bytes(), IDENTIFIER_KEY_DERIVATION_INFO)
+                .expect("identifier a");
         let ident_b =
-            derive_subkey_from_env(name, IDENTIFIER_KEY_DERIVATION_INFO).expect("identifier b");
-        env::remove_var(name);
+            derive_subkey_from_secret_bytes(master.as_bytes(), IDENTIFIER_KEY_DERIVATION_INFO)
+                .expect("identifier b");
 
         assert_eq!(ident_a.as_bytes(), ident_b.as_bytes());
 
@@ -985,35 +915,6 @@ mod tests {
                 "sha256:0f171351475ceebcf948aa13ede666b8e6d568bc3bf15edd5d1710cd32ed9d82"
                     .to_string()
             )
-        );
-    }
-
-    #[test]
-    fn env_and_byte_backed_profiles_derive_the_same_identifier_hashes() {
-        let name = "REGISTRY_PLATFORM_AUDIT_ENV_BYTES_PARITY_SECRET";
-        let master = "env-bytes-parity-master-0123456789abcdef";
-        env::set_var(name, master);
-        let from_env = AuditProfile::production_from_env(name).expect("env profile");
-        env::remove_var(name);
-        let from_bytes =
-            AuditProfile::production_from_secret_bytes(Zeroizing::new(master.as_bytes().to_vec()))
-                .expect("byte-backed profile");
-
-        assert_eq!(
-            from_env
-                .key_hasher()
-                .audit_reference_hash("class", "scope", "canonical")
-                .expect("env reference hash"),
-            from_bytes
-                .key_hasher()
-                .audit_reference_hash("class", "scope", "canonical")
-                .expect("byte reference hash")
-        );
-        assert_eq!(
-            from_env.key_hasher().sensitive_value_hash("field", "value"),
-            from_bytes
-                .key_hasher()
-                .sensitive_value_hash("field", "value")
         );
     }
 
