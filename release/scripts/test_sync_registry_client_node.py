@@ -15,7 +15,7 @@ PLATFORM_TRIPLES = {
     "linux-arm64-gnu": "aarch64-unknown-linux-gnu",
     "linux-x64-gnu": "x86_64-unknown-linux-gnu",
 }
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
 
 
 def load_module():
@@ -90,6 +90,10 @@ MESSAGING_LICENCES = (
     "crates/registry-messaging-client-node/LICENSE",
     "crates/registry-messaging-client-py/LICENSE",
 )
+SCHEDULING_LICENCES = (
+    "crates/registry-scheduling-client-node/LICENSE",
+    "crates/registry-scheduling-client-py/LICENSE",
+)
 
 
 class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
@@ -128,6 +132,13 @@ class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
         # Both Messaging bindings compare their licence copies with the root
         # LICENSE in their own checks, so the same gate holds them.
         for licence in MESSAGING_LICENCES:
+            with self.subTest(licence=licence):
+                self.assertIn(licence, self.gated)
+
+    def test_the_scheduling_binding_licences_are_gated(self) -> None:
+        # Both Scheduling bindings compare their licence copies with the root
+        # LICENSE in their own checks, so the same gate holds them.
+        for licence in SCHEDULING_LICENCES:
             with self.subTest(licence=licence):
                 self.assertIn(licence, self.gated)
 

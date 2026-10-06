@@ -233,6 +233,7 @@ updates:
       - "/crates/registry-discovery-client-node"
       - "/crates/registry-evidence-client-node"
       - "/crates/registry-messaging-client-node"
+      - "/crates/registry-scheduling-client-node"
       - "/crates/registry-stack-client-node"
     schedule:
       interval: monthly

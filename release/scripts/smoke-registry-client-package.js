@@ -24,4 +24,10 @@ if (Object.hasOwn(client, 'messaging')) {
   assert.ok(new client.messaging.MessagingClient({ baseUrl: 'https://messaging.invalid' }));
 }
 
+// Scheduling joins published packages in v0.40.0, under the same rule.
+if (Object.hasOwn(client, 'scheduling')) {
+  assert.strictEqual(typeof client.scheduling.SchedulingClient, 'function');
+  assert.ok(new client.scheduling.SchedulingClient({ baseUrl: 'https://scheduling.invalid' }));
+}
+
 console.log('Unified Node Registry client package smoke passed');

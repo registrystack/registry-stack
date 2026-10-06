@@ -51,6 +51,15 @@ class ReleaseRosterTest(TestCase):
             ):
                 self.assertFalse(helper((1, 0, 0)))
 
+    def test_unified_clients_carry_scheduling_from_v0_40(self) -> None:
+        self.assertEqual((0, 40, 0), release_roster.SCHEDULING_CLIENT_FIRST_RELEASE)
+        self.assertFalse(release_roster.scheduling_client_in_release((0, 39, 0)))
+        self.assertFalse(release_roster.scheduling_client_in_release((0, 39, 99)))
+        self.assertTrue(release_roster.scheduling_client_in_release((0, 40, 0)))
+        self.assertTrue(release_roster.scheduling_client_in_release((1, 0, 0)))
+        with mock.patch.object(release_roster, "SCHEDULING_CLIENT_FIRST_RELEASE", None):
+            self.assertFalse(release_roster.scheduling_client_in_release((1, 0, 0)))
+
     def test_relay_is_retired_from_v0_39(self) -> None:
         self.assertEqual((0, 39, 0), release_roster.RELAY_RETIREMENT_RELEASE)
         self.assertTrue(release_roster.relay_in_release((0, 38, 0)))
@@ -74,6 +83,14 @@ class ReleaseRosterTest(TestCase):
                         result = release_roster.main([command, version])
                     self.assertEqual(0, result)
                     self.assertEqual(expected, stdout.getvalue())
+
+        for version, expected in (("0.39.9", "false\n"), ("v0.40.0", "true\n")):
+            with self.subTest(command="scheduling-client-in-release", version=version):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                    result = release_roster.main(["scheduling-client-in-release", version])
+                self.assertEqual(0, result)
+                self.assertEqual(expected, stdout.getvalue())
 
         for version, expected in (("0.38.99", "true\n"), ("v0.39.0", "false\n")):
             with self.subTest(command="relay-in-release", version=version):

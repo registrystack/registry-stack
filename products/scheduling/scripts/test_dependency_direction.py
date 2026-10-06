@@ -15,6 +15,9 @@ def metadata(edges: dict[str, list[str]]) -> dict:
     names = {
         "core": "registry-scheduling-core",
         "client": "registry-scheduling-client",
+        "client-node": "registry-scheduling-client-node",
+        "client-py": "registry-scheduling-client-py",
+        "stack-client": "registry-stack-client",
         "runtime": "registry-scheduling",
         "ctl": "registry-schedulingctl",
         "breg-client": "registry-breg-client",
@@ -154,6 +157,98 @@ class DependencyDirectionTests(unittest.TestCase):
             failures,
         )
 
+
+    def test_bindings_and_the_unified_client_beside_other_products_are_accepted(self):
+        graph = metadata(
+            {
+                "core": ["serde"],
+                "client": ["core"],
+                "client-node": ["client", "serde"],
+                "client-py": ["client", "serde"],
+                "stack-client": ["client", "breg-client", "evidence-client"],
+                "runtime": ["core"],
+                "ctl": ["runtime", "core"],
+                "breg-client": [],
+                "casework-core": [],
+                "evidence-client": [],
+                "platform": [],
+                "serde": [],
+            }
+        )
+        self.assertEqual(MODULE.violations(graph), [])
+
+    def test_a_binding_reaching_the_runtime_or_tooling_is_rejected(self):
+        # The tooling itself depends on the runtime, so reaching it reaches both.
+        for binding, name in (
+            ("client-node", "registry-scheduling-client-node"),
+            ("client-py", "registry-scheduling-client-py"),
+        ):
+            for runtime, reached in (
+                ("runtime", "registry-scheduling"),
+                ("ctl", "registry-scheduling, registry-schedulingctl"),
+            ):
+                with self.subTest(binding=binding, runtime=runtime):
+                    graph = metadata(
+                        {
+                            "core": ["serde"],
+                            "client": ["core"],
+                            binding: ["client", runtime],
+                            "runtime": ["core"],
+                            "ctl": ["runtime", "core"],
+                            "serde": [],
+                        }
+                    )
+                    failures = "\n".join(MODULE.violations(graph))
+                    self.assertIn(
+                        f"{name} transitively depends on runtime crate(s): {reached}",
+                        failures,
+                    )
+
+    def test_a_binding_reaching_another_product_is_rejected(self):
+        for binding, name in (
+            ("client-node", "registry-scheduling-client-node"),
+            ("client-py", "registry-scheduling-client-py"),
+        ):
+            with self.subTest(binding=binding):
+                graph = metadata(
+                    {
+                        "core": ["serde"],
+                        "client": ["core"],
+                        binding: ["client", "casework-core"],
+                        "casework-core": [],
+                        "serde": [],
+                    }
+                )
+                failures = "\n".join(MODULE.violations(graph))
+                self.assertIn(
+                    f"{name} transitively depends on other-product package(s): "
+                    "registry-casework-core",
+                    failures,
+                )
+
+    def test_the_unified_client_reaching_the_scheduling_runtime_is_rejected(self):
+        for runtime, reached in (
+            ("runtime", "registry-scheduling"),
+            ("ctl", "registry-scheduling, registry-schedulingctl"),
+        ):
+            with self.subTest(runtime=runtime):
+                graph = metadata(
+                    {
+                        "core": ["serde"],
+                        "client": ["core"],
+                        "stack-client": ["client", "breg-client", runtime],
+                        "runtime": ["core"],
+                        "ctl": ["runtime", "core"],
+                        "breg-client": [],
+                        "serde": [],
+                    }
+                )
+                failures = "\n".join(MODULE.violations(graph))
+                self.assertIn(
+                    "registry-stack-client transitively depends on Scheduling runtime "
+                    f"package(s): {reached}",
+                    failures,
+                )
 
 if __name__ == "__main__":
     unittest.main()

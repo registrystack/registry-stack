@@ -1,4 +1,4 @@
-import { breg, casework, discovery, evidence, messaging } from '..'
+import { breg, casework, discovery, evidence, messaging, scheduling } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
 const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
@@ -10,6 +10,7 @@ const evidenceClient = new evidence.EvidenceClient({
 })
 const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
 const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/' })
+const schedulingClient = new scheduling.SchedulingClient({ baseUrl: 'https://scheduling.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
 breg.verifyWebhookDelivery({
@@ -45,6 +46,11 @@ void messagingClient.submit('header.payload.signature', 'reminder-1', {
   to: { phone: '+15550100' },
   content: { text: 'Appointment tomorrow' },
 })
+void schedulingClient.availability('header.payload.signature', 'clinic-visit', {
+  start: '2026-10-06T08:00:00Z',
+  limit: 10,
+})
+void schedulingClient.createAppointment('header.payload.signature', 'book-1', { hold: 'hold-1' })
 
 // The progressive request surface refines the generated declaration: it names
 // the request shape and discriminates the result on its response format.
@@ -66,6 +72,19 @@ type EvidenceHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof evidence>>
 type BregHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof breg>>
 type CaseworkHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof casework>>
 type MessagingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof messaging>>
+type SchedulingHasNoLoaderTarget = Assert<HasNoLoaderTarget<typeof scheduling>>
 
 // @ts-expect-error Product query vocabularies remain distinct.
 bregClient.listRecords('people', { pageSize: 25 })
+// @ts-expect-error A Scheduling appointment confirms a hold or books directly, never both.
+void schedulingClient.createAppointment('header.payload.signature', 'book-2', {
+  hold: 'hold-1',
+  admission: {
+    offering: 'clinic-visit',
+    start: '2026-10-06T08:00:00Z',
+    party: { recipients: 1, attendees: 1 },
+    policyRevision: 1,
+    capabilities: [],
+    prerequisites: [],
+  },
+})

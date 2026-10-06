@@ -206,7 +206,7 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
 
     def test_reuses_compiler_paths_for_all_products_in_one_job(self) -> None:
         compilers = []
-        for client in ("discovery", "evidence", "breg", "casework", "messaging"):
+        for client in ("discovery", "evidence", "breg", "casework", "messaging", "scheduling"):
             self.make_client(client, "aarch64-unknown-linux-gnu", "linux-arm64-gnu")
             result = self.run_build(client=client)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -247,7 +247,7 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
         result = self.run_build(client="relay")
         self.assertEqual(result.returncode, 2)
         self.assertIn(
-            "client must be discovery, evidence, breg, casework, or messaging",
+            "client must be discovery, evidence, breg, casework, messaging, or scheduling",
             result.stderr,
         )
         self.assertFalse(self.napi_log.exists())

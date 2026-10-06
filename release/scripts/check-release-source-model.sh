@@ -85,6 +85,9 @@ require_path "registry-casework Python client binding" "${stack_root}/crates/reg
 require_path "registry-messaging client crate" "${stack_root}/crates/registry-messaging-client"
 require_path "registry-messaging Node client binding" "${stack_root}/crates/registry-messaging-client-node"
 require_path "registry-messaging Python client binding" "${stack_root}/crates/registry-messaging-client-py"
+require_path "registry-scheduling client crate" "${stack_root}/crates/registry-scheduling-client"
+require_path "registry-scheduling Node client binding" "${stack_root}/crates/registry-scheduling-client-node"
+require_path "registry-scheduling Python client binding" "${stack_root}/crates/registry-scheduling-client-py"
 require_path "unified Node client package" "${stack_root}/crates/registry-stack-client-node"
 require_path "unified Python client package" "${stack_root}/crates/registry-stack-client-py"
 if [[ "${stack_git_root}" != "${stack_root}" ]]; then

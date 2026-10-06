@@ -39,6 +39,12 @@ def main() -> None:
             ("messaging", registry_client.messaging.MessagingClient),
             ("messaging", registry_client.messaging.MessagingClientError),
         )
+    # Scheduling joins published wheels in v0.40.0, under the same rule.
+    if hasattr(registry_client, "scheduling"):
+        public_types += (
+            ("scheduling", registry_client.scheduling.SchedulingClient),
+            ("scheduling", registry_client.scheduling.SchedulingClientError),
+        )
     for product, value in public_types:
         expected_module = f"registry_client.{product}"
         if value.__module__ != expected_module:
@@ -71,6 +77,12 @@ def main() -> None:
         )
         if messaging_client is None:
             raise SystemExit("Messaging client construction returned no client")
+    if hasattr(registry_client, "scheduling"):
+        scheduling_client = registry_client.scheduling.SchedulingClient(
+            base_url="https://scheduling.invalid",
+        )
+        if scheduling_client is None:
+            raise SystemExit("Scheduling client construction returned no client")
     print("Unified Python Registry client package smoke passed")
 
 

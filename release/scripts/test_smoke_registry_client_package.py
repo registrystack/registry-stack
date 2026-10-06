@@ -27,6 +27,7 @@ NAMESPACES = {
     "discovery": ("DiscoveryClient", "DiscoveryClientError"),
     "evidence": ("EvidenceClient", "EvidenceClientError"),
     "messaging": ("MessagingClient", "MessagingClientError"),
+    "scheduling": ("SchedulingClient", "SchedulingClientError"),
 }
 
 
@@ -95,6 +96,18 @@ class SmokeRegistryClientPackageTest(unittest.TestCase):
             raise RuntimeError("the messaging extension module failed to load")
 
         self.package.messaging.MessagingClient.__init__ = refuse
+        with self.assertRaises(RuntimeError):
+            self.run_smoke()
+
+    def test_a_historical_wheel_without_scheduling_passes(self) -> None:
+        delattr(self.package, "scheduling")
+        self.assertIn("smoke passed", self.run_smoke())
+
+    def test_a_scheduling_extension_that_cannot_load_is_refused(self) -> None:
+        def refuse(self: object, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("the scheduling extension module failed to load")
+
+        self.package.scheduling.SchedulingClient.__init__ = refuse
         with self.assertRaises(RuntimeError):
             self.run_smoke()
 

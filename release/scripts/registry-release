@@ -115,6 +115,10 @@ NODE_CLIENT_RELEASE_SURFACES = (
         "crates/registry-messaging-client-node",
         "@registrystack/messaging-client-native",
     ),
+    (
+        "crates/registry-scheduling-client-node",
+        "@registrystack/scheduling-client-native",
+    ),
 )
 PYTHON_CLIENT_RELEASE_SURFACES = (
     (
@@ -141,6 +145,11 @@ PYTHON_CLIENT_RELEASE_SURFACES = (
         "crates/registry-messaging-client-py",
         "registry-messaging-client-native",
         "messaging-client-sdk",
+    ),
+    (
+        "crates/registry-scheduling-client-py",
+        "registry-scheduling-client-native",
+        "scheduling-client-sdk",
     ),
 )
 FUZZ_LOCK_RELEASE_SURFACE_PATHS = (

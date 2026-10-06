@@ -6320,6 +6320,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-scheduling-client-node"
+version = "0.40.0"
+dependencies = [
+ "chrono",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-scheduling-client",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "registry-scheduling-client-py"
+version = "0.40.0"
+dependencies = [
+ "chrono",
+ "pyo3",
+ "pyo3-build-config",
+ "registry-scheduling-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "registry-scheduling-core"
 version = "0.40.0"
 dependencies = [
@@ -6362,6 +6390,7 @@ dependencies = [
 name = "registry-stack-client"
 version = "0.40.0"
 dependencies = [
+ "chrono",
  "registry-breg-client",
  "registry-casework-client",
  "registry-discovery-client",
@@ -6369,6 +6398,7 @@ dependencies = [
  "registry-messaging-client",
  "registry-platform-httputil",
  "registry-record",
+ "registry-scheduling-client",
  "serde_json",
 ]
 

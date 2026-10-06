@@ -5,4 +5,5 @@ module.exports = {
   breg: require('./breg-client.darwin-arm64.node'),
   casework: require('./casework-client.darwin-arm64.node'),
   messaging: require('./messaging-client.darwin-arm64.node'),
+  scheduling: require('./scheduling-client.darwin-arm64.node'),
 };

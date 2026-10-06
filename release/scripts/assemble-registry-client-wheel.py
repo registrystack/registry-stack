@@ -26,7 +26,7 @@ from macos_fips_packaging import bundle_macos_fips
 
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 
@@ -118,6 +118,11 @@ def main() -> int:
         action="store_true",
         help="include Messaging in an explicit local integration before its first release",
     )
+    parser.add_argument(
+        "--include-scheduling",
+        action="store_true",
+        help="include Scheduling in an explicit local integration before its first release",
+    )
     for product in PRODUCTS:
         parser.add_argument(f"--{product}-wheel", type=Path, required=True)
     args = parser.parse_args()
@@ -138,6 +143,13 @@ def main() -> int:
         parser.error(
             "this checkout contains the Messaging Python facade; versions before "
             "its first release require --include-messaging for local integration; use the release tag for published bytes"
+        )
+    if not client_registry.includes_scheduling(
+        args.version, include_scheduling=args.include_scheduling
+    ):
+        parser.error(
+            "this checkout contains the Scheduling Python facade; versions before "
+            "its first release require --include-scheduling for local integration; use the release tag for published bytes"
         )
 
     configured_version = None

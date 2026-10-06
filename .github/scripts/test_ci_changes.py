@@ -1108,6 +1108,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-discovery-client-py/src/lib.rs",
             "crates/registry-evidence-client-py/src/lib.rs",
             "crates/registry-messaging-client-py/src/lib.rs",
+            "crates/registry-scheduling-client-py/src/lib.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(
@@ -1901,6 +1902,34 @@ class CiChangesTest(unittest.TestCase):
                 self.workspace, ("crates/registry-messaging-client-py/src/lib.rs",)
             )["evidence_tutorial"]
         )
+
+    def test_scheduling_bindings_run_the_native_client_job(self) -> None:
+        # The Scheduling bindings are covered only by the shared native-client
+        # job, and the Python one also ships in the assembled package the
+        # application tutorial imports.
+        for path in (
+            "crates/registry-scheduling-client-node/src/lib.rs",
+            "crates/registry-scheduling-client-py/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["client_bindings"])
+                self.assertTrue(outputs["scheduling_contracts"])
+        self.assertTrue(
+            classify(
+                self.workspace, ("crates/registry-scheduling-client-py/src/lib.rs",)
+            )["evidence_tutorial"]
+        )
+
+    def test_a_scheduling_client_change_also_runs_the_binding_job(self) -> None:
+        # Both bindings are Cargo path-dependents of the Rust client, so a
+        # client change can alter the native surface the packages wrap.
+        outputs = classify(
+            self.workspace, ("crates/registry-scheduling-client/src/lib.rs",)
+        )
+        self.assertTrue(outputs["client_bindings"])
+        self.assertIn("registry-scheduling-client-node", outputs["rust_packages"])
+        self.assertIn("registry-scheduling-client-py", outputs["rust_packages"])
 
     def test_an_sdk_or_verifier_change_also_runs_the_binding_job(self) -> None:
         # Both bindings are Cargo path-dependents of the SDK and the verifier,

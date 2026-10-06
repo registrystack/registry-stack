@@ -131,6 +131,14 @@ def includes_messaging(version: str, *, include_messaging: bool = False) -> bool
     )
 
 
+def includes_scheduling(version: str, *, include_scheduling: bool = False) -> bool:
+    """Select Scheduling at release, or explicitly for local integration checks."""
+
+    return include_scheduling or release_roster.scheduling_client_in_release(
+        release_version(version)
+    )
+
+
 def includes_relay(version: str) -> bool:
     """Keep Relay only when validating an immutable historical client release."""
 
@@ -150,6 +158,7 @@ def native_binary_stems(
     *,
     include_casework: bool = False,
     include_messaging: bool = False,
+    include_scheduling: bool = False,
 ) -> tuple[str, ...]:
     definition = client_definition(client)
     stems = definition.native_binary_stems
@@ -163,11 +172,19 @@ def native_binary_stems(
         version, include_messaging=include_messaging
     ):
         stems += ("messaging-client",)
+    if client == "stack" and includes_scheduling(
+        version, include_scheduling=include_scheduling
+    ):
+        stems += ("scheduling-client",)
     return stems
 
 
 def stack_python_namespaces(
-    version: str, *, include_casework: bool = False, include_messaging: bool = False
+    version: str,
+    *,
+    include_casework: bool = False,
+    include_messaging: bool = False,
+    include_scheduling: bool = False,
 ) -> tuple[str, ...]:
     namespaces = STACK_PYTHON_NAMESPACES
     if includes_relay(version):
@@ -176,6 +193,8 @@ def stack_python_namespaces(
         namespaces += ("casework",)
     if includes_messaging(version, include_messaging=include_messaging):
         namespaces += ("messaging",)
+    if includes_scheduling(version, include_scheduling=include_scheduling):
+        namespaces += ("scheduling",)
     return tuple(sorted(namespaces))
 
 
@@ -185,6 +204,7 @@ def npm_platforms(
     *,
     include_casework: bool = False,
     include_messaging: bool = False,
+    include_scheduling: bool = False,
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(
         (
@@ -196,6 +216,7 @@ def npm_platforms(
                     version,
                     include_casework=include_casework,
                     include_messaging=include_messaging,
+                    include_scheduling=include_scheduling,
                 )
             ),
         )
@@ -330,6 +351,7 @@ def validate_npm_packages(
     *,
     include_casework: bool = False,
     include_messaging: bool = False,
+    include_scheduling: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
     definition = client_definition(client)
@@ -344,6 +366,7 @@ def validate_npm_packages(
             version,
             include_casework=include_casework,
             include_messaging=include_messaging,
+            include_scheduling=include_scheduling,
         ):
             if path.name == f"{definition.npm_tarball_stem}-{platform}-{version}.tgz":
                 expected_name = f"{definition.npm_root_package}-{platform}"
@@ -406,6 +429,28 @@ def validate_npm_packages(
                     raise ClientRegistryError(
                         f"root npm package {path.name} unexpectedly exposes the messaging facade"
                     )
+                scheduling_members = {
+                    "package/scheduling/client.js",
+                    "package/scheduling/client.d.ts",
+                    "package/scheduling/index.js",
+                    "package/scheduling/index.d.ts",
+                }
+                exposed_scheduling = any(
+                    name.startswith("package/scheduling/") for name in names
+                )
+                scheduling_expected = includes_scheduling(
+                    version, include_scheduling=include_scheduling
+                )
+                missing_scheduling = scheduling_members - names
+                if scheduling_expected and missing_scheduling:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} has an incomplete scheduling facade: "
+                        f"{sorted(missing_scheduling)!r}"
+                    )
+                if not scheduling_expected and exposed_scheduling:
+                    raise ClientRegistryError(
+                        f"root npm package {path.name} unexpectedly exposes the scheduling facade"
+                    )
             if metadata.get("optionalDependencies") != expected_optional:
                 raise ClientRegistryError(
                     "root npm package does not bind the exact platform versions"
@@ -426,6 +471,7 @@ def validate_wheels(
     *,
     include_casework: bool = False,
     include_messaging: bool = False,
+    include_scheduling: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
     definition = client_definition(client)
@@ -459,6 +505,7 @@ def validate_wheels(
                 version,
                 include_casework=include_casework,
                 include_messaging=include_messaging,
+                include_scheduling=include_scheduling,
             )
             for namespace in expected_namespaces:
                 prefix = f"registry_client/{namespace}/"
@@ -477,6 +524,12 @@ def validate_wheels(
             ):
                 raise ClientRegistryError(
                     f"Python wheel {path.name} unexpectedly contains the messaging namespace"
+                )
+            if "scheduling" not in expected_namespaces and any(
+                name.startswith("registry_client/scheduling/") for name in names
+            ):
+                raise ClientRegistryError(
+                    f"Python wheel {path.name} unexpectedly contains the scheduling namespace"
                 )
         metadata_names = [
             name for name in names if name.endswith(".dist-info/METADATA")
@@ -512,6 +565,7 @@ def validate_distribution(
     *,
     include_casework: bool = False,
     include_messaging: bool = False,
+    include_scheduling: bool = False,
 ) -> None:
     require_supported_client(client, version)
     validate_npm_packages(
@@ -520,6 +574,7 @@ def validate_distribution(
         client,
         include_casework=include_casework,
         include_messaging=include_messaging,
+        include_scheduling=include_scheduling,
     )
     validate_wheels(
         directory,
@@ -527,6 +582,7 @@ def validate_distribution(
         client,
         include_casework=include_casework,
         include_messaging=include_messaging,
+        include_scheduling=include_scheduling,
     )
 
 
@@ -649,6 +705,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate.add_argument("--client", choices=sorted(CLIENTS), required=True)
     validate.add_argument("--include-casework", action="store_true")
     validate.add_argument("--include-messaging", action="store_true")
+    validate.add_argument("--include-scheduling", action="store_true")
     bind = subparsers.add_parser("bind-optional-deps")
     bind.add_argument("--package-json", type=Path, required=True)
     bind.add_argument("--version", required=True)
@@ -661,6 +718,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pypi.add_argument("--client", choices=sorted(CLIENTS), required=True)
     pypi.add_argument("--include-casework", action="store_true")
     pypi.add_argument("--include-messaging", action="store_true")
+    pypi.add_argument("--include-scheduling", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -674,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.client,
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
+                include_scheduling=args.include_scheduling,
             )
             print("validated")
         elif args.command == "bind-optional-deps":
@@ -688,6 +747,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.client,
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
+                include_scheduling=args.include_scheduling,
             )
             print(
                 pypi_registry_state(
