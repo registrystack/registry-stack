@@ -13,10 +13,6 @@ impl SensitiveJsonValue {
         Self(value)
     }
 
-    pub(super) const fn value(&self) -> &Value {
-        &self.0
-    }
-
     pub(super) const fn value_mut(&mut self) -> &mut Value {
         &mut self.0
     }

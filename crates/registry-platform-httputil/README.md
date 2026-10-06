@@ -96,13 +96,6 @@ Outbound HTTP utilities for registry services.
   `NotSent` when it failed before the connection was established (policy
   refusal, resolution, connect, or TLS handshake) and conservatively as
   `MaybeSent` for every failure after it.
-- A closed no-expiry OAuth client-credentials response decoder that returns a
-  fresh, move-only bearer authorization capability.
-- A decoder pinned to the OpenCRVS DCI adapter v1.9.0-rc.1. It verifies the
-  exact compact RS256 response sibling against the fresh two-key OpenCRVS JWKS,
-  enforces the closed DCI envelope, and sends only a logical record wrapper
-  through the caller-supplied closed JSON schema. This remains product-specific
-  so configuration cannot weaken signature or correlation rules.
 
 ## Typical Use
 
