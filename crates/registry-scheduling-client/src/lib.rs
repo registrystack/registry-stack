@@ -12,10 +12,17 @@
 //! core's `ProblemCode`, not a second vocabulary.
 //!
 //! Authentication is a borrowed bearer token per call, the only credential
-//! Scheduling accepts. The client never retains the token, follows
-//! redirects, or retries a mutation. Mutating calls carry a caller-supplied
-//! idempotency key, validated against the pinned bound before any network
-//! input or output. Responses are read under a bounded byte ceiling, the core
+//! Scheduling accepts. The client never retains the token or follows
+//! redirects. Mutating calls carry a caller-supplied idempotency key,
+//! validated against the pinned bound before any network input or output;
+//! the client never generates one. A keyed command whose outcome is unknown
+//! (a timeout or broken exchange after the request was sent, or a 5xx answer)
+//! is resent, byte for byte and under the same key, at most
+//! `SchedulingClientConfig::with_max_mutation_retries` times (2 by default, 0
+//! disables it). Reads and the unkeyed hold release are never resent. A 5xx
+//! answer may follow a commit: when `SchedulingClientError::is_outcome_unknown`
+//! is still true, the safe recovery is the same request under the same key,
+//! never a new key. Responses are read under a bounded byte ceiling, the core
 //! answer documents tolerate a member a later deployment added while the
 //! request documents the runtime reads refuse one, and every failure lands
 //! in one of three named shapes: a caller-side request defect, a transport

@@ -3,8 +3,8 @@
 use std::{fmt, time::Duration};
 
 use registry_platform_httputil::client::{
-    ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
-    MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
+    ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MUTATION_RETRIES, DEFAULT_REQUEST_TIMEOUT,
+    MAXIMUM_MUTATION_RETRIES, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
 };
 use url::Url;
 
@@ -21,6 +21,7 @@ pub struct SchedulingClientConfig {
     pub(crate) max_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Vec<u8>>,
+    pub(crate) max_mutation_retries: u8,
 }
 
 impl SchedulingClientConfig {
@@ -33,6 +34,7 @@ impl SchedulingClientConfig {
             max_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
+            max_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
 
@@ -66,6 +68,16 @@ impl SchedulingClientConfig {
         self
     }
 
+    /// How many times an idempotency-keyed command whose outcome is unknown
+    /// is resent, identically and under the same key, before its error is
+    /// returned. Defaults to 2, accepts at most 2, and 0 disables the
+    /// resend.
+    #[must_use]
+    pub fn with_max_mutation_retries(mut self, value: u8) -> Self {
+        self.max_mutation_retries = value;
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<ServiceBaseUrl, SchedulingClientError> {
         let base_url = ServiceBaseUrl::new(self.base_url.clone()).map_err(|_| {
             SchedulingClientError::configuration("the service base URL is not usable")
@@ -89,6 +101,11 @@ impl SchedulingClientConfig {
                 "the trusted root certificate bundle exceeds the accepted bound",
             ));
         }
+        if self.max_mutation_retries > MAXIMUM_MUTATION_RETRIES {
+            return Err(SchedulingClientError::configuration(
+                "the mutation retry count exceeds the accepted bound",
+            ));
+        }
         Ok(base_url)
     }
 }
@@ -106,6 +123,7 @@ impl fmt::Debug for SchedulingClientConfig {
                 "trusted_root_certificates_present",
                 &self.trusted_root_certificates.is_some(),
             )
+            .field("max_mutation_retries", &self.max_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -148,6 +166,18 @@ mod tests {
             oversized_body_bound.validate(),
             Err(SchedulingClientError::Configuration { .. })
         ));
+        let excessive_retries = SchedulingClientConfig::new(url.clone())
+            .with_max_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1);
+        assert!(matches!(
+            excessive_retries.validate(),
+            Err(SchedulingClientError::Configuration { .. })
+        ));
+        for retries in 0..=MAXIMUM_MUTATION_RETRIES {
+            assert!(SchedulingClientConfig::new(url.clone())
+                .with_max_mutation_retries(retries)
+                .validate()
+                .is_ok());
+        }
         let oversized_certificate_bundle = SchedulingClientConfig::new(url)
             .with_trusted_root_certificates(vec![
                 0;

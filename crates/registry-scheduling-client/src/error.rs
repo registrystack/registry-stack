@@ -74,6 +74,39 @@ impl SchedulingClientError {
     pub(crate) fn invalid_request(reason: &'static str) -> Self {
         Self::InvalidRequest { reason }
     }
+
+    /// Whether the request may have taken effect although this error was
+    /// returned.
+    ///
+    /// True for a timeout or broken exchange after the request was sent, an
+    /// oversized or unparseable answer, and a 5xx answer: a 5xx may follow a
+    /// commit. False for a request defect, a connection that was never
+    /// established, and every typed 4xx refusal. When it is true, the safe
+    /// recovery for an idempotency-keyed command is the same request under the
+    /// same key, which the service either replays or settles; a new key could
+    /// apply the command twice.
+    #[must_use]
+    pub fn is_outcome_unknown(&self) -> bool {
+        match self {
+            Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
+            Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
+            Self::Problem { status, .. } => *status >= 500,
+            Self::Protocol { .. } => true,
+        }
+    }
+
+    /// Whether resending the identical request under the same key may settle
+    /// an unknown outcome. An oversized or unparseable non-5xx answer would be
+    /// replayed unchanged, so it is not resent.
+    pub(crate) fn resend_may_settle(&self) -> bool {
+        match self {
+            Self::Transport { kind } => {
+                matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
+            }
+            Self::Problem { status, .. } | Self::Protocol { status, .. } => *status >= 500,
+            Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +259,94 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn the_unknown_outcome_predicate_separates_maybe_committed_from_refused() {
+        let problem = |status, code| SchedulingClientError::Problem {
+            status,
+            code,
+            trace_id: None,
+        };
+        let protocol = |status, failure| SchedulingClientError::Protocol {
+            status,
+            failure,
+            trace_id: None,
+        };
+        let transport = |kind| SchedulingClientError::Transport { kind };
+        let unknown = [
+            transport(TransportKind::Timeout),
+            transport(TransportKind::Exchange),
+            transport(TransportKind::ResponseTooLarge),
+            problem(503, ProblemCode::ServiceUnavailable),
+            problem(503, ProblemCode::EligibilityUnavailable),
+            protocol(502, SchedulingProtocolFailure::Status),
+            protocol(201, SchedulingProtocolFailure::Body),
+            protocol(200, SchedulingProtocolFailure::TraceContext),
+        ];
+        for error in &unknown {
+            assert!(error.is_outcome_unknown(), "{error:?}");
+        }
+        let settled = [
+            SchedulingClientError::configuration("fixture reason"),
+            SchedulingClientError::invalid_request("fixture reason"),
+            transport(TransportKind::Connect),
+            problem(401, ProblemCode::AuthenticationRefused),
+            problem(403, ProblemCode::OperationNotAuthorized),
+            problem(409, ProblemCode::IdempotencyKeyReused),
+            problem(410, ProblemCode::IdempotencyExpired),
+            problem(422, ProblemCode::ScheduleUnpublished),
+        ];
+        for error in &settled {
+            assert!(!error.is_outcome_unknown(), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_timeout_a_broken_exchange_or_a_5xx_is_resent() {
+        let resent = [
+            SchedulingClientError::Transport {
+                kind: TransportKind::Timeout,
+            },
+            SchedulingClientError::Transport {
+                kind: TransportKind::Exchange,
+            },
+            SchedulingClientError::Problem {
+                status: 503,
+                code: ProblemCode::ServiceUnavailable,
+                trace_id: None,
+            },
+            SchedulingClientError::Protocol {
+                status: 500,
+                failure: SchedulingProtocolFailure::Status,
+                trace_id: None,
+            },
+        ];
+        for error in &resent {
+            assert!(error.resend_may_settle(), "{error:?}");
+        }
+        let kept = [
+            SchedulingClientError::Transport {
+                kind: TransportKind::Connect,
+            },
+            SchedulingClientError::Transport {
+                kind: TransportKind::ResponseTooLarge,
+            },
+            SchedulingClientError::Protocol {
+                status: 201,
+                failure: SchedulingProtocolFailure::Body,
+                trace_id: None,
+            },
+            SchedulingClientError::Problem {
+                status: 409,
+                code: ProblemCode::IdempotencyKeyReused,
+                trace_id: None,
+            },
+            SchedulingClientError::invalid_request("fixture reason"),
+        ];
+        for error in &kept {
+            assert!(!error.resend_may_settle(), "{error:?}");
+        }
     }
 
     #[test]
