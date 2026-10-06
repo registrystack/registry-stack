@@ -14,7 +14,7 @@
     - ['`hold.released`', '409', 'The claim is not an active hold. It may already be confirmed or released.']
     - ['`hook.unavailable`', '503', 'A required lifecycle hook could not run, so the request was refused rather than half-applied. Reserved: no milestone path answers it yet.']
     - ['`horizon.outside`', '422', 'The requested start is earlier than the lead time allows or further ahead than the horizon allows.']
-    - ['`idempotency.expired`', '410', 'The stored response for the idempotency key has expired. Reconcile the original operation before choosing a new key.']
+    - ['`idempotency.expired`', '410', 'The stored response for this idempotency key has expired. Read the appointment by its external reference or its identifier to learn the original outcome before choosing a new key.']
     - ['`idempotency.key-reused`', '409', 'An idempotency key was presented for a different request.']
     - ['`location.closed`', '409', 'A closure covers the requested start. Choose a start outside the closure.']
     - ['`operation.not-authorized`', '403', 'The caller''s task grant does not name this operation, or the deployment''s client does not match the grant''s client.']

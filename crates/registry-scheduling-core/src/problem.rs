@@ -297,7 +297,7 @@ impl ProblemCode {
                 "The requested start is earlier than the lead time allows or further ahead than the horizon allows."
             }
             Self::IdempotencyExpired => {
-                "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
+                "The stored response for this idempotency key has expired. Read the appointment by its external reference or its identifier to learn the original outcome before choosing a new key."
             }
             Self::IdempotencyKeyReused => {
                 "This idempotency key was used for a different request."
