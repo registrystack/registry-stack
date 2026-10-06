@@ -220,6 +220,7 @@ fn write_idempotency_separates_grants_without_changing_read_authority() {
     use crate::{
         idempotency::{
             canonical_claim_context, resolve_binding, IdempotencyBinding, IdempotencyKeyDomain,
+            IdempotencyPolicy,
         },
         model::HttpMethod,
         postgres::ClaimContext,
@@ -242,6 +243,7 @@ fn write_idempotency_separates_grants_without_changing_read_authority() {
     let resolve = |context| {
         resolve_binding(
             &profile,
+            &IdempotencyPolicy::default(),
             &IdempotencyBinding {
                 key: "same-key",
                 context,

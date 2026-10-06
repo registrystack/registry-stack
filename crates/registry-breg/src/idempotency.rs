@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
@@ -20,7 +21,7 @@ use crate::stored_bytes;
 pub(crate) const MAX_IMMEDIATE_ACTION_RESULTS: u16 =
     crate::change_request::MAX_CHANGE_REQUEST_FIELD_MUTATIONS;
 
-const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
+pub(crate) const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
 // Held mutation bodies keep encrypted members as tagged, base64-encoded
 // AES-GCM envelopes until the authorized serve edge opens them. Reserve half
@@ -120,6 +121,71 @@ impl HeldResponse {
     }
 }
 
+/// The issuer a coordinator scopes caller keys under when no verified token
+/// issuer is configured, as in an embedded coordinator that serves no HTTP
+/// surface. A runtime started from its configuration always scopes keys under
+/// its configured OIDC issuer instead.
+pub const EMBEDDED_CALLER_ISSUER: &str = "urn:registry-breg:embedded-issuer";
+/// The issuer hook proposal keys are scoped under. No token verifier accepts
+/// it, so no caller can reach a hook delivery's key.
+const HOOK_DELIVERY_ISSUER: &str = "urn:registry-breg:hook-delivery";
+/// How many days a held response is kept when the runtime configuration does
+/// not choose.
+pub const DEFAULT_RECEIPT_RETENTION_DAYS: u16 = 7;
+/// The longest receipt horizon a runtime configuration may choose.
+pub const MAX_RECEIPT_RETENTION_DAYS: u16 = 365;
+
+/// Who a spent key belongs to and how long its held response is kept.
+///
+/// A key is spent per caller: the verified token issuer and subject, the
+/// operation domain, and the key itself find the spent row. Nothing that finds
+/// or binds a row is derived from the audit hash key, so rotating
+/// `audit.hashKeyRef` changes pseudonyms only.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdempotencyPolicy {
+    caller_issuer: String,
+    receipt_retention_days: u16,
+}
+
+impl IdempotencyPolicy {
+    /// Scope caller keys under `caller_issuer` and keep each held response
+    /// for `receipt_retention_days` days after its commit.
+    pub fn new(
+        caller_issuer: impl Into<String>,
+        receipt_retention_days: u16,
+    ) -> Result<Self, IdempotencyError> {
+        let caller_issuer = caller_issuer.into();
+        if caller_issuer.is_empty()
+            || !(1..=MAX_RECEIPT_RETENTION_DAYS).contains(&receipt_retention_days)
+        {
+            return Err(IdempotencyError::InvalidInput);
+        }
+        Ok(Self {
+            caller_issuer,
+            receipt_retention_days,
+        })
+    }
+
+    #[must_use]
+    pub fn caller_issuer(&self) -> &str {
+        &self.caller_issuer
+    }
+
+    #[must_use]
+    pub fn receipt_retention_days(&self) -> u16 {
+        self.receipt_retention_days
+    }
+}
+
+impl Default for IdempotencyPolicy {
+    fn default() -> Self {
+        Self {
+            caller_issuer: EMBEDDED_CALLER_ISSUER.to_owned(),
+            receipt_retention_days: DEFAULT_RECEIPT_RETENTION_DAYS,
+        }
+    }
+}
+
 pub(crate) struct IdempotencyBinding<'a> {
     pub key: &'a str,
     pub context: &'a ClaimContext,
@@ -129,14 +195,14 @@ pub(crate) struct IdempotencyBinding<'a> {
     pub package_revision: &'a str,
     pub response_fields: &'a BTreeSet<String>,
     pub canonical_request_digest: [u8; 32],
-    /// The hash domain the key resolves under. Server-derived ingestion keys
-    /// carry their own, so no caller-supplied key, however derived, can
+    /// The operation domain the key is spent in. Server-derived ingestion
+    /// keys carry their own, so no caller-supplied key, however derived, can
     /// reserve, preseed, or replay a run chunk's cached result through the
     /// ordinary mutation routes.
     pub key_domain: IdempotencyKeyDomain,
 }
 
-/// Which hash domain one idempotency key resolves its key reference under.
+/// The operation domain one idempotency key is spent in.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum IdempotencyKeyDomain {
     /// Keys callers supply on ordinary mutation routes.
@@ -144,6 +210,19 @@ pub(crate) enum IdempotencyKeyDomain {
     /// Keys the run API derives for one ingestion chunk attempt.
     IngestionChunk,
 }
+
+impl IdempotencyKeyDomain {
+    fn scope(self) -> &'static str {
+        match self {
+            Self::Caller => KEY_SCOPE_MUTATION,
+            Self::IngestionChunk => KEY_SCOPE_INGESTION_CHUNK,
+        }
+    }
+}
+
+const KEY_SCOPE_MUTATION: &str = "mutation";
+const KEY_SCOPE_INGESTION_CHUNK: &str = "ingestion_chunk";
+const KEY_SCOPE_HOOK_PROPOSAL: &str = "hook_proposal";
 
 pub(crate) struct ActionIdempotencyBinding<'a> {
     pub key: &'a str,
@@ -164,11 +243,29 @@ pub(crate) struct ActionIdempotencyBinding<'a> {
 }
 
 pub(crate) struct ResolvedIdempotencyBinding {
+    /// A SHA-256 digest of the caller, the operation domain, and the key. It
+    /// keys the spent row, its dependents, and the advisory lock.
     pub key_reference: String,
+    /// A SHA-256 digest of the exact verified authority and request the key
+    /// was spent on. A retry replays only when it matches.
     pub binding_reference: String,
+    /// The audit-keyed pseudonym of the same binding, published in revisions
+    /// and the audit journal. It changes when `audit.hashKeyRef` rotates and
+    /// is never used to find or bind a spent key.
+    pub request_reference: String,
     pub principal_reference: String,
     pub record_reference: String,
     pub handler_answer_digest: Option<[u8; 32]>,
+    pub caller: SpentKeyCaller,
+}
+
+/// The identity a spent row is stored under, and its receipt horizon.
+pub(crate) struct SpentKeyCaller {
+    pub issuer: String,
+    pub subject: String,
+    pub scope: &'static str,
+    pub key: String,
+    pub receipt_retention_days: u16,
 }
 
 pub(crate) struct StoredMutationResult {
@@ -206,6 +303,11 @@ pub enum IdempotencyError {
     InvalidInput,
     #[error("idempotency key is already bound to another request")]
     Conflict,
+    /// The key was spent on this request and its held response is past the
+    /// receipt horizon. The key stays spent, so the request never executes
+    /// again.
+    #[error("idempotency key is spent and its held response has expired")]
+    Expired,
     #[error("a cached mutation response holds bytes no JSON reader accepts")]
     CachedResponseUnreadable,
     #[error("mutation state operation timed out")]
@@ -227,47 +329,43 @@ fn map_database_error(error: tokio_postgres::Error) -> IdempotencyError {
 
 pub(crate) fn resolve_binding(
     profile: &AuditProfile,
+    policy: &IdempotencyPolicy,
     binding: &IdempotencyBinding<'_>,
 ) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
     if binding.route.is_empty()
         || binding.package_revision.is_empty()
         || binding.response_fields.iter().any(|field| field.is_empty())
+        || binding.target_record.is_some_and(str::is_empty)
     {
         return Err(IdempotencyError::InvalidInput);
     }
+    let subject = binding
+        .context
+        .principal()
+        .ok_or(IdempotencyError::InvalidInput)?;
+    let caller = SpentKeyCaller::new(
+        policy,
+        policy.caller_issuer(),
+        subject,
+        binding.key_domain.scope(),
+        binding.key,
+    )?;
 
     let key_hasher = profile.key_hasher();
-    let key_reference = match binding.key_domain {
-        IdempotencyKeyDomain::Caller => resolve_key_reference(profile, binding.key)?,
-        IdempotencyKeyDomain::IngestionChunk => {
-            resolve_key_reference_in_domain(profile, "breg-ingestion-chunk-key-v1", binding.key)?
-        }
-    };
-    let canonical_context =
-        canonical_claim_context(profile, binding.context, binding.package_revision)?;
     let principal_reference = key_hasher
-        .audit_reference_hash(
-            "breg-principal-v1",
-            binding.package_revision,
-            binding
-                .context
-                .principal()
-                .ok_or(IdempotencyError::InvalidInput)?,
-        )
+        .audit_reference_hash("breg-principal-v1", binding.package_revision, subject)
         .map_err(|_| IdempotencyError::InvalidInput)?;
     let record_reference = binding
         .target_record
         .map(|target_record| {
-            if target_record.is_empty() {
-                return Err(IdempotencyError::InvalidInput);
-            }
             key_hasher
                 .audit_reference_hash("breg-record-v1", binding.package_revision, target_record)
                 .map_err(|_| IdempotencyError::InvalidInput)
         })
         .transpose()?;
-    let mut authority_binding = json!({
-        "context": canonical_context,
+
+    let mut pseudonymous_binding = json!({
+        "context": canonical_claim_context(profile, binding.context, binding.package_revision)?,
         "method": method_name(binding.method),
         "route": binding.route,
         "targetRecordReference": record_reference,
@@ -275,50 +373,79 @@ pub(crate) fn resolve_binding(
         "responseFields": binding.response_fields,
         "canonicalRequestDigest": hex(&binding.canonical_request_digest),
     });
+    let mut exact_binding = json!({
+        "context": binding_claim_context(binding.context)?,
+        "method": method_name(binding.method),
+        "route": binding.route,
+        "targetRecord": binding.target_record,
+        "packageRevision": binding.package_revision,
+        "responseFields": binding.response_fields,
+        "canonicalRequestDigest": hex(&binding.canonical_request_digest),
+    });
     if let Some(grant) = binding.context.task_grant() {
-        authority_binding["taskGrant"] =
-            serde_json::to_value(grant).map_err(|_| IdempotencyError::InvalidInput)?;
+        let grant = serde_json::to_value(grant).map_err(|_| IdempotencyError::InvalidInput)?;
+        pseudonymous_binding["taskGrant"] = grant.clone();
+        exact_binding["taskGrant"] = grant;
     }
-    let canonical =
-        canonicalize_json(&authority_binding).map_err(|_| IdempotencyError::InvalidInput)?;
-    let canonical = std::str::from_utf8(&canonical).map_err(|_| IdempotencyError::InvalidInput)?;
-    let binding_reference = key_hasher
-        .audit_reference_hash(
-            "breg-idempotency-binding-v1",
-            binding.package_revision,
-            canonical,
-        )
-        .map_err(|_| IdempotencyError::InvalidInput)?;
 
     Ok(ResolvedIdempotencyBinding {
-        key_reference,
-        binding_reference,
+        key_reference: caller.key_reference(),
+        binding_reference: sha256_reference(
+            "breg-idempotency-binding-v2",
+            &[&canonical_text(&exact_binding)?],
+        ),
+        request_reference: audit_reference(
+            profile,
+            "breg-idempotency-binding-v1",
+            binding.package_revision,
+            &pseudonymous_binding,
+        )?,
         principal_reference,
         record_reference: record_reference.unwrap_or_default(),
         handler_answer_digest: None,
+        caller,
     })
 }
 
 pub(crate) fn resolve_action_binding(
     profile: &AuditProfile,
+    policy: &IdempotencyPolicy,
     binding: &ActionIdempotencyBinding<'_>,
 ) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
-    let key_reference = resolve_key_reference(profile, binding.key)?;
-    resolve_action_binding_with_key_reference(profile, binding, key_reference)
+    let caller = SpentKeyCaller::new(
+        policy,
+        policy.caller_issuer(),
+        binding.context.principal(),
+        KEY_SCOPE_MUTATION,
+        binding.key,
+    )?;
+    resolve_action_binding_for_caller(profile, binding, caller)
 }
 
+/// Resolve the binding of one hook proposal application. The key is spent by
+/// the hook delivery itself, under an issuer no token verifier accepts and the
+/// compiled delivery as the subject, so no caller can reserve, replay, or
+/// collide with a delivery's application.
 pub(crate) fn resolve_hook_action_binding(
     profile: &AuditProfile,
+    policy: &IdempotencyPolicy,
+    compiled_delivery_id: &str,
     binding: &ActionIdempotencyBinding<'_>,
 ) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
-    let key_reference = resolve_hook_key_reference(profile, binding.key)?;
-    resolve_action_binding_with_key_reference(profile, binding, key_reference)
+    let caller = SpentKeyCaller::new(
+        policy,
+        HOOK_DELIVERY_ISSUER,
+        compiled_delivery_id,
+        KEY_SCOPE_HOOK_PROPOSAL,
+        binding.key,
+    )?;
+    resolve_action_binding_for_caller(profile, binding, caller)
 }
 
-fn resolve_action_binding_with_key_reference(
+fn resolve_action_binding_for_caller(
     profile: &AuditProfile,
     binding: &ActionIdempotencyBinding<'_>,
-    key_reference: String,
+    caller: SpentKeyCaller,
 ) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
     if binding.route.is_empty()
         || binding.package_revision.is_empty()
@@ -327,26 +454,25 @@ fn resolve_action_binding_with_key_reference(
             .result_effects
             .iter()
             .any(|effect| effect.is_empty())
+        || binding
+            .target_authority
+            .keys()
+            .any(|entity_id| entity_id.is_empty())
     {
         return Err(IdempotencyError::InvalidInput);
     }
-    let key_hasher = profile.key_hasher();
-    let principal_reference = key_hasher
+    let principal_reference = profile
+        .key_hasher()
         .audit_reference_hash(
             "breg-principal-v1",
             binding.package_revision,
             binding.context.principal(),
         )
         .map_err(|_| IdempotencyError::InvalidInput)?;
-    let canonical_context =
-        canonical_action_context(profile, binding.context, binding.package_revision)?;
-    let target_authority = binding
+    let pseudonymous_authority = binding
         .target_authority
         .iter()
         .map(|(entity_id, boundaries)| {
-            if entity_id.is_empty() {
-                return Err(IdempotencyError::InvalidInput);
-            }
             Ok(json!({
                 "entityId": entity_id,
                 "rowBoundaries": canonical_boundary_references(
@@ -357,64 +483,181 @@ fn resolve_action_binding_with_key_reference(
             }))
         })
         .collect::<Result<Vec<_>, IdempotencyError>>()?;
-    let mut canonical_binding = json!({
-        "context": canonical_context,
+    let exact_authority = binding
+        .target_authority
+        .iter()
+        .map(|(entity_id, boundaries)| {
+            json!({
+                "entityId": entity_id,
+                "rowBoundaries": binding_boundaries(boundaries),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut pseudonymous_binding = json!({
+        "context": canonical_action_context(profile, binding.context, binding.package_revision)?,
         "method": method_name(binding.method),
         "route": binding.route,
         "packageRevision": binding.package_revision,
         "actionContractFingerprint": binding.action_contract_fingerprint,
-        "targetAuthority": target_authority,
+        "targetAuthority": pseudonymous_authority,
+        "resultEffects": binding.result_effects,
+        "canonicalRequestDigest": hex(&binding.canonical_request_digest),
+    });
+    let mut exact_binding = json!({
+        "context": binding_action_context(binding.context),
+        "method": method_name(binding.method),
+        "route": binding.route,
+        "packageRevision": binding.package_revision,
+        "actionContractFingerprint": binding.action_contract_fingerprint,
+        "targetAuthority": exact_authority,
         "resultEffects": binding.result_effects,
         "canonicalRequestDigest": hex(&binding.canonical_request_digest),
     });
     if let Some(answer_digest) = binding.answer_digest {
-        canonical_binding["handlerAnswerDigest"] = Value::String(hex(answer_digest.as_slice()));
+        let answer_digest = Value::String(hex(answer_digest.as_slice()));
+        pseudonymous_binding["handlerAnswerDigest"] = answer_digest.clone();
+        exact_binding["handlerAnswerDigest"] = answer_digest;
     }
-    let canonical =
-        canonicalize_json(&canonical_binding).map_err(|_| IdempotencyError::InvalidInput)?;
-    let canonical = std::str::from_utf8(&canonical).map_err(|_| IdempotencyError::InvalidInput)?;
-    let binding_reference = key_hasher
-        .audit_reference_hash(
+    Ok(ResolvedIdempotencyBinding {
+        key_reference: caller.key_reference(),
+        binding_reference: sha256_reference(
+            "breg-action-idempotency-binding-v2",
+            &[&canonical_text(&exact_binding)?],
+        ),
+        request_reference: audit_reference(
+            profile,
             "breg-action-idempotency-binding-v1",
             binding.package_revision,
-            canonical,
-        )
-        .map_err(|_| IdempotencyError::InvalidInput)?;
-    Ok(ResolvedIdempotencyBinding {
-        key_reference,
-        binding_reference,
+            &pseudonymous_binding,
+        )?,
         principal_reference,
         record_reference: String::new(),
         handler_answer_digest: binding.answer_digest.copied(),
+        caller,
     })
 }
 
-pub(crate) fn resolve_key_reference(
-    profile: &AuditProfile,
-    key: &str,
-) -> Result<String, IdempotencyError> {
-    resolve_key_reference_in_domain(profile, "breg-idempotency-key-v1", key)
-}
-
+/// The key reference of one hook delivery's proposal application, the same
+/// reference `resolve_hook_action_binding` spends.
 pub(crate) fn resolve_hook_key_reference(
-    profile: &AuditProfile,
+    compiled_delivery_id: &str,
     key: &str,
 ) -> Result<String, IdempotencyError> {
-    resolve_key_reference_in_domain(profile, "breg-hook-proposal-key-v1", key)
+    SpentKeyCaller::new(
+        &IdempotencyPolicy::default(),
+        HOOK_DELIVERY_ISSUER,
+        compiled_delivery_id,
+        KEY_SCOPE_HOOK_PROPOSAL,
+        key,
+    )
+    .map(|caller| caller.key_reference())
 }
 
-fn resolve_key_reference_in_domain(
+impl SpentKeyCaller {
+    fn new(
+        policy: &IdempotencyPolicy,
+        issuer: &str,
+        subject: &str,
+        scope: &'static str,
+        key: &str,
+    ) -> Result<Self, IdempotencyError> {
+        if issuer.is_empty()
+            || subject.is_empty()
+            || key.is_empty()
+            || key.len() > MAX_IDEMPOTENCY_KEY_BYTES
+        {
+            return Err(IdempotencyError::InvalidInput);
+        }
+        Ok(Self {
+            issuer: issuer.to_owned(),
+            subject: subject.to_owned(),
+            scope,
+            key: key.to_owned(),
+            receipt_retention_days: policy.receipt_retention_days(),
+        })
+    }
+
+    /// One fixed-length handle for the spent row: its primary key, the target
+    /// of its dependents, and the advisory lock that serializes the key.
+    fn key_reference(&self) -> String {
+        sha256_reference(
+            "breg-idempotency-key-v2",
+            &[self.scope, &self.issuer, &self.subject, &self.key],
+        )
+    }
+}
+
+/// A SHA-256 digest over a domain and length-prefixed parts, so no two
+/// distinct part sequences share a preimage.
+fn sha256_reference(domain: &str, parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
+    for part in std::iter::once(domain).chain(parts.iter().copied()) {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    format!("sha256:{}", hex(&hasher.finalize()))
+}
+
+fn canonical_text(value: &Value) -> Result<String, IdempotencyError> {
+    let canonical = canonicalize_json(value).map_err(|_| IdempotencyError::InvalidInput)?;
+    String::from_utf8(canonical).map_err(|_| IdempotencyError::InvalidInput)
+}
+
+fn audit_reference(
     profile: &AuditProfile,
     domain: &str,
-    key: &str,
+    package_revision: &str,
+    value: &Value,
 ) -> Result<String, IdempotencyError> {
-    if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_BYTES {
-        return Err(IdempotencyError::InvalidInput);
-    }
     profile
         .key_hasher()
-        .audit_reference_hash(domain, "", key)
+        .audit_reference_hash(domain, package_revision, &canonical_text(value)?)
         .map_err(|_| IdempotencyError::InvalidInput)
+}
+
+/// The exact verified authority one protected operation ran under, as the
+/// spent-key binding records it. It holds raw verified values, which the
+/// binding reference digests together with the canonical request digest.
+fn binding_claim_context(context: &ClaimContext) -> Result<Value, IdempotencyError> {
+    let principal = context.principal().ok_or(IdempotencyError::InvalidInput)?;
+    let mut value = json!({
+        "entityId": context.entity_id(),
+        "principal": principal,
+        "selectedAccessProfile": context.access_profile(),
+        "verifiedPurpose": context.purpose(),
+        "rowBoundaries": binding_boundaries(context.row_boundaries()),
+    });
+    if !context.submitter_targets().is_empty() {
+        value["submitterTargets"] = context
+            .submitter_targets()
+            .iter()
+            .map(|(id, target)| Ok((id.clone(), binding_claim_context(target)?)))
+            .collect::<Result<serde_json::Map<String, Value>, IdempotencyError>>()?
+            .into();
+    }
+    Ok(value)
+}
+
+fn binding_action_context(context: &ActionClaimContext) -> Value {
+    json!({
+        "actionId": context.action_id(),
+        "principal": context.principal(),
+        "selectedAccessProfile": context.access_profile(),
+        "verifiedPurpose": context.purpose(),
+    })
+}
+
+fn binding_boundaries(boundaries: &[RowBoundaryContext]) -> Vec<Value> {
+    boundaries
+        .iter()
+        .map(|boundary| {
+            json!({
+                "field": boundary.field(),
+                "operator": boundary.operator().as_str(),
+                "values": boundary.values(),
+            })
+        })
+        .collect()
 }
 
 /// Canonical, value-safe identity of every verified authorization input that
@@ -547,7 +790,9 @@ pub(crate) async fn lock_and_load(
         .query_opt(
             "SELECT binding_reference, result_kind, record_revision, response_status,
                     response_body, response_headers, record_reference, result_count,
-                    proposal_version, erased_at
+                    proposal_version, erased_at,
+                    receipt_dropped_at IS NOT NULL
+                        OR receipt_expires_at <= transaction_timestamp()
              FROM registry_internal.registry_idempotency
              WHERE key_reference = $1",
             &[&binding.key_reference],
@@ -565,11 +810,20 @@ pub(crate) async fn lock_and_load(
         // replay without presenting a transient outage to retrying clients.
         return Err(IdempotencyError::Conflict);
     }
-    let metadata = match row.get::<_, String>(1).as_str() {
+    let result_kind = row.get::<_, String>(1);
+    if result_kind == "erased" {
         // Erasure is irreversible, so the consumed key answers with the same
         // terminal conflict the erased-at path answers with. A transient outage
         // would invite a client to retry a key that can never succeed.
-        "erased" => return Err(IdempotencyError::Conflict),
+        return Err(IdempotencyError::Conflict);
+    }
+    if row.get::<_, bool>(10) {
+        // Past the receipt horizon the held response is gone or about to be
+        // dropped, but the key stays spent: the exact retry is refused rather
+        // than executed again.
+        return Err(IdempotencyError::Expired);
+    }
+    let metadata = match result_kind.as_str() {
         "record" => {
             let record_revision = row
                 .get::<_, Option<i64>>(2)
@@ -749,13 +1003,17 @@ pub(crate) async fn insert_result(
             ),
             _ => return Err(IdempotencyError::InvalidInput),
         };
+    let caller = &binding.caller;
+    let receipt_retention_days = i32::from(caller.receipt_retention_days);
     let changed = transaction
         .execute(
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_revision,
                   response_status, response_body, response_headers, record_reference, result_count,
-                  proposal_version)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                  proposal_version, caller_issuer, caller_subject, key_scope, idempotency_key,
+                  receipt_expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                     transaction_timestamp() + pg_catalog.make_interval(days => $15))",
             &[
                 &binding.key_reference,
                 &binding.binding_reference,
@@ -767,6 +1025,11 @@ pub(crate) async fn insert_result(
                 &record_reference,
                 &result_count,
                 &proposal_version,
+                &caller.issuer,
+                &caller.subject,
+                &caller.scope,
+                &caller.key,
+                &receipt_retention_days,
             ],
         )
         .await
@@ -844,7 +1107,10 @@ pub(crate) async fn tombstone_erased_cached_responses(
                     record_revision = NULL,
                     result_count = NULL,
                     response_status = 200,
-                    response_body = $6,
+                    response_body = CASE
+                        WHEN idempotency.response_body IS NULL THEN NULL
+                        ELSE $6::bytea
+                    END,
                     response_headers = $7
               WHERE idempotency.result_kind IN ('record', 'batch')
                 AND idempotency.key_reference IN (
@@ -898,6 +1164,52 @@ async fn affected_snapshot_references(
         .into_iter()
         .map(|row| SnapshotReference::for_uuid(row.get::<_, Uuid>(0)).to_string())
         .collect())
+}
+
+/// Drop the held response of every spent key whose receipt horizon passed at
+/// or before `before`. The row keeps its caller, key, binding, and times, so
+/// the key stays spent and an exact retry is still refused as expired.
+#[cfg(feature = "tooling")]
+pub(crate) async fn drop_expired_receipts(
+    transaction: &Transaction<'_>,
+    before: chrono::DateTime<chrono::Utc>,
+) -> Result<u64, IdempotencyError> {
+    let headers = encode_headers(&BTreeMap::new())?;
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_idempotency
+                SET response_body = NULL,
+                    response_headers = $2,
+                    receipt_dropped_at = transaction_timestamp()
+              WHERE receipt_expires_at <= LEAST($1, transaction_timestamp())
+                AND receipt_dropped_at IS NULL
+                AND response_body IS NOT NULL",
+            &[&before, &headers],
+        )
+        .await
+        .map_err(map_database_error)
+}
+
+/// Whether a held response past its horizon at `cutoff` remains.
+#[cfg(feature = "tooling")]
+pub(crate) async fn expired_receipts_remain(
+    client: &tokio_postgres::Client,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, IdempotencyError> {
+    client
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM registry_internal.registry_idempotency
+                  WHERE receipt_expires_at <= $1
+                    AND receipt_dropped_at IS NULL
+                    AND response_body IS NOT NULL
+             )",
+            &[&cutoff],
+        )
+        .await
+        .map_err(map_database_error)?
+        .try_get(0)
+        .map_err(|_| IdempotencyError::Unavailable)
 }
 
 fn encode_headers(

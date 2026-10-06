@@ -143,6 +143,17 @@ impl PostgresRecordMutationService {
         self
     }
 
+    /// Spend idempotency keys under the runtime's verified issuer and keep
+    /// held responses for its configured receipt horizon.
+    #[must_use]
+    pub fn with_idempotency_policy(
+        mut self,
+        policy: crate::idempotency::IdempotencyPolicy,
+    ) -> Self {
+        self.coordinator = self.coordinator.with_idempotency_policy(policy);
+        self
+    }
+
     #[must_use]
     pub fn with_attachment_storage(
         mut self,
@@ -2161,6 +2172,7 @@ impl PostgresRecordMutationService {
                         Some(IngestionServiceError::PreconditionFailed),
                     ),
                     MutationError::IdempotencyConflict
+                    | MutationError::IdempotencyExpired
                     | MutationError::Unavailable
                     | MutationError::RetryableConflict
                     | MutationError::CommitUnresolved

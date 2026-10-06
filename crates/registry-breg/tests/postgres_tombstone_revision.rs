@@ -242,7 +242,18 @@ async fn tombstone_refusals_faults_and_concurrency_have_no_duplicate_effects() {
         )
         .await
         .expect("first tombstone commits");
-    let other_claims = mutation_claims(&fixture.compiled, "other-principal");
+    let changed_boundary_claims = ClaimContext::for_compiled(
+        &fixture.compiled,
+        "widget",
+        Some(PRINCIPAL_CANARY.to_owned()),
+        "operator",
+        Some("case-management".to_owned()),
+        vec![RowBoundaryContext::Equals {
+            field: "jurisdiction".to_owned(),
+            value: "zone-b".to_owned(),
+        }],
+    )
+    .expect("claim context is compiler-bound");
     let before_changed_context = durable_counts(&fixture.database, &fixture.table).await;
     let changed_context_reuse = fixture
         .coordinator
@@ -251,7 +262,7 @@ async fn tombstone_refusals_faults_and_concurrency_have_no_duplicate_effects() {
             tombstone_request(
                 &tombstone_plan,
                 "changed-context-seed-key",
-                &other_claims,
+                &changed_boundary_claims,
                 &stale_id,
                 &response_header(&stale_seed, PermittedResponseHeader::Etag),
             ),
@@ -266,6 +277,33 @@ async fn tombstone_refusals_faults_and_concurrency_have_no_duplicate_effects() {
     );
     assert_audited_refusal_only(
         before_changed_context,
+        durable_counts(&fixture.database, &fixture.table).await,
+    );
+
+    // Keys are per caller: another principal's request under the same key is
+    // its own fresh tombstone, refused by the ETag the committed tombstone
+    // replaced, so it neither replays nor commits.
+    let other_claims = mutation_claims(&fixture.compiled, "other-principal");
+    let before_other_principal = durable_counts(&fixture.database, &fixture.table).await;
+    let other_principal = fixture
+        .coordinator
+        .execute(
+            &mut client,
+            tombstone_request(
+                &tombstone_plan,
+                "changed-context-seed-key",
+                &other_claims,
+                &stale_id,
+                &response_header(&stale_seed, PermittedResponseHeader::Etag),
+            ),
+        )
+        .await;
+    assert!(
+        matches!(other_principal, Err(MutationError::PreconditionFailed)),
+        "another caller's key replayed or committed a held tombstone"
+    );
+    assert_audited_refusal_only(
+        before_other_principal,
         durable_counts(&fixture.database, &fixture.table).await,
     );
 

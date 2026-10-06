@@ -207,6 +207,8 @@ enum Command {
     ReviewRecovery(ReviewRecoveryArgs),
     /// Erase expired protected action Evidence using configured migration authority.
     EvidenceRetention(EvidenceRetentionArgs),
+    /// Drop held idempotency responses past their receipt horizon using configured migration authority.
+    IdempotencyRetention(IdempotencyRetentionArgs),
     /// Open, close, and list the authorities that bound `import` runs.
     ImportAuthority(ImportAuthorityArgs),
     /// Inspect and adopt the claim naming the database the Registry serves from.
@@ -290,6 +292,28 @@ struct EvidenceRetentionEraseArgs {
     #[arg(long)]
     runtime_config: PathBuf,
     /// RFC 3339 expiry cutoff, no later than the current time.
+    #[arg(long)]
+    before: String,
+}
+
+#[derive(Debug, Args)]
+struct IdempotencyRetentionArgs {
+    #[command(subcommand)]
+    command: IdempotencyRetentionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum IdempotencyRetentionCommand {
+    /// Drop held responses past their receipt horizon; every key stays spent and a retry is still refused.
+    EraseExpired(IdempotencyRetentionEraseArgs),
+}
+
+#[derive(Debug, Args)]
+struct IdempotencyRetentionEraseArgs {
+    /// Absolute runtime configuration path containing the migration connection binding.
+    #[arg(long)]
+    runtime_config: PathBuf,
+    /// RFC 3339 cutoff, no later than the current time; responses whose horizon passed before it are dropped.
     #[arg(long)]
     before: String,
 }
@@ -1548,6 +1572,7 @@ enum DiagnosticArtifact {
     RequestRetentionOperation,
     ReviewRecoveryOperation,
     EvidenceRetentionOperation,
+    IdempotencyRetentionOperation,
     ImportAuthority,
     InstanceClaim,
     HistoryErasure,
@@ -1599,6 +1624,7 @@ enum SuggestedAction {
     VerifyRequestRetentionOperation,
     VerifyReviewRecoveryOperation,
     VerifyEvidenceRetentionOperation,
+    VerifyIdempotencyRetentionOperation,
     CorrectImportAuthorityRequest,
     VerifyImportAuthority,
     VerifyInstanceClaim,
@@ -2475,6 +2501,40 @@ where
                 }
             };
         }
+        Command::IdempotencyRetention(args) => {
+            let IdempotencyRetentionCommand::EraseExpired(args) = args.command;
+            let outcome = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| registry_breg::mutation::MutationError::Unavailable)
+                .and_then(|runtime| {
+                    runtime.block_on(registry_breg::idempotency_retention::erase_expired(
+                        &args.runtime_config,
+                        &args.before,
+                    ))
+                });
+            return match outcome {
+                Ok(erased) => {
+                    let result = if format == OutputFormat::Json {
+                        serde_json::to_writer_pretty(&mut *stdout, &json!({"ok":true,"command":"idempotency-retention erase-expired","erased":erased}))
+                            .map_err(io::Error::other).and_then(|()| writeln!(stdout))
+                    } else {
+                        render_report(
+                            "Dropped expired held idempotency responses; the keys stay spent.",
+                            &[("erased", erased.to_string())],
+                            stdout,
+                        )
+                    };
+                    write_result(result, stderr)
+                }
+                Err(error) => write_failure(
+                    &idempotency_retention_failure(error),
+                    format,
+                    stdout,
+                    stderr,
+                ),
+            };
+        }
         Command::ReviewRecovery(args) => {
             let (command, operation, args) = match args.command {
                 ReviewRecoveryCommand::Resubmit(args) => (
@@ -2768,6 +2828,38 @@ fn evidence_retention_failure(error: registry_breg::mutation::MutationError) -> 
             ),
             DiagnosticArtifact::EvidenceRetentionOperation,
             SuggestedAction::VerifyEvidenceRetentionOperation,
+        ),
+    }
+}
+
+fn idempotency_retention_failure(error: registry_breg::mutation::MutationError) -> FailureReport {
+    let command = "idempotency-retention erase-expired";
+    match error {
+        registry_breg::mutation::MutationError::MigrationLockHeld => source_failure(
+            command,
+            diagnostic(
+                "idempotency_retention.in_progress",
+                "database",
+                "another session held the exclusive migration lock past the lock timeout, so an apply, an adoption, a migration reconcile, or other registry maintenance is in progress. Nothing was dropped. Retry the same sweep once it releases",
+            ),
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::RetryAfterMigrationLockReleases,
+        ),
+        registry_breg::mutation::MutationError::PackagePinMismatch(mismatch) => package_pin_failure(
+            command,
+            "idempotency_retention.package.refused",
+            "package",
+            &mismatch,
+        ),
+        _ => source_failure(
+            command,
+            diagnostic(
+                "idempotency_retention.unavailable",
+                "idempotencyRetention",
+                "Verify the absolute runtime configuration, migration authority and nonfuture RFC 3339 cutoff.",
+            ),
+            DiagnosticArtifact::IdempotencyRetentionOperation,
+            SuggestedAction::VerifyIdempotencyRetentionOperation,
         ),
     }
 }
@@ -14545,6 +14637,7 @@ mod tests {
                 "request-retention",
                 "review-recovery",
                 "evidence-retention",
+                "idempotency-retention",
                 "import-authority",
                 "instance-claim",
                 "field-encryption"
@@ -16114,6 +16207,11 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
             "evidence_retention.in_progress",
         ),
         (
+            idempotency_retention_failure(MutationError::MigrationLockHeld),
+            "idempotency-retention erase-expired",
+            "idempotency_retention.in_progress",
+        ),
+        (
             request_retention_failure(
                 "request-retention erase",
                 RequestRetentionCliError::MigrationLockHeld,
@@ -16167,6 +16265,11 @@ fn operator_maintenance_reports_a_held_migration_lock_as_in_progress() {
     assert_eq!(
         unavailable.diagnostics[0].code,
         "evidence_retention.unavailable"
+    );
+    let unavailable = idempotency_retention_failure(MutationError::Unavailable);
+    assert_eq!(
+        unavailable.diagnostics[0].code,
+        "idempotency_retention.unavailable"
     );
 }
 

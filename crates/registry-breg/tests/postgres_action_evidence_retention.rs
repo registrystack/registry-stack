@@ -118,8 +118,10 @@ fn assert_retention_audited(database: &TestDatabase, outcomes: &[(&str, Option<u
 
 async fn sentinel(database: &TestDatabase) {
     database.admin.batch_execute("INSERT INTO registry_internal.registry_idempotency
-        (key_reference,binding_reference,result_kind,result_count,response_status,response_body,response_headers)
-        VALUES ('retention-test','retention-binding','immediate_action',0,200,'{}','{}');
+        (key_reference,binding_reference,result_kind,result_count,response_status,response_body,response_headers,
+         caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at)
+        VALUES ('retention-test','retention-binding','immediate_action',0,200,'{}','{}',
+         'urn:test:issuer', 'test-subject', 'mutation', 'retention-test', transaction_timestamp() + interval '7 days');
         INSERT INTO registry_internal.registry_immediate_action_applications
         (key_reference,binding_reference,application_id,action_id,action_contract_fingerprint,package_revision,principal_reference,result_count)
         VALUES ('retention-test','retention-binding','00000000-0000-4000-8000-000000000001','check-procedure',

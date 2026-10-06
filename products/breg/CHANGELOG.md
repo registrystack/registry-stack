@@ -10,6 +10,28 @@
   refusal. `/health`, `/healthz`, and `/ready` still answer `HEAD`. A client
   that sent `HEAD` to a record, history, statistics, attachment, GIS,
   ingestion-run, or discovery route must send `GET`.
+- BREAKING: idempotency keys are per caller (#1912). A spent key is found by
+  the configured issuer, the verified principal, the operation, and the key,
+  and its request binding is an unkeyed SHA-256 digest, so rotating
+  `audit.hashKeyRef` changes audit pseudonyms only: an exact retry after a
+  rotation still replays and never executes again. The same key sent by
+  another principal is that principal's own fresh request. A replay with an
+  identical body but a different package, access profile, or claims still
+  answers `409 idempotency.conflict`. Only successful responses are held, for
+  the new `idempotency.receiptRetentionDays` (default 7, at most 365). An
+  exact retry past that horizon answers the new `410 idempotency.expired` and
+  is never executed. The new `bregctl idempotency-retention erase-expired
+  --runtime-config PATH --before RFC3339` drops held responses past their
+  horizon and keeps each key spent. The spent-key table now stores the raw
+  issuer, principal, and key; see `SECURITY-REVIEW-NOTES.md`.
+- BREAKING: the caller-keyed idempotency store is a new engine capability, so
+  a package an earlier release built no longer loads. Rebuild it unchanged
+  with this `bregctl package --baseline-package <deployed package>` and apply
+  it once before starting the upgraded runtime.
+- The upgrade discards existing idempotency records, with the immediate
+  action results, immediate action applications, and request idempotency
+  links that reference them: a request committed before the upgrade and
+  retried after it executes again.
 
 ## v0.39.0 - 2026-10-06
 

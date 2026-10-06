@@ -53,8 +53,8 @@ use crate::history_schema::MAX_HISTORY_SNAPSHOT_BYTES;
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_action_binding, resolve_binding,
     resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
-    HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain,
-    PermittedResponseHeader, StoredResultMetadata, MAX_HELD_BODY_BYTES,
+    HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy,
+    PermittedResponseHeader, StoredResultMetadata, MAX_HELD_BODY_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
     MAX_IMMEDIATE_ACTION_RESULTS,
 };
 use crate::ingestion_store::{
@@ -260,9 +260,7 @@ pub async fn install_mutation_schema(
                  ADD CONSTRAINT registry_idempotency_response_body_bounds CHECK (
                      response_body IS NULL OR
                      (octet_length(response_body) > 0 AND octet_length(response_body) <= {MAX_HELD_BODY_BYTES})
-                 ),
-                 ADD CONSTRAINT registry_idempotency_erasure_shape
-                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
+                 );
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values,
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_shape;
@@ -296,6 +294,53 @@ pub async fn install_mutation_schema(
                          AND record_revision IS NULL AND result_count IS NULL
                          AND proposal_version IS NULL)
                  );",
+        ))
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    // A spent key is found by its caller: the verified issuer and subject, the
+    // operation scope, and the key. Rows an earlier engine found by an
+    // audit-keyed digest carry no caller and can never be found again, so a
+    // table without the caller columns is emptied before they are added. The
+    // erasure shape is installed here because it reads the receipt columns.
+    migration
+        .batch_execute(&format!(
+            "DO $breg_idempotency_caller$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1
+                       FROM pg_catalog.pg_attribute
+                      WHERE attrelid = 'registry_internal.registry_idempotency'::regclass
+                        AND attname = 'caller_issuer'
+                        AND NOT attisdropped
+                 ) THEN
+                     TRUNCATE registry_internal.registry_idempotency CASCADE;
+                     ALTER TABLE registry_internal.registry_idempotency
+                         ADD COLUMN caller_issuer text NOT NULL,
+                         ADD COLUMN caller_subject text NOT NULL,
+                         ADD COLUMN key_scope text NOT NULL,
+                         ADD COLUMN idempotency_key text NOT NULL,
+                         ADD COLUMN receipt_expires_at timestamptz NOT NULL,
+                         ADD COLUMN receipt_dropped_at timestamptz;
+                 END IF;
+             END
+             $breg_idempotency_caller$;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT IF EXISTS registry_idempotency_caller_shape;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_caller_shape CHECK (
+                     caller_issuer <> '' AND caller_subject <> ''
+                     AND key_scope IN ('mutation', 'ingestion_chunk', 'hook_proposal')
+                     AND idempotency_key <> ''
+                     AND octet_length(idempotency_key) <= {MAX_IDEMPOTENCY_KEY_BYTES}
+                     AND receipt_expires_at > created_at
+                 ),
+                 ADD CONSTRAINT registry_idempotency_erasure_shape CHECK (
+                     (response_body IS NULL) =
+                         (erased_at IS NOT NULL OR receipt_dropped_at IS NOT NULL)
+                 );
+             CREATE UNIQUE INDEX IF NOT EXISTS registry_idempotency_caller_key
+                 ON registry_internal.registry_idempotency
+                     (caller_issuer, caller_subject, key_scope, idempotency_key);",
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -768,6 +813,7 @@ pub struct MutationCoordinator {
     task_status: Option<Arc<dyn crate::task_grant::TaskGrantStatusChecker>>,
     field_encryption: Option<Arc<FieldEncryptionService>>,
     review_authorities: Option<Arc<crate::review_store::ReviewAuthorityRegistry>>,
+    idempotency: IdempotencyPolicy,
 }
 
 impl MutationCoordinator {
@@ -818,7 +864,16 @@ impl MutationCoordinator {
             task_status: None,
             field_encryption: None,
             review_authorities: None,
+            idempotency: IdempotencyPolicy::default(),
         }
+    }
+
+    /// Scope spent idempotency keys under the verified token issuer and keep
+    /// held responses for the configured receipt horizon.
+    #[must_use]
+    pub fn with_idempotency_policy(mut self, policy: IdempotencyPolicy) -> Self {
+        self.idempotency = policy;
+        self
     }
 
     #[must_use]
@@ -926,6 +981,7 @@ impl MutationCoordinator {
         .await?;
         let binding = resolve_binding(
             self.audit.profile(),
+            &self.idempotency,
             &IdempotencyBinding {
                 key: request.idempotency_key,
                 context: request.claims,
@@ -1252,6 +1308,7 @@ impl MutationCoordinator {
         let canonical_request_digest = canonical_request_digest(request)?;
         let binding = resolve_binding(
             self.audit.profile(),
+            &self.idempotency,
             &IdempotencyBinding {
                 key: request.idempotency_key,
                 context: request.claims,
@@ -1467,7 +1524,7 @@ impl MutationCoordinator {
                 operation_id: &request.plan.route.id,
                 mutation_kind: mutation_kind(request.plan.route.operation),
                 principal_reference: &binding.principal_reference,
-                request_reference: &binding.binding_reference,
+                request_reference: &binding.request_reference,
                 snapshot: &snapshot,
             },
         )
@@ -1535,7 +1592,7 @@ impl MutationCoordinator {
                 package_revision: &self.expected.activation_id,
                 origin: CommitOrigin::Mutation {
                     actor_reference: &binding.principal_reference,
-                    request_reference: &binding.binding_reference,
+                    request_reference: &binding.request_reference,
                 },
                 change_context: None,
                 members: &members,
@@ -1671,6 +1728,7 @@ impl MutationCoordinator {
         let canonical_request_digest = canonical_batch_request_digest(request)?;
         let binding = resolve_binding(
             self.audit.profile(),
+            &self.idempotency,
             &IdempotencyBinding {
                 key: request.idempotency_key,
                 context: request.claims,
@@ -2074,7 +2132,7 @@ impl MutationCoordinator {
                     operation_id: &item_plan.route.id,
                     mutation_kind: mutation_kind(item_plan.route.operation),
                     principal_reference: &binding.principal_reference,
-                    request_reference: &binding.binding_reference,
+                    request_reference: &binding.request_reference,
                     snapshot: &snapshot,
                 },
             )
@@ -2158,7 +2216,7 @@ impl MutationCoordinator {
                 package_revision: &self.expected.activation_id,
                 origin: CommitOrigin::Mutation {
                     actor_reference: &binding.principal_reference,
-                    request_reference: &binding.binding_reference,
+                    request_reference: &binding.request_reference,
                 },
                 change_context: request.change_context.as_ref(),
                 members: &commit_members,
@@ -2499,6 +2557,10 @@ pub enum MutationError {
     Conflict,
     #[error("idempotency key is already bound to another request")]
     IdempotencyConflict,
+    /// The exact request already committed under this key and its held
+    /// response is past the receipt horizon. The key stays spent.
+    #[error("idempotency key is spent and its held response has expired")]
+    IdempotencyExpired,
     #[error("mutation service is unavailable")]
     Unavailable,
     #[error("mutation transaction was aborted by PostgreSQL concurrency control")]
@@ -4552,6 +4614,7 @@ impl From<IdempotencyError> for MutationError {
         match error {
             IdempotencyError::InvalidInput => Self::InvalidRequest,
             IdempotencyError::Conflict => Self::IdempotencyConflict,
+            IdempotencyError::Expired => Self::IdempotencyExpired,
             // Only maintenance erasure reads a cached response body back, so
             // this classification names a state a mutation cannot reach. The
             // mutation surface answers it as the outage its callers retry.

@@ -5715,6 +5715,15 @@ fn evidence_retention_names_both_digests_when_the_active_package_misses_its_pin(
 }
 
 #[test]
+fn idempotency_retention_names_both_digests_when_the_active_package_misses_its_pin() {
+    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+        &["idempotency-retention", "erase-expired"],
+        &["--before", "2020-01-01T00:00:00Z"],
+        "idempotency_retention.package.refused",
+    );
+}
+
+#[test]
 fn canonical_package_tampering_is_refused_without_rendering_package_values() {
     let fixture = RuntimePackageFixture::production("127.0.0.1:1".parse().unwrap());
     let manifest = fixture.package.join("package.json");

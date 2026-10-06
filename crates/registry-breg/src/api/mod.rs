@@ -5703,6 +5703,7 @@ fn mutation_problem(error: MutationError) -> Response {
         }
         MutationError::Conflict => fixed_problem(ProblemCode::MutationConflict),
         MutationError::IdempotencyConflict => fixed_problem(ProblemCode::IdempotencyConflict),
+        MutationError::IdempotencyExpired => fixed_problem(ProblemCode::IdempotencyExpired),
         MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),
         // Only operator maintenance can produce `MigrationLockHeld` and
         // `PackagePinMismatch`; request handling never reaches those two, but

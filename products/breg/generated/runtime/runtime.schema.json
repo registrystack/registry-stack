@@ -963,6 +963,20 @@
         }
       ]
     },
+    "RawIdempotencyConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "receiptRetentionDays": {
+          "default": 7,
+          "description": "Days a held response is kept after its commit. A retry after it is\nrefused as expired and never executed; the key stays spent.",
+          "format": "uint16",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "RawJwksCacheConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1636,6 +1650,13 @@
       "$ref": "#/$defs/RawFieldEncryptionConfig",
       "default": {},
       "description": "Optional field-encryption data-key provider. Absent by default, which\nserves unencrypted entities only."
+    },
+    "idempotency": {
+      "$ref": "#/$defs/RawIdempotencyConfig",
+      "default": {
+        "receiptRetentionDays": 7
+      },
+      "description": "Optional idempotency tuning. Defaults to a seven-day receipt horizon."
     },
     "identity": {
       "$ref": "#/$defs/RawDeploymentIdentity"

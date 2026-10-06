@@ -1987,3 +1987,139 @@ does not accept, leaves no journal entry. Journaling unaccepted methods on
 every route family would be a separate change to the refusal path itself.
 A caller that sent HEAD to a governed route now receives a 404 and must send
 GET.
+
+## Caller-scoped idempotency and the receipt horizon
+
+The change moves the identity of a spent idempotency key off the audit hash
+key and onto the verified caller, adds a receipt horizon to held responses,
+and adds the operator command `bregctl idempotency-retention erase-expired`
+(`crates/registry-breg/src/idempotency.rs`,
+`crates/registry-breg/src/idempotency_retention.rs`,
+`crates/registry-breg/src/mutation.rs`,
+`crates/registry-breg/src/runtime_config.rs`). It touches authorization (who
+may replay a held response), data minimization (raw caller identifiers are
+now persisted), audit integrity (what rotating `audit.hashKeyRef` changes),
+and deployment defaults (a seven-day horizon and an upgrade that discards
+spent keys). The invariants are BREG-SEC-162 through BREG-SEC-164.
+
+### Threat
+
+1. A spent row was found by a keyed hash under `audit.hashKeyRef`. Rotating
+   that key made every spent row unfindable, so the exact retry of a write
+   whose response was lost executed it a second time: a pseudonymization
+   control decided write safety.
+2. One caller's key replays another caller's held response, which can carry
+   record values the second caller may not read, or refuses the second
+   caller's request as a conflict.
+3. Held responses, which carry record values, were kept for as long as the
+   registry kept the row.
+4. Dropping an expired held response frees its key, so a late retry executes
+   a committed write again.
+
+### Enforcement and defaults
+
+- **Identity.** A spent row is found by `key_reference`, an unkeyed SHA-256
+  over the domain `breg-idempotency-key-v2` and the length-prefixed operation
+  scope, issuer, subject, and key, and by a unique index on those four raw
+  columns. Mutation keys, immediate-action keys, and the server-derived
+  ingestion chunk keys use the configured `authentication.issuer` and the
+  verified principal. A hook proposal application is spent by the delivery
+  itself: issuer `urn:registry-breg:hook-delivery`, which no token verifier
+  accepts, subject the compiled delivery id, and the delivery's idempotency
+  key, so no caller can reserve, replay, or collide with it. A coordinator
+  built without a runtime configuration scopes keys under
+  `urn:registry-breg:embedded-issuer`.
+- **Binding.** `binding_reference` is an unkeyed SHA-256 over the canonical
+  exact binding: method, route, target, package revision, response fields,
+  canonical request digest, the raw verified claim context (principal,
+  selected profile, purpose, row boundaries, submitter targets), and the
+  task grant, action contract fingerprint, target authority, or handler
+  answer digest where they apply. A byte-identical body under a different
+  package, profile, or claims is therefore `409 idempotency.conflict`.
+- **Audit key.** Nothing that finds or binds a spent row reads
+  `audit.hashKeyRef`. The keyed `request_reference` and principal reference
+  stay in revisions and the audit journal as pseudonyms; rotating the key
+  changes them for later writes only.
+- **Horizon.** A held response stays available for
+  `idempotency.receiptRetentionDays` after its commit: default 7, at least 1,
+  at most 365, fixed on the row when it commits. Reading a spent key checks
+  the binding first and the horizon second, so a changed request is told it
+  conflicts and an exact retry past the horizon is `410 idempotency.expired`.
+  Either way nothing executes, whether or not the held bytes were dropped.
+  Only successful responses are held; a refusal spends no key.
+- **Sweep.** Expiry is enforced when the row is read, so the sweep only
+  bounds how long held bytes stay stored, as `evidence-retention
+  erase-expired` does for retained assertions. It runs under the migration
+  credential, takes the registry lock, verifies identity, catalog, and
+  readiness, and sets the body and headers to null with
+  `receipt_dropped_at`, keeping caller, key, binding, and times. The runtime
+  role holds only `SELECT` and `INSERT` on the table, so no request path can
+  drop or rewrite a held response. The request entry
+  (`breg-idempotency-retention-audit/v1`) is accepted before the transaction
+  opens and the response records the count; a commit that returned an error
+  is read back on a fresh connection before the outcome is recorded.
+- **Upgrade.** The engine feature `caller_scoped_idempotency` makes a
+  rebuilt v0.39.0 package an engine-capability successor, so the apply runs
+  the schema install. When `registry_idempotency` lacks the caller columns,
+  the install truncates it with `CASCADE`, which also empties
+  `registry_immediate_action_results`,
+  `registry_immediate_action_applications`, and
+  `registry_request_idempotency_links`, and then adds the caller-keyed shape.
+  No old row is converted: none records the caller it belongs to.
+
+### Data minimization
+
+`registry_internal.registry_idempotency` now stores the raw issuer,
+principal value, and key of every spent row for as long as the registry keeps
+the row; previously it stored only a keyed hash. The audit journal is
+unchanged and carries keyed references only. The binding digest is unkeyed,
+so someone who can read the table can confirm a guessed low-entropy claim
+value, such as a purpose or a row boundary, against it; that reader already
+sees the raw principal beside it and the records it produced. `history erase`
+still replaces held responses that could replay erased revisions with refusal
+tombstones and leaves the spent row.
+
+### Tests
+
+- `tests/postgres_mutation.rs`:
+  `real_postgres_exact_retry_after_audit_key_rotation_replays_and_never_reexecutes`,
+  `real_postgres_idempotency_keys_are_scoped_per_caller`,
+  `real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent`,
+  and
+  `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_discards_spent_rows`.
+- `tests/postgres_migration.rs`:
+  `a_pre_caller_scoped_empty_successor_discards_audit_keyed_spent_keys`
+  applies a package without the engine feature, restores the old table
+  shape with a held row, and proves the successor apply discards it and
+  verifies the catalog.
+- `tests/postgres_batch.rs` proves over HTTP that another principal's batch
+  under the same key executes as its own request and that an expired exact
+  retry answers `410 idempotency.expired` without effects.
+- `tests/runtime_config.rs`:
+  `idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year`.
+- `registry-bregctl`: the held-lock, pin-mismatch, and invalid-configuration
+  diagnostics of `idempotency-retention erase-expired`.
+
+### Accepted residuals
+
+- **The upgrade discards spent keys.** A request committed before the
+  upgrade and retried after it executes again, and a hook delivery in flight
+  across the upgrade can apply its proposal again. Nobody runs Base Registry
+  Engine in production yet, so no record is preserved or converted. Entity
+  uniqueness constraints still refuse a duplicate create where the project
+  declares them.
+- **Issuer or principal mapping changes re-scope keys.** A retry across a
+  change of `authentication.issuer` or of the principal claim is another
+  caller's fresh request. The operator guide says to resolve uncertain writes
+  before such a change.
+- **Spent rows are never deleted.** The horizon bounds held bytes, not the
+  raw caller and key, which stay as long as the registry keeps the row.
+- **A late retry cannot recover a lost body.** Past the horizon a client
+  whose first response was lost must read the record or its history.
+- **Ingestion chunk replays do not use the horizon.** A chunk replays from
+  the run's own chunk receipt, which the run retains; the spent row behind it
+  is never the source of that reply.
+- **Other keyed references still bind ownership.** Ingestion run ownership
+  (`created_principal_reference`) is a keyed hash under `audit.hashKeyRef`,
+  so rotating the key hides an open run from its creator. It is outside the
+  spent-key scope of this change.

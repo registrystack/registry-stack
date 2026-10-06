@@ -1796,6 +1796,13 @@ fn action_problem_responses(
             ],
         );
         responses.insert(
+            "410",
+            vec![ProblemExample {
+                code: "idempotency.expired",
+                detail: "The held response of the idempotency key expired; the key stays spent.",
+            }],
+        );
+        responses.insert(
             "412",
             vec![ProblemExample {
                 code: "precondition.failed",
@@ -4375,6 +4382,13 @@ fn problem_responses(
             ],
         );
         responses.insert(
+            "410",
+            vec![ProblemExample {
+                code: "idempotency.expired",
+                detail: "The held response of the idempotency key expired; the key stays spent.",
+            }],
+        );
+        responses.insert(
             "415",
             vec![ProblemExample {
                 code: "unsupported.media_type",
@@ -4436,6 +4450,13 @@ fn problem_responses(
                     detail: "The idempotency key is bound to another request.",
                 },
             ],
+        );
+        responses.insert(
+            "410",
+            vec![ProblemExample {
+                code: "idempotency.expired",
+                detail: "The held response of the idempotency key expired; the key stays spent.",
+            }],
         );
         responses.insert(
             "412",
@@ -4555,6 +4576,7 @@ fn problem_example(status: &str, code: &str, detail: &str) -> Value {
             "401" => "Unauthorized",
             "404" => "Not Found",
             "409" => "Conflict",
+            "410" => "Gone",
             "412" => "Precondition Failed",
             "415" => "Unsupported Media Type",
             "422" => "Unprocessable Entity",

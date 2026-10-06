@@ -196,6 +196,33 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
         }),
     )
     .await;
+    // A held response the receipt sweep already dropped stays dropped: the
+    // erasure rewrites its result to the erased shape without restoring a body.
+    insert_idempotency_response(
+        &transaction,
+        "dropped-record-key",
+        "dropped-record-binding",
+        "record",
+        Some(&format!("{ENTITY}:{record_id}")),
+        Some(1),
+        None,
+        json!({
+            "id": record_id.to_string(),
+            "revision": 1,
+            "data": {"household": "dropped-record-canary"}
+        }),
+    )
+    .await;
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_idempotency
+                SET response_body = NULL,
+                    receipt_dropped_at = transaction_timestamp()
+              WHERE key_reference = 'dropped-record-key'",
+            &[],
+        )
+        .await
+        .expect("the sweep's drop of one held response is reproduced");
     insert_idempotency_response(
         &transaction,
         "batch-snapshot-key",
@@ -279,7 +306,7 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     assert_eq!(outcome.erased_commit_member_count, 1);
     assert_eq!(outcome.scrubbed_change_context_count, 1);
     assert_eq!(outcome.scrubbed_outbox_payload_count, 1);
-    assert_eq!(outcome.scrubbed_cached_response_count, 4);
+    assert_eq!(outcome.scrubbed_cached_response_count, 5);
     assert_eq!(outcome.removed_descriptor_count, 1);
 
     let erased_response_body = b"{\"kind\":\"erased\"}".as_slice();
@@ -328,6 +355,24 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     assert_eq!(state.get::<_, i64>(5), 1);
     assert_eq!(state.get::<_, i64>(6), 1);
     assert_eq!(state.get::<_, i64>(7), 4);
+    let dropped = migration
+        .query_one(
+            "SELECT result_kind, response_body IS NULL, receipt_dropped_at IS NOT NULL
+               FROM registry_internal.registry_idempotency
+              WHERE key_reference = 'dropped-record-key'",
+            &[],
+        )
+        .await
+        .expect("migration can inspect the dropped held response");
+    assert_eq!(
+        (
+            dropped.get::<_, String>(0),
+            dropped.get::<_, bool>(1),
+            dropped.get::<_, bool>(2)
+        ),
+        ("erased".to_owned(), true, true),
+        "erasure keeps a dropped held response without a body"
+    );
 
     let transaction = migration
         .transaction()
@@ -361,9 +406,17 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
         &idempotency::ResolvedIdempotencyBinding {
             key_reference: "record-key".to_owned(),
             binding_reference: "record-binding".to_owned(),
+            request_reference: "record-request".to_owned(),
             principal_reference: "principal".to_owned(),
             record_reference: format!("{ENTITY}:{record_id}"),
             handler_answer_digest: None,
+            caller: idempotency::SpentKeyCaller {
+                issuer: "urn:test:issuer".to_owned(),
+                subject: "test-subject".to_owned(),
+                scope: "mutation",
+                key: "record-key".to_owned(),
+                receipt_retention_days: 7,
+            },
         },
     )
     .await;
@@ -2401,8 +2454,8 @@ async fn insert_idempotency_response(
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_reference,
                   record_revision, result_count, response_status, response_body,
-                  response_headers)
-             VALUES ($1, $2, $3, $4, $5, $6, 200, $7, $8)",
+                  response_headers, caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 200, $7, $8, 'urn:test:issuer', 'test-subject', 'mutation', $1, transaction_timestamp() + interval '7 days')",
             &[
                 &key_reference,
                 &binding_reference,
@@ -2431,8 +2484,8 @@ async fn insert_idempotency_response_bytes(
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_reference,
                   record_revision, result_count, response_status, response_body,
-                  response_headers)
-             VALUES ($1, $2, 'batch', NULL, NULL, 1, 200, $3, $4)",
+                  response_headers, caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at)
+             VALUES ($1, $2, 'batch', NULL, NULL, 1, 200, $3, $4, 'urn:test:issuer', 'test-subject', 'mutation', $1, transaction_timestamp() + interval '7 days')",
             &[&key_reference, &binding_reference, &body, &vec![0_u8, 0_u8]],
         )
         .await

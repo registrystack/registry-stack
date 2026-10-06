@@ -191,6 +191,7 @@ impl MutationCoordinator {
         }
         let binding = resolve_binding(
             self.audit.profile(),
+            &self.idempotency,
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -420,6 +421,7 @@ impl MutationCoordinator {
         }
         let binding = resolve_binding(
             self.audit.profile(),
+            &self.idempotency,
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -846,6 +848,7 @@ impl MutationCoordinator {
                 .into();
         let binding = resolve_binding(
             self.audit.profile(),
+            &self.idempotency,
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -1015,6 +1018,7 @@ impl MutationCoordinator {
                 .into();
         let binding = resolve_binding(
             self.audit.profile(),
+            &self.idempotency,
             &IdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -1683,7 +1687,7 @@ impl MutationCoordinator {
                 package_revision: &self.expected.activation_id,
                 origin: CommitOrigin::Mutation {
                     actor_reference: &binding.principal_reference,
-                    request_reference: &binding.binding_reference,
+                    request_reference: &binding.request_reference,
                 },
                 change_context: None,
                 members: &commit_members,
@@ -2574,7 +2578,7 @@ impl MutationCoordinator {
                 operation_id: &target_operation_id,
                 mutation_kind: mutation_kind(target.operation),
                 principal_reference: &binding.principal_reference,
-                request_reference: &binding.binding_reference,
+                request_reference: &binding.request_reference,
                 snapshot: &canonical_snapshot(&current.data)?,
             },
         )
@@ -2640,7 +2644,7 @@ impl MutationCoordinator {
                 operation_id: &route.id,
                 mutation_kind: "patch",
                 principal_reference: &binding.principal_reference,
-                request_reference: &binding.binding_reference,
+                request_reference: &binding.request_reference,
                 snapshot: &canonical_snapshot(&current.data)?,
             },
         )

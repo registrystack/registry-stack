@@ -17,7 +17,8 @@ use crate::audit::RegistryAudit;
 use crate::history_reference::SnapshotReference;
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_binding, HeldResponse, IdempotencyBinding,
-    IdempotencyError, IdempotencyKeyDomain, PermittedResponseHeader, StoredResultMetadata,
+    IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy, PermittedResponseHeader,
+    StoredResultMetadata,
 };
 use crate::model::{
     CompiledEntity, CompiledRegistry, CompiledStatisticalDataset,
@@ -78,6 +79,8 @@ pub enum StatisticsServiceError {
     Timeout,
     #[error("idempotency key is already bound to another request")]
     IdempotencyConflict,
+    #[error("idempotency key is spent and its held response has expired")]
+    IdempotencyExpired,
     #[error("statistical service is unavailable")]
     Unavailable,
     /// A release or withdrawal reached its commit and its outcome is not
@@ -257,6 +260,7 @@ pub struct PostgresStatisticsService {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit: RegistryAudit,
+    idempotency: IdempotencyPolicy,
     #[cfg(feature = "postgres-test")]
     test_trace: Option<Arc<std::sync::Mutex<Vec<String>>>>,
     #[cfg(feature = "postgres-test")]
@@ -285,7 +289,8 @@ impl PostgresStatisticsService {
             canonical_request_digest: request.canonical_request_digest,
             key_domain: IdempotencyKeyDomain::Caller,
         };
-        let resolved = resolve_binding(self.audit.profile(), &binding).map_err(map_idempotency)?;
+        let resolved = resolve_binding(self.audit.profile(), &self.idempotency, &binding)
+            .map_err(map_idempotency)?;
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = begin_record_transaction(
             &mut client,
@@ -352,7 +357,8 @@ impl PostgresStatisticsService {
             canonical_request_digest: request.canonical_request_digest,
             key_domain: IdempotencyKeyDomain::Caller,
         };
-        let resolved = resolve_binding(self.audit.profile(), &binding).map_err(map_idempotency)?;
+        let resolved = resolve_binding(self.audit.profile(), &self.idempotency, &binding)
+            .map_err(map_idempotency)?;
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = match begin_record_transaction(
             &mut client,
@@ -705,6 +711,7 @@ impl PostgresStatisticsService {
             lock_key,
             lock_timeout,
             audit,
+            idempotency: IdempotencyPolicy::default(),
             #[cfg(feature = "postgres-test")]
             test_trace: None,
             #[cfg(feature = "postgres-test")]
@@ -712,6 +719,14 @@ impl PostgresStatisticsService {
             #[cfg(feature = "postgres-test")]
             withdrawal_pause: None,
         }
+    }
+
+    /// Scope spent idempotency keys under the verified token issuer and keep
+    /// held responses for the configured receipt horizon.
+    #[must_use]
+    pub fn with_idempotency_policy(mut self, policy: IdempotencyPolicy) -> Self {
+        self.idempotency = policy;
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -919,7 +934,8 @@ impl PostgresStatisticsService {
             canonical_request_digest: request.canonical_request_digest,
             key_domain: IdempotencyKeyDomain::Caller,
         };
-        let resolved = resolve_binding(self.audit.profile(), &binding).map_err(map_idempotency)?;
+        let resolved = resolve_binding(self.audit.profile(), &self.idempotency, &binding)
+            .map_err(map_idempotency)?;
         let mut client = self.pool.get().await.map_err(unavailable)?;
         let transaction = begin_record_transaction(
             &mut client,
@@ -1707,6 +1723,7 @@ fn map_read_error(_: ReadServiceError) -> StatisticsServiceError {
 fn map_idempotency(error: IdempotencyError) -> StatisticsServiceError {
     match error {
         IdempotencyError::Conflict => StatisticsServiceError::IdempotencyConflict,
+        IdempotencyError::Expired => StatisticsServiceError::IdempotencyExpired,
         IdempotencyError::InvalidInput => StatisticsServiceError::QueryInvalid {
             field_path: "Idempotency-Key",
         },

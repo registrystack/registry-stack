@@ -21,7 +21,7 @@ use registry_breg::audit::RegistryAudit;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, Operation};
 use registry_breg::cursor::CursorCodec;
-use registry_breg::idempotency::PermittedResponseHeader;
+use registry_breg::idempotency::{IdempotencyPolicy, PermittedResponseHeader};
 use registry_breg::mutation::{
     install_mutation_schema, MutationBody, MutationCoordinator, MutationError, MutationFaultPoint,
     MutationOutcome, MutationPlan, MutationRequest, PatchOperation,
@@ -147,8 +147,9 @@ async fn insert_idempotency_response(
             "INSERT INTO registry_internal.registry_idempotency (
                  key_reference, binding_reference, result_kind,
                  record_reference, record_revision, response_status,
-                 response_body, response_headers
-             ) VALUES ($1, 'binding', 'record', 'record', 1, 200, $2, $3)",
+                 response_body, response_headers, caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at
+             ) VALUES ($1, 'binding', 'record', 'record', 1, 200, $2, $3,
+                       'urn:test:issuer', 'test-subject', 'mutation', $1, transaction_timestamp() + interval '7 days')",
             &[&key_reference, &body, &response_headers],
         )
         .await
@@ -220,8 +221,9 @@ async fn real_postgres_idempotency_release_kind_installs_on_the_predecessor_sche
             .execute(
                 "INSERT INTO registry_internal.registry_idempotency (
                      key_reference, binding_reference, result_kind,
-                     response_status, response_body, response_headers
-                 ) VALUES ('upgraded-release-without-record', 'binding', 'release', 200, '{}', '')",
+                     response_status, response_body, response_headers, caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at
+                 ) VALUES ('upgraded-release-without-record', 'binding', 'release', 200, '{}', '',
+                           'urn:test:issuer', 'test-subject', 'mutation', 'upgraded-release-without-record', transaction_timestamp() + interval '7 days')",
                 &[],
             )
             .await
@@ -242,8 +244,9 @@ async fn insert_idempotency_release(
             "INSERT INTO registry_internal.registry_idempotency (
                  key_reference, binding_reference, result_kind,
                  record_reference, record_revision, response_status,
-                 response_body, response_headers
-             ) VALUES ($1, 'binding', 'release', 'release', 1, 200, '{}', '')",
+                 response_body, response_headers, caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at
+             ) VALUES ($1, 'binding', 'release', 'release', 1, 200, '{}', '',
+                       'urn:test:issuer', 'test-subject', 'mutation', $1, transaction_timestamp() + interval '7 days')",
             &[&key_reference],
         )
         .await
@@ -655,9 +658,11 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
     )
     .await;
 
+    // Keys are per caller: the same key from another principal is that
+    // principal's own unspent key, so the request executes as a fresh write
+    // and is refused only because the record it would create already exists.
     let other_principal = mutation_claims(&compiled, "different-principal", "zone-a");
     let before_principal = durable_counts(&database, table).await;
-    let before_principal_refusals = refusal_audit_count(&database).await;
     let changed_principal = coordinator
         .execute(
             &mut client,
@@ -671,14 +676,8 @@ async fn real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable()
             ),
         )
         .await;
-    assert_idempotency_refusal_only(
-        changed_principal,
-        before_principal,
-        before_principal_refusals,
-        &database,
-        table,
-    )
-    .await;
+    assert_eq!(changed_principal, Err(MutationError::Conflict));
+    assert_audited_refusal_only(before_principal, durable_counts(&database, table).await);
 
     let before_patch_seed = durable_counts(&database, table).await;
     let patch_seed = coordinator
@@ -4593,4 +4592,436 @@ fn query_parameter_names(parameters: &Value) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
+}
+
+fn coordinator_with_audit_key(
+    database: &TestDatabase,
+    identity: &registry_breg::postgres::ExpectedRegistryIdentity,
+    audit_key: u8,
+) -> MutationCoordinator {
+    MutationCoordinator::new(
+        RegistryLockKey::derive("mutation-registry").expect("lock id is bounded"),
+        Duration::from_secs(2),
+        identity.clone(),
+        INSTANCE_ID,
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![audit_key; 32].into())
+                .expect("test owns a strong keyed audit profile"),
+        ),
+    )
+}
+
+/// Every durable effect except the audit journal, which also records replays
+/// and refusals.
+fn effect_counts(counts: DurableCounts) -> [i64; 6] {
+    [
+        counts.current,
+        counts.revisions,
+        counts.outbox,
+        counts.idempotency,
+        counts.commits,
+        counts.commit_members,
+    ]
+}
+
+/// Rotating `audit.hashKeyRef` changes pseudonyms only. An exact retry after
+/// the rotation finds the spent key by the caller and the key alone, replays
+/// the held response, and never executes the mutation a second time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_exact_retry_after_audit_key_rotation_replays_and_never_reexecutes() {
+    let database = TestDatabase::create(2).await;
+    let (compiled, identity, pool) = prepared_mutation_registry(&database).await;
+    let plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
+        .expect("create plan comes from the compiled inventory");
+    let claims = mutation_claims(&compiled, PRINCIPAL_CANARY, "zone-a");
+    let table = &compiled.entities()["widget"].physical_table;
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+
+    let first = coordinator_with_audit_key(&database, &identity, 0x5a)
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "rotation-key",
+                &claims,
+                RECORD_POSITIVE,
+                "rotation-label",
+                Some(3),
+            ),
+        )
+        .await
+        .expect("the first attempt executes");
+    assert!(!first.replayed());
+    let committed = durable_counts(&database, table).await;
+
+    let rotated = coordinator_with_audit_key(&database, &identity, 0x6b);
+    let retry = rotated
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "rotation-key",
+                &claims,
+                RECORD_POSITIVE,
+                "rotation-label",
+                Some(3),
+            ),
+        )
+        .await
+        .expect("an exact retry after rotation replays the held response");
+    assert!(retry.replayed());
+    assert_eq!(retry.response(), first.response());
+    assert_eq!(
+        effect_counts(durable_counts(&database, table).await),
+        effect_counts(committed)
+    );
+
+    let changed = rotated
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "rotation-key",
+                &claims,
+                RECORD_POSITIVE,
+                "rotation-other-label",
+                Some(3),
+            ),
+        )
+        .await;
+    assert_eq!(changed, Err(MutationError::IdempotencyConflict));
+    assert_eq!(
+        effect_counts(durable_counts(&database, table).await),
+        effect_counts(committed)
+    );
+
+    let spent = database
+        .admin
+        .query_one(
+            "SELECT key_reference, binding_reference, caller_subject, key_scope, idempotency_key
+               FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .expect("administrator can inspect the spent key");
+    assert!(spent.get::<_, String>(0).starts_with("sha256:"));
+    assert!(spent.get::<_, String>(1).starts_with("sha256:"));
+    assert_eq!(spent.get::<_, String>(2), PRINCIPAL_CANARY);
+    assert_eq!(spent.get::<_, String>(3), "mutation");
+    assert_eq!(spent.get::<_, String>(4), "rotation-key");
+    drop(client);
+    database.cleanup().await;
+}
+
+/// A key is spent per caller: the verified issuer and subject scope it, so
+/// another subject, or the same subject under another issuer, using the same
+/// key executes its own request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_idempotency_keys_are_scoped_per_caller() {
+    let database = TestDatabase::create(2).await;
+    let (compiled, identity, pool) = prepared_mutation_registry(&database).await;
+    let plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
+        .expect("create plan comes from the compiled inventory");
+    let first_caller = mutation_claims(&compiled, PRINCIPAL_CANARY, "zone-a");
+    let second_caller = mutation_claims(&compiled, "second-caller-subject", "zone-a");
+    let table = &compiled.entities()["widget"].physical_table;
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+    let coordinator = audited_coordinator(&database, &identity);
+
+    let first = coordinator
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "shared-key",
+                &first_caller,
+                RECORD_POSITIVE,
+                "first-caller-label",
+                Some(1),
+            ),
+        )
+        .await
+        .expect("the first caller executes");
+    let second = coordinator
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "shared-key",
+                &second_caller,
+                RECORD_PATCH,
+                "second-caller-label",
+                Some(2),
+            ),
+        )
+        .await
+        .expect("another subject using the same key executes its own request");
+    assert!(!first.replayed());
+    assert!(!second.replayed());
+    assert_ne!(first.response(), second.response());
+
+    let other_issuer = audited_coordinator(&database, &identity).with_idempotency_policy(
+        IdempotencyPolicy::new("https://other-issuer.example", 7)
+            .expect("the policy is within bounds"),
+    );
+    let third = other_issuer
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "shared-key",
+                &first_caller,
+                RECORD_RECOVERY,
+                "other-issuer-label",
+                Some(3),
+            ),
+        )
+        .await
+        .expect("the same subject under another issuer executes its own request");
+    assert!(!third.replayed());
+
+    let counts = durable_counts(&database, table).await;
+    assert_eq!(counts.current, 3);
+    assert_eq!(counts.idempotency, 3);
+    let replay = coordinator
+        .execute(
+            &mut client,
+            create_request(
+                &plan,
+                "shared-key",
+                &second_caller,
+                RECORD_PATCH,
+                "second-caller-label",
+                Some(2),
+            ),
+        )
+        .await
+        .expect("each caller replays only its own held response");
+    assert!(replay.replayed());
+    assert_eq!(replay.response(), second.response());
+    drop(client);
+    database.cleanup().await;
+}
+
+/// A held response is kept for the receipt horizon. A retry after it is
+/// refused as expired and never executed, before and after the operator
+/// sweep drops the held body; the key stays spent throughout.
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent() {
+    use registry_breg::idempotency_retention::IdempotencyRetentionOperatorService;
+    use registry_breg::postgres::ExpectedManagedCatalog;
+
+    let database = TestDatabase::create(2).await;
+    let (compiled, identity, pool) = prepared_mutation_registry(&database).await;
+    let plan = MutationPlan::from_compiled(&compiled, "records.widget.create")
+        .expect("create plan comes from the compiled inventory");
+    let claims = mutation_claims(&compiled, PRINCIPAL_CANARY, "zone-a");
+    let table = &compiled.entities()["widget"].physical_table;
+    let mut client = pool
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+    let coordinator = audited_coordinator(&database, &identity);
+
+    for (key, label) in [
+        ("horizon-key", "horizon-label"),
+        ("fresh-key", "fresh-label"),
+    ] {
+        coordinator
+            .execute(
+                &mut client,
+                create_request(&plan, key, &claims, RECORD_POSITIVE, label, Some(1)),
+            )
+            .await
+            .expect("the first attempt executes");
+    }
+    let held = database
+        .admin
+        .query_one(
+            "SELECT receipt_expires_at - created_at = INTERVAL '7 days'
+               FROM registry_internal.registry_idempotency
+              WHERE idempotency_key = 'horizon-key'",
+            &[],
+        )
+        .await
+        .expect("administrator can inspect the receipt horizon");
+    assert!(held.get::<_, bool>(0), "the default horizon is seven days");
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_idempotency
+                SET created_at = CURRENT_TIMESTAMP - INTERVAL '9 days',
+                    receipt_expires_at = CURRENT_TIMESTAMP - INTERVAL '2 days'
+              WHERE idempotency_key = 'horizon-key'",
+            &[],
+        )
+        .await
+        .expect("administrator ages one receipt past its horizon");
+    let committed = durable_counts(&database, table).await;
+
+    let retry = || {
+        create_request(
+            &plan,
+            "horizon-key",
+            &claims,
+            RECORD_POSITIVE,
+            "horizon-label",
+            Some(1),
+        )
+    };
+    assert_eq!(
+        coordinator.execute(&mut client, retry()).await,
+        Err(MutationError::IdempotencyExpired)
+    );
+    assert_eq!(
+        effect_counts(durable_counts(&database, table).await),
+        effect_counts(committed)
+    );
+
+    let sweep = IdempotencyRetentionOperatorService::new_for_test(
+        identity.clone(),
+        ExpectedManagedCatalog::compiled(&compiled),
+        RegistryLockKey::derive(PACKAGE_ID).expect("lock id is bounded"),
+        database.migration_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        database.audit(
+            AuditProfile::production_from_secret_bytes(vec![0x5e; 32].into())
+                .expect("test owns a strong keyed audit profile"),
+        ),
+    );
+    assert_eq!(
+        sweep
+            .erase_expired(chrono::Utc::now())
+            .await
+            .expect("the sweep drops expired held responses"),
+        1
+    );
+    assert_eq!(
+        sweep
+            .erase_expired(chrono::Utc::now())
+            .await
+            .expect("a repeated sweep is idempotent"),
+        0
+    );
+    let rows = database
+        .admin
+        .query(
+            "SELECT idempotency_key, response_body IS NULL, receipt_dropped_at IS NOT NULL
+               FROM registry_internal.registry_idempotency
+              ORDER BY idempotency_key",
+            &[],
+        )
+        .await
+        .expect("administrator can inspect spent keys");
+    let rows = rows
+        .iter()
+        .map(|row| {
+            (
+                row.get::<_, String>(0),
+                row.get::<_, bool>(1),
+                row.get::<_, bool>(2),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            ("fresh-key".to_owned(), false, false),
+            ("horizon-key".to_owned(), true, true),
+        ]
+    );
+    assert_eq!(
+        coordinator.execute(&mut client, retry()).await,
+        Err(MutationError::IdempotencyExpired)
+    );
+    assert_eq!(
+        effect_counts(durable_counts(&database, table).await),
+        effect_counts(committed)
+    );
+    let sweep_entries = database
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["schema"] == "breg-idempotency-retention-audit/v1")
+        .collect::<Vec<_>>();
+    assert_eq!(sweep_entries.len(), 4, "{sweep_entries:?}");
+    assert_eq!(sweep_entries[1]["record"]["outcome"], "erased");
+    assert_eq!(sweep_entries[1]["record"]["erased"], 1);
+    drop(client);
+    database.cleanup().await;
+}
+
+/// Upgrading from the table shape that keyed rows by an audit-key HMAC
+/// discards every spent row, since none carries the caller its key belongs
+/// to, and leaves the caller-scoped shape in place for the next write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_discards_spent_rows() {
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("clean mutation schema installs");
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT registry_idempotency_caller_shape,
+                 DROP CONSTRAINT registry_idempotency_erasure_shape;
+             DROP INDEX registry_internal.registry_idempotency_caller_key;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP COLUMN caller_issuer,
+                 DROP COLUMN caller_subject,
+                 DROP COLUMN key_scope,
+                 DROP COLUMN idempotency_key,
+                 DROP COLUMN receipt_expires_at,
+                 DROP COLUMN receipt_dropped_at;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_erasure_shape
+                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
+             INSERT INTO registry_internal.registry_idempotency
+                 (key_reference, binding_reference, result_kind, result_count,
+                  response_status, response_body, response_headers)
+             VALUES
+                 ('hmac-sha256:held', 'hmac-sha256:held-binding', 'immediate_action', 0,
+                  200, '{}', '\\x0000');",
+        )
+        .await
+        .expect("the audit-keyed table shape is restored with a held row");
+
+    for attempt in ["upgrade", "reinstall"] {
+        install_mutation_schema(&migration, &database.runtime_role)
+            .await
+            .unwrap_or_else(|_| panic!("{attempt} of the caller-scoped shape succeeds"));
+    }
+    let remaining = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .expect("administrator can count spent keys")
+        .get::<_, i64>(0);
+    assert_eq!(remaining, 0, "the upgrade discards audit-keyed spent rows");
+    let refused = migration
+        .batch_execute(
+            "INSERT INTO registry_internal.registry_idempotency
+                 (key_reference, binding_reference, result_kind, result_count,
+                  response_status, response_body, response_headers)
+             VALUES ('sha256:unscoped', 'sha256:unscoped-binding', 'immediate_action', 0,
+                     200, '{}', '\\x0000')",
+        )
+        .await;
+    assert!(
+        refused.is_err(),
+        "a spent key without its caller scope is refused"
+    );
+    migration_task.abort();
+    database.cleanup().await;
 }
