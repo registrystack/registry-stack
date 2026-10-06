@@ -158,11 +158,6 @@ impl TestClient {
         &self.id
     }
 
-    #[must_use]
-    pub fn service_subject(&self) -> &str {
-        &self.service_subject
-    }
-
     fn lifetime_seconds(&self) -> i64 {
         i64::try_from(self.token_lifetime.as_secs()).expect("the token lifetime fits in i64")
     }

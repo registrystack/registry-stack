@@ -16,10 +16,7 @@ pub use authorization_server::{
 };
 
 use std::{
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
-    },
+    sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -27,13 +24,13 @@ use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use jsonwebtoken::Algorithm;
-use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider};
+use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use wiremock::{
     matchers::{method, path},
-    Match, Mock, MockServer, Request, ResponseTemplate,
+    Mock, MockServer, ResponseTemplate,
 };
 
 const TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
@@ -123,17 +120,6 @@ impl MockIdp {
         mint_ed25519_jwt(&self.issuer, claims, &key.private)
     }
 
-    /// Mint a token whose JOSE header omits the optional `typ` member, modelling
-    /// IdPs (such as eSignet) that sign ID Tokens with only `alg` + `kid`.
-    #[must_use]
-    pub fn mint_token_without_typ(&self, claims: Value) -> String {
-        let key = {
-            let state = self.state.read().expect("mock IdP state lock is healthy");
-            state.keys[state.current].clone()
-        };
-        mint_ed25519_jwt_without_typ(&self.issuer, claims, &key.private)
-    }
-
     pub fn rotate_key(&self) {
         let mut state = self.state.write().expect("mock IdP state lock is healthy");
         state.current = (state.current + 1) % state.keys.len();
@@ -199,18 +185,6 @@ fn mint_ed25519_jwt(issuer: &str, claims: Value, private: &PrivateJwk) -> String
     sign_ed25519_compact_jwt_with_key(private, "JWT", &kid, claims)
 }
 
-fn mint_ed25519_jwt_without_typ(issuer: &str, claims: Value, private: &PrivateJwk) -> String {
-    let kid = private
-        .kid
-        .clone()
-        .unwrap_or_else(|| "registry-platform-testing-ed25519-1".to_string());
-    let claims = normalize_claims(issuer, claims);
-    let header = json!({ "alg": "EdDSA", "kid": kid });
-    let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
-    let signature = sign(signing_input.as_bytes(), private).expect("fixture key signs JWT");
-    format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
-}
-
 #[must_use]
 pub fn sign_ed25519_compact_jwt(private_jwk: &str, typ: &str, kid: &str, claims: Value) -> String {
     let private = PrivateJwk::parse(private_jwk).expect("fixture private JWK parses");
@@ -234,32 +208,9 @@ pub fn sign_ed25519_compact_jwt_with_key(
     format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
 }
 
-pub async fn sign_ed25519_compact_jwt_with_provider(
-    signer: &dyn SigningProvider,
-    typ: &str,
-    claims: Value,
-) -> String {
-    let header = json!({
-        "alg": "EdDSA",
-        "typ": typ,
-        "kid": signer.key_id(),
-    });
-    let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
-    let signature = signer
-        .sign(signing_input.as_bytes())
-        .await
-        .expect("fixture provider signs JWT");
-    format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(signature))
-}
-
 #[must_use]
 pub fn jwks_from_private_jwk(private: &PrivateJwk) -> Value {
     json!({ "keys": [private.public()] })
-}
-
-#[must_use]
-pub fn jwks_from_signing_provider(signer: &dyn SigningProvider) -> Value {
-    json!({ "keys": [signer.public_jwk()] })
 }
 
 fn normalize_claims(issuer: &str, claims: Value) -> Value {
@@ -293,14 +244,12 @@ fn now_unix_seconds() -> i64 {
 #[derive(Debug)]
 pub struct MockHttpUpstream {
     server: MockServer,
-    max_request_bytes: Arc<AtomicU64>,
 }
 
 impl MockHttpUpstream {
     pub async fn start() -> Self {
         Self {
             server: MockServer::start().await,
-            max_request_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -315,16 +264,7 @@ impl MockHttpUpstream {
             server: &self.server,
             method: method_name.to_string(),
             path: request_path.to_string(),
-            max_request_bytes: Arc::clone(&self.max_request_bytes),
         }
-    }
-
-    pub fn assert_max_request_bytes(&self, n: u64) {
-        let observed = self.max_request_bytes.load(Ordering::SeqCst);
-        assert!(
-            observed <= n,
-            "expected max request body to be <= {n} bytes, observed {observed} bytes"
-        );
     }
 
     #[must_use]
@@ -338,16 +278,12 @@ pub struct MockExpectation<'a> {
     server: &'a MockServer,
     method: String,
     path: String,
-    max_request_bytes: Arc<AtomicU64>,
 }
 
 impl MockExpectation<'_> {
     pub async fn respond(self, response: ResponseTemplate) {
         Mock::given(method(self.method.as_str()))
             .and(path(self.path.as_str()))
-            .and(BodySizeTracker {
-                max_request_bytes: self.max_request_bytes,
-            })
             .respond_with(response)
             .mount(self.server)
             .await;
@@ -361,35 +297,6 @@ impl MockExpectation<'_> {
         self.respond(ResponseTemplate::new(status).set_body_json(body))
             .await;
     }
-
-    pub async fn respond_body(self, status: u16, body: impl Into<Vec<u8>>) {
-        self.respond(ResponseTemplate::new(status).set_body_bytes(body))
-            .await;
-    }
-}
-
-#[derive(Debug)]
-struct BodySizeTracker {
-    max_request_bytes: Arc<AtomicU64>,
-}
-
-impl Match for BodySizeTracker {
-    fn matches(&self, request: &Request) -> bool {
-        let len = request.body.len() as u64;
-        let mut current = self.max_request_bytes.load(Ordering::Relaxed);
-        while len > current {
-            match self.max_request_bytes.compare_exchange_weak(
-                current,
-                len,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(next) => current = next,
-            }
-        }
-        true
-    }
 }
 
 pub mod fixtures {
@@ -400,11 +307,6 @@ pub mod fixtures {
 
     pub fn ed25519_pair() -> (PrivateJwk, PublicJwk) {
         pair(ED25519_PRIVATE_JWK)
-    }
-
-    pub fn ed25519_signer() -> LocalJwkSigner {
-        let private = PrivateJwk::parse(ED25519_PRIVATE_JWK).expect("fixture private JWK parses");
-        LocalJwkSigner::new(private).expect("fixture signer builds")
     }
 
     fn pair(jwk: &str) -> (PrivateJwk, PublicJwk) {
@@ -488,7 +390,6 @@ pub fn oidc_verifier_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::decode_header;
     use registry_platform_crypto::verify;
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{
@@ -512,27 +413,6 @@ mod tests {
             .expect("rotated fixture parses");
         assert_ne!(first["d"], rotated["d"]);
         assert_ne!(first["x"], rotated["x"]);
-    }
-
-    #[tokio::test]
-    async fn provider_backed_jwt_fixture_signs_with_provider_kid_and_jwks() {
-        let signer = fixtures::ed25519_signer();
-        let typ = "registry-platform-testing+jwt";
-        let token = sign_ed25519_compact_jwt_with_provider(
-            &signer,
-            typ,
-            json!({ "sub": "fixture-subject" }),
-        )
-        .await;
-
-        let header = decode_header(&token).expect("header decodes");
-        assert_eq!(header.kid.as_deref(), Some(signer.key_id()));
-        assert_eq!(header.typ.as_deref(), Some(typ));
-
-        let jwks = jwks_from_signing_provider(&signer);
-        let keys = jwks["keys"].as_array().expect("jwks keys");
-        assert_eq!(keys[0]["kid"], signer.key_id());
-        assert!(keys[0].get("d").is_none());
     }
 
     #[tokio::test]
@@ -604,7 +484,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_http_upstream_mounts_expectations_and_tracks_request_size() {
+    async fn mock_http_upstream_mounts_expectations() {
         let upstream = MockHttpUpstream::start().await;
         upstream
             .expect("POST", "/claims")
@@ -618,7 +498,6 @@ mod tests {
             .await
             .expect("request succeeds");
         assert!(response.status().is_success());
-        upstream.assert_max_request_bytes(3);
     }
 
     #[test]
