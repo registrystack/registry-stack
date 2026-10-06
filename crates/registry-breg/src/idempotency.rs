@@ -129,6 +129,13 @@ pub const EMBEDDED_CALLER_ISSUER: &str = "urn:registry-breg:embedded-issuer";
 /// The issuer hook proposal keys are scoped under. No token verifier accepts
 /// it, so no caller can reach a hook delivery's key.
 const HOOK_DELIVERY_ISSUER: &str = "urn:registry-breg:hook-delivery";
+/// The issuer a spent key an earlier engine wrote is converted under when the
+/// caller columns are installed. Such a row keeps its audit-keyed digest as
+/// its key reference, which no key reference this engine derives can equal,
+/// and its receipt is dropped. A runtime's configured issuer is an `https`
+/// URL, and [`IdempotencyPolicy::new`] refuses this one, so no caller's key is
+/// ever scoped under it either.
+pub(crate) const PRE_CALLER_SCOPE_ISSUER: &str = "urn:registry-breg:pre-caller-scope";
 /// How many days a held response is kept when the runtime configuration does
 /// not choose.
 pub const DEFAULT_RECEIPT_RETENTION_DAYS: u16 = 7;
@@ -149,13 +156,15 @@ pub struct IdempotencyPolicy {
 
 impl IdempotencyPolicy {
     /// Scope caller keys under `caller_issuer` and keep each held response
-    /// for `receipt_retention_days` days after its commit.
+    /// for `receipt_retention_days` days after its commit. The issuer earlier
+    /// spent keys are converted under is refused.
     pub fn new(
         caller_issuer: impl Into<String>,
         receipt_retention_days: u16,
     ) -> Result<Self, IdempotencyError> {
         let caller_issuer = caller_issuer.into();
         if caller_issuer.is_empty()
+            || caller_issuer == PRE_CALLER_SCOPE_ISSUER
             || !(1..=MAX_RECEIPT_RETENTION_DAYS).contains(&receipt_retention_days)
         {
             return Err(IdempotencyError::InvalidInput);
@@ -1305,5 +1314,23 @@ impl std::fmt::Debug for HeldResponse {
             )
             .field("headers", &self.headers.keys())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_policy_refuses_the_issuer_earlier_spent_keys_are_converted_under() {
+        assert_eq!(
+            IdempotencyPolicy::new(PRE_CALLER_SCOPE_ISSUER, DEFAULT_RECEIPT_RETENTION_DAYS),
+            Err(IdempotencyError::InvalidInput)
+        );
+        assert!(IdempotencyPolicy::new(
+            "https://issuer.example.test",
+            DEFAULT_RECEIPT_RETENTION_DAYS
+        )
+        .is_ok());
     }
 }

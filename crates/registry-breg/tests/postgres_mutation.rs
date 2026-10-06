@@ -4958,11 +4958,12 @@ async fn real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keep
     database.cleanup().await;
 }
 
-/// Upgrading from the table shape that keyed rows by an audit-key HMAC
-/// discards every spent row, since none carries the caller its key belongs
-/// to, and leaves the caller-scoped shape in place for the next write.
+/// Upgrading from the table shape that keyed rows by an audit-key HMAC keeps
+/// every spent row as a tombstone no caller can find, since none carries the
+/// caller its key belongs to, and leaves the caller-scoped shape in place for
+/// the next write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_discards_spent_rows() {
+async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows() {
     let database = TestDatabase::create(1).await;
     let (migration, migration_task) = database.connect_migration().await;
     install_mutation_schema(&migration, &database.runtime_role)
@@ -5001,14 +5002,29 @@ async fn real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_discards_s
     }
     let remaining = database
         .admin
-        .query_one(
-            "SELECT count(*) FROM registry_internal.registry_idempotency",
+        .query(
+            "SELECT key_reference, caller_issuer, caller_subject, key_scope,
+                    response_body IS NULL, receipt_dropped_at IS NOT NULL
+               FROM registry_internal.registry_idempotency",
             &[],
         )
         .await
-        .expect("administrator can count spent keys")
-        .get::<_, i64>(0);
-    assert_eq!(remaining, 0, "the upgrade discards audit-keyed spent rows");
+        .expect("administrator can read spent keys");
+    assert_eq!(
+        remaining.len(),
+        1,
+        "the upgrade keeps audit-keyed spent rows"
+    );
+    let tombstone = &remaining[0];
+    assert_eq!(tombstone.get::<_, String>(0), "hmac-sha256:held");
+    assert_eq!(
+        tombstone.get::<_, String>(1),
+        "urn:registry-breg:pre-caller-scope"
+    );
+    assert_eq!(tombstone.get::<_, String>(2), "hmac-sha256:held");
+    assert_eq!(tombstone.get::<_, String>(3), "mutation");
+    assert!(tombstone.get::<_, bool>(4), "no held response survives");
+    assert!(tombstone.get::<_, bool>(5), "the receipt is dropped");
     let refused = migration
         .batch_execute(
             "INSERT INTO registry_internal.registry_idempotency

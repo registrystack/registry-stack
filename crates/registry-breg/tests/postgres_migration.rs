@@ -599,9 +599,10 @@ async fn a_pre_statistics_empty_successor_installs_the_release_store_once() {
 /// statistical release store, and its engine found spent keys by an
 /// audit-keyed digest. The current compiler's rebuild has no authored model
 /// delta, yet installing the caller-keyed shape is real apply work: the plan is
-/// not empty, and the apply discards the spent keys the earlier engine wrote.
+/// not empty, and the apply keeps the spent keys the earlier engine wrote as
+/// tombstones no caller can find, with their held responses removed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pre_caller_scoped_empty_successor_discards_audit_keyed_spent_keys() {
+async fn a_pre_caller_scoped_empty_successor_tombstones_audit_keyed_spent_keys() {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -739,13 +740,32 @@ async fn a_pre_caller_scoped_empty_successor_discards_audit_keyed_spent_keys() {
         .expect("administrator reads the spent-key table");
     assert_eq!(
         row.get::<_, i64>(0),
-        0,
-        "the upgrade discards audit-keyed spent keys"
+        1,
+        "the upgrade keeps audit-keyed spent keys"
     );
     assert!(
         row.get::<_, bool>(1),
         "the upgrade installs the caller shape"
     );
+    let tombstone = database
+        .admin
+        .query_one(
+            "SELECT caller_issuer, caller_subject, key_scope,
+                    response_body IS NULL, receipt_dropped_at IS NOT NULL
+               FROM registry_internal.registry_idempotency
+              WHERE key_reference = 'hmac-sha256:held'",
+            &[],
+        )
+        .await
+        .expect("administrator reads the converted spent key");
+    assert_eq!(
+        tombstone.get::<_, String>(0),
+        "urn:registry-breg:pre-caller-scope"
+    );
+    assert_eq!(tombstone.get::<_, String>(1), "hmac-sha256:held");
+    assert_eq!(tombstone.get::<_, String>(2), "mutation");
+    assert!(tombstone.get::<_, bool>(3), "no held response survives");
+    assert!(tombstone.get::<_, bool>(4), "the receipt is dropped");
     verify_catalog_identity_for_catalog(
         &database.admin,
         &upgraded,
