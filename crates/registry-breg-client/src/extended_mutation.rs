@@ -13,7 +13,9 @@ impl BaseRegistryClient {
     /// Tombstone one record against the caller's original strong entity tag.
     ///
     /// The server returns the resulting Registry Record envelope. This method
-    /// performs no condition refresh and never retries the mutation.
+    /// performs no condition refresh. A tombstone whose outcome is unknown is
+    /// resent identically under the same idempotency key and entity tag, at
+    /// most as many times as the configured mutation retry count.
     pub async fn tombstone_record(
         &self,
         operation: &BRegTombstoneBinding,

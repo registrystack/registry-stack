@@ -4,9 +4,11 @@
 Engine. Its public API uses the BReg technical family and the
 `BaseRegistryClient` entry point.
 
-One method performs at most one explicitly initiated HTTP exchange. The client
-does not follow redirects, use ambient proxies, retry, advance pagination, or
-fetch referenced resources.
+One method performs one explicitly initiated HTTP exchange, except that a
+keyed mutation whose outcome is unknown is resent under the same key (see
+[Unknown outcomes and the same-key retry](#unknown-outcomes-and-the-same-key-retry)).
+The client does not follow redirects, use ambient proxies, advance pagination,
+or fetch referenced resources.
 
 ## Configure a client
 
@@ -150,7 +152,37 @@ contract.
 Builders validate API field names, permissions, required create fields,
 whole-field JSON Patch paths, operation counts, I-JSON values, and encoded body
 size before token acquisition or HTTP I/O. The client never generates an
-idempotency key and never retries a mutation.
+idempotency key.
+
+### Unknown outcomes and the same-key retry
+
+A 5xx answer may follow a commit, and so may a timeout or a broken exchange
+after the request was sent. `BaseRegistryClientError::is_outcome_unknown()`
+reports those cases, and an oversized or unparseable answer, as true; it is
+false for a request or configuration defect, a token failure, a connection
+that was never established, and every typed 4xx refusal such as
+`idempotency.conflict` (409).
+
+The client resends a keyed mutation (Create, PATCH, attachment upload and
+delete, lifecycle actions, immediate actions, batches, tombstones, and
+statistical publication and withdrawal) whose outcome is unknown, with the
+same key, headers, and body bytes, at most twice by default, waiting 250 ms
+and then 500 ms, or the service's `Retry-After` when that is longer and at
+most 5 seconds. A longer requested wait ends the retries. Configure the count
+with `BaseRegistryClientConfig::with_max_mutation_retries` (0 to 2; 0 disables
+the resend). Reads, ingestion run calls, and action target-condition requests
+are never resent. Each attempt has the full request timeout, so a call can
+take up to three request timeouts plus the waits.
+
+BReg holds a response under the key only for a committed success, so a resend
+after a 5xx either replays that success or runs the operation again; a handler
+that fails the same way each time fails on every attempt.
+
+When the returned error still reports `is_outcome_unknown()`, recover by
+sending the same request with the same key. A new key could apply the
+mutation twice. A refusal that answers a resend does not prove the earlier
+attempt left no effect, so the client then returns the earlier unknown-outcome
+error instead of the refusal.
 
 The lifecycle is source-owned and exposes only Submit, Revise, Cancel, and
 Apply. `action.with_reason("Applied after external approval.")?` returns a copy

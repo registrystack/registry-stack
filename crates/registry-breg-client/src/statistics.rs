@@ -200,7 +200,9 @@ impl BaseRegistryClient {
         .await
     }
 
-    /// Explicitly compute and persist one release version. The client never retries.
+    /// Explicitly compute and persist one release version. A publication whose
+    /// outcome is unknown is resent identically under the same idempotency
+    /// key, at most as many times as the configured mutation retry count.
     pub async fn statistics_publish(
         &self,
         dataset: &str,
@@ -224,7 +226,9 @@ impl BaseRegistryClient {
         .await
     }
 
-    /// Withdraw one version with a closed reason code. The client never retries.
+    /// Withdraw one version with a closed reason code. A withdrawal whose
+    /// outcome is unknown is resent identically under the same idempotency
+    /// key, at most as many times as the configured mutation retry count.
     pub async fn statistics_withdraw(
         &self,
         dataset: &str,

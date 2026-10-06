@@ -593,11 +593,45 @@ impl BaseRegistryClientError {
             _ => None,
         }
     }
+
+    /// Whether the request may have taken effect although this error was
+    /// returned.
+    ///
+    /// True for a timeout or broken exchange after the request was sent, an
+    /// oversized or unparseable answer, and a 5xx answer: a 5xx may follow a
+    /// commit. False for a configuration or request defect, a credential the
+    /// token provider could not supply, a connection that was never
+    /// established, and every typed 4xx refusal. When it is true, the safe
+    /// recovery for an idempotency-keyed mutation is the same request under
+    /// the same key, which the engine either replays or executes once; a new
+    /// key could apply the mutation twice.
+    #[must_use]
+    pub fn is_outcome_unknown(&self) -> bool {
+        match self {
+            Self::Configuration { .. } | Self::InvalidRequest { .. } | Self::Token(_) => false,
+            Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
+            Self::Problem { status, .. } => *status >= 500,
+            Self::Protocol { .. } => true,
+        }
+    }
+
+    /// Whether resending the identical request under the same key may settle
+    /// an unknown outcome. An oversized or unparseable non-5xx answer would be
+    /// replayed unchanged, so it is not resent.
+    pub(crate) fn resend_may_settle(&self) -> bool {
+        match self {
+            Self::Transport { kind } => {
+                matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
+            }
+            Self::Problem { status, .. } | Self::Protocol { status, .. } => *status >= 500,
+            Self::Configuration { .. } | Self::InvalidRequest { .. } | Self::Token(_) => false,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BRegPlanRefusal, BRegProblemCode};
+    use super::{BRegPlanRefusal, BRegProblemCode, BRegProtocolFailure, TokenError, TransportKind};
     use super::{BaseRegistryClientError, TraceId};
 
     #[test]
@@ -741,6 +775,89 @@ mod tests {
                 "problem"
             };
             assert_eq!(error.kind(), expected, "{code} reported an unexpected kind");
+        }
+    }
+
+    fn problem(code: BRegProblemCode) -> BaseRegistryClientError {
+        BaseRegistryClientError::Problem {
+            status: code.status(),
+            code,
+            trace_id: TraceId::parse("0123456789abcdef0123456789abcdef")
+                .expect("a canonical trace identifier"),
+            field_path: None,
+            refusal_code: None,
+        }
+    }
+
+    #[test]
+    fn the_unknown_outcome_predicate_separates_maybe_committed_from_refused() {
+        let unknown = [
+            BaseRegistryClientError::transport(TransportKind::Timeout),
+            BaseRegistryClientError::transport(TransportKind::Exchange),
+            BaseRegistryClientError::transport(TransportKind::ResponseTooLarge),
+            BaseRegistryClientError::protocol(502, BRegProtocolFailure::Problem, None),
+            BaseRegistryClientError::protocol(201, BRegProtocolFailure::Body, None),
+            BaseRegistryClientError::protocol(200, BRegProtocolFailure::TraceContext, None),
+        ];
+        for error in &unknown {
+            assert!(error.is_outcome_unknown(), "{error:?}");
+        }
+        let settled = [
+            BaseRegistryClientError::configuration("fixture reason"),
+            BaseRegistryClientError::invalid_request("fixture reason"),
+            BaseRegistryClientError::Token(TokenError::Unavailable),
+            BaseRegistryClientError::transport(TransportKind::Connect),
+        ];
+        for error in &settled {
+            assert!(!error.is_outcome_unknown(), "{error:?}");
+        }
+        // Every 4xx code is a deterministic refusal; every 5xx code may follow
+        // a commit.
+        for code in BRegProblemCode::ALL {
+            assert_eq!(
+                problem(code).is_outcome_unknown(),
+                code.status() >= 500,
+                "{code}"
+            );
+        }
+        for code in [
+            BRegProblemCode::AuthenticationRefused,
+            BRegProblemCode::IdempotencyConflict,
+            BRegProblemCode::StatisticalDatasetVersionWithdrawn,
+            BRegProblemCode::ActionRefused,
+        ] {
+            assert!(!problem(code).is_outcome_unknown(), "{code}");
+        }
+        for code in [
+            BRegProblemCode::ActionHandlerFailed,
+            BRegProblemCode::ServiceUnavailable,
+            BRegProblemCode::RequestTimeout,
+        ] {
+            assert!(problem(code).is_outcome_unknown(), "{code}");
+        }
+    }
+
+    #[test]
+    fn only_a_timeout_a_broken_exchange_or_a_5xx_is_resent() {
+        let resent = [
+            BaseRegistryClientError::transport(TransportKind::Timeout),
+            BaseRegistryClientError::transport(TransportKind::Exchange),
+            problem(BRegProblemCode::ServiceUnavailable),
+            BaseRegistryClientError::protocol(500, BRegProtocolFailure::Problem, None),
+        ];
+        for error in &resent {
+            assert!(error.resend_may_settle(), "{error:?}");
+        }
+        let kept = [
+            BaseRegistryClientError::transport(TransportKind::Connect),
+            BaseRegistryClientError::transport(TransportKind::ResponseTooLarge),
+            BaseRegistryClientError::protocol(201, BRegProtocolFailure::Body, None),
+            problem(BRegProblemCode::IdempotencyConflict),
+            BaseRegistryClientError::Token(TokenError::Unavailable),
+            BaseRegistryClientError::invalid_request("fixture reason"),
+        ];
+        for error in &kept {
+            assert!(!error.resend_may_settle(), "{error:?}");
         }
     }
 }

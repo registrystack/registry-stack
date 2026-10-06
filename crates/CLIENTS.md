@@ -33,8 +33,15 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
 
 - Keep requests explicit and bounded, preserve deployment prefixes, and retain
   product-owned route and query construction. Do not introduce ambient proxy
-  use, redirects, automatic pagination, resource following, or hidden retries.
-  Acquire credentials only for operations the product contract protects.
+  use, redirects, automatic pagination, resource following, or retries. The
+  one exception is the bounded same-key resend of an idempotency-keyed
+  mutation whose outcome is unknown (a timeout or broken exchange after
+  sending, or a 5xx answer): `registry_platform_httputil::client::retry_keyed_mutation`
+  owns its loop and waits, each client exposes the count as
+  `with_max_mutation_retries` (2 by default, at most 2, 0 disables), and the
+  resend repeats the caller's exact key, headers, and body. Reads and unkeyed
+  operations are never resent. Acquire credentials only for operations the
+  product contract protects.
 - Evidence verification delegates to `registry-evidence-verifier`. Preserve
   request binding and the distinction between verified, raw, unsigned, and
   holder-bound results across language conversions. Portable verifier means
@@ -46,10 +53,11 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   client origin, registry, dataset, entity, profile, revision, route, and
   operation. Opaque authority handles must not become caller-constructible
   permissions in a binding. Validate a mutation before token acquisition or
-  I/O; never generate its idempotency key or retry it implicitly. Record ETags
-  and lifecycle-action ETags are distinct.
+  I/O; never generate its idempotency key, and resend it only through the
+  bounded same-key retry. Record ETags and lifecycle-action ETags are distinct.
 - Messaging submissions take a caller-chosen idempotency key; a binding never
-  generates one or retries a submission or a cancellation. Message, template,
+  generates one. Only the Rust client's bounded same-key retry resends a
+  submission, and a cancellation is never resent. Message, template,
   and version names are checked by the Rust client before any request.
   Bindings add no Messaging semantics: the closed problem catalogue, message
   view, receipt, and template preview come from the Rust client unchanged. A
@@ -62,8 +70,8 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
 
 Make ordinary composition easy through typed product namespaces and existing
 HTTP contracts. A language facade should remove packaging and conversion work
-from adopters while keeping consequential choices, such as local trust
-acceptance and mutation retries, explicit.
+from adopters while keeping consequential choices explicit, such as local
+trust acceptance and the mutation retry count.
 
 ## Verification and generated surfaces
 
