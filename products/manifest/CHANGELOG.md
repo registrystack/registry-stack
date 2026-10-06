@@ -100,6 +100,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   generated from the types the command line reads and published under
   `products/manifest/schemas`. `editors/configure.py manifest` maps them to
   the selected document and every `profile.yaml` below the project.
+- BREAKING: `registry-manifest-core` no longer exports `render_entity_shacl`.
+  Its only consumer was Registry Relay. Render the whole manifest with
+  `render_shacl` instead.
 
 ## [0.39.0] - 2026-10-06
 
