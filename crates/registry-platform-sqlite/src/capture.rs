@@ -76,18 +76,12 @@ impl CapturedSnapshot {
         Ok(())
     }
 
-    /// Re-read the bound snapshot and prove that its exact captured bytes are
-    /// still present. This is intended for readiness probes, where the extra
-    /// I/O is acceptable and identity checks alone are not a sufficient proof
-    /// that an immutable deployment input has not drifted.
-    pub fn verify_unchanged(&self) -> Result<(), SqliteError> {
-        self.verify_unchanged_until(None)
-    }
-
-    /// Re-read the bound snapshot before an absolute deadline.
+    /// Re-read the bound snapshot before an absolute deadline and prove that
+    /// its exact captured bytes are still present.
     ///
-    /// This is the bounded form of [`Self::verify_unchanged`] for readiness
-    /// and other request-scoped checks.
+    /// This is intended for readiness probes and other request-scoped checks,
+    /// where the extra I/O is acceptable and identity checks alone are not a
+    /// sufficient proof that an immutable deployment input has not drifted.
     pub fn verify_unchanged_before(&self, deadline: Instant) -> Result<(), SqliteError> {
         self.verify_unchanged_until(Some(deadline))
     }
