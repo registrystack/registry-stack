@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- `registry-casework-client`, which never resent a mutation, now resends an
+  idempotency-keyed mutation whose outcome is unknown (a timeout or broken
+  exchange after the request was sent, or a 5xx answer) byte for byte under
+  the same key, through the bounded loop the BReg, Messaging, and Scheduling
+  clients share. It resends at most 2 times, only while the outcome is
+  unknown, and never after any 4xx answer, waiting 250 ms then 500 ms, or a
+  server `Retry-After` of at most 5 seconds; a longer one ends the retries.
+  Opt out with `CaseworkClientConfig::with_max_mutation_retries(0)` (Node.js
+  `maxMutationRetries`, Python `max_mutation_retries`; 0 to 2). Reads,
+  unkeyed operations (task grant revocations, task assertions, decision
+  recovery, and previews), and review request create and cancel are never
+  resent. One keyed mutation can now take up to three request timeouts (30
+  seconds each by default) plus the waits between attempts (#1913).
+- `CaseworkClientError::is_outcome_unknown()` (Node.js `outcomeUnknown`,
+  Python `outcome_unknown`) reports a failure after which the mutation may
+  have taken effect, including an answer a binding cannot represent; recover
+  it with the same request under the same key, never a new key.
+  `CaseworkClientError::mutation_class()` now agrees with it: a connection
+  that was never established, a connect timeout included, is
+  `Deterministic`, where it was `Ambiguous`.
+- The Node.js client reports a rejected constructor setting (an unsafe
+  integer, an undefined member, or a value of the wrong type) as kind
+  `configuration`, where it reported `invalid_request`. Code that branches on
+  `kind` sees the change.
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: `caseworkctl dev` takes PostgreSQL loopback port 15433 on a first
