@@ -128,8 +128,11 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                 "name": IDEMPOTENCY_KEY_HEADER,
                 "in": "header",
                 "required": true,
-                "description": "Scopes a retry to the caller: the same key and request answer \
-                                the stored receipt again.",
+                "description": "Scopes a retry to the caller's issuer and subject: the same \
+                                key and request answer the stored receipt again, across an \
+                                audit key rotation too. A retry is authorized and rendered \
+                                again before its key is looked up, so a 403 or 422 answer to \
+                                an exact retry does not mean the first attempt failed.",
                 "schema": {
                     "type": "string",
                     "minLength": 1,

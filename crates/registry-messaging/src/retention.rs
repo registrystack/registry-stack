@@ -10,8 +10,8 @@
 //!   content-free message record stays;
 //! - the message record is deleted `recordDays` after that terminal state,
 //!   and its payload, job, attempts, and delivery receipts go with it; its
-//!   idempotency record stays, holding only the caller's keyed pseudonym,
-//!   the key, and its times, so the key stays spent;
+//!   idempotency record stays, holding only the caller's issuer and
+//!   subject, the key, and its times, so the key stays spent;
 //! - a submission receipt, the stored answer an idempotent replay returns,
 //!   is erased when its `submissionReceiptDays` end, and its key stays
 //!   spent.
@@ -405,9 +405,11 @@ fn records_due(lock: &str) -> String {
 /// appended.
 fn submission_receipts_due(lock: &str) -> String {
     format!(
-        "SELECT principal, operation, idempotency_key FROM messaging_idempotency \
+        "SELECT submitter_issuer, submitter_subject, operation, idempotency_key \
+           FROM messaging_idempotency \
           WHERE erased_at IS NULL AND expires_at <= $1::timestamptz \
-          ORDER BY expires_at, principal, operation, idempotency_key \
+          ORDER BY expires_at, submitter_issuer, submitter_subject, operation, \
+                   idempotency_key \
           LIMIT $2{lock}"
     )
 }
@@ -470,7 +472,8 @@ async fn expire_submission_receipts(
                 "UPDATE messaging_idempotency \
                     SET status_code = NULL, receipt = NULL, \
                         erased_at = transaction_timestamp() \
-                  WHERE (principal, operation, idempotency_key) IN ({due})"
+                  WHERE (submitter_issuer, submitter_subject, operation, idempotency_key) \
+                        IN ({due})"
             ),
             &[&before, &limit],
         )

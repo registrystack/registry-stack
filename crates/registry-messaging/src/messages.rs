@@ -1076,8 +1076,7 @@ impl MessageService {
             .query_one("SELECT transaction_timestamp()", &[])
             .await?
             .try_get(0)?;
-        if let Some(stored) = lookup_key(&transaction, &references.principal_pseudonym, key).await?
-        {
+        if let Some(stored) = lookup_key(&transaction, &caller.identity, key).await? {
             transaction.commit().await?;
             return replay(stored, submission).map(Some);
         }
@@ -1086,9 +1085,7 @@ impl MessageService {
             lock_daily_limit(&transaction, &caller.profile.id).await?;
             // A submission under the same key may have committed while this
             // one waited on the lock; it is replayed, never counted against.
-            if let Some(stored) =
-                lookup_key(&transaction, &references.principal_pseudonym, key).await?
-            {
+            if let Some(stored) = lookup_key(&transaction, &caller.identity, key).await? {
                 transaction.commit().await?;
                 return replay(stored, submission).map(Some);
             }
@@ -1105,12 +1102,13 @@ impl MessageService {
         let inserted = transaction
             .execute(
                 "INSERT INTO messaging_idempotency \
-                     (principal, operation, idempotency_key, request_hash, message_id, \
-                      status_code, receipt, created_at, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, 202, $6, transaction_timestamp(), $7) \
+                     (submitter_issuer, submitter_subject, operation, idempotency_key, \
+                      request_hash, message_id, status_code, receipt, created_at, expires_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, 202, $7, transaction_timestamp(), $8) \
                  ON CONFLICT DO NOTHING",
                 &[
-                    &references.principal_pseudonym,
+                    &caller.identity.issuer,
+                    &caller.identity.subject,
                     &SUBMIT_OPERATION,
                     &key,
                     &submission.request_hash,
@@ -1297,13 +1295,12 @@ async fn check_daily_limit(
 /// The advisory-lock name prefix a profile's daily count is taken under.
 const DAILY_LIMIT_LOCK_NAMESPACE: &str = "registry-messaging.daily-limit:";
 
-/// The idempotency record `key` has under the caller's keyed pseudonym.
-/// The record is found by the pseudonym, not by the verified issuer and
-/// subject, so a record retention keeps after deleting its message holds
-/// nothing that names the caller outside the audit's own key.
+/// The idempotency record `key` has under the caller's verified issuer and
+/// subject. The record is found by the caller itself, not by its keyed audit
+/// pseudonym, so rotating `audit.hashKeyRef` never frees a spent key.
 async fn lookup_key(
     transaction: &tokio_postgres::Transaction<'_>,
-    principal_pseudonym: &str,
+    caller: &CallerIdentity,
     key: &str,
 ) -> Result<Option<StoredKey>, Refusal> {
     let row = transaction
@@ -1312,8 +1309,9 @@ async fn lookup_key(
                     erased_at IS NOT NULL OR expires_at <= transaction_timestamp(), \
                     status_code, receipt, message_id \
                FROM messaging_idempotency \
-              WHERE principal = $1 AND operation = $2 AND idempotency_key = $3",
-            &[&principal_pseudonym, &SUBMIT_OPERATION, &key],
+              WHERE submitter_issuer = $1 AND submitter_subject = $2 \
+                AND operation = $3 AND idempotency_key = $4",
+            &[&caller.issuer, &caller.subject, &SUBMIT_OPERATION, &key],
         )
         .await?;
     row.map(|row| {

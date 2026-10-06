@@ -24,11 +24,16 @@ use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql");
 const ACTIVATION_MIGRATION: &str = include_str!("../migrations/0002_activations.sql");
+const IDEMPOTENCY_CALLER_MIGRATION: &str =
+    include_str!("../migrations/0003_idempotency_caller.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list.
-pub(crate) const MIGRATIONS: [(i64, &str); 2] =
-    [(1, MESSAGING_MIGRATION), (2, ACTIVATION_MIGRATION)];
+pub(crate) const MIGRATIONS: [(i64, &str); 3] = [
+    (1, MESSAGING_MIGRATION),
+    (2, ACTIVATION_MIGRATION),
+    (3, IDEMPOTENCY_CALLER_MIGRATION),
+];
 
 /// Shared advisory-lock key for schema migration and package activation. Its
 /// ASCII bytes spell "messagin".

@@ -113,16 +113,22 @@ decisions:
       the template on every request, including one that repeats an
       idempotency key, and only then consults the key. An expired key answers
       idempotency.expired before its request hash is compared, and a key is
-      scoped to the caller that used it.
+      scoped to the issuer and subject of the caller that used it
+      (MESSAGING-DEC-17). An exact retry refused with 403 or 422 therefore
+      says nothing about the first attempt, which may have been accepted
+      under the package or profile active then.
     reasoning: >-
       A replay answered from the key alone would let a caller whose profile
       lost a template keep sending it by repeating an old key, and would let
       a different caller probe another caller's keys. The request hash covers
       the canonical request body, so one key never stands for two different
-      requests.
+      requests. An operator drains senders before activating a package that
+      removes what an in-flight retry needs, so no retry meets the refusal.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: concurrent_submissions_under_one_key_record_one_message}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_the_caller_may_no_longer_send_is_refused_while_the_first_attempt_stands}
   - id: MESSAGING-DEC-08
     subject: The recipient is masked for every reader, the operator included
     decision: >-
@@ -295,25 +301,41 @@ decisions:
     evidence:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown}
   - id: MESSAGING-DEC-17
-    subject: A deleted record keeps its idempotency key spent
+    subject: A spent idempotency key belongs to the caller's issuer and subject
     decision: >-
-      An idempotency row is keyed by the caller's keyed audit pseudonym, the
-      operation, and the key, never by the caller's issuer and subject. When
-      a record is deleted its row stays with the message, the request hash,
-      and any stored receipt nulled, holding only the pseudonym, the key, and
-      its times, so a repeat of the key after recordDays is refused with
-      idempotency.expired, the refusal every spent key gets.
+      An idempotency row is keyed by the caller's verified issuer and
+      subject, the operation, and the key, as Scheduling and Casework key
+      theirs, and never by the caller's keyed audit pseudonym. When a record
+      is deleted its row stays with the message, the request hash, and any
+      stored receipt nulled, holding only the issuer, the subject, the key,
+      and its times, so a repeat of the key after recordDays is refused with
+      idempotency.expired, the refusal every spent key gets. Rotating
+      audit.hashKeyRef changes pseudonyms only: an exact retry after the
+      rotation replays its receipt or is refused as expired, and never sends
+      again. The audit journal keeps naming the caller by pseudonym. Schema
+      version 3 moved each key whose message is still held to that message's
+      submitter; a key whose message retention had deleted, a key naming no
+      held message, and the older of two records one caller held under two
+      pseudonyms were preserved unchanged in
+      legacy_messaging_idempotency, which nothing reads, and those keys are
+      free again.
     reasoning: >-
-      Freeing the key would turn a caller's mistaken retry after the record
-      period into a second message sent to the same recipient, which is the
-      duplicate the key exists to prevent. Keeping the raw issuer, subject,
-      and request hash would keep what the record period exists to bound;
-      the pseudonym names the caller only under the audit hash key, which
-      the journal already relies on. Rotating that key re-keys every
-      pseudonym, so the keys spent under the previous one stop being
-      recognized and can be used again; rotation is rare and deliberate,
-      and the journal carries the same boundary.
+      Freeing a key would turn a caller's mistaken retry into a second message
+      sent to the same recipient, which is the duplicate the key exists to
+      prevent. A key scoped to the pseudonym was freed by every audit key
+      rotation, so routine key hygiene reopened that duplicate for every
+      caller with a retry in flight. Keeping the raw issuer and subject in a
+      spent-key row is the accepted cost: they identify a service principal,
+      not a recipient, the message row already held them for recordDays, and
+      the tombstone holds no request hash, receipt, or message. A key
+      version 3 could not attribute to a caller was moved rather than
+      guessed at or dropped, since a wrong caller would replay one caller's
+      receipt to another and a dropped row loses history the operator may
+      need; it stays spent only where its caller is known.
     evidence:
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_scopes_spent_keys_to_the_caller_and_preserves_every_record}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
   - id: MESSAGING-DEC-18

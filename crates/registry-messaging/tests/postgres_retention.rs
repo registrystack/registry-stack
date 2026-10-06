@@ -29,8 +29,8 @@ use registry_messaging::runtime::{erase_expired_as_operator, RuntimeError};
 use registry_platform_audit::AuditWriter;
 use serde_json::Value;
 use support::{
-    assert_absent, assert_logs_clean, email_submission, sender_token, test_audit, Harness,
-    RefusingAuditSink, ISSUER, SENDER_PRINCIPAL,
+    assert_absent, assert_logs_clean, email_submission, rotated_test_audit, sender_token,
+    submit_to, test_audit, Harness, RefusingAuditSink, ISSUER, SENDER_PRINCIPAL,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -290,22 +290,26 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
     assert!(!payload_erased(&harness, unknown).await);
 
     // With its record gone, the key stays spent: the row keeps the key
-    // under the caller's keyed pseudonym and nothing else, and a retry
-    // under it, with the same body or another, is refused as expired and
-    // sends nothing.
+    // under the caller's issuer and subject and nothing of the message, and
+    // a retry under it, with the same body or another, before or after an
+    // audit key rotation, is refused as expired and sends nothing.
     let retained = harness
         .isolated
         .admin
         .query_one(
-            "SELECT to_jsonb(key)::text, message_id IS NULL AND request_hash IS NULL \
+            "SELECT (to_jsonb(key) - 'submitter_issuer' - 'submitter_subject')::text, \
+                    submitter_issuer, submitter_subject, \
+                    message_id IS NULL AND request_hash IS NULL \
                     AND status_code IS NULL AND receipt IS NULL AND erased_at IS NOT NULL \
                FROM messaging_idempotency AS key WHERE idempotency_key = $1",
             &[&key],
         )
         .await
         .unwrap();
+    assert_eq!(retained.get::<_, String>(1), ISSUER);
+    assert_eq!(retained.get::<_, String>(2), SENDER_PRINCIPAL);
     assert!(
-        retained.get::<_, bool>(1),
+        retained.get::<_, bool>(3),
         "the retained key holds no record"
     );
     let retained: String = retained.get(0);
@@ -318,10 +322,17 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
     let accepted = accepted_records(&harness).await;
     let mut other = email_submission();
     other["correlationId"] = serde_json::json!("another-body");
-    for body in [email_submission(), other] {
-        let (status, again) = harness.submit(&sender_token(), &key, &body).await;
-        assert_eq!(status, StatusCode::GONE, "{again}");
-        assert_eq!(again["code"], "idempotency.expired");
+    let rotated = harness
+        .app_with_audit(rotated_test_audit(AuditWriter::from_line_sink(Box::new(
+            RefusingAuditSink::after(usize::MAX),
+        ))))
+        .await;
+    for app in [harness.app.clone(), rotated] {
+        for body in [email_submission(), other.clone()] {
+            let (status, _, again) = submit_to(app.clone(), &sender_token(), &key, &body).await;
+            assert_eq!(status, StatusCode::GONE, "{again}");
+            assert_eq!(again["code"], "idempotency.expired");
+        }
     }
     assert_eq!(
         harness
