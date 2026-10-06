@@ -33,4 +33,4 @@
     - ['`resource.unavailable`', '409', 'Every capable member is unavailable for this interval. The separately authorized explain path reports this code; the public path answers `capacity.exhausted`.']
     - ['`revision.mismatch`', '412', 'The window revision changed before the request committed. Reload the catalogue and try again.']
     - ['`schedule.unpublished`', '422', 'No published schedule serves that start. Choose a start on the published grid.']
-    - ['`service.unavailable`', '503', 'Scheduling storage or the audit destination is unavailable. A commitment may already be in place: retry it with the same idempotency key after the service recovers.']
+    - ['`service.unavailable`', '503', 'Scheduling cannot decide the request for now: its storage did not answer or did not acknowledge a commit, its audit destination refused the entry, or the OIDC token verifier reached no verdict because the issuer''s discovery document or key set could not be fetched or used. The response carries `Retry-After`. A commitment may already be in place: retry it with the same idempotency key after the service recovers.']
