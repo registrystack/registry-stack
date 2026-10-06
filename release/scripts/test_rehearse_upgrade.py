@@ -509,7 +509,8 @@ class MessagingUpgradeTest(unittest.TestCase):
             side = unittest.mock.Mock()
             settled = self.plan("none", [])
             side.run_json.side_effect = [self.plan("activate", [3]), settled]
-            self.assertEqual(messaging.upgrade(side), settled)
+            self.assertEqual(messaging.upgrade(side),
+                             (settled, {"public.messaging_idempotency"}))
             runtime = ["--runtime-config", str(messaging.runtime)]
             plan = unittest.mock.call("messagingctl", "--format", "json", "plan", *runtime)
             self.assertEqual(side.run_json.call_args_list, [plan, plan])
@@ -521,7 +522,7 @@ class MessagingUpgradeTest(unittest.TestCase):
             side = unittest.mock.Mock()
             settled = self.plan("none", [])
             side.run_json.return_value = settled
-            self.assertEqual(messaging.upgrade(side), settled)
+            self.assertEqual(messaging.upgrade(side), (settled, set()))
             side.run_json.assert_called_once()
             side.run.assert_not_called()
 
@@ -532,8 +533,17 @@ class MessagingUpgradeTest(unittest.TestCase):
                 messaging = self.messaging(Path(directory))
                 side = unittest.mock.Mock()
                 side.run_json.return_value = planned
-                self.assertEqual(messaging.upgrade(side), planned)
+                self.assertEqual(messaging.upgrade(side), (planned, set()))
                 side.run.assert_not_called()
+
+    def test_an_applied_version_that_empties_nothing_names_no_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            messaging = self.messaging(Path(directory))
+            side = unittest.mock.Mock()
+            settled = self.plan("none", [])
+            side.run_json.side_effect = [self.plan("activate", [4]), settled]
+            self.assertEqual(messaging.upgrade(side), (settled, set()))
+            side.run.assert_called_once()
 
 
 @unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
@@ -976,6 +986,14 @@ class StateComparisonTest(unittest.TestCase):
 
     def test_growth_and_new_tables_are_not_losses(self) -> None:
         self.assertEqual(MODULE.row_count_losses({"a": 1}, {"a": 4, "b": 0}), [])
+
+    def test_a_table_the_upgrade_empties_by_design_is_not_a_loss(self) -> None:
+        before = {"public.a": 3, "public.b": 2}
+        after = {"public.a": 3, "public.b": 0}
+        self.assertEqual(MODULE.row_count_losses(before, after, emptied={"public.b"}), [])
+        self.assertEqual(MODULE.row_count_losses(before, {"public.b": 0},
+                                                 emptied={"public.b"}),
+                         ["public.a disappeared (held 3 rows)"])
 
     def test_names_every_view_served_differently(self) -> None:
         before = {"records/1": {"etag": "1"}, "records/2": {"etag": "2"}}

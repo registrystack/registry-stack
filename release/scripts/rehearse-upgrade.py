@@ -354,11 +354,15 @@ def install_asset(asset: Path, binary: str, destination: Path) -> None:
             output.chmod(0o755)
 
 
-def row_count_losses(before: dict[str, int], after: dict[str, int]) -> list[str]:
-    """Name every table that disappeared or lost rows."""
+def row_count_losses(before: dict[str, int], after: dict[str, int], *,
+                     emptied: frozenset[str] | set[str] = frozenset()) -> list[str]:
+    """Name every table that disappeared or lost rows, except a table in
+    `emptied`, one an applied schema version empties by design."""
 
     losses = []
     for table, count in sorted(before.items()):
+        if table in emptied and table in after:
+            continue
         if table not in after:
             losses.append(f"{table} disappeared (held {count} rows)")
         elif after[table] < count:
@@ -1555,6 +1559,11 @@ MESSAGING_TEMPLATES = {"email": "appointment-reminder", "sms": "appointment-remi
 MESSAGING_RECIPIENTS = {"email": {"email": "upgrade-rehearsal@example.invalid"},
                         "sms": {"phone": "+15555550100"}}
 MESSAGING_SENDER_PROFILES = {"email": "transactional", "sms": "reminders-sms"}
+MESSAGING_IDEMPOTENCY = "public.messaging_idempotency"
+# The table each Messaging schema version empties by design. Version 3
+# discards the idempotency records keyed by the caller's audit pseudonym, so
+# every key spent before it can be used again.
+MESSAGING_EMPTYING_SCHEMA_VERSIONS = {3: MESSAGING_IDEMPOTENCY}
 
 
 class Messaging:
@@ -1661,19 +1670,23 @@ class Messaging:
             views[f"message/{message_id}"] = body
         return views
 
-    def upgrade(self, side: Side) -> dict[str, Any]:
+    def upgrade(self, side: Side) -> tuple[dict[str, Any], set[str]]:
         """Plan with `side` and, when the package already active only has
         schema versions pending, apply them with the migration credential, the
         upgrade step the Messaging changelog names. Returns the plan after any
         apply, which names the package on disk with nothing left to change
-        when the upgrade kept the activation."""
+        when the upgrade kept the activation, and the tables the applied
+        versions empty by design."""
         config = ["--runtime-config", str(self.runtime)]
         planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        if planned.get("pendingSchemaVersions") and planned.get(
-                "activeDigest") == planned.get("packageDigest"):
+        emptied: set[str] = set()
+        pending = planned.get("pendingSchemaVersions")
+        if pending and planned.get("activeDigest") == planned.get("packageDigest"):
             side.run("messagingctl", "apply", *config)
+            emptied = {MESSAGING_EMPTYING_SCHEMA_VERSIONS[version] for version in pending
+                       if version in MESSAGING_EMPTYING_SCHEMA_VERSIONS}
             planned = side.run_json("messagingctl", "--format", "json", "plan", *config)
-        return planned
+        return planned, emptied
 
 
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
@@ -1704,17 +1717,24 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # The ledger must still name the package on disk: a plan that reports a
     # change once any new schema versions are applied means the upgrade lost
     # the activation.
-    ledger = messaging.upgrade(new)
+    ledger, emptied = messaging.upgrade(new)
     differences = []
     if ledger.get("change") != "none" or ledger.get("activeDigest") != ledger.get(
             "packageDigest"):
         differences.append("the package ledger no longer names the applied package")
-    losses = row_count_losses(before_counts, postgres.row_counts("messaging"))
+    losses = row_count_losses(before_counts, postgres.row_counts("messaging"),
+                              emptied=emptied)
     service = Service(new, "messaging", [*runtime, "serve"], work / "messaging-new.log", ready)
     try:
         after_views = messaging.views(message_ids)
         differences += view_differences(before_views, after_views)
         key, body, receipt = submitted[1]
+        if MESSAGING_IDEMPOTENCY in emptied:
+            # The upgrade freed every spent key, so this one sends once more
+            # and its new receipt is the one a retry must answer.
+            receipt = messaging.submit(key, body)
+            if receipt.get("id") in message_ids:
+                differences.append("a key the upgrade freed answered a discarded receipt")
         if messaging.submit(key, body) != receipt:
             differences.append("an idempotent resubmission no longer answers its "
                                "stored receipt")
@@ -1722,7 +1742,8 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
         messaging.submit(str(uuid.uuid4()), messaging.submission("sms", "after-upgrade"))
     finally:
         service.stop()
-    losses += row_count_losses(before_counts, postgres.row_counts("messaging"))
+    losses += row_count_losses(before_counts, postgres.row_counts("messaging"),
+                               emptied=emptied)
 
     report["messaging"] = {
         "messages": len(message_ids),
