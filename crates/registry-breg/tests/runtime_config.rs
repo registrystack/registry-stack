@@ -842,6 +842,38 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
 }
 
 #[test]
+fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let config = parse_runtime_config(&base).expect("the idempotency section is optional");
+    assert_eq!(config.idempotency().receipt_retention_days(), 7);
+    let policy = config
+        .idempotency_policy()
+        .expect("the configured issuer scopes caller keys");
+    assert_eq!(
+        policy.caller_issuer(),
+        config.authentication().oidc().issuer()
+    );
+    assert_eq!(policy.receipt_retention_days(), 7);
+    for days in [1_u16, 365_u16] {
+        let config = parse_runtime_config(&format!(
+            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+        ))
+        .expect("a bounded receipt horizon parses");
+        assert_eq!(config.idempotency().receipt_retention_days(), days);
+    }
+    for days in [0_u16, 366_u16] {
+        assert_eq!(
+            parse_runtime_config(&format!(
+                "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+            ))
+            .err(),
+            Some(RuntimeConfigError::InvalidBounds)
+        );
+    }
+}
+
+#[test]
 fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);

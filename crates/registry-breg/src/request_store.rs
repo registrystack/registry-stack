@@ -1596,9 +1596,11 @@ mod tests {
             .execute(
                 "INSERT INTO registry_internal.registry_idempotency
                      (key_reference, binding_reference, result_kind, record_reference,
-                      record_revision, response_status, response_body, response_headers)
+                      record_revision, response_status, response_body, response_headers,
+                      caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at)
                  VALUES ('request-create-key', 'binding-ref', 'record', 'request-ref', 1,
-                         201, convert_to('{}', 'UTF8'), decode('0000', 'hex'))",
+                         201, convert_to('{}', 'UTF8'), decode('0000', 'hex'),
+                         'urn:test:issuer', 'test-subject', 'mutation', 'request-create-key', transaction_timestamp() + interval '7 days')",
                 &[],
             )
             .await

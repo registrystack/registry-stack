@@ -41,8 +41,9 @@ use registry_breg::package::{
     compiled_registry_change_set, compiled_registry_change_set_from_baseline, load_package,
     load_predecessor_package, prepare_package, prepare_package_with_project_assets,
     CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
-    PackageBuildRequest, PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile, PreparedPackage, VerifiedPackage, VerifiedPredecessorPackage,
+    PackageBuildRequest, PackageEngineFeature, PackageLoadContext, PackageMigrationPlanInput,
+    PackageModuleSource, PackageSourceFile, PreparedPackage, VerifiedPackage,
+    VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::{
     install_compiled_schema, managed_schema_fingerprint, rehearse_successor_migration,
@@ -53,6 +54,7 @@ use registry_breg::postgres::{
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG;
 use serde::Serialize;
@@ -591,6 +593,221 @@ async fn a_pre_statistics_empty_successor_installs_the_release_store_once() {
     .await
     .expect("the activated catalog is the exact current catalog");
     database.cleanup().await;
+}
+
+/// A package built before caller-scoped idempotency declares only the
+/// statistical release store, and its engine found spent keys by an
+/// audit-keyed digest. The current compiler's rebuild has no authored model
+/// delta, yet installing the caller-keyed shape is real apply work: the plan is
+/// not empty, and the apply discards the spent keys the earlier engine wrote.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_caller_scoped_empty_successor_discards_audit_keyed_spent_keys() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    // The package loader refuses a path through a symbolic link, so the copy
+    // lives under the canonical temporary root.
+    let predecessor_root = tempfile::Builder::new()
+        .prefix("registry-pre-caller-scoped-package-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("the temporary root canonicalizes"),
+        )
+        .expect("a temporary package root is created");
+    let predecessor = load_person_pre_caller_scoped_package(predecessor_root.path());
+    assert!(predecessor.statistical_release_store_present());
+    assert!(!predecessor
+        .engine_features()
+        .contains(&PackageEngineFeature::CallerScopedIdempotency));
+    let assets = person_registration_assets();
+    let project = person_registration_project(false);
+    let registry = compile_person_registration(&project, &assets);
+    assert_eq!(predecessor.package_id(), registry.registry_id());
+    let target_fingerprint = initial_fingerprint(&database, &registry).await;
+    let initial = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let mut active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the current package establishes the fixture catalog");
+
+    let (migration, task) = database.connect_migration().await;
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT registry_idempotency_caller_shape,
+                 DROP CONSTRAINT registry_idempotency_erasure_shape;
+             DROP INDEX registry_internal.registry_idempotency_caller_key;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP COLUMN caller_issuer,
+                 DROP COLUMN caller_subject,
+                 DROP COLUMN key_scope,
+                 DROP COLUMN idempotency_key,
+                 DROP COLUMN receipt_expires_at,
+                 DROP COLUMN receipt_dropped_at;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_erasure_shape
+                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
+             INSERT INTO registry_internal.registry_idempotency
+                 (key_reference, binding_reference, result_kind, result_count,
+                  response_status, response_body, response_headers)
+             VALUES
+                 ('hmac-sha256:held', 'hmac-sha256:held-binding', 'immediate_action', 0,
+                  200, '{}', '\\x0000');",
+        )
+        .await
+        .expect("the fixture restores the audit-keyed spent-key shape with a held row");
+    let legacy_catalog = ExpectedManagedCatalog::compiled_predecessor(&registry, true);
+    let legacy_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &legacy_catalog)
+            .await
+            .expect("the audit-keyed catalog fingerprints against its closed shape");
+    active.package_digest = predecessor.package_digest().to_owned();
+    active.schema_fingerprint = legacy_fingerprint;
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_state
+                SET active_package_digest = $1, schema_fingerprint = $2
+              WHERE singleton",
+            &[&active.package_digest, &active.schema_fingerprint],
+        )
+        .await
+        .expect("the fixture records the predecessor identity");
+    migration
+        .execute(
+            "UPDATE registry_internal.registry_migrations
+                SET package_digest = $1
+              WHERE activation_id = $2::text::uuid",
+            &[&active.package_digest, &active.activation_id],
+        )
+        .await
+        .expect("the activation ledger names the predecessor package");
+    drop(migration);
+    task.abort();
+
+    let successor = prepare_and_load_person_registration(
+        &project,
+        &assets,
+        &target_fingerprint,
+        Some(predecessor.package_digest()),
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(registry.clone()),
+        },
+    );
+    assert!(successor_plan_is_empty(&successor));
+    assert!(!successor_plan_is_empty_for_predecessor(
+        &successor,
+        &predecessor
+    ));
+
+    let history = predecessor.history_schema_descriptor();
+    let upgraded = apply_verified_package(
+        request(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .with_predecessor_migration_baseline(predecessor.migration_baseline())
+        .with_predecessor_history_descriptor(&history)
+        .with_predecessor_engine_capabilities(&predecessor),
+    )
+    .await
+    .expect("the verified caller-scoped capability transition applies");
+    assert_ready_target(&database, &upgraded).await;
+    let row = database
+        .admin
+        .query_one(
+            "SELECT (SELECT count(*) FROM registry_internal.registry_idempotency),
+                    EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                         WHERE table_schema = 'registry_internal'
+                           AND table_name = 'registry_idempotency'
+                           AND column_name = 'caller_issuer'
+                    )",
+            &[],
+        )
+        .await
+        .expect("administrator reads the spent-key table");
+    assert_eq!(
+        row.get::<_, i64>(0),
+        0,
+        "the upgrade discards audit-keyed spent keys"
+    );
+    assert!(
+        row.get::<_, bool>(1),
+        "the upgrade installs the caller shape"
+    );
+    verify_catalog_identity_for_catalog(
+        &database.admin,
+        &upgraded,
+        &ExpectedManagedCatalog::compiled(&registry),
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("the activated catalog is the exact current catalog");
+    database.cleanup().await;
+}
+
+/// The current frozen person-registration package as an engine that predates
+/// caller-scoped idempotency wrote it: the same bytes, with a manifest that
+/// declares only the statistical release store.
+fn load_person_pre_caller_scoped_package(root: &std::path::Path) -> VerifiedPredecessorPackage {
+    let frozen = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/person-registration-rhai-package");
+    copy_package_tree(&frozen, root);
+    let manifest_path = root.join("package.json");
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("the package manifest reads"))
+            .expect("the package manifest parses");
+    envelope["manifest"]["engineFeatures"] = serde_json::json!(["statistical_release_store"]);
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("the rewritten envelope canonicalizes"),
+    )
+    .expect("the rewritten manifest is written");
+    fs::remove_file(root.join(SUM_FILE)).expect("the stale sum file is removed");
+    write_sum_file(
+        root,
+        None,
+        &PackageLimits {
+            max_files: 1_026,
+            max_file_bytes: 16 * 1024 * 1024,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 16,
+            max_path_bytes: 512,
+        },
+        "test package",
+    )
+    .expect("the rewritten package closes");
+    load_predecessor_package(root, &local_context())
+        .expect("the pre-caller-scoped package verifies as a predecessor")
+}
+
+fn copy_package_tree(source: &std::path::Path, destination: &std::path::Path) {
+    for entry in fs::read_dir(source).expect("the frozen package directory reads") {
+        let entry = entry.expect("the frozen package entry reads");
+        let target = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("the frozen package entry type reads")
+            .is_dir()
+        {
+            fs::create_dir(&target).expect("the package subdirectory is created");
+            copy_package_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("the package file is copied");
+        }
+    }
 }
 
 fn person_registration_acceptance_root() -> std::path::PathBuf {

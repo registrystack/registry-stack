@@ -87,6 +87,8 @@ pub(crate) mod history_store;
 pub mod hook_handler;
 #[cfg(feature = "runtime")]
 pub mod idempotency;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub mod idempotency_retention;
 pub mod immediate_actions;
 #[cfg(feature = "runtime")]
 pub mod import_authority;

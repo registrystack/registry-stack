@@ -640,11 +640,17 @@ rm -f "$invoke_curl_config"
 Use the same `Idempotency-Key`, body, selected access profile, and condition
 after a lost response. Within the original package and authority binding, the
 server returns the stored receipt instead of running the mutation a second time.
-After a successful commit, reusing that key with different input, conditions,
-profile, or result permissions returns an idempotency conflict. A package change
-or erased response can also prevent replay, but never makes the consumed key
-eligible to execute again. A different key is a separate invocation; configure
-entity uniqueness constraints for domain-level duplicate prevention.
+Keys are per caller: the verified issuer and principal, the operation, and the
+key find the consumed key, so another principal's identical key is its own
+invocation. After a successful commit, reusing that key with different input,
+conditions, profile, or result permissions returns an idempotency conflict, and
+so does an identical body when the first attempt committed under a different
+package, profile, or claims. The receipt is held for
+`idempotency.receiptRetentionDays` (7 days by default); after that the retry
+returns `410 idempotency.expired`. A package change, an erased response, or an
+expired receipt can prevent replay, but never makes the consumed key eligible
+to execute again. A different key is a separate invocation; configure entity
+uniqueness constraints for domain-level duplicate prevention.
 
 The condition read does not grant ordinary `GET`, list, lookup, field
 projection, or revision-history access. Missing and out-of-bound exact targets
@@ -658,6 +664,7 @@ use the same concealment behavior as the rest of the protected API.
 | `412 precondition.failed` | Keep the form inputs. Recheck the selected targets, their current conditions and permitted boundaries before resubmitting. |
 | `422 action.refused` | Correct the input using the declared `refusalCode`, static detail and optional input `fieldPath`. No effects were committed. |
 | `409` | Inspect the problem code: `idempotency.conflict` is a consumed-key binding mismatch; `mutation.conflict` is a state or configured constraint conflict. |
+| `410 idempotency.expired` | The first attempt committed and its receipt horizon passed. Read the affected records instead of retrying; the key never executes again. |
 | `503 service.unavailable` or a lost response | Retry the identical request with the same key to recover a possible committed receipt. Do not generate a fresh key automatically. |
 
 The compiler bounds an action to 16 target roles, 128 field mutations and a

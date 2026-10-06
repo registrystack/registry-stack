@@ -525,6 +525,7 @@ pub struct RuntimeConfig {
     review_authorities: BTreeMap<String, ReviewAuthorityConfig>,
     review_executors: BTreeMap<String, ReviewExecutorConfig>,
     event_delivery: EventDeliveryConfig,
+    idempotency: IdempotencyConfig,
     operational_timeouts: OperationalTimeouts,
     wasm_execution: WasmExecutionConfig,
     metrics_listener: Option<MetricsListenerConfig>,
@@ -560,6 +561,7 @@ impl RuntimeConfig {
         let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
         let event_delivery = EventDeliveryConfig::from_raw(raw.event_delivery)?;
+        let idempotency = IdempotencyConfig::from_raw(raw.idempotency)?;
         let review_authorities = raw
             .review_authorities
             .into_iter()
@@ -601,6 +603,7 @@ impl RuntimeConfig {
             review_authorities,
             review_executors,
             event_delivery,
+            idempotency,
             operational_timeouts,
             wasm_execution,
             metrics_listener,
@@ -986,6 +989,21 @@ impl RuntimeConfig {
         &self.event_delivery
     }
 
+    pub fn idempotency(&self) -> &IdempotencyConfig {
+        &self.idempotency
+    }
+
+    /// The idempotency policy every write path of this runtime spends keys
+    /// under: caller keys are scoped under the configured OIDC issuer, the
+    /// only issuer whose tokens this runtime verifies.
+    pub fn idempotency_policy(&self) -> Result<crate::idempotency::IdempotencyPolicy> {
+        crate::idempotency::IdempotencyPolicy::new(
+            self.authentication.oidc.issuer(),
+            self.idempotency.receipt_retention_days(),
+        )
+        .map_err(|_| RuntimeConfigError::InvalidBounds)
+    }
+
     /// The field-encryption binding, defaulting to no provider.
     pub fn field_encryption(&self) -> &crate::field_encryption::FieldEncryptionConfig {
         &self.field_encryption
@@ -1128,6 +1146,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("cursor", &self.cursor)
             .field("event_destinations", &self.event_destinations)
             .field("event_delivery", &self.event_delivery)
+            .field("idempotency", &self.idempotency)
             .field("operational_timeouts", &self.operational_timeouts)
             .field("wasm_execution", &self.wasm_execution)
             .field("metrics_listener", &self.metrics_listener)
@@ -1558,6 +1577,12 @@ pub struct OidcVerifierConfig {
 }
 
 impl OidcVerifierConfig {
+    /// The one token issuer this runtime verifies.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
     fn from_raw(raw: RawOidcVerifierConfig) -> Result<Self> {
         validate_oidc_value(&raw.provider.issuer)?;
         validate_oidc_value(&raw.provider.audience)?;
@@ -2172,6 +2197,30 @@ impl EventDeliveryConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IdempotencyConfig {
+    receipt_retention_days: u16,
+}
+
+impl IdempotencyConfig {
+    fn from_raw(raw: RawIdempotencyConfig) -> Result<Self> {
+        if raw.receipt_retention_days == 0
+            || raw.receipt_retention_days > crate::idempotency::MAX_RECEIPT_RETENTION_DAYS
+        {
+            return Err(RuntimeConfigError::InvalidBounds);
+        }
+        Ok(Self {
+            receipt_retention_days: raw.receipt_retention_days,
+        })
+    }
+
+    /// How many days a held response is kept after its commit.
+    #[must_use]
+    pub fn receipt_retention_days(&self) -> u16 {
+        self.receipt_retention_days
+    }
+}
+
 impl CursorConfig {
     fn from_raw(raw: RawCursorConfig) -> Result<Self> {
         Ok(Self {
@@ -2577,6 +2626,9 @@ struct RawRuntimeConfig {
     /// Optional event-delivery tuning. Defaults to the server's bounded retention policy.
     #[serde(default)]
     event_delivery: RawEventDeliveryConfig,
+    /// Optional idempotency tuning. Defaults to a seven-day receipt horizon.
+    #[serde(default)]
+    idempotency: RawIdempotencyConfig,
     /// Optional operational request, shutdown, locking, and migration timeout tuning.
     #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
@@ -2826,6 +2878,28 @@ impl Default for RawEventDeliveryConfig {
 
 const fn default_webhook_payload_retention_days() -> u8 {
     DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawIdempotencyConfig {
+    /// Days a held response is kept after its commit. A retry after it is
+    /// refused as expired and never executed; the key stays spent.
+    #[serde(default = "default_receipt_retention_days")]
+    receipt_retention_days: u16,
+}
+
+impl Default for RawIdempotencyConfig {
+    fn default() -> Self {
+        Self {
+            receipt_retention_days: default_receipt_retention_days(),
+        }
+    }
+}
+
+const fn default_receipt_retention_days() -> u16 {
+    crate::idempotency::DEFAULT_RECEIPT_RETENTION_DAYS
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -3161,6 +3235,11 @@ fn install_schema_constraints(schema: &mut Value) {
             "/$defs/RawEventDeliveryConfig/properties/payloadRetentionDays",
             1,
             u64::from(MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS),
+        ),
+        (
+            "/$defs/RawIdempotencyConfig/properties/receiptRetentionDays",
+            1,
+            u64::from(crate::idempotency::MAX_RECEIPT_RETENTION_DAYS),
         ),
         (
             "/$defs/RawOperationalTimeouts/properties/httpRequestMilliseconds",

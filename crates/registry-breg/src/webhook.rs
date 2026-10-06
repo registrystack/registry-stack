@@ -48,6 +48,7 @@ use crate::audit::{
 use crate::event_destination::{ActivatedEventDestination, ActivatedEventDestinationRegistry};
 use crate::field_encryption::FieldEncryptionService;
 use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
+use crate::idempotency::IdempotencyPolicy;
 use crate::model::CompiledRegistry;
 use crate::mutation::{HookProposalApplication, HookProposalOutcome, MutationCoordinator};
 use crate::package::PackageError;
@@ -205,6 +206,7 @@ struct BregDeliverySeams {
     lock_timeout: Duration,
     audit: RegistryAudit,
     field_encryption: Option<Arc<FieldEncryptionService>>,
+    idempotency: IdempotencyPolicy,
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
@@ -217,7 +219,8 @@ impl BregDeliverySeams {
             &self.instance_id,
             self.audit.clone(),
             Some(Arc::clone(&self.destinations)),
-        );
+        )
+        .with_idempotency_policy(self.idempotency.clone());
         match &self.field_encryption {
             Some(field_encryption) => {
                 coordinator.with_field_encryption(Arc::clone(field_encryption))
@@ -813,6 +816,39 @@ impl WebhookDeliveryService {
         audit: RegistryAudit,
         field_encryption: Option<Arc<FieldEncryptionService>>,
     ) -> Self {
+        Self::new_with_runtime_bindings(
+            pool,
+            destinations,
+            handlers,
+            registry,
+            expected,
+            instance_id,
+            lock_key,
+            lock_timeout,
+            audit,
+            field_encryption,
+            IdempotencyPolicy::default(),
+        )
+    }
+
+    /// Bind the delivery worker to the same optional field-encryption key
+    /// state and the same idempotency policy used by request-path mutations,
+    /// so a hook proposal receipt is held for the configured horizon.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_runtime_bindings(
+        pool: RuntimePool,
+        destinations: Arc<ActivatedEventDestinationRegistry>,
+        handlers: Arc<HookHandlerRegistry>,
+        registry: Arc<CompiledRegistry>,
+        expected: ExpectedRegistryIdentity,
+        instance_id: &str,
+        lock_key: RegistryLockKey,
+        lock_timeout: Duration,
+        audit: RegistryAudit,
+        field_encryption: Option<Arc<FieldEncryptionService>>,
+        idempotency: IdempotencyPolicy,
+    ) -> Self {
         let config = DeliveryConfig {
             schema: DELIVERY_SCHEMA.to_owned(),
             idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
@@ -830,6 +866,7 @@ impl WebhookDeliveryService {
             lock_timeout,
             audit,
             field_encryption,
+            idempotency,
             last_success: Arc::clone(&last_success),
         };
         Self {

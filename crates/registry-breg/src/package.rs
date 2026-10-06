@@ -102,10 +102,16 @@ pub struct PackageManifest {
 #[serde(rename_all = "snake_case")]
 pub enum PackageEngineFeature {
     StatisticalReleaseStore,
+    /// Spent idempotency keys are found by the verified caller, the operation
+    /// scope, and the key, and held responses carry a receipt horizon.
+    CallerScopedIdempotency,
 }
 
 fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
-    BTreeSet::from([PackageEngineFeature::StatisticalReleaseStore])
+    BTreeSet::from([
+        PackageEngineFeature::StatisticalReleaseStore,
+        PackageEngineFeature::CallerScopedIdempotency,
+    ])
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -639,6 +645,13 @@ impl VerifiedPredecessorPackage {
     /// compatibility.
     pub fn statistical_release_store_present(&self) -> bool {
         self.statistical_release_store_present
+    }
+
+    /// The engine-owned capabilities this predecessor's hash-covered manifest
+    /// declares. A successor declaring one this set lacks has apply work even
+    /// when its authored model is unchanged.
+    pub fn engine_features(&self) -> &BTreeSet<PackageEngineFeature> {
+        &self.manifest.engine_features
     }
 }
 

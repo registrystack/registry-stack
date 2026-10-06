@@ -152,6 +152,7 @@ impl From<IdempotencyError> for HistoryErasureError {
             IdempotencyError::InvalidInput => Self::InvalidInput,
             IdempotencyError::CachedResponseUnreadable => Self::CachedResponseUnreadable,
             IdempotencyError::Conflict
+            | IdempotencyError::Expired
             | IdempotencyError::Timeout
             | IdempotencyError::Unavailable => Self::Unavailable,
         }

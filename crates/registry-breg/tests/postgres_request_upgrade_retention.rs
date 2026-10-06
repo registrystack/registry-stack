@@ -1595,19 +1595,24 @@ async fn seed_canceled_draft_without_proposal(
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_reference,
                   record_revision, result_count, proposal_version, response_status,
-                  response_body, response_headers)
+                  response_body, response_headers, caller_issuer, caller_subject, key_scope,
+                  idempotency_key, receipt_expires_at)
              VALUES ('canceled-create-key', 'canceled-create-binding', 'record',
                      'canceled-request-ref', 1, NULL, NULL, 201,
-                     convert_to('{\"id\":\"created canceled draft\"}', 'UTF8'), decode('0000', 'hex')),
+                     convert_to('{\"id\":\"created canceled draft\"}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'canceled-create-key', transaction_timestamp() + interval '7 days'),
                     ('canceled-patch-key', 'canceled-patch-binding', 'record',
                      'canceled-request-ref', 2, NULL, NULL, 200,
-                     convert_to('{\"id\":\"patched canceled draft\"}', 'UTF8'), decode('0000', 'hex')),
+                     convert_to('{\"id\":\"patched canceled draft\"}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'canceled-patch-key', transaction_timestamp() + interval '7 days'),
                     ('canceled-batch-key', 'canceled-batch-binding', 'batch',
                      NULL, NULL, 2, NULL, 200,
-                     convert_to('{\"results\":[{},{}]}', 'UTF8'), decode('0000', 'hex')),
+                     convert_to('{\"results\":[{},{}]}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'canceled-batch-key', transaction_timestamp() + interval '7 days'),
                     ('other-canceled-key', 'other-canceled-binding', 'record',
                      'other-canceled-request-ref', 1, NULL, NULL, 200,
-                     convert_to('{\"id\":\"other entity detail\"}', 'UTF8'), decode('0000', 'hex'))",
+                     convert_to('{\"id\":\"other entity detail\"}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'other-canceled-key', transaction_timestamp() + interval '7 days')",
             &[],
         )
         .await
@@ -2018,20 +2023,26 @@ async fn seed_application_provenance_and_receipts(client: &Client) {
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_reference,
                   record_revision, result_count, proposal_version, response_status,
-                  response_body, response_headers)
+                  response_body, response_headers, caller_issuer, caller_subject, key_scope,
+                  idempotency_key, receipt_expires_at)
              VALUES ('submit-key', 'submit-binding', 'record', 'request-record-ref', 7, NULL,
-                     NULL, 200, convert_to('{\"id\":\"request-action\"}', 'UTF8'), decode('0000', 'hex')),
+                     NULL, 200, convert_to('{\"id\":\"request-action\"}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'submit-key', transaction_timestamp() + interval '7 days'),
                     ('application-key', 'application-binding', 'application',
                      'request-record-ref', 8, 1, 1, 200,
-                     convert_to('{\"id\":\"application\"}', 'UTF8'), decode('0000', 'hex')),
+                     convert_to('{\"id\":\"application\"}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'application-key', transaction_timestamp() + interval '7 days'),
                     ('mixed-batch-key', 'mixed-batch-binding', 'batch', NULL, NULL, 2,
-                     NULL, 200, convert_to('{\"results\":[{},{}]}', 'UTF8'), decode('0000', 'hex')),
+                     NULL, 200, convert_to('{\"results\":[{},{}]}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'mixed-batch-key', transaction_timestamp() + interval '7 days'),
                     ('other-request-key', 'other-binding', 'record', 'other-record-ref', 4, NULL,
                      NULL, 200,
-                     convert_to('{\"id\":\"same-uuid-other-entity\"}', 'UTF8'), decode('0000', 'hex')),
+                     convert_to('{\"id\":\"same-uuid-other-entity\"}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'other-request-key', transaction_timestamp() + interval '7 days'),
                     ('ordinary-key', 'ordinary-binding', 'record', 'ordinary-ref', 5, NULL,
                      NULL, 200,
-                     convert_to('{\"id\":\"same-json-shape\"}', 'UTF8'), decode('0000', 'hex'))",
+                     convert_to('{\"id\":\"same-json-shape\"}', 'UTF8'), decode('0000', 'hex'),
+                     'urn:test:issuer', 'test-subject', 'mutation', 'ordinary-key', transaction_timestamp() + interval '7 days')",
             &[],
         )
         .await

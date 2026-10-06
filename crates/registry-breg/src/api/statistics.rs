@@ -868,6 +868,9 @@ fn service_problem(error: StatisticsServiceError) -> Response {
         StatisticsServiceError::IdempotencyConflict => {
             statistics_problem(ProblemCode::IdempotencyConflict, None)
         }
+        StatisticsServiceError::IdempotencyExpired => {
+            statistics_problem(ProblemCode::IdempotencyExpired, None)
+        }
         StatisticsServiceError::Unavailable | StatisticsServiceError::CommitUnresolved => {
             unavailable()
         }

@@ -22,11 +22,14 @@ async fn application_receipts_keep_record_results_and_enforce_shape() {
         .batch_execute(
             "INSERT INTO registry_internal.registry_idempotency
                  (key_reference, binding_reference, result_kind, record_reference,
-                  record_revision, result_count, response_status, response_body, response_headers)
+                  record_revision, result_count, response_status, response_body, response_headers,
+                  caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at)
              VALUES ('stored-record', 'binding-record', 'record', 'record-ref', 3, NULL,
-                         200, convert_to('{\"stored\":true}', 'UTF8'), decode('0000', 'hex')),
+                         200, convert_to('{\"stored\":true}', 'UTF8'), decode('0000', 'hex'),
+                         'urn:test:issuer', 'test-subject', 'mutation', 'stored-record', transaction_timestamp() + interval '7 days'),
                     ('stored-batch', 'binding-batch', 'batch', NULL, NULL, 2,
-                         200, convert_to('[]', 'UTF8'), decode('0000', 'hex'));",
+                         200, convert_to('[]', 'UTF8'), decode('0000', 'hex'),
+                         'urn:test:issuer', 'test-subject', 'mutation', 'stored-batch', transaction_timestamp() + interval '7 days');",
         )
         .await
         .expect("record and batch receipts are stored");
@@ -49,9 +52,10 @@ async fn application_receipts_keep_record_results_and_enforce_shape() {
     let insert_application = "INSERT INTO registry_internal.registry_idempotency
              (key_reference, binding_reference, result_kind, record_reference,
               record_revision, result_count, proposal_version, response_status,
-              response_body, response_headers)
+              response_body, response_headers, caller_issuer, caller_subject, key_scope, idempotency_key, receipt_expires_at)
          VALUES ($1, 'application-binding', 'application', 'request-ref', 7, $2, $3,
-                 200, convert_to('{}', 'UTF8'), decode('0000', 'hex'))";
+                 200, convert_to('{}', 'UTF8'), decode('0000', 'hex'),
+                 'urn:test:issuer', 'test-subject', 'mutation', $1, transaction_timestamp() + interval '7 days')";
     migration
         .execute(
             insert_application,

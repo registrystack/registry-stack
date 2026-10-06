@@ -278,7 +278,7 @@ pub(crate) fn append_statistics_openapi(
                     &publisher,
                     &admission_publisher,
                     publish_parameters(false),
-                    json!({"201": json_response("StatisticalReleaseHeader", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
+                    json!({"201": json_response("StatisticalReleaseHeader", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "410":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalReleaseRequest"),
                 ),
             );
@@ -293,7 +293,7 @@ pub(crate) fn append_statistics_openapi(
                     &publisher,
                     &admission_publisher,
                     publish_parameters(true),
-                    json!({"200": json_response("StatisticalReleaseHeader", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
+                    json!({"200": json_response("StatisticalReleaseHeader", true), "400":problem_response(), "401":problem_response(), "404":problem_response(), "409":problem_response(), "410":problem_response(), "415":problem_response(), "422":problem_response(), "500":problem_response(), "503":problem_response(), "504":problem_response()}),
                     Some("StatisticalWithdrawalRequest"),
                 ),
             );

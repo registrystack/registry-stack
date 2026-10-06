@@ -266,12 +266,6 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
             ]}),
         ),
         (
-            "principal",
-            "/v1/records/widgets:batch",
-            claims("different-principal", "case-management", "zone-a"),
-            batch_body.clone(),
-        ),
-        (
             "purpose",
             "/v1/records/widgets:batch",
             claims(PRINCIPAL, "case-review", "zone-a"),
@@ -294,6 +288,59 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
         assert_eq!(response.status(), StatusCode::CONFLICT, "{label}");
         assert_eq!(body_json(response).await["code"], "idempotency.conflict");
     }
+
+    // Keys are per caller: the same key from another principal is that
+    // principal's own unspent key, so the batch executes as a fresh write and
+    // is refused by the stale record version it carries, committing nothing.
+    let before_principal = effect_counts(&database, table).await;
+    let other_principal = send_json(
+        &app,
+        "/v1/records/widgets:batch",
+        Some(claims("different-principal", "case-management", "zone-a")),
+        "batch-key",
+        batch_body.clone(),
+    )
+    .await;
+    assert_eq!(other_principal.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(other_principal).await["code"],
+        "mutation.conflict"
+    );
+    assert_eq!(
+        effect_counts(&database, table).await.without_audit(),
+        before_principal.without_audit(),
+        "another caller's fresh batch cannot commit a prefix"
+    );
+
+    // Past the receipt horizon the exact retry is answered 410 and never
+    // executes: the key stays spent although its held response is gone.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_idempotency
+                SET created_at = CURRENT_TIMESTAMP - INTERVAL '9 days',
+                    receipt_expires_at = CURRENT_TIMESTAMP - INTERVAL '2 days'
+              WHERE idempotency_key = 'batch-key'",
+            &[],
+        )
+        .await
+        .expect("administrator ages the batch receipt past its horizon");
+    let before_expired = effect_counts(&database, table).await;
+    let expired = send_json(
+        &app,
+        "/v1/records/widgets:batch",
+        Some(authorized_claims.clone()),
+        "batch-key",
+        batch_body.clone(),
+    )
+    .await;
+    assert_eq!(expired.status(), StatusCode::GONE);
+    assert_eq!(body_json(expired).await["code"], "idempotency.expired");
+    assert_eq!(
+        effect_counts(&database, table).await.without_audit(),
+        before_expired.without_audit(),
+        "an expired key never executes again"
+    );
 
     let mut changed_identity = identity.clone();
     changed_identity.activation_id = test_activation_id("package-batch-2");

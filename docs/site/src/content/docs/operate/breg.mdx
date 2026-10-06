@@ -389,7 +389,8 @@ configured prefix and never derive their authority from request headers.
 | `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
 | `package` | The package directory the activation ledger names as active and, optionally, the `expectedDigest` it must carry. |
 | `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. |
-| `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms; changing the cursor secret invalidates existing cursors. |
+| `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms only: spent idempotency keys are found and bound without it, so a retry after the rotation still replays or is refused. Changing the cursor secret invalidates existing cursors. |
+| `idempotency` | Optional `receiptRetentionDays` (default 7, 1 to 365): how long the response to a successful write stays available to an exact retry. The key stays spent after that; see [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses). |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
 | `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, `trustedJwksRef`, `revokedKeyIds`, optional `caBundleRef`, and exactly one of `tokenRef` or a refreshing `privateKeyJwt` credential. The script cannot replace these bindings; see [Governed registry actions](../../explanation/governed-registry-actions/). |
 | `fieldEncryption` | Key custody for encrypted fields; declare it when the project encrypts a field. The optional `provider` binding's `kind` member selects the custodian. `kind: transit` requires `unixSocketPath`, `mount`, and `keyName`, with an optional `timeoutMilliseconds` (default 5000, at most 30000). `kind: localFile` requires `dekRef`, a `secret:file/<name>` reference to one base64 data-key file, and is for local assurance only. The model and its limits are in [Field encryption for restricted fields](../../explanation/breg-field-encryption/). |
@@ -618,8 +619,9 @@ Keep the selected principal values stable if existing ownership and review decis
 Test new tokens before the serving cutover, including refused permissions and assignment shapes.
 
 Resolve uncertain writes before changing issuer mappings, profiles, or packages.
-After a timeout, retry the same request with its original idempotency key and the same effective principal, profile, purpose, and row context.
-A replacement token can satisfy those conditions; changing identity or authority context can produce `idempotency.conflict` instead of a replay.
+After a timeout, retry the same request with its original idempotency key and the same effective principal, profile, purpose, and row context, within the receipt horizon (`idempotency.receiptRetentionDays`).
+A replacement token can satisfy those conditions; changing the profile or authority context produces `idempotency.conflict` instead of a replay.
+Keys are spent per caller, under the configured issuer and the principal value, so a retry under a changed issuer or principal mapping is a different caller's fresh request and can duplicate a write whose first response was lost.
 The binding also covers the request and the activation that serves it, so issuing a fresh key blindly can duplicate a write whose first response was lost.
 [Mutation retry rules](../../reference/breg-api/#idempotency) explain the request contract.
 

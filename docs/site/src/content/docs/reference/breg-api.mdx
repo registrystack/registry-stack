@@ -284,15 +284,33 @@ item.
 ### Idempotency
 
 Send `Idempotency-Key` (at most 256 bytes) on any create, patch, tombstone, batch, request
-action, or immediate action. A repeat with the same key and the same request returns the stored
-response without writing again. The same key with a different request returns
-`409 idempotency.conflict`. Request actions and immediate actions require the header.
+action, or immediate action. Request actions and immediate actions require the header.
+
+- Keys are per caller. The configured token issuer, the principal value, the operation, and the
+  key find a spent key, so two callers that send the same key never meet, and the same key under
+  another principal is that principal's own request.
+- Only successes are held. A refused or failed attempt spends nothing, so correct the request and
+  retry it with the same key.
+- A repeat of the same request under the same key returns the held response without writing
+  again, for `idempotency.receiptRetentionDays` after the first attempt committed (7 days by
+  default).
+- The same key with a different request returns `409 idempotency.conflict`. The binding covers the
+  request body and the package activation, selected access profile, and verified claims it ran
+  under, so a byte-identical body can also return `409` when the first attempt committed under a
+  different package, profile, or claims.
+- After the horizon, the same request returns `410 idempotency.expired` and is never executed: the
+  key stays spent although its held response is gone. The first attempt committed, so read the
+  record instead of retrying.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), and precondition_required();
+    crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, resolve_binding(), and lock_and_load();
     crates/registry-breg/src/mutation/request.rs;
     crates/registry-breg/src/postgres/mutation.rs;
     crates/registry-breg/src/artifacts.rs, batch_response_schema;
-    crates/registry-breg/tests/postgres_temporal_corrections.rs. */}
+    crates/registry-breg/tests/postgres_temporal_corrections.rs;
+    crates/registry-breg/tests/postgres_mutation.rs,
+    real_postgres_idempotency_keys_are_scoped_per_caller and
+    real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent. */}
 
 ## Ingestion runs
 

@@ -85,7 +85,7 @@ impl MutationCoordinator {
         compiled_delivery_id: &str,
     ) -> Result<String, UncertainApply> {
         let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
-        resolve_hook_key_reference(self.audit.profile(), &idempotency_key)
+        resolve_hook_key_reference(compiled_delivery_id, &idempotency_key)
             .map_err(|_| UncertainApply)
     }
 
@@ -180,6 +180,7 @@ impl MutationCoordinator {
             canonical_action_request_digest(action, &normalized_input, &input.preconditions)?;
         let binding = resolve_action_binding(
             self.audit.profile(),
+            &self.idempotency,
             &ActionIdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -278,7 +279,11 @@ impl MutationCoordinator {
         let idempotency_key =
             hook_proposal_idempotency_key(application.event_id, application.compiled_delivery_id);
         let receipt = self
-            .hook_proposal_receipt(&***client, &idempotency_key)
+            .hook_proposal_receipt(
+                &***client,
+                application.compiled_delivery_id,
+                &idempotency_key,
+            )
             .await?;
         if let Some(receipt) = &receipt {
             if let Some(answer_digest) = receipt.answer_digest {
@@ -356,7 +361,7 @@ impl MutationCoordinator {
     ) -> Result<Option<HookProposalOutcome>, UncertainApply> {
         let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
         if self
-            .hook_proposal_receipt(client, &idempotency_key)
+            .hook_proposal_receipt(client, compiled_delivery_id, &idempotency_key)
             .await?
             .is_some()
         {
@@ -369,9 +374,10 @@ impl MutationCoordinator {
     async fn hook_proposal_receipt(
         &self,
         client: &(impl tokio_postgres::GenericClient + Sync),
+        compiled_delivery_id: &str,
         idempotency_key: &str,
     ) -> Result<Option<HookProposalReceipt>, UncertainApply> {
-        let key_reference = resolve_hook_key_reference(self.audit.profile(), idempotency_key)
+        let key_reference = resolve_hook_key_reference(compiled_delivery_id, idempotency_key)
             .map_err(|_| UncertainApply)?;
         client
             .query_opt(
@@ -672,6 +678,8 @@ impl MutationCoordinator {
         };
         let binding = match resolve_hook_action_binding(
             self.audit.profile(),
+            &self.idempotency,
+            application.compiled_delivery_id,
             &ActionIdempotencyBinding {
                 key: idempotency_key,
                 context: &claims,
@@ -772,10 +780,12 @@ impl MutationCoordinator {
                     "The proposed outcome was refused by the action's handler contract.",
                 );
             }
-            Err(MutationError::IdempotencyConflict) => {
+            Err(MutationError::IdempotencyConflict | MutationError::IdempotencyExpired) => {
                 // The key is the delivery, so a conflict means this delivery
                 // already settled a different answer: the first application
-                // stands and the changed one can never apply.
+                // stands and the changed one can never apply. A delivery whose
+                // receipt is past the horizon already applied, so it never
+                // applies again either.
                 return conflicting_hook_answer();
             }
             Err(MutationError::PreconditionFailed) => {
@@ -1223,7 +1233,7 @@ impl MutationCoordinator {
                 package_revision: &self.expected.activation_id,
                 origin: CommitOrigin::Mutation {
                     actor_reference: &binding.principal_reference,
-                    request_reference: &binding.binding_reference,
+                    request_reference: &binding.request_reference,
                 },
                 change_context: None,
                 members: &members,
@@ -2841,6 +2851,7 @@ impl MutationCoordinator {
         );
         let binding = resolve_action_binding(
             self.audit.profile(),
+            &self.idempotency,
             &ActionIdempotencyBinding {
                 key: input.idempotency_key,
                 context: claims,
@@ -3110,8 +3121,10 @@ mod tests {
         .expect("action claims are valid");
         let target_authority = BTreeMap::new();
         let request_digest = [7_u8; 32];
+        let policy = IdempotencyPolicy::default();
         let binding = resolve_action_binding(
             &profile,
+            &policy,
             &ActionIdempotencyBinding {
                 key: "ordinary-action-key",
                 context: &claims,
@@ -3151,13 +3164,18 @@ mod tests {
             )
             .expect("legacy binding hashes");
         assert_eq!(
-            binding.binding_reference, expected,
+            binding.request_reference, expected,
             "an absent hook answer digest must not add a null member to released action receipts"
+        );
+        assert!(
+            binding.binding_reference.starts_with("sha256:"),
+            "the spent-key binding is independent of the audit hash key"
         );
 
         let answer_digest = [9_u8; 32];
         let hook_binding = resolve_action_binding(
             &profile,
+            &policy,
             &ActionIdempotencyBinding {
                 key: "ordinary-action-key",
                 context: &claims,
@@ -3173,7 +3191,11 @@ mod tests {
         )
         .expect("hook action binding resolves");
         assert_ne!(
-            hook_binding.binding_reference, expected,
+            hook_binding.request_reference, expected,
+            "a hook answer digest still binds the exact accepted answer"
+        );
+        assert_ne!(
+            hook_binding.binding_reference, binding.binding_reference,
             "a hook answer digest still binds the exact accepted answer"
         );
     }
@@ -3182,13 +3204,45 @@ mod tests {
     fn hook_receipts_do_not_share_the_caller_key_namespace() {
         let profile = AuditProfile::unkeyed_dev_only();
         let key = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let delivery = "compiled-delivery";
+        let claims = ActionClaimContext::new(
+            "register".to_owned(),
+            delivery.to_owned(),
+            "operator".to_owned(),
+            None,
+            BTreeSet::from(["created".to_owned()]),
+        )
+        .expect("action claims are valid");
+        let target_authority = BTreeMap::new();
+        let binding = ActionIdempotencyBinding {
+            key,
+            context: &claims,
+            method: HttpMethod::Post,
+            route: "/v1/actions/register",
+            package_revision: "package-revision",
+            action_contract_fingerprint: "sha256:contract",
+            target_authority: &target_authority,
+            result_effects: claims.result_effects(),
+            canonical_request_digest: [7_u8; 32],
+            answer_digest: None,
+        };
+        let policy = IdempotencyPolicy::default();
 
-        let caller_reference =
-            crate::idempotency::resolve_key_reference(&profile, key).expect("caller key resolves");
+        let caller_reference = resolve_action_binding(&profile, &policy, &binding)
+            .expect("caller key resolves")
+            .key_reference;
         let hook_reference =
-            resolve_hook_key_reference(&profile, key).expect("hook receipt key resolves");
+            resolve_hook_key_reference(delivery, key).expect("hook receipt key resolves");
+        let hook_binding_reference =
+            resolve_hook_action_binding(&profile, &policy, delivery, &binding)
+                .expect("hook binding resolves")
+                .key_reference;
 
-        assert_ne!(caller_reference, hook_reference);
+        assert_eq!(hook_reference, hook_binding_reference);
+        assert_ne!(
+            caller_reference, hook_reference,
+            "a caller whose subject equals a delivery id still cannot reach its key"
+        );
     }
 
     #[test]

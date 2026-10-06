@@ -1429,7 +1429,12 @@ async fn finish_prepared_server(
         &registry,
         &expected.activation_id,
     ));
-    let webhook_delivery = WebhookDeliveryService::new_with_field_encryption(
+    // Every write path spends idempotency keys under the one verified issuer
+    // and holds responses for the configured receipt horizon.
+    let idempotency = config
+        .idempotency_policy()
+        .map_err(StartupError::RuntimeConfig)?;
+    let webhook_delivery = WebhookDeliveryService::new_with_runtime_bindings(
         pool.clone(),
         Arc::clone(&event_destinations),
         hook_handlers,
@@ -1440,6 +1445,7 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit.clone(),
         field_encryption.clone(),
+        idempotency.clone(),
     );
     verify_pending_delivery_source(&pool, &expected.package_id, config.identity().instance_id())
         .await?;
@@ -1513,14 +1519,17 @@ async fn finish_prepared_server(
             attachment_verification.clone(),
         ))
     };
-    let statistics = Arc::new(crate::postgres::PostgresStatisticsService::new(
-        pool.clone(),
-        Arc::clone(&registry),
-        expected.clone(),
-        lock_key,
-        config.operational_timeouts().record_lock,
-        audit.clone(),
-    ));
+    let statistics = Arc::new(
+        crate::postgres::PostgresStatisticsService::new(
+            pool.clone(),
+            Arc::clone(&registry),
+            expected.clone(),
+            lock_key,
+            config.operational_timeouts().record_lock,
+            audit.clone(),
+        )
+        .with_idempotency_policy(idempotency.clone()),
+    );
     let mutations = PostgresRecordMutationService::new_with_event_destinations(
         pool,
         Arc::clone(&registry),
@@ -1531,6 +1540,7 @@ async fn finish_prepared_server(
         audit,
         Some(event_destinations),
     )
+    .with_idempotency_policy(idempotency)
     .with_task_status(task_status)
     .with_attachment_storage(attachment_storage)
     .with_attachment_verification(attachment_verification);

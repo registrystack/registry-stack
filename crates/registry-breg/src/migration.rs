@@ -23,8 +23,8 @@ use crate::migration_plan::{
     ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
 };
 use crate::package::{
-    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan,
-    PackageEngineFeature, PackageFileRole, VerifiedPackage, VerifiedPredecessorPackage,
+    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
+    VerifiedPackage, VerifiedPredecessorPackage,
 };
 use crate::postgres::{
     statement_checksum, ActivationPlanKind, BackupReference, ConnectionConfig,
@@ -164,17 +164,18 @@ pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
 
 /// Whether a verified successor remains empty after accounting for an
 /// engine-owned capability absent from its verified predecessor. The sole
-/// compatibility exception installs the statistical release store introduced
-/// after packages first became activatable; every ordinary empty successor is
-/// still refused.
+/// compatibility exception installs an engine capability, such as the
+/// statistical release store or caller-scoped idempotency, that the current
+/// compiler declares and the predecessor's manifest does not; every ordinary
+/// empty successor is still refused.
 pub fn successor_plan_is_empty_for_predecessor(
     package: &VerifiedPackage,
     predecessor: &VerifiedPredecessorPackage,
 ) -> bool {
-    successor_plan_is_empty(package) && !installs_statistical_release_store(package, predecessor)
+    successor_plan_is_empty(package) && !installs_engine_capability(package, predecessor)
 }
 
-fn installs_statistical_release_store(
+fn installs_engine_capability(
     package: &VerifiedPackage,
     predecessor: &VerifiedPredecessorPackage,
 ) -> bool {
@@ -185,11 +186,12 @@ fn installs_statistical_release_store(
             .from_package_digest
             .as_deref()
             == Some(predecessor.package_digest())
-        && !predecessor.statistical_release_store_present()
         && package
             .manifest()
             .engine_features
-            .contains(&PackageEngineFeature::StatisticalReleaseStore)
+            .difference(predecessor.engine_features())
+            .next()
+            .is_some()
 }
 
 fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
@@ -1066,9 +1068,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     let engine_capability_only_upgrade = successor_plan_is_empty(request.package)
         && request
             .predecessor_engine_capabilities
-            .is_some_and(|predecessor| {
-                installs_statistical_release_store(request.package, predecessor)
-            });
+            .is_some_and(|predecessor| installs_engine_capability(request.package, predecessor));
     let empty_successor =
         successor_plan_is_empty(request.package) && !engine_capability_only_upgrade;
     if current.is_some() && !role_change && empty_successor {

@@ -189,10 +189,12 @@ Reader and live grants and `firstPeriod` do not change it. Read eligibility
 uses the active definition digest, so versions from another definition remain
 stored but are unavailable until that exact definition is active again.
 
-Publication and withdrawal require `Idempotency-Key`. An identical retry under
-the same current authority returns the retained status, headers, and body
-without creating another version. Binding the key to a different request
-returns `409 idempotency.conflict`.
+Publication and withdrawal require `Idempotency-Key`. Keys are per caller,
+like every BReg mutation key. An identical retry under the same current
+authority returns the retained status, headers, and body without creating
+another version, for `idempotency.receiptRetentionDays` after the first commit;
+after that it returns `410 idempotency.expired` and creates nothing. Binding
+the key to a different request returns `409 idempotency.conflict`.
 
 Withdraw using one of `computation-error`, `source-data-error`, or
 `disclosure-risk`. The database records the withdrawal and deletes content in
