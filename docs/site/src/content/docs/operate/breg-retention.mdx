@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-08"
+last_reviewed: "2026-10-07"
 doc_type: how-to
 persona:
   - operator
@@ -24,8 +24,8 @@ exactly what each one destroys.
 
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
-| `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, and the audit journal. |
-| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, idempotency results, request revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that request, and record history. |
+| `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key with the raw issuer, principal value, and key it was sent under, so a retry answers `409 idempotency.conflict`. |
+| `request-retention erase` | The payload detail of one change-request proposal version: proposal and target snapshots, the held idempotency responses, request revision snapshots, outbox payloads, intake rows, and attachment references/content. | The value-free lifecycle rows of that request, record history, and each spent idempotency key with the raw issuer, principal value, and key it was sent under, so a retry answers `409 idempotency.conflict`. |
 | `request-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, request detail, and durable deletion tombstones. |
 | `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
 | `idempotency-retention erase-expired` | The held responses of spent idempotency keys whose receipt horizon has passed. | Every spent key, with its caller, binding, and times, so an exact retry is still refused rather than executed. |
@@ -50,6 +50,7 @@ uses a private certificate authority, set
 
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/idempotency.rs, tombstone_erased_cached_responses and lock_and_load();
     crates/registry-bregctl/src/lib.rs, HistoryCommand and RequestRetentionCommand;
     products/breg/quickstart/run.sh. */}
 
@@ -337,8 +338,9 @@ version, this erasure works from the time boundary alone.
 ## Drop expired idempotency responses
 
 A successful write holds its response so that a retry with the same `Idempotency-Key` returns it
-instead of writing again. A key is spent per caller: the configured issuer, the principal value,
-the operation, and the key find it, and nothing about it depends on `audit.hashKeyRef`. Only
+instead of writing again. A key is spent per caller across every write: the configured issuer, the
+principal value, and the key find it, so the same key on another write answers
+`409 idempotency.conflict`, and nothing about it depends on `audit.hashKeyRef`. Only
 successes are held; a refused or failed attempt spends nothing. The held response stays available
 for `idempotency.receiptRetentionDays` after the write commits, 7 days unless the runtime
 configuration chooses another value between 1 and 365. A horizon is fixed when the write commits,
@@ -369,6 +371,8 @@ key was spent.
 
 {/* Evidence: crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, lock_and_load(), and
     drop_expired_receipts();
+    crates/registry-breg/src/idempotency.rs, KEY_SCOPE_MUTATION and resolve_binding();
+    crates/registry-breg/src/request_retention.rs, idempotency_results;
     crates/registry-breg/src/idempotency_retention.rs, erase_expired;
     crates/registry-breg/src/runtime_config.rs, IdempotencyConfig;
     crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;
