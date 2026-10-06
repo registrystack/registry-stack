@@ -94,6 +94,20 @@ caller holding anything back.
     crates/registry-scheduling/src/service.rs, release_hold();
     crates/registry-scheduling-core/src/naming.rs, MAXIMUM_IDEMPOTENCY_KEY_BYTES. */}
 
+A 5xx answer may follow a commit, and so may a timeout or a broken exchange after the request was
+sent. The safe recovery is the same request with the same key: the runtime replays the stored answer
+or settles the command, while a new key can commit it twice. The Rust client in
+`registry-scheduling-client` does this for the four keyed commitments: its error's
+`is_outcome_unknown()` is true in those cases and false for a typed 4xx refusal, and it resends the
+identical request at most twice by default, waiting 250 ms and then 500 ms, or the runtime's
+`Retry-After` when that is longer and at most 5 seconds. `with_max_mutation_retries` on its
+configuration sets the count from 0, which sends once, to 2. It never resends a read or a release.
+
+{/* Evidence: crates/registry-scheduling-client/src/error.rs, is_outcome_unknown;
+    crates/registry-scheduling-client/src/config.rs, with_max_mutation_retries;
+    crates/registry-scheduling-client/tests/mutation_retry.rs;
+    crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation. */}
+
 Observed revisions travel in request bodies, not in an `If-Match` header: an admission names the
 `policyRevision` it resolved the offering under, and a reschedule or cancel names the appointment
 revision it acted on. A stale revision is refused with `policy.changed` or `revision.mismatch`, and

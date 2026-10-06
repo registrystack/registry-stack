@@ -135,7 +135,9 @@ first-page query options.
 An immediate action can operate without generic record-get authority.
 Select its binding from metadata, retrieve target conditions explicitly, then invoke using the
 same binding, validated inputs, conditions, and your idempotency key.
-Invocation never refreshes conditions or retries automatically.
+Invocation never refreshes conditions. It resends the identical invocation under the same key only
+when the outcome is unknown, as the
+[same-key retry](../client-api/#unknown-outcomes-and-the-same-key-retry) describes.
 Required, optional, and nullable inputs remain distinct.
 The action contract supplies field types and bounds; receipts expose only effects permitted by the
 selected profile.

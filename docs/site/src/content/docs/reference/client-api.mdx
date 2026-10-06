@@ -148,10 +148,11 @@ The naming convention is fixed across the bindings:
   bundle as `bytes` in Python; `trustedRootCertificates` accepts it as a string in Node, except in
   the Discovery namespace, where it is a `Buffer`.
 
-A method that sends an already-prepared request performs at most one service exchange. A configured
+A method that sends an already-prepared request performs at most one service exchange, except for
+the [same-key retry](#unknown-outcomes-and-the-same-key-retry) of a keyed mutation. A configured
 private-key-JWT provider can make a separate token-endpoint exchange when it needs to acquire or
-refresh a bearer. No client follows redirects, reads ambient proxy configuration, retries an
-exchange, fetches referenced schemas, or advances pagination on its own.
+refresh a bearer. No client follows redirects, reads ambient proxy configuration, fetches referenced
+schemas, or advances pagination on its own, and none retries any other exchange.
 
 The Evidence client's profile-driven methods are the exception. `request`, `prepare_progressive`,
 `contracts_candidate`, and `refresh_metadata` assemble or refresh a cached service snapshot first,
@@ -163,6 +164,41 @@ skips all of it.
 
 Base URLs may carry a deployment prefix. HTTPS is required except for loopback HTTP, and the URL
 cannot contain credentials, a query, a fragment, or ambiguous empty path segments.
+
+### Unknown outcomes and the same-key retry
+
+A 5xx answer may follow a commit. A BReg<DocsetProduct product="registry-messaging"> or
+Messaging</DocsetProduct> mutation that carries an idempotency key has an unknown outcome after a 5xx answer, after a timeout or a broken exchange once the request was sent,
+and after an oversized or unparseable answer. Its outcome is known after a refusal before sending, a
+connection that was never established, and a typed 4xx refusal such as an idempotency conflict.
+
+The client resends the identical request, with the same key, headers, and body bytes, after a 5xx
+answer, a timeout, or a broken exchange: at most twice by default, waiting 250 ms and then 500 ms, or
+the service's `Retry-After` when that is longer and at most 5 seconds. A longer requested wait ends
+the retries. Each attempt has the full request timeout. Reads, and operations that carry no
+idempotency key, are never resent.
+
+In Rust, `is_outcome_unknown()` on the client error reports the classification, and
+`with_max_mutation_retries` on the client configuration sets the count from 0, which sends once, to
+2. The Python and Node clients run the Rust client and apply the same rule.
+
+When the returned error still has an unknown outcome, the safe recovery is the same request with the
+same key, which the service replays or settles. A new key can apply the mutation twice. A refusal
+that answers a resend does not prove the earlier attempt left no effect, so the client returns the
+earlier unknown-outcome error instead of that refusal.
+
+{/* Evidence: crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation,
+    DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRY_AFTER_SECONDS;
+    crates/registry-breg-client/src/error.rs, is_outcome_unknown;
+    crates/registry-breg-client/src/config.rs, with_max_mutation_retries;
+    crates/registry-breg-client/tests/mutation_retry.rs */}
+
+<DocsetProduct product="registry-messaging">
+
+{/* Evidence: crates/registry-messaging-client/src/error.rs, is_outcome_unknown;
+    crates/registry-messaging-client/tests/mutation_retry.rs */}
+
+</DocsetProduct>
 
 ## Registry Discovery
 
@@ -539,9 +575,9 @@ const client = new breg.BaseRegistryClient({
 ```
 
 `BaseRegistryClientConfig` provides `with_token_provider`, `with_request_timeout`,
-`with_connect_timeout`, `with_max_response_bytes`, `with_user_agent`, and
-`with_trusted_root_certificates`. Health and readiness never acquire or send a bearer. Other
-operations attach one token when a provider is configured.
+`with_connect_timeout`, `with_max_response_bytes`, `with_user_agent`,
+`with_trusted_root_certificates`, and `with_max_mutation_retries`. Health and readiness never
+acquire or send a bearer. Other operations attach one token when a provider is configured.
 
 `authorization` is optional; a client without it reaches only the probes and whatever the deployment
 serves anonymously. Any unsupported shape is refused at construction with kind `configuration`.
@@ -712,8 +748,14 @@ I-JSON-safe values, nesting depth, operation count, and encoded body size before
 operation serializes under `/data/<field>`.
 
 `BRegIdempotencyKey::parse(value)` accepts 1 to 256 visible ASCII bytes except comma and semicolon.
-The client never creates a key or retries a mutation. A retry after an unknown outcome must reuse the
-same binding, body, precondition, representation, and key.
+The client never creates a key, and resends a mutation only under the
+[same-key retry](#unknown-outcomes-and-the-same-key-retry). A retry after an unknown outcome must
+reuse the same binding, body, precondition, representation, and key. BReg holds a response under the
+key only for a committed success, so a resend after a 5xx either replays that success or runs the
+operation again.
+
+{/* Evidence: crates/registry-breg/src/idempotency.rs, ERASED_TOMBSTONE_BODY;
+    crates/registry-breg-client/src/client.rs, send_keyed */}
 
 `create_record` sends the selected create operation and requires a `201` response whose `Location`
 matches the created record. `patch_record` sends the selected patch operation with `If-Match` and
@@ -827,8 +869,9 @@ stays distinct from an absent one. JSON whitespace and equivalent number spellin
 canonicalized, because the promise covers values and types. Decode `valueJson` with a lossless JSON
 library to display a number outside the JavaScript safe integer range.
 
-The client never retries a mutation on its own. After an unknown outcome, the caller decides whether
-to send the same action again with the same idempotency key.
+The client resends a mutation only under the
+[same-key retry](#unknown-outcomes-and-the-same-key-retry). After an unknown outcome it still
+reports, the caller decides whether to send the same action again with the same idempotency key.
 
 ### BReg error contract
 
@@ -975,7 +1018,8 @@ Rust, `absences` reads with the default query and `absences_page` takes one; the
 A claim, release, or decision takes the caller-filtered `CaseworkAction` the item carried, which
 holds the exact route and the `if_match` revision to send, so the caller never assembles that route.
 Every other revisioned mutation takes the revision the caller displayed and a caller-chosen
-idempotency key, both as explicit arguments. No client retries a mutation, and none replaces a key.
+idempotency key, both as explicit arguments. No Casework client retries a mutation, and none
+replaces a key.
 
 After a lost response, `recover_decision_by_key` replays the original idempotency key, so recovery
 does not depend on the attempt identifier reaching the caller. `recover_decision` names the attempt
@@ -1103,6 +1147,8 @@ const client = new messaging.MessagingClient({
 `MessagingClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
 `with_max_response_bytes`, `with_user_agent`, and `with_trusted_root_certificates`. The Python
 constructor takes the same settings as keyword arguments and the Node constructor as config members.
+In Rust, `with_max_mutation_retries` also sets the
+[same-key retry](#unknown-outcomes-and-the-same-key-retry) count for `submit`.
 A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
 credential, and its debug output redacts the base URL, the user agent, and any trusted root
 certificates.
@@ -1130,11 +1176,21 @@ retains none. In Rust it is a `BearerToken`, built with `BearerToken::new(token)
 a trusted server host, the way the Casework module is.
 
 A submission requires an idempotency key the caller chose: 1 to 128 visible ASCII characters,
-refused before any exchange otherwise. The client never generates a key, replaces one, or retries a
-submission. After a lost response, send the same key with the same submission, and the runtime
-answers the stored receipt instead of accepting a second message. A message identifier must be the
-lowercase hyphenated UUID the runtime answered; any other value is refused before any exchange. The
-view carries the recipient's channel with the value `redacted`, and no rendered content.
+refused before any exchange otherwise. A key is scoped to the caller's verified issuer and subject.
+The client never generates or replaces a key, and resends a submission only under the
+[same-key retry](#unknown-outcomes-and-the-same-key-retry). After a lost response it still reports,
+send the same key with the same submission, and the runtime answers the stored receipt instead of
+accepting a second message. The runtime authorizes the caller and renders the template again before
+it looks up the key, so a `403` or `422` answering an exact retry does not show that the first
+attempt failed: never resubmit under a new key, and read the message status instead. A message
+identifier must be the lowercase hyphenated UUID the runtime answered; any other value is refused
+before any exchange. The view carries the recipient's channel with the value `redacted`, and no
+rendered content.
+
+{/* Evidence: products/messaging/contracts/recorded-decisions.yaml, MESSAGING-DEC-07,
+    an_idempotency_key_replays_one_request_and_refuses_another;
+    crates/registry-messaging-client/tests/mutation_retry.rs,
+    a_refusal_after_an_unknown_outcome_keeps_the_outcome_unknown */}
 
 `cancel` withdraws a message whose dispatch has not started. A cancellation that lost the race
 answers `message.dispatch-started` when dispatch began first, and `message.terminal` when the
@@ -1207,7 +1263,8 @@ A submission over its access profile's request rate or daily limit is refused wi
 `retry_after_seconds`, the whole seconds the response's `Retry-After` asked the caller to wait. The
 client accepts only a single delta-seconds value from 1 through `MAXIMUM_RETRY_AFTER_SECONDS`
 (86,400, one day); an absent, repeated, or out-of-range header leaves the wait unset and the refusal
-still typed. The wait is unset on every other status. The client never waits or retries on its own.
+still typed. The wait is unset on every other status. The client never waits out a 429 or resends
+the refused submission.
 
 Python raises `messaging.MessagingClientError`, an `Exception` whose attributes are `kind`, `code`,
 `title`, `detail`, `status`, `trace_id`, `retry_after_seconds`, `transport_kind`, and
