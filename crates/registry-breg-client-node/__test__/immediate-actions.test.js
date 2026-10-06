@@ -102,7 +102,8 @@ test('an immediate action recovers after a lost response from persisted bytes an
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
-    const client = new BaseRegistryClient({ baseUrl });
+    // The process gives up after the lost answer instead of resending it.
+    const client = new BaseRegistryClient({ baseUrl, maxMutationRetries: 0 });
     const binding = (await client.registryContract('writer')).selectImmediateAction('update-item', 'writer');
     const conditions = await client.actionTargetConditions(binding, { targetId });
     const inputs = { targetId, label: 'new' };
@@ -114,7 +115,7 @@ test('an immediate action recovers after a lost response from persisted bytes an
     assert.throws(() => new BRegPreparedAction(), TypeError);
     await assert.rejects(
       client.invokeAction(binding, inputs, 'invoke-lost', conditions),
-      error => error.kind === 'transport',
+      error => error.kind === 'transport' && error.outcomeUnknown === true,
     );
     const lost = requests.at(-1);
     assert.equal(lost.headers['idempotency-key'], 'invoke-lost');

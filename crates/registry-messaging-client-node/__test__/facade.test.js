@@ -473,3 +473,87 @@ test('bearer tokens never reach error text, fields, or inspection', async (conte
   }
   assert.doesNotMatch(inspect(client, { depth: 8, showHidden: true }), /canary/);
 });
+
+const UNAVAILABLE = problem(
+  'service.unavailable',
+  503,
+  'Messaging service unavailable',
+  'Messaging is unavailable. Try again after the service recovers.',
+);
+const RECEIPT = { status: 202, contentType: 'application/json', document: { id: MESSAGE_ID, status: 'queued', links: LINKS } };
+
+function scripted(answers) {
+  let next = 0;
+  return () => answers[next++] ?? { status: 418 };
+}
+
+test('a submission answered 503 is resent once under the same key and succeeds', async (context) => {
+  const { baseUrl, requests } = await serve(context, scripted([UNAVAILABLE, RECEIPT]));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl });
+
+  const receipt = await client.submit('one-call-secret', 'reminder-2026-09-25-0001', SUBMISSION);
+
+  assert.equal(receipt.kind, 'complete');
+  assert.equal(receipt.value.id, MESSAGE_ID);
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.method, 'POST');
+    assert.equal(request.path, '/v1/messages');
+    assert.equal(request.headers['idempotency-key'], 'reminder-2026-09-25-0001');
+    assert.equal(request.body, requests[0].body);
+  }
+});
+
+test('a retry ceiling of zero sends a submission once and reports the outcome unknown', async (context) => {
+  const { baseUrl, requests } = await serve(context, scripted([UNAVAILABLE, RECEIPT]));
+  const { MessagingClient, MessagingClientError } = require('../client');
+  const client = new MessagingClient({ baseUrl, maxMutationRetries: 0 });
+
+  await assert.rejects(client.submit('one-call-secret', 'key-1', SUBMISSION), (error) => {
+    assert.ok(error instanceof MessagingClientError);
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.status, 503);
+    assert.equal(error.code, 'service.unavailable');
+    assert.equal(error.outcomeUnknown, true);
+    return true;
+  });
+  assert.equal(requests.length, 1);
+});
+
+test('a 4xx refusal of a submission is never resent and reports the outcome known', async (context) => {
+  const { baseUrl, requests } = await serve(context, scripted([
+    problem(
+      'idempotency.key-reused',
+      409,
+      'Idempotency key reused',
+      'This idempotency key was used for a different request.',
+    ),
+    RECEIPT,
+  ]));
+  const { MessagingClient } = require('../client');
+  const client = new MessagingClient({ baseUrl, maxMutationRetries: 2 });
+
+  await assert.rejects(client.submit('one-call-secret', 'key-1', SUBMISSION), (error) => {
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.status, 409);
+    assert.equal(error.outcomeUnknown, false);
+    return true;
+  });
+  assert.equal(requests.length, 1);
+});
+
+test('a retry ceiling outside zero to two is a configuration error', () => {
+  const { MessagingClient, MessagingClientError } = require('../client');
+  for (const maxMutationRetries of [0, 1, 2]) {
+    assert.ok(new MessagingClient({ baseUrl: 'https://messaging.example/', maxMutationRetries }));
+  }
+  for (const maxMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
+    assert.throws(() => new MessagingClient({ baseUrl: 'https://messaging.example/', maxMutationRetries }), (error) => {
+      assert.ok(error instanceof MessagingClientError, `${maxMutationRetries}`);
+      assert.equal(error.kind, 'configuration', `${maxMutationRetries}`);
+      assert.equal(error.outcomeUnknown, false);
+      return true;
+    });
+  }
+});

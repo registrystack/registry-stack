@@ -64,11 +64,11 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   429 limit refusal carries the bounded `Retry-After` wait the Rust client
   read; waiting and retrying stay the caller's decision.
 - Scheduling holds, bookings, reschedules, and cancellations take a
-  caller-chosen idempotency key; a binding never generates one or retries a
-  capacity mutation. Bindings parse every instant they send as RFC 3339 before
-  any request and add no Scheduling semantics: the closed problem catalogue
-  and the hold, appointment, and availability documents come from the Rust
-  client unchanged.
+  caller-chosen idempotency key; a binding never generates one. Only the Rust
+  client's bounded same-key retry resends a capacity mutation. Bindings parse
+  every instant they send as RFC 3339 before any request and add no Scheduling
+  semantics: the closed problem catalogue and the hold, appointment, and
+  availability documents come from the Rust client unchanged.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains

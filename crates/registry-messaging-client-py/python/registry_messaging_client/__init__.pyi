@@ -174,13 +174,20 @@ class MessagingClientError(Exception):
     trace_id: str | None
     # Whole seconds a 429 limit refusal asked the caller to wait, from
     # Retry-After, at most one day; None on every other failure. The client
-    # never waits or retries itself.
+    # never waits on a 429 or retries it; the wait is the caller's to honor.
     retry_after_seconds: int | None
     transport_kind: str | None
     protocol_failure: MessagingProtocolFailure | None
+    # Whether the request may have taken effect although this error was
+    # raised: a timeout or broken exchange after sending, an unusable answer,
+    # or a 5xx. When True, recover a keyed request by sending it again under
+    # the same idempotency key; a new key could apply it twice. False for a
+    # configuration or request defect, a connection never established, and
+    # every 4xx refusal.
+    outcome_unknown: bool
 
 class MessagingClient:
-    def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None) -> None: ...
+    def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, max_mutation_retries: int | None = None) -> None: ...
     def health(self) -> Complete[None]: ...
     def ready(self) -> Complete[None]: ...
     def submit(self, token: str, idempotency_key: str, request: SubmitMessageRequest) -> Complete[MessageReceipt]: ...

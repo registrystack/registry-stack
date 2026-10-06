@@ -18,6 +18,11 @@ export interface MessagingClientConfig {
   maxResponseBytes?: number
   userAgent?: string
   trustedRootCertificates?: string
+  /**
+   * How many times a submission whose outcome is unknown is resent under
+   * the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
+   */
+  maxMutationRetries?: number
 }
 
 export interface MessagingOutcome {

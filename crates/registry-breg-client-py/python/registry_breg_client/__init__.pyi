@@ -67,6 +67,16 @@ class BaseRegistryClientError(Exception):
     trace_id: str | None
     transport_kind: str | None
     token_kind: str | None
+    # Whether the request may have taken effect although this error was
+    # raised: a timeout or broken exchange after sending, an unusable answer,
+    # or a 5xx other than action.handler_failed and
+    # statistical_dataset.domain_violation, which the engine returns only with
+    # the attempt rolled back. When True, recover a keyed mutation by sending
+    # it again under the same idempotency key; a new key could apply it twice.
+    # False for a configuration or request defect, a credential the token
+    # provider could not supply, a connection never established, and every
+    # 4xx refusal.
+    outcome_unknown: bool
 
 class BRegCreateBinding: ...
 class BRegPatchBinding: ...
@@ -311,6 +321,7 @@ class BaseRegistryClient:
         user_agent: str | None = None,
         max_response_bytes: int | None = None,
         trusted_root_certificates: bytes | None = None,
+        max_mutation_retries: int | None = None,
     ) -> None: ...
     def health(self) -> dict[str, Any]: ...
     def ready(self) -> dict[str, Any]: ...

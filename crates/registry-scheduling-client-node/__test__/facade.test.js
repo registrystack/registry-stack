@@ -588,3 +588,90 @@ test('bearer tokens never reach error text, fields, or inspection', async (conte
   }
   assert.doesNotMatch(inspect(scheduling, { depth: 8, showHidden: true }), /canary/);
 });
+
+const UNAVAILABLE = problem(
+  'service.unavailable',
+  503,
+  'Scheduling service unavailable',
+  'Scheduling storage is unavailable. Try again after the service recovers.',
+);
+
+function scripted(answers) {
+  let next = 0;
+  return () => answers[next++] ?? { status: 418 };
+}
+
+async function retrying(context, answers, config) {
+  const served = await serve(context, scripted(answers));
+  const { SchedulingClient } = require('../client');
+  return { ...served, client: new SchedulingClient({ baseUrl: served.baseUrl, ...config }) };
+}
+
+test('a hold answered 503 is resent once under the same key and succeeds', async (context) => {
+  const { client: scheduling, requests } = await retrying(context, [UNAVAILABLE, answered(201, HOLD)], {});
+
+  const outcome = await scheduling.createHold('one-call-secret', 'hold-2026-10-05-0001', ADMISSION);
+
+  assert.deepEqual(outcome, { kind: 'complete', value: HOLD, traceId: TRACE_ID });
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.method, 'POST');
+    assert.equal(request.path, '/v1/holds');
+    assert.equal(request.headers['idempotency-key'], 'hold-2026-10-05-0001');
+    assert.equal(request.body, requests[0].body);
+  }
+});
+
+test('a retry ceiling of zero sends a hold once and reports the outcome unknown', async (context) => {
+  const { client: scheduling, requests } = await retrying(
+    context,
+    [UNAVAILABLE, answered(201, HOLD)],
+    { maxMutationRetries: 0 },
+  );
+  const { SchedulingClientError } = require('../client');
+
+  await assert.rejects(scheduling.createHold('one-call-secret', 'key-1', ADMISSION), (error) => {
+    assert.ok(error instanceof SchedulingClientError);
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.status, 503);
+    assert.equal(error.code, 'service.unavailable');
+    assert.equal(error.outcomeUnknown, true);
+    return true;
+  });
+  assert.equal(requests.length, 1);
+});
+
+test('a 4xx refusal of a hold is never resent and reports the outcome known', async (context) => {
+  const { client: scheduling, requests } = await retrying(context, [
+    problem(
+      'capacity.exhausted',
+      409,
+      'Capacity exhausted',
+      'The supply is fully committed for the requested interval. Choose another time.',
+    ),
+    answered(201, HOLD),
+  ], { maxMutationRetries: 2 });
+
+  await assert.rejects(scheduling.createHold('one-call-secret', 'key-1', ADMISSION), (error) => {
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.status, 409);
+    assert.equal(error.outcomeUnknown, false);
+    return true;
+  });
+  assert.equal(requests.length, 1);
+});
+
+test('a retry ceiling outside zero to two is a configuration error', () => {
+  const { SchedulingClient, SchedulingClientError } = require('../client');
+  for (const maxMutationRetries of [0, 1, 2]) {
+    assert.ok(new SchedulingClient({ baseUrl: 'https://scheduling.example/', maxMutationRetries }));
+  }
+  for (const maxMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
+    assert.throws(() => new SchedulingClient({ baseUrl: 'https://scheduling.example/', maxMutationRetries }), (error) => {
+      assert.ok(error instanceof SchedulingClientError, `${maxMutationRetries}`);
+      assert.equal(error.kind, 'configuration', `${maxMutationRetries}`);
+      assert.equal(error.outcomeUnknown, false);
+      return true;
+    });
+  }
+});

@@ -15,6 +15,14 @@ export interface SchedulingClientConfig {
   maxResponseBytes?: SafeInteger | null
   userAgent?: string | null
   trustedRootCertificates?: string | null
+  /**
+   * How many times a keyed command (hold, appointment create, reschedule,
+   * cancel) whose outcome is unknown is resent, identically and under the
+   * same idempotency key, before its error is returned: a whole number from 0
+   * to 2, default 2; 0 sends it once. Any other value is a `configuration`
+   * error.
+   */
+  maxMutationRetries?: SafeInteger | null
 }
 
 /** An opaque record link Scheduling retains with a hold or appointment. */
@@ -176,6 +184,15 @@ export type SchedulingProtocolFailure = 'header_bounds' | 'trace_context' | 'med
 
 export class SchedulingClientError extends Error {
   readonly kind: 'configuration' | 'invalid_request' | 'transport' | 'problem' | 'protocol'
+  /**
+   * Whether the request may have taken effect although this error was
+   * raised: a timeout or broken exchange after sending, an unusable answer,
+   * or a 5xx. When true, recover a keyed request by sending it again under
+   * the same idempotency key; a new key could apply it twice. False for a
+   * configuration or request defect, a connection never established, and
+   * every 4xx refusal.
+   */
+  readonly outcomeUnknown: boolean
   readonly code?: SchedulingProblemCode
   readonly title?: string
   readonly detail?: string

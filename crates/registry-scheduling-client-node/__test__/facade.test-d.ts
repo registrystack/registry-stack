@@ -14,6 +14,8 @@ import {
 } from '../client'
 
 const client = new SchedulingClient({ baseUrl: 'https://scheduling.example.test/' })
+const once = new SchedulingClient({ baseUrl: 'https://scheduling.example.test/', maxMutationRetries: 0 })
+void once
 const token: string = 'header.payload.signature'
 const appointmentId = '0199d0e0-8f2a-7c3b-9d4e-5f6a7b8c9d0f'
 const reference: ExternalReference = { product: 'casework', recordType: 'review-task', identifier: 'case:1234' }
@@ -92,3 +94,9 @@ void client.createAppointment(token, 'confirm-2', {})
 void client.createHold(token, admission)
 // @ts-expect-error a cancellation names the revision it observed
 void client.cancelAppointment(token, appointmentId, 'cancel-2', {})
+
+function mayHaveTakenEffect(error: SchedulingClientError): boolean {
+  const unknown: boolean = error.outcomeUnknown
+  return unknown
+}
+void mayHaveTakenEffect

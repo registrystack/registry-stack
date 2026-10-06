@@ -45,7 +45,11 @@ export declare class BaseRegistryClient {
   lookupRecord(entityRoute: string, selector: string, values?: any | undefined | null, options?: any | undefined | null): Promise<CompleteOutcome>
   /** Fetch opaque target conditions for one metadata-selected action. */
   actionTargetConditions(binding: BRegImmediateActionBinding, inputs: any): Promise<BRegActionTargetConditions>
-  /** Invoke one metadata-selected immediate action without automatic retry. */
+  /**
+   * Invoke one metadata-selected immediate action. An invocation whose
+   * outcome is unknown is resent identically under the same key, at most
+   * `maxMutationRetries` times.
+   */
   invokeAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
   /**
    * Prepare inert invocation evidence before any token acquisition or I/O.
@@ -59,8 +63,9 @@ export declare class BaseRegistryClient {
    */
   recoverAction(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputs: any, idempotencyKey: string): BRegRecoveredAction
   /**
-   * Explicitly send a recovered invocation under its original key, without
-   * automatic retry.
+   * Explicitly send a recovered invocation under its original key. An
+   * invocation whose outcome is unknown is resent identically under that
+   * key, at most `maxMutationRetries` times.
    */
   executeRecoveredAction(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome>
   createRecord(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
@@ -71,7 +76,11 @@ export declare class BaseRegistryClient {
   /** Explicitly send a recovered Create request with fresh authority. */
   executeRecoveredCreate(binding: BRegCreateBinding, recovered: BRegRecoveredCreate): Promise<CompleteOutcome>
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
-  /** Execute one metadata-selected atomic batch without automatic retry. */
+  /**
+   * Execute one metadata-selected atomic batch. A batch whose outcome is
+   * unknown is resent identically under the same key, at most
+   * `maxMutationRetries` times.
+   */
   batchRecords(binding: BRegBatchBinding, request: any, idempotencyKey: string): Promise<CompleteOutcome>
   /**
    * Announce one whole input and open a durable ingestion run for it. The

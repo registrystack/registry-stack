@@ -1,5 +1,6 @@
 import {
   BaseRegistryClient,
+  BaseRegistryClientError,
   BRegAttachmentSlot,
   BRegAttachmentUpload,
   BRegActionTargetConditions,
@@ -249,3 +250,12 @@ if (value.kind === 'filled') value.value.sha256.toUpperCase()
 slot.maximumBytes = 1
 // @ts-expect-error Uploads must be bound to a slot before they can be sent.
 client.uploadAttachment(slot, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', Buffer.from('%PDF-1.7'), 'upload-1')
+
+const once = new BaseRegistryClient({ baseUrl: 'https://registry.example.test/', maxMutationRetries: 0 })
+void once
+
+function mayHaveTakenEffect(error: BaseRegistryClientError): boolean {
+  const unknown: boolean = error.outcomeUnknown
+  return unknown
+}
+void mayHaveTakenEffect
