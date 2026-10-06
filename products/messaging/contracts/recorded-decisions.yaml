@@ -123,7 +123,8 @@ decisions:
       a different caller probe another caller's keys. The request hash covers
       the canonical request body, so one key never stands for two different
       requests. An operator drains senders before activating a package that
-      removes what an in-flight retry needs, so no retry meets the refusal.
+      removes what an in-flight retry needs; a retry meets the refusal only
+      when the operator skips that drain.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: concurrent_submissions_under_one_key_record_one_message}
