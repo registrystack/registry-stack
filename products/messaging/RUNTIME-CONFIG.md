@@ -132,8 +132,10 @@ makes `/ready` fail.
 | `submissionReceiptDays` | 7 | 1 to `recordDays` |
 
 The start record carries the deployed values. `submissionReceiptDays` is
-also the idempotency window: a submission repeating a key whose receipt is
-older is refused with `idempotency.expired`. A submission whose `expiresAt`
+also the idempotency window: a submission repeating the request of a key
+whose receipt is older is refused with `idempotency.expired`, and one that
+changes the request under the key is refused with `idempotency.key-reused`
+whatever the key's age. A submission whose `expiresAt`
 is already past, or falls more than `payloadDays` after acceptance, is
 refused with `request.unprocessable`, so a message is never still waiting to
 send when its payload's period could end.
@@ -144,12 +146,14 @@ still waiting in a retry keeps its payload. `payloadDays` after that moment
 the rendered parts and the recipient contact are erased and the message
 record stays; `recordDays` after it the record is deleted with its attempts
 and receipts. The idempotency key stays spent, held only as a digest of
-the caller and the key with its times, and a repeat of it is refused with
-`idempotency.expired`.
+the caller and the key with its times, and a repeat of it, with the same
+request or another, is refused with `idempotency.expired`.
 `submissionReceiptDays` after acceptance the stored submission receipt is
-dropped together with the raw issuer, subject, and key beside it, and a
-repeat of its key by the same caller is refused with `idempotency.expired`;
-their SHA-256 digest keeps the key spent for that caller alone. A
+dropped together with the raw issuer, subject, and key beside it, the
+request hash stays with the message record, and the same caller's repeat
+of its request under the key is refused with `idempotency.expired` and a
+changed request with `idempotency.key-reused`; their SHA-256 digest keeps
+the key spent for that caller alone. A
 message that is queued, sending, or in an unknown outcome is never erased,
 and an operator retry committed while a sweep waits for the message keeps
 its payload.

@@ -459,8 +459,10 @@ async fn erase_payloads(
 }
 
 /// Erase every submission receipt past its period, with the raw issuer,
-/// subject, and key beside it. The row stays under their digest, so its key
-/// stays spent for that caller and a replay answers `idempotency.expired`.
+/// subject, and key beside it. The row stays under their digest with its
+/// message and request hash, so its key stays spent for that caller: an
+/// exact replay answers `idempotency.expired` and another request under the
+/// key `idempotency.key-reused`.
 async fn expire_submission_receipts(
     transaction: &Transaction<'_>,
     before: SystemTime,
@@ -485,8 +487,8 @@ async fn expire_submission_receipts(
 /// Delete every message record past its period. The payload, the job, the
 /// attempts, and the receipts cascade. The idempotency record is kept with
 /// its message, request hash, any receipt, and the raw issuer, subject, and
-/// key nulled, so a retry under its key is refused as expired rather than
-/// accepted as a new message.
+/// key nulled, so a retry under its key, which can no longer be told exact
+/// or changed, is refused as expired rather than accepted as a new message.
 async fn delete_records(
     transaction: &Transaction<'_>,
     before: SystemTime,

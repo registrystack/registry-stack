@@ -214,17 +214,23 @@ effect, so the client returns the earlier unknown-outcome error instead of that 
 The receipt horizon is how long a service holds a key's first answer: BReg's
 `idempotency.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
 Messaging's `retention.submissionReceiptDays`,</DocsetProduct> and Scheduling's
-`retention.attemptReceiptDays`. Past it, the same request is refused with
-`410 idempotency.expired` and the key stays spent. In BReg that refusal means the first attempt
-committed: read the record or its history rather than sending the write again under a new key. In
-Casework it means an earlier attempt under the key committed and retention erased only its stored
-response: reconcile by reading the item, review request, or directory before choosing a new key.
+`retention.attemptReceiptDays`. Every service answers a spent key by one rule: a different request
+under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
+`409 idempotency.key-reused` in the others, whatever the key's age. Past the horizon the same
+request is refused with `410 idempotency.expired` and the key stays spent. In BReg that `410` means
+the first attempt committed: read the record or its history rather than sending the write again
+under a new key. In Casework it means an earlier attempt under the key committed and retention
+erased only its stored response: reconcile by reading the item, review request, or directory before
+choosing a new key.<DocsetProduct product="registry-messaging"> In Messaging, once retention deletes
+the message record after `retention.recordDays`, the request hash goes with it and any request under
+the key is refused with `410`.</DocsetProduct>
 
 {/* Evidence: crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation,
     classify_keyed_attempt, RetryAfter,
     DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRY_AFTER_SECONDS;
-    crates/registry-breg/src/idempotency.rs, IdempotencyPolicy;
-    crates/registry-scheduling-core/src/problem.rs, IdempotencyExpired;
+    crates/registry-breg/src/idempotency.rs, IdempotencyPolicy and lock_and_load;
+    crates/registry-scheduling-core/src/problem.rs, IdempotencyExpired and IdempotencyKeyReused;
+    crates/registry-casework/src/http.rs, IdempotencyKeyReused;
     crates/registry-breg-client/src/error.rs, is_outcome_unknown;
     crates/registry-breg-client/src/config.rs, with_max_mutation_retries;
     crates/registry-breg-client/tests/mutation_retry.rs;
@@ -238,6 +244,8 @@ response: reconcile by reading the item, review request, or directory before cho
 {/* Evidence: crates/registry-messaging-client/src/error.rs, is_outcome_unknown;
     crates/registry-messaging/src/config.rs, default_submission_receipt_days;
     crates/registry-messaging-core/src/problem.rs, IdempotencyExpired;
+    crates/registry-messaging/src/messages.rs, replay();
+    crates/registry-messaging/src/retention.rs, delete_records();
     crates/registry-messaging-client/tests/mutation_retry.rs;
     crates/registry-messaging-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
     crates/registry-messaging-client-py/tests/python/test_mutation_retry.py */}

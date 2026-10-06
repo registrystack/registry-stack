@@ -11,7 +11,12 @@
   operation, and key; the raw issuer, subject, and key stay beside it only
   until retention erases the submission receipt, which clears all three,
   and the digest alone keeps the key spent for that caller after
-  `submissionReceiptDays`. Audit records keep the pseudonym. The upgrade discards existing idempotency
+  `submissionReceiptDays`. Past that horizon a changed request under the key
+  is refused with `409 idempotency.key-reused`, as Base Registry Engine,
+  Scheduling, and Casework refuse it, instead of `410 idempotency.expired`:
+  only the exact request is `410`, and every request is once retention
+  deletes the message record after `recordDays`, since its request hash goes
+  with it. Audit records keep the pseudonym. The upgrade discards existing idempotency
   records, so every key spent before it can be used again, and a retry the
   new runtime receives under a discarded key sends its message a second
   time. Before you run `messagingctl apply` with this release, stop new

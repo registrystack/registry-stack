@@ -278,8 +278,10 @@ pseudonyms the journal writes and frees no spent key, so an exact retry
 across a rotation replays its receipt or is refused as expired and never
 sends again.
 The request hash covers the canonical request body: the same key with
-another body is `409 idempotency.key-reused`, and a key older than
-`retention.submissionReceiptDays` is `410 idempotency.expired`. A replay is
+another body is `409 idempotency.key-reused` whatever the key's age, as in
+Base Registry Engine, Scheduling, and Casework, and the same body under a
+key older than `retention.submissionReceiptDays` is
+`410 idempotency.expired`. A replay is
 authorized and rendered again against the active package before the stored
 receipt is answered, so a key cannot outlive the caller's authority
 (MESSAGING-DEC-07). The consequence for a caller is that an exact retry
@@ -305,8 +307,10 @@ holds the pair: a row whose receipt is erased holds none of the three, and
 a row whose receipt stands holds all three. The digest row then stays
 indefinitely with the operation and its times, and the message and request
 hash until `recordDays`, so the key stays spent for that caller alone: the
-same caller's retry, exact or changed, is `410 idempotency.expired` and
-sends nothing, another caller's identical key is fresh, and an audit key
+same caller's exact retry is `410 idempotency.expired`, a changed one is
+`409 idempotency.key-reused` while the request hash stays and `410` once the
+record deletion clears it, and neither sends anything; another caller's
+identical key is fresh, and an audit key
 rotation frees nothing, since the digest takes no key. The issuer and
 subject name the authenticated caller, not a recipient, and that caller is
 not always a service: an access profile may admit a human or agent actor,
@@ -814,11 +818,13 @@ rendered parts are nulled and the content-free record stays; past
 `recordDays` the record is deleted with its payload, job, attempts, and
 delivery receipts; its idempotency row stays with the message, the request
 hash, any stored receipt, and the raw issuer, subject, and key nulled,
-holding only their digest and its times, so a repeat is still
-`410 idempotency.expired` (MESSAGING-DEC-17), whatever audit hash key the
-runtime holds then. Past `submissionReceiptDays` the stored receipt is
-dropped together with the raw issuer, subject, and key, and a repeat of its
-key by the same caller is `410 idempotency.expired` (MESSAGING-SEC-11).
+holding only their digest and its times, so a repeat, exact or changed,
+is still `410 idempotency.expired` (MESSAGING-DEC-17), whatever audit hash
+key the runtime holds then. Past `submissionReceiptDays` the stored receipt
+is dropped together with the raw issuer, subject, and key, the request hash
+stays, and the same caller's exact repeat of its key is
+`410 idempotency.expired` and a changed one `409 idempotency.key-reused`
+(MESSAGING-SEC-11).
 
 An applied run erases in batches of at most 1,000 of each kind, oldest
 first, and ends at the first batch shorter than that. Each batch is one

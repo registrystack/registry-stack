@@ -264,14 +264,19 @@ async fn an_idempotency_key_replays_one_request_and_refuses_another() {
             &[&Uuid::parse_str(first.1["id"].as_str().unwrap()).unwrap()],
         )
         .await;
-    // An expired key answers expired whether or not the body matches.
-    for body in [email_submission(), different] {
-        assert_problem(
-            &harness.submit(&sender, "key-1", &body).await,
-            StatusCode::GONE,
-            "idempotency.expired",
-        );
-    }
+    // Past its receipt horizon the exact request answers expired, and a
+    // different request under the key is still a reuse, as it was inside
+    // the horizon.
+    assert_problem(
+        &harness.submit(&sender, "key-1", &email_submission()).await,
+        StatusCode::GONE,
+        "idempotency.expired",
+    );
+    assert_problem(
+        &harness.submit(&sender, "key-1", &different).await,
+        StatusCode::CONFLICT,
+        "idempotency.key-reused",
+    );
     assert_eq!(
         harness
             .count("SELECT count(*) FROM messaging_messages")
@@ -347,9 +352,12 @@ async fn an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_aga
             &[&Uuid::parse_str(first.1["id"].as_str().unwrap()).unwrap()],
         )
         .await;
-    for body in [email_submission(), different] {
+    for (body, status_code, code) in [
+        (email_submission(), StatusCode::GONE, "idempotency.expired"),
+        (different, StatusCode::CONFLICT, "idempotency.key-reused"),
+    ] {
         let (status, _, problem) = submit_to(rotated.clone(), &sender, "key-1", &body).await;
-        assert_problem(&(status, problem), StatusCode::GONE, "idempotency.expired");
+        assert_problem(&(status, problem), status_code, code);
     }
 
     // One message and one dispatch job for the first caller's key, and one

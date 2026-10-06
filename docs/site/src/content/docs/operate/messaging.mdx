@@ -285,10 +285,11 @@ and signs, so a reverse proxy in front of the runtime must not change it.
 | `recordDays` | 90 | `payloadDays` to 3650 |
 | `submissionReceiptDays` | 7 | 1 to `recordDays` |
 
-`submissionReceiptDays` is also the idempotency window: a repeated key whose stored receipt is
-older is refused with `410 idempotency.expired`. A submission whose `expiresAt` falls after its
-payload period is refused. These values are defaults, not a jurisdictional recommendation, and the
-audit journal's start record carries the values in force.
+`submissionReceiptDays` is also the idempotency window: the same request under a key whose stored
+receipt is older is refused with `410 idempotency.expired`, and a different request under the key
+is refused with `409 idempotency.key-reused` whatever the key's age. A submission whose `expiresAt`
+falls after its payload period is refused. These values are defaults, not a jurisdictional
+recommendation, and the audit journal's start record carries the values in force.
 
 `payloadDays` and `recordDays` count from the moment a message reached a terminal state
 (delivered, failed, expired, or cancelled), not from acceptance, so a message waiting in a retry
@@ -297,8 +298,8 @@ keeps its payload:
 | Period ends | What is erased |
 | --- | --- |
 | `payloadDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
-| `recordDays` after the terminal state | The message record, with its attempts and receipts. The idempotency key stays spent, held only as a digest of the caller and the key with its times, and a repeat of it is refused with `idempotency.expired` |
-| `submissionReceiptDays` after acceptance | The stored submission receipt, with the raw issuer, subject, and key beside it. Their SHA-256 digest keeps the key spent for that caller alone: the caller's repeat of it is refused with `idempotency.expired`, and another caller's identical key is fresh |
+| `recordDays` after the terminal state | The message record, with its attempts and receipts, and the request hash of its idempotency key. The key stays spent, held only as a digest of the caller and the key with its times, and a repeat of it, with the same request or another, is refused with `idempotency.expired` |
+| `submissionReceiptDays` after acceptance | The stored submission receipt, with the raw issuer, subject, and key beside it. Their SHA-256 digest keeps the key spent for that caller alone: the caller's repeat of the request is refused with `idempotency.expired` and a changed request with `idempotency.key-reused`, and another caller's identical key is fresh |
 
 A message that is queued, sending, or held in an unknown outcome is never erased, whatever its age.
 The runtime sweeps once at start and then hourly with the runtime credential. A sweep erases in
@@ -308,9 +309,11 @@ batches of at most 1,000 of each kind, each batch its own transaction, and journ
 operator host.
 
 {/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys; crates/registry-messaging/src/retention.rs,
-    RETENTION_ERASED_EVENT, SWEEP_INTERVAL, erase_expired(), and expire_submission_receipts();
+    RETENTION_ERASED_EVENT, SWEEP_INTERVAL, erase_expired(), expire_submission_receipts(), and
+    delete_records(); crates/registry-messaging/src/messages.rs, replay();
     crates/registry-messaging/tests/postgres_retention.rs,
-    a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent. */}
+    a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent and
+    a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds. */}
 
 ### Create the secret files
 

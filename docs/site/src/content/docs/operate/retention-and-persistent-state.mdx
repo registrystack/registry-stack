@@ -270,9 +270,12 @@ idempotency key a caller spent, so a retry is answered rather than run again. Un
 receipt horizon, that row holds the raw issuer, subject, and key beside the held response. After
 each product's receipt horizon the raw caller and key are cleared and a digest keeps the key spent:
 a retry under it is still refused, and the same key sent by another caller is that caller's own
-fresh key. Base Registry Engine clears them when the operator runs
-`bregctl idempotency-retention erase-expired`; Messaging and Scheduling clear them in their
-retention sweeps.
+fresh key. Each product refuses it by the same rule: the same request is `410 idempotency.expired`,
+and a different request is a `409` idempotency conflict, as it is inside the horizon. Messaging
+keeps the request hash with the message record, so once it deletes the record after
+`retention.recordDays` any request under the key is `410`. Base Registry Engine clears the raw
+caller and key when the operator runs `bregctl idempotency-retention erase-expired`; Messaging and
+Scheduling clear them in their retention sweeps.
 
 ## What remains outside the product
 
