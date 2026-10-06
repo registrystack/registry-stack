@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- BREAKING: `registry-manifest-core` no longer exports `render_entity_shacl`.
+  Its only consumer was Registry Relay. Render the whole manifest with
+  `render_shacl` instead.
+
 ## [0.39.0] - 2026-10-06
 
 - `registry-manifest --version` prints the build version. Registry Manifest
