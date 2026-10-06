@@ -12,13 +12,11 @@ This crate is test-only. It fails to compile unless callers enable the
 - `TestAuthorizationServer` (feature `test-authorization-server`), an
   in-process authorization server with the authorization-code, client
   credentials, and token-exchange grants.
-- `MockHttpUpstream`, a WireMock-backed upstream with request-size tracking.
+- `MockHttpUpstream`, a WireMock-backed upstream.
 - Ed25519 JWK fixtures for signing and verification tests.
 - `assert_json_absent_strings` for focused audit non-leak checks over JSON
   records.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
-- Provider-backed Ed25519 signer and JWKS helpers for tests that exercise the
-  production signing abstraction.
 
 ## Typical Use
 
@@ -102,9 +100,6 @@ response with:
 - `respond(ResponseTemplate)`: arbitrary WireMock response.
 - `respond_status(u16)`: status only.
 - `respond_json(u16, Value)`: JSON body.
-- `respond_body(u16, bytes)`: raw bytes.
-
-Also tracks request body size (used by `assert_max_request_bytes`).
 
 ### JWT signing helpers
 
@@ -112,21 +107,13 @@ Also tracks request body size (used by `assert_max_request_bytes`).
   string then sign a compact JWT with the given `typ` and `kid`.
 - `sign_ed25519_compact_jwt_with_key(private, typ, kid, claims)`: sign with
   an already-parsed `PrivateJwk`.
-- `sign_ed25519_compact_jwt_with_provider(signer, typ, claims)`: sign with a
-  `SigningProvider`; the JWT header `kid` is taken from the provider.
 - `jwks_from_private_jwk(private)`: return `{"keys": [public]}` as a
   `serde_json::Value`; useful for mocking a JWKS endpoint.
-- `jwks_from_signing_provider(signer)`: return a JWKS from provider public
-  metadata, without private JWK members.
-- `fixtures::ed25519_signer()`: return a `LocalJwkSigner` backed by the
-  primary Ed25519 fixture key.
 
 ## Fixture Notes
 
 - Fixtures are deterministic and intended for tests only.
 - `MockIdp::rotate_key` switches JWKS output to a second Ed25519 key.
-- `MockHttpUpstream::assert_max_request_bytes` is useful for verifying upload
-  and proxy boundaries.
 - `wiremock_server` exposes the underlying server when tests need custom
   matchers beyond the convenience API.
 
