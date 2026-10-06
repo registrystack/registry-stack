@@ -302,16 +302,11 @@ reopen duplicate sends; the issuer and subject name a calling service
 principal, not a recipient; the message row already held both for
 `recordDays`; and the tombstone keeps no request hash, receipt, message,
 recipient reference, or content. The audit journal and the rate limiter
-keep the pseudonym. Schema version 3 moved every spent key whose
-message was still held onto that message's submitter. A key it could not
-attribute (one whose message retention had deleted, one naming no held
-message, or the older of two records one caller held under two pseudonyms
-after an earlier rotation) was preserved unchanged, pseudonym included, in
-`legacy_messaging_idempotency`, outside the runtime's grants and read by
-nothing; those keys are free again, and a legacy row that named a message
-keeps its request hash and receipt until the operator drops the table
-(`postgres_migrate.rs`,
-`version_3_scopes_spent_keys_to_the_caller_and_preserves_every_record`).
+keep the pseudonym. Schema version 3 discarded every idempotency record
+written under the pseudonym scope, request hashes and receipts included, so
+no pseudonym-keyed row survives the upgrade and every key spent before it
+is free again (`postgres_migrate.rs`,
+`version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`).
 
 Tests: MESSAGING-SEC-01 and -02 in `contracts/security-test-traceability.yaml`.
 

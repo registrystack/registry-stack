@@ -773,8 +773,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
             "SELECT has_table_privilege('{runtime_role}', '{schema}.messaging_activations', 'SELECT'), \
                     has_table_privilege('{runtime_role}', '{schema}.messaging_activations', 'INSERT'), \
                     has_table_privilege('{runtime_role}', '{schema}.messaging_schema_migrations', 'INSERT'), \
-                    has_table_privilege('{runtime_role}', '{schema}.messaging_messages', 'INSERT'), \
-                    has_table_privilege('{runtime_role}', '{schema}.legacy_messaging_idempotency', 'SELECT')",
+                    has_table_privilege('{runtime_role}', '{schema}.messaging_messages', 'INSERT')",
             schema = isolated.schema,
         ),
         &[],
@@ -784,10 +783,9 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
             privilege.get(0),
             privilege.get(1),
             privilege.get(2),
-            privilege.get(3),
-            privilege.get(4)
+            privilege.get(3)
         ),
-        (true, false, false, true, false)
+        (true, false, false, true)
     );
 
     let secrets = config.secret_resolver().expect("secrets");

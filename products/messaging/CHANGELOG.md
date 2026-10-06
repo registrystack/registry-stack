@@ -8,15 +8,10 @@
   exact retry across a rotation replays its receipt or is refused with
   `410 idempotency.expired`, and never sends again. A deleted record's
   idempotency tombstone now holds the caller's issuer and subject. Audit
-  records keep the pseudonym. Upgrade by running `messagingctl apply` with
-  this release before starting the runtime; it applies schema version 3,
-  which moves every key whose message is still held to that message's
-  submitter. A key whose message retention already deleted, a key naming no
-  held message, and the older of two records one caller held under two
-  pseudonyms after an earlier rotation are preserved unchanged in
-  `legacy_messaging_idempotency`, which nothing reads, and those keys can be
-  used again. Drop that table once nothing needs it; a row that named a
-  message keeps its request hash and receipt until then (#1912).
+  records keep the pseudonym. Run `messagingctl apply` with this release
+  before starting the new runtime; the upgrade discards existing
+  idempotency records, so every key spent before it can be used again
+  (#1912).
 
 ## v0.38.0 - 2026-10-01
 

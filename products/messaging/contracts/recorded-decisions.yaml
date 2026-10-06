@@ -313,12 +313,8 @@ decisions:
       audit.hashKeyRef changes pseudonyms only: an exact retry after the
       rotation replays its receipt or is refused as expired, and never sends
       again. The audit journal keeps naming the caller by pseudonym. Schema
-      version 3 moved each key whose message is still held to that message's
-      submitter; a key whose message retention had deleted, a key naming no
-      held message, and the older of two records one caller held under two
-      pseudonyms were preserved unchanged in
-      legacy_messaging_idempotency, which nothing reads, and those keys are
-      free again.
+      version 3 discarded every idempotency record written under the
+      pseudonym scope, so those keys are free again.
     reasoning: >-
       Freeing a key would turn a caller's mistaken retry into a second message
       sent to the same recipient, which is the duplicate the key exists to
@@ -327,15 +323,14 @@ decisions:
       caller with a retry in flight. Keeping the raw issuer and subject in a
       spent-key row is the accepted cost: they identify a service principal,
       not a recipient, the message row already held them for recordDays, and
-      the tombstone holds no request hash, receipt, or message. A key
-      version 3 could not attribute to a caller was moved rather than
-      guessed at or dropped, since a wrong caller would replay one caller's
-      receipt to another and a dropped row loses history the operator may
-      need; it stays spent only where its caller is known.
+      the tombstone holds no request hash, receipt, or message. Version 3
+      discarded the records it replaced rather than re-keying them because no
+      deployment held Messaging records worth keeping, and a key attributed
+      to the wrong caller would replay one caller's receipt to another.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
-      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_scopes_spent_keys_to_the_caller_and_preserves_every_record}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
   - id: MESSAGING-DEC-18
