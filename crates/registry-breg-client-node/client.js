@@ -217,7 +217,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['listRelationshipRecords', [3]], ['continueRelationshipList', [0], [0]],
   ['lookupRecord', [2, 3]], ['createRecord', [1], [1]],
   ['actionTargetConditions', [1], [1]], ['invokeAction', [1], [1]],
-  ['executeRecoveredCreate'],
+  ['executeRecoveredAction'], ['executeRecoveredCreate'],
   ['patchRecord', [3], [3]], ['batchRecords', [1], [1]], ['tombstoneRecord'],
   ['executeLifecycleAction'],
   ['executeRecoveredLifecycleAction'],
@@ -231,13 +231,16 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['listRelationshipRecordsJson', [3]], ['continueRelationshipListJson', [0], [0]],
   ['lookupRecordJson', [3]], ['createRecordJson'], ['patchRecordJson'], ['executeLifecycleActionJson'],
   ['actionTargetConditionsJson'], ['invokeActionJson'], ['batchRecordsJson'], ['tombstoneRecordJson'],
-  ['executeRecoveredCreateJson'], ['executeRecoveredLifecycleActionJson'],
+  ['executeRecoveredActionJson'], ['executeRecoveredCreateJson'],
+  ['executeRecoveredLifecycleActionJson'],
   ['uploadAttachmentJson'], ['deleteAttachmentJson'],
   ['createIngestionRun', [1], [1]], ['listIngestionRuns', [1]],
   ['readIngestionRun'], ['submitIngestionChunk'], ['cancelIngestionRun'],
 ]) wrapAsync(method, jsonIndexes, requiredIndexes);
 
 for (const [method, jsonIndexes, requiredIndexes] of [
+  ['prepareAction', [1], [1]], ['prepareActionJson'],
+  ['recoverAction', [2], [2]], ['recoverActionJson'],
   ['prepareCreate', [1], [1]], ['prepareCreateJson'], ['recoverCreate'],
   ['prepareLifecycleAction', [1], [1]], ['prepareLifecycleActionJson'],
   ['recoverLifecycleAction'],
@@ -284,6 +287,7 @@ function preparedClass(Class, label) {
   return Facade;
 }
 
+const BRegPreparedAction = preparedClass(native.BRegPreparedAction, 'BRegPreparedAction');
 const BRegPreparedCreate = preparedClass(native.BRegPreparedCreate, 'BRegPreparedCreate');
 const BRegPreparedLifecycle = preparedClass(
   native.BRegPreparedLifecycle, 'BRegPreparedLifecycle',
@@ -456,8 +460,10 @@ module.exports = {
   BRegActionTargetConditions: native.BRegActionTargetConditions,
   BRegTombstoneBinding: native.BRegTombstoneBinding,
   BRegBatchBinding: native.BRegBatchBinding,
+  BRegPreparedAction,
   BRegPreparedCreate,
   BRegPreparedLifecycle,
+  BRegRecoveredAction: native.BRegRecoveredAction,
   BRegRecoveredCreate: native.BRegRecoveredCreate,
   BRegRecoveredLifecycle: native.BRegRecoveredLifecycle,
   BRegIngestionChunk: native.BRegIngestionChunk,

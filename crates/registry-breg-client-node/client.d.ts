@@ -940,6 +940,18 @@ export declare class BRegLifecycleAction {
   readonly body: JsonObject
 }
 
+/**
+ * Inert bounded immediate-action evidence: inputs, saved target conditions,
+ * and the idempotency key. Persist these bytes with owner-only access before
+ * invoking.
+ */
+export declare class BRegPreparedAction {
+  private constructor()
+  private readonly __opaque: void
+  static fromBytes(bytes: Buffer): BRegPreparedAction
+  toBytes(): Buffer
+}
+
 /** Inert bounded Create evidence. Persist these bytes with owner-only access. */
 export declare class BRegPreparedCreate {
   private constructor()
@@ -954,6 +966,12 @@ export declare class BRegPreparedLifecycle {
   private readonly __opaque: void
   static fromBytes(bytes: Buffer): BRegPreparedLifecycle
   toBytes(): Buffer
+}
+
+/** Revalidated action invocation and key. It still requires fresh metadata authority to send. */
+export declare class BRegRecoveredAction {
+  private constructor()
+  private readonly __opaque: void
 }
 
 /** Revalidated Create request. It still requires fresh metadata authority to send. */
@@ -1052,6 +1070,14 @@ export declare class BaseRegistryClient {
   actionTargetConditionsJson(binding: BRegImmediateActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
   invokeAction(binding: BRegImmediateActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<CompleteOutcome<BRegActionReceipt>>
   invokeActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<JsonOutcome>
+  /** Validate and retain one invocation before any I/O, for recovery after a lost response. */
+  prepareAction(binding: BRegImmediateActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
+  prepareActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): BRegPreparedAction
+  /** Revalidate saved evidence against fresh authority and the original inputs and key. Performs no I/O. */
+  recoverAction(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputs: JsonObject, idempotencyKey: string): BRegRecoveredAction
+  recoverActionJson(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
+  executeRecoveredAction(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome<BRegActionReceipt>>
+  executeRecoveredActionJson(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
   createRecord(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   prepareCreate(binding: BRegCreateBinding, data: JsonObject, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedCreate
   prepareCreateJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedCreate

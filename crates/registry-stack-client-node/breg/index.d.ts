@@ -39,6 +39,22 @@ export declare class BaseRegistryClient {
   actionTargetConditions(binding: BRegImmediateActionBinding, inputs: any): Promise<BRegActionTargetConditions>
   /** Invoke one metadata-selected immediate action without automatic retry. */
   invokeAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
+  /**
+   * Prepare inert invocation evidence before any token acquisition or I/O.
+   * Persist `toBytes` before invoking so a lost response can be recovered.
+   */
+  prepareAction(binding: BRegImmediateActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
+  /**
+   * Revalidate saved invocation evidence against freshly selected authority
+   * and the caller's original inputs and key. The saved target conditions
+   * are reused exactly; this never fetches conditions or sends a request.
+   */
+  recoverAction(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputs: any, idempotencyKey: string): BRegRecoveredAction
+  /**
+   * Explicitly send a recovered invocation under its original key, without
+   * automatic retry.
+   */
+  executeRecoveredAction(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome>
   createRecord(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   /** Prepare inert Create evidence before any token acquisition or I/O. */
   prepareCreate(binding: BRegCreateBinding, data: any, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
@@ -116,6 +132,12 @@ export declare class BaseRegistryClient {
   actionTargetConditionsJson(binding: BRegImmediateActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
   /** Invoke an action from exact JSON and preserve exact receipt values. */
   invokeActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
+  /** Prepare inert invocation evidence from exact action-input JSON. */
+  prepareActionJson(binding: BRegImmediateActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): BRegPreparedAction
+  /** Revalidate saved invocation evidence against exact original input JSON. */
+  recoverActionJson(binding: BRegImmediateActionBinding, prepared: BRegPreparedAction, inputsJson: string, idempotencyKey: string): BRegRecoveredAction
+  /** Explicitly send a recovered invocation and preserve exact receipt values. */
+  executeRecoveredActionJson(binding: BRegImmediateActionBinding, recovered: BRegRecoveredAction): Promise<JsonOutcome>
   createRecordJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<JsonOutcome>
   /** Prepare inert Create evidence from exact JSON text. */
   prepareCreateJson(binding: BRegCreateBinding, dataJson: string, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedCreate
@@ -252,6 +274,19 @@ export declare class BRegPatchBinding {}
 export type PatchBinding = BRegPatchBinding
 
 /**
+ * Inert original immediate-action invocation evidence. The bytes carry the
+ * inputs, saved target conditions, and idempotency key, but no token or
+ * executable metadata authority.
+ */
+export declare class BRegPreparedAction {
+  /** Restore bounded inert evidence previously returned by `toBytes`. */
+  static fromBytes(bytes: Buffer): BRegPreparedAction
+  /** Copy the exact evidence bytes for owner-protected persistence. */
+  toBytes(): Buffer
+}
+export type PreparedAction = BRegPreparedAction
+
+/**
  * Inert original Create request evidence. The bytes carry values and an
  * idempotency key, but no token or executable metadata authority.
  */
@@ -274,6 +309,14 @@ export declare class BRegPreparedLifecycle {
   toBytes(): Buffer
 }
 export type PreparedLifecycle = BRegPreparedLifecycle
+
+/**
+ * A recovered immediate-action invocation and key. This remains inert until
+ * `executeRecoveredAction` is explicitly called with freshly selected
+ * authority.
+ */
+export declare class BRegRecoveredAction {}
+export type RecoveredAction = BRegRecoveredAction
 
 /**
  * A recovered Create request, key, and representation. This remains inert

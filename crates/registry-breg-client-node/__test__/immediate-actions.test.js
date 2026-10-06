@@ -2,7 +2,8 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { test } = require('node:test');
-const { BaseRegistryClient } = process.env.BREG_CLIENT_PACKAGE
+const util = require('node:util');
+const { BaseRegistryClient, BRegPreparedAction } = process.env.BREG_CLIENT_PACKAGE
   ? require(process.env.BREG_CLIENT_PACKAGE).breg : require('..');
 
 const targetId = '00000000-0000-4000-8000-000000000001';
@@ -72,6 +73,88 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     const foreign = new BaseRegistryClient({ baseUrl: 'http://127.0.0.1:1' });
     await assert.rejects(foreign.invokeAction(binding, { targetId }, 'foreign', conditions), error => error.kind === 'invalid_request');
     assert.equal(requests.length, count);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('an immediate action recovers after a lost response from persisted bytes and the same key', async () => {
+  const requests = [];
+  let loseNextInvocation = true;
+  const server = http.createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk;
+    requests.push({ url: request.url, body, headers: request.headers });
+    const invocation = request.url.startsWith('/v1/actions/update-item?');
+    if (invocation && loseNextInvocation) {
+      // The engine received the invocation, but its answer never arrives.
+      loseNextInvocation = false;
+      request.socket.destroy();
+      return;
+    }
+    response.setHeader('content-type', 'application/json');
+    response.setHeader('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01');
+    response.setHeader('cache-control', 'no-store');
+    response.setHeader('vary', 'authorization, accept');
+    if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
+    if (request.url.includes('/target-conditions')) return response.end(`{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}`);
+    return response.end(`{"action":"update-item","applicationId":"${applicationId}","results":{"item":{"entity":"item","recordId":"${targetId}","revision":9007199254740992}}}`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const client = new BaseRegistryClient({ baseUrl });
+    const binding = (await client.registryContract('writer')).selectImmediateAction('update-item', 'writer');
+    const conditions = await client.actionTargetConditions(binding, { targetId });
+    const inputs = { targetId, label: 'new' };
+    const prepared = client.prepareAction(binding, inputs, 'invoke-lost', conditions);
+    const persisted = prepared.toBytes();
+    assert.ok(Buffer.isBuffer(persisted));
+    assert.match(util.inspect(prepared), /^BRegPreparedAction\(<redacted>\)$/);
+    assert.doesNotMatch(String(prepared), /invoke-lost|opaque-condition/);
+    assert.throws(() => new BRegPreparedAction(), TypeError);
+    await assert.rejects(
+      client.invokeAction(binding, inputs, 'invoke-lost', conditions),
+      error => error.kind === 'transport',
+    );
+    const lost = requests.at(-1);
+    assert.equal(lost.headers['idempotency-key'], 'invoke-lost');
+
+    const restarted = new BaseRegistryClient({ baseUrl });
+    const restartedBinding = (await restarted.registryContract('writer')).selectImmediateAction('update-item', 'writer');
+    const restored = BRegPreparedAction.fromBytes(persisted);
+    assert.ok(restored instanceof BRegPreparedAction);
+    assert.deepEqual(restored.toBytes(), persisted);
+    const beforeRecovery = requests.length;
+    assert.throws(() => BRegPreparedAction.fromBytes('not bytes'), error => error.kind === 'invalid_request');
+    assert.throws(() => BRegPreparedAction.fromBytes(Buffer.from('{}')), error => error.kind === 'invalid_request');
+    assert.throws(() => restarted.recoverAction(restartedBinding, restored, inputs, 'another-key'), error => error.kind === 'invalid_request');
+    assert.throws(() => restarted.recoverAction(restartedBinding, restored, { targetId, label: 'changed' }, 'invoke-lost'), error => error.kind === 'invalid_request');
+    const foreign = new BaseRegistryClient({ baseUrl: 'http://127.0.0.1:1' });
+    assert.throws(() => foreign.recoverAction(restartedBinding, restored, inputs, 'invoke-lost'), error => error.kind === 'invalid_request');
+    const recovered = restarted.recoverAction(restartedBinding, restored, inputs, 'invoke-lost');
+    await assert.rejects(foreign.executeRecoveredAction(restartedBinding, recovered), error => error.kind === 'invalid_request');
+    assert.equal(requests.length, beforeRecovery);
+
+    const result = await restarted.executeRecoveredAction(restartedBinding, recovered);
+    assert.equal(result.value.action, 'update-item');
+    assert.equal(result.value.applicationId, applicationId);
+    const replay = requests.at(-1);
+    assert.equal(replay.url, lost.url);
+    assert.match(replay.url, /^\/v1\/actions\/update-item\?/);
+    assert.equal(replay.headers['idempotency-key'], 'invoke-lost');
+    assert.equal(replay.body, lost.body);
+    assert.equal(requests.filter(request => request.url.includes('/target-conditions')).length, 1);
+
+    const exactInputs = `{"targetId":"${targetId}","sequence":9007199254740992}`;
+    const preparedExact = restarted.prepareActionJson(restartedBinding, exactInputs, 'invoke-exact', conditions);
+    assert.throws(() => restarted.recoverActionJson(restartedBinding, preparedExact, `{"targetId":"${targetId}","sequence":9007199254740993}`, 'invoke-exact'), error => error.kind === 'invalid_request');
+    const recoveredExact = restarted.recoverActionJson(
+      restartedBinding, BRegPreparedAction.fromBytes(preparedExact.toBytes()), exactInputs, 'invoke-exact',
+    );
+    const exact = await restarted.executeRecoveredActionJson(restartedBinding, recoveredExact);
+    assert.match(exact.valueJson, /"revision":9007199254740992/);
+    assert.equal(requests.at(-1).headers['idempotency-key'], 'invoke-exact');
+    assert.match(requests.at(-1).body, /"sequence":9007199254740992/);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

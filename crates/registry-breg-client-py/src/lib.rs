@@ -21,13 +21,13 @@ use breg_client_sdk::{
     BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
     BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
     BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
-    BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
-    BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
-    BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegReleaseSelection, BRegReleaseStatus, BRegRequestMetadata,
-    BRegRequestProposal, BRegRequestResultReference as CoreRequestResultReference,
-    BRegRequestReviewRequirement, BRegRequestState,
-    BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
+    BRegPreparedAction as CorePreparedAction, BRegPreparedCreate as CorePreparedCreate,
+    BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
+    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
+    BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
+    BRegReleaseStatus, BRegRequestMetadata, BRegRequestProposal,
+    BRegRequestResultReference as CoreRequestResultReference, BRegRequestReviewRequirement,
+    BRegRequestState, BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
     BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegStatisticsFormat,
     BRegTombstoneBinding, BRegWithdrawalReason, BaseRegistryClient as RustClient,
@@ -1637,6 +1637,11 @@ struct PreparedCreate {
     inner: CorePreparedCreate,
 }
 
+#[pyclass(name = "BRegPreparedAction", module = "registry_breg_client", frozen)]
+struct PreparedAction {
+    inner: CorePreparedAction,
+}
+
 #[pyclass(
     name = "BRegPreparedLifecycle",
     module = "registry_breg_client",
@@ -1660,6 +1665,12 @@ struct RecoveredCreate {
 )]
 struct RecoveredLifecycle {
     action: CoreLifecycleAction,
+    key: BRegIdempotencyKey,
+}
+
+#[pyclass(name = "BRegRecoveredAction", module = "registry_breg_client", frozen)]
+struct RecoveredAction {
+    request: Arc<BRegActionInvocationRequest>,
     key: BRegIdempotencyKey,
 }
 
@@ -1700,9 +1711,34 @@ impl PreparedLifecycle {
 }
 
 #[pymethods]
+impl PreparedAction {
+    #[staticmethod]
+    fn from_bytes(py: Python<'_>, bytes: Vec<u8>) -> PyResult<Self> {
+        CorePreparedAction::from_slice(&bytes)
+            .map(|inner| Self { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn to_bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, self.inner.as_bytes())
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "BRegPreparedAction(<redacted>)"
+    }
+}
+
+#[pymethods]
 impl RecoveredCreate {
     fn __repr__(&self) -> &'static str {
         "BRegRecoveredCreate(<redacted>)"
+    }
+}
+
+#[pymethods]
+impl RecoveredAction {
+    fn __repr__(&self) -> &'static str {
+        "BRegRecoveredAction(<redacted>)"
     }
 }
 
@@ -2990,6 +3026,68 @@ impl BaseRegistryClient {
         complete_value(py, &value.value, &value.metadata)
     }
 
+    #[pyo3(signature = (binding, inputs, idempotency_key, conditions=None))]
+    fn prepare_action(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, ImmediateActionBinding>,
+        inputs: &Bound<'_, PyAny>,
+        idempotency_key: &str,
+        conditions: Option<PyRef<'_, ActionTargetConditions>>,
+    ) -> PyResult<PreparedAction> {
+        let inputs = json_object(py, inputs, "inputs")?;
+        let request = BRegActionInvocationRequest::new(
+            &binding.inner,
+            inputs,
+            conditions.as_ref().map(|value| &value.inner),
+        )
+        .map_err(|error| invalid(py, error.to_string()))?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        self.inner
+            .prepare_action(&binding.inner, &request, &key)
+            .map(|inner| PreparedAction { inner })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn recover_action(
+        &self,
+        py: Python<'_>,
+        binding: PyRef<'_, ImmediateActionBinding>,
+        prepared: PyRef<'_, PreparedAction>,
+        inputs: &Bound<'_, PyAny>,
+        idempotency_key: &str,
+    ) -> PyResult<RecoveredAction> {
+        let inputs = json_object(py, inputs, "inputs")?;
+        let key = BRegIdempotencyKey::parse(idempotency_key)
+            .map_err(|error| invalid(py, error.to_string()))?;
+        self.inner
+            .recover_action(&binding.inner, &prepared.inner, &inputs, &key)
+            .map(|request| RecoveredAction {
+                request: Arc::new(request),
+                key,
+            })
+            .map_err(|error| sdk_error(py, error))
+    }
+
+    fn execute_recovered_action<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ImmediateActionBinding>,
+        recovered: PyRef<'_, RecoveredAction>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let binding = binding.inner.clone();
+        let request = Arc::clone(&recovered.request);
+        let key = recovered.key.clone();
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.invoke_action(&binding, request.as_ref(), &key))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
+    }
+
     #[pyo3(signature = (binding, record_identifier, etag, idempotency_key, *, format="json"))]
     fn tombstone_record<'py>(
         &self,
@@ -3466,8 +3564,10 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<RetainedRequestProposal>()?;
     module.add_class::<RetainedRequestHistoryPage>()?;
     module.add_class::<PreparedCreate>()?;
+    module.add_class::<PreparedAction>()?;
     module.add_class::<PreparedLifecycle>()?;
     module.add_class::<RecoveredCreate>()?;
+    module.add_class::<RecoveredAction>()?;
     module.add_class::<RecoveredLifecycle>()?;
     module.add_class::<AttachmentSlot>()?;
     module.add_class::<AttachmentUpload>()?;
