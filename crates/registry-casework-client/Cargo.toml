@@ -31,5 +31,5 @@ base64.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 registry-platform-crypto.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
 wiremock.workspace = true

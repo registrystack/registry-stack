@@ -23,7 +23,8 @@ use registry_casework_core::{
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
-    build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
+    build_client, classify_keyed_attempt, read_failure_kind, retry_keyed_mutation,
+    send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
     read_bounded, url::append_path_segments, validate_response_headers,
@@ -59,6 +60,7 @@ pub struct CaseworkClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     max_response_bytes: u64,
+    max_mutation_retries: u8,
     review: ProducerReviewClient,
 }
 
@@ -68,6 +70,7 @@ impl fmt::Debug for CaseworkClient {
             .debug_struct("CaseworkClient")
             .field("base_url", &"<validated service URL>")
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("max_mutation_retries", &self.max_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -98,6 +101,7 @@ impl CaseworkClient {
             http,
             base_url,
             max_response_bytes: config.max_response_bytes,
+            max_mutation_retries: config.max_mutation_retries,
             review,
         })
     }
@@ -623,7 +627,7 @@ impl CaseworkClient {
             expected_revision,
             idempotency_key,
         )?;
-        self.send_empty(request, StatusCode::NO_CONTENT).await
+        self.send_keyed_empty(request, StatusCode::NO_CONTENT).await
     }
 
     pub async fn decide_review_task(
@@ -645,7 +649,7 @@ impl CaseworkClient {
             expected_revision,
             idempotency_key,
         )?;
-        self.send_empty(request, StatusCode::NO_CONTENT).await
+        self.send_keyed_empty(request, StatusCode::NO_CONTENT).await
     }
 
     pub async fn review_history(
@@ -692,7 +696,7 @@ impl CaseworkClient {
                 idempotency_key,
             );
         let complete: CaseworkComplete<ReviewHistoryEntry> =
-            self.send_json(request, StatusCode::OK).await?;
+            self.send_keyed_json(request, StatusCode::OK).await?;
         let audience = match note.audience {
             ReviewHistoryAudience::Reviewers => "reviewers",
             ReviewHistoryAudience::Requester => "requester",
@@ -781,7 +785,7 @@ impl CaseworkClient {
         )?;
         let request = self.mutation_headers(request, expected_revision, idempotency_key)?;
         let complete: CaseworkComplete<ReviewerTask> =
-            self.send_json(request, expected_status).await?;
+            self.send_keyed_json(request, expected_status).await?;
         require_review_task_transition(
             complete,
             task_id,
@@ -1035,7 +1039,7 @@ impl CaseworkClient {
             expected_revision,
             idempotency_key,
         )?;
-        self.send_empty(request, StatusCode::NO_CONTENT).await
+        self.send_keyed_empty(request, StatusCode::NO_CONTENT).await
     }
 
     pub async fn decide_work_item(
@@ -1218,7 +1222,7 @@ impl CaseworkClient {
             expected_directory_revision,
             idempotency_key,
         )?;
-        self.send_json(request, StatusCode::CREATED).await
+        self.send_keyed_json(request, StatusCode::CREATED).await
     }
 
     pub async fn update_absence(
@@ -1261,7 +1265,7 @@ impl CaseworkClient {
             expected_directory_revision,
             idempotency_key,
         )?;
-        self.send_empty(request, StatusCode::NO_CONTENT).await
+        self.send_keyed_empty(request, StatusCode::NO_CONTENT).await
     }
 
     pub async fn assign_work_item(
@@ -1350,7 +1354,7 @@ impl CaseworkClient {
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
                 idempotency_key,
             );
-        self.send_json(request, StatusCode::OK).await
+        self.send_keyed_json(request, StatusCode::OK).await
     }
 
     pub async fn update_directory_team(
@@ -1425,7 +1429,7 @@ impl CaseworkClient {
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
                 idempotency_key,
             );
-        self.send_json(request, StatusCode::CREATED).await
+        self.send_keyed_json(request, StatusCode::CREATED).await
     }
 
     pub async fn preview_clock_recompute(
@@ -1460,7 +1464,7 @@ impl CaseworkClient {
                 HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
                 idempotency_key,
             );
-        self.send_json(request, StatusCode::OK).await
+        self.send_keyed_json(request, StatusCode::OK).await
     }
 
     async fn get_json<T: DeserializeOwned>(
@@ -1515,7 +1519,7 @@ impl CaseworkClient {
             &action.if_match,
             idempotency_key,
         )?;
-        self.send_json(request, StatusCode::OK).await
+        self.send_keyed_json(request, StatusCode::OK).await
     }
 
     async fn mutate_with_method<T: DeserializeOwned, B: Serialize + ?Sized>(
@@ -1534,7 +1538,7 @@ impl CaseworkClient {
             expected_revision,
             idempotency_key,
         )?;
-        self.send_json(request, StatusCode::OK).await
+        self.send_keyed_json(request, StatusCode::OK).await
     }
 
     fn authorized(
@@ -1600,22 +1604,81 @@ impl CaseworkClient {
         self.url(&segments)
     }
 
+    /// Send one idempotency-keyed mutation, resending the identical request
+    /// under the same key while its outcome stays unknown, at most the
+    /// configured number of times.
+    async fn send_keyed_json<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        expected_status: StatusCode,
+    ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
+        let request = &request;
+        retry_keyed_mutation(self.max_mutation_retries, || async move {
+            let Some(attempt) = request.try_clone() else {
+                return KeyedMutationAttempt::Settled(Err(CaseworkClientError::invalid_request(
+                    "the request could not be prepared for sending",
+                )));
+            };
+            let response = match self.send(attempt).await {
+                Ok(response) => response,
+                Err(error) => return keyed_attempt(Err(error), None, RetryAfter::Absent),
+            };
+            let status = response.status();
+            let retry_after = RetryAfter::from_headers(response.headers());
+            keyed_attempt(
+                self.json_answer(response, expected_status).await,
+                Some(status),
+                retry_after,
+            )
+        })
+        .await
+    }
+
+    /// Send one idempotency-keyed mutation answered without a body, under the
+    /// same resend rule as [`Self::send_keyed_json`].
+    async fn send_keyed_empty(
+        &self,
+        request: RequestBuilder,
+        expected_status: StatusCode,
+    ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
+        let request = &request;
+        retry_keyed_mutation(self.max_mutation_retries, || async move {
+            let Some(attempt) = request.try_clone() else {
+                return KeyedMutationAttempt::Settled(Err(CaseworkClientError::invalid_request(
+                    "the request could not be prepared for sending",
+                )));
+            };
+            let response = match self.send(attempt).await {
+                Ok(response) => response,
+                Err(error) => return keyed_attempt(Err(error), None, RetryAfter::Absent),
+            };
+            let status = response.status();
+            let retry_after = RetryAfter::from_headers(response.headers());
+            keyed_attempt(
+                self.empty_answer(response, expected_status).await,
+                Some(status),
+                retry_after,
+            )
+        })
+        .await
+    }
+
     async fn send_json<T: DeserializeOwned>(
         &self,
         request: RequestBuilder,
         expected_status: StatusCode,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
-        self.send_json_one_of(request, &[expected_status]).await
+        let response = self.send(request).await?;
+        self.json_answer(response, expected_status).await
     }
 
-    async fn send_json_one_of<T: DeserializeOwned>(
+    async fn json_answer<T: DeserializeOwned>(
         &self,
-        request: RequestBuilder,
-        expected_statuses: &[StatusCode],
+        response: Response,
+        expected_status: StatusCode,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
-        let response = self.send(request).await?;
         let status = response.status();
-        if !expected_statuses.contains(&status) {
+        if status != expected_status {
             return Err(self.problem_or_status(response).await);
         }
         let trace_id = response_trace(status, response.headers())?;
@@ -1641,12 +1704,11 @@ impl CaseworkClient {
         Ok(CaseworkComplete { value, trace_id })
     }
 
-    async fn send_empty(
+    async fn empty_answer(
         &self,
-        request: RequestBuilder,
+        response: Response,
         expected_status: StatusCode,
     ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
-        let response = self.send(request).await?;
         let status = response.status();
         if status != expected_status {
             return Err(self.problem_or_status(response).await);
@@ -1945,6 +2007,23 @@ fn review_validation_reason(value: &str) -> Option<ReviewValidationReason> {
         "constraint_violated" => ReviewValidationReason::ConstraintViolated,
         _ => return None,
     })
+}
+
+/// Classify one attempt of a keyed mutation for the shared retry loop, with
+/// the shared rule. Any unknown outcome on a 5xx answer is resent, whatever
+/// stage of decoding it reached.
+fn keyed_attempt<T>(
+    result: Result<T, CaseworkClientError>,
+    status: Option<StatusCode>,
+    retry_after: RetryAfter,
+) -> KeyedMutationAttempt<T, CaseworkClientError> {
+    classify_keyed_attempt(
+        result,
+        status,
+        retry_after,
+        CaseworkClientError::is_outcome_unknown,
+        CaseworkClientError::resend_may_settle,
+    )
 }
 
 fn response_trace(

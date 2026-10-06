@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Canonical, bounded client for Registry Casework.
+//!
+//! Mutating calls carry a caller-supplied idempotency key; the client never
+//! generates one. A keyed mutation whose outcome is unknown (a timeout or
+//! broken exchange after the request was sent, or a 5xx answer) is resent,
+//! byte for byte and under the same key, at most
+//! `CaseworkClientConfig::with_max_mutation_retries` times (2 by default, 0
+//! disables it). Reads, unkeyed operations, and the review request create and
+//! cancel calls are never resent. A 5xx answer may follow a commit: when
+//! `CaseworkClientError::is_outcome_unknown` is still true, the safe recovery
+//! is the same request under the same key, never a new key.
 
 #![deny(unsafe_code)]
 

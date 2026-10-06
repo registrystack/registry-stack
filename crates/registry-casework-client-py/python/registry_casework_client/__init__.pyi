@@ -688,6 +688,17 @@ class CaseworkClientError(Exception):
     validation: ValidationDetail | None
     transport_kind: str | None
     protocol_failure: CaseworkProtocolFailure | None
+    # Whether the request may have taken effect although this error was
+    # raised: a timeout or broken exchange after sending, an unusable answer,
+    # or a 5xx. When True, recover a keyed request by sending it again under
+    # the same idempotency key; a new key could apply it twice. False for a
+    # configuration or request defect, a connection never established, and
+    # every 4xx refusal. It is False for `410 idempotency.expired` too, but
+    # there an earlier attempt under the key committed and only its stored
+    # response was erased by retention: reconcile the original operation, by
+    # reading the item, review request, or directory, before choosing a new
+    # key.
+    outcome_unknown: bool
 
 ContentDigest: TypeAlias = str
 ReviewRequestLifecycle: TypeAlias = Literal["reviewing", "approved", "rejected", "changes_requested", "answered", "cancelled", "superseded"]
@@ -905,7 +916,7 @@ ReviewAccountabilityRecord: TypeAlias = JsonObject
 ReviewKindPolicySnapshot: TypeAlias = JsonObject
 
 class CaseworkClient:
-    def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None) -> None: ...
+    def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, max_mutation_retries: int | None = None) -> None: ...
     def description(self, token: str, profile: str) -> Complete[Description]: ...
     def create_or_recover_review_request(self, token: str, profile: str, idempotency_key: str, request: ReviewCreateRequest, expected_submission_digest: ContentDigest) -> Complete[ReviewRequestAccepted]: ...
     def review_request(self, token: str, profile: str, request_id: Uuid) -> Complete[ReviewRequestView]: ...

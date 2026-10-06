@@ -13,6 +13,14 @@ export interface CaseworkClientConfig {
   maxResponseBytes?: SafeInteger | null
   userAgent?: string | null
   trustedRootCertificates?: string | null
+  /**
+   * How many times an idempotency-keyed mutation whose outcome is unknown is
+   * resent, identically and under the same key, before its error is
+   * returned: a whole number from 0 to 2, default 2; 0 sends it once. Reads,
+   * unkeyed operations, and review request create and cancel are never
+   * resent. Any other value is a `configuration` error.
+   */
+  maxMutationRetries?: SafeInteger | null
 }
 
 export type InboxView = 'mine' | 'my_teams' | 'team_holdings' | 'overdue' | 'completed_by_me'
@@ -320,6 +328,19 @@ export type CaseworkProtocolFailure = 'header_bounds' | 'trace_context' | 'media
 
 export class CaseworkClientError extends Error {
   readonly kind: 'configuration' | 'invalid_request' | 'transport' | 'problem' | 'protocol'
+  /**
+   * Whether the request may have taken effect although this error was
+   * raised: a timeout or broken exchange after sending, an unusable answer,
+   * or a 5xx. When true, recover a keyed request by sending it again under
+   * the same idempotency key; a new key could apply it twice. False for a
+   * configuration or request defect, a connection never established, and
+   * every 4xx refusal. It is false for `410 idempotency.expired` too, but
+   * there an earlier attempt under the key committed and only its stored
+   * response was erased by retention: reconcile the original operation, by
+   * reading the item, review request, or directory, before choosing a new
+   * key.
+   */
+  readonly outcomeUnknown: boolean
   readonly code?: CaseworkProblemCode
   readonly detail?: string
   readonly status?: SafeInteger

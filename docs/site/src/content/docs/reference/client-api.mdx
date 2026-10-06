@@ -169,7 +169,7 @@ cannot contain credentials, a query, a fragment, or ambiguous empty path segment
 
 ### Unknown outcomes and the same-key retry
 
-A 5xx answer may follow a commit. A BReg<DocsetProduct product="registry-messaging">, Messaging,</DocsetProduct>
+A 5xx answer may follow a commit. A BReg, Casework<DocsetProduct product="registry-messaging">, Messaging,</DocsetProduct>
 or Scheduling mutation that carries an idempotency key has an unknown outcome after every 5xx answer,
 after a timeout or a broken exchange once the request was sent, and after a protocol failure: a 3xx
 answer, or an answer that is oversized, cannot be parsed, or does not meet the contract. Its outcome
@@ -216,7 +216,9 @@ The receipt horizon is how long a service holds a key's first answer: BReg's
 Messaging's `retention.submissionReceiptDays`,</DocsetProduct> and Scheduling's
 `retention.attemptReceiptDays`. Past it, the same request is refused with
 `410 idempotency.expired` and the key stays spent. In BReg that refusal means the first attempt
-committed: read the record or its history rather than sending the write again under a new key.
+committed: read the record or its history rather than sending the write again under a new key. In
+Casework it means an earlier attempt under the key committed and retention erased only its stored
+response: reconcile by reading the item, review request, or directory before choosing a new key.
 
 {/* Evidence: crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation,
     classify_keyed_attempt, RetryAfter,
@@ -249,6 +251,22 @@ hold carries no key and is never resent.
     crates/registry-scheduling-client/tests/mutation_retry.rs;
     crates/registry-scheduling-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
     crates/registry-scheduling-client-py/tests/python/test_mutation_retry.py */}
+
+In Casework, every keyed work-item, review task, and directory mutation is resent, and the error's
+`mutation_class()` is `Ambiguous` exactly when `is_outcome_unknown()` holds. Review request create
+and cancel carry a key but go through the review client's single exchange and are never resent.
+Grant revocation and the caseload and clock previews carry no key and are never resent either.
+Casework answers every 503 with `Retry-After: 5`, so a resend after one waits 5 seconds.
+
+{/* Evidence: crates/registry-casework-client/src/error.rs, is_outcome_unknown, resend_may_settle,
+    mutation_class; crates/registry-casework-client/src/client.rs, send_keyed_json,
+    send_keyed_empty, create_or_recover_review_request, cancel_review_request;
+    crates/registry-casework/src/http.rs, Retry-After on 503;
+    crates/registry-casework/src/problem.rs, IdempotencyExpired;
+    crates/registry-casework-client/tests/mutation_retry.rs;
+    crates/registry-casework-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-casework-client-node/__test__/mutation-retry.test.js;
+    crates/registry-casework-client-py/tests/python/test_mutation_retry.py */}
 
 ## Registry Discovery
 
@@ -1006,8 +1024,9 @@ const page = await client.listWorkItems(token, 'staff', 'reviewer', { view: 'my_
 ```
 
 `CaseworkClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
-`with_max_response_bytes`, `with_user_agent`, and `with_trusted_root_certificates`. The Python
-constructor takes the same settings as keyword arguments and the Node constructor as config members.
+`with_max_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
+`with_max_mutation_retries`. The Python constructor takes the same settings as keyword arguments and
+the Node constructor as config members.
 A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
 credential, and its debug output redacts the base URL, the user agent, and any trusted root
 certificates.
@@ -1073,8 +1092,8 @@ Rust, `absences` reads with the default query and `absences_page` takes one; the
 A claim, release, or decision takes the caller-filtered `CaseworkAction` the item carried, which
 holds the exact route and the `if_match` revision to send, so the caller never assembles that route.
 Every other revisioned mutation takes the revision the caller displayed and a caller-chosen
-idempotency key, both as explicit arguments. No Casework client retries a mutation, and none
-replaces a key.
+idempotency key, both as explicit arguments. A Casework client resends a mutation only under the
+same-key retry above, and none replaces a key.
 
 After a lost response, `recover_decision_by_key` replays the original idempotency key, so recovery
 does not depend on the attempt identifier reaching the caller. `recover_decision` names the attempt
@@ -1127,10 +1146,11 @@ parse failure, so an older client keeps the status and trace context of a refusa
 recognize.
 
 Python raises `casework.CaseworkClientError`, an `Exception` whose attributes are `kind`, `code`,
-`detail`, `status`, `trace_id`, `original_attempt_id`, `validation`, `transport_kind`, and
-`protocol_failure`; an absent member is `None`. Node rejects with `casework.CaseworkClientError`, an
-`Error` with `kind` and the optional `code`, `detail`, `status`, `traceId`, `originalAttemptId`,
-`validation`, `transportKind`, and `protocolFailure`; an absent member is undefined.
+`detail`, `status`, `trace_id`, `original_attempt_id`, `validation`, `transport_kind`,
+`protocol_failure`, and the boolean `outcome_unknown`; an absent member is `None`. Node rejects with
+`casework.CaseworkClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`, and the
+optional `code`, `detail`, `status`, `traceId`, `originalAttemptId`, `validation`, `transportKind`,
+and `protocolFailure`; an absent member is undefined.
 
 `kind` is one of:
 

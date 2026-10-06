@@ -38,13 +38,15 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   sending, or a 5xx answer other than a typed failure the product returns only
   with the attempt rolled back), and never after a 4xx status line:
   `registry_platform_httputil::client::retry_keyed_mutation` owns its loop and
-  waits, the BReg, Messaging, and Scheduling clients expose the count as
-  `with_max_mutation_retries` (2 by default, at most 2, 0 disables), and the
-  resend repeats the caller's exact key, headers, and body. The other clients
-  never resend. Reads and unkeyed operations are never resent. Those three
-  clients treat a connection that was never established, a connect timeout
-  included, as a known failure; the Casework client's `mutation_class` still
-  classifies every transport failure, that one included, as ambiguous.
+  waits, the BReg, Casework, Messaging, and Scheduling clients expose the
+  count as `with_max_mutation_retries` (2 by default, at most 2, 0 disables),
+  and the resend repeats the caller's exact key, headers, and body. The other
+  clients never resend. Reads and unkeyed operations are never resent, and
+  neither are Casework's review request create and cancel, which go through
+  the review client's single exchange. Those four clients treat a connection
+  that was never established, a connect timeout included, as a known failure,
+  and the Casework client's `mutation_class` is `Ambiguous` exactly when
+  `is_outcome_unknown` holds.
   Acquire credentials only for operations the product contract protects.
 - Evidence verification delegates to `registry-evidence-verifier`. Preserve
   request binding and the distinction between verified, raw, unsigned, and

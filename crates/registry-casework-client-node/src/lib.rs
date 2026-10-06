@@ -34,6 +34,9 @@ pub struct CaseworkClientConfig {
     pub max_response_bytes: Option<u32>,
     pub user_agent: Option<String>,
     pub trusted_root_certificates: Option<String>,
+    /// How many times a keyed mutation whose outcome is unknown is resent under
+    /// the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
+    pub max_mutation_retries: Option<f64>,
 }
 
 #[napi(object)]
@@ -70,6 +73,9 @@ impl CaseworkClient {
         }
         if let Some(value) = config.trusted_root_certificates {
             core = core.with_trusted_root_certificates(value.into_bytes());
+        }
+        if let Some(value) = config.max_mutation_retries {
+            core = core.with_max_mutation_retries(mutation_retries(value)?);
         }
         CoreClient::new(core)
             .map(|inner| Self { inner })
@@ -1502,7 +1508,8 @@ fn contains_unsafe_integer(value: &Value) -> bool {
 }
 
 fn client_error(error: CaseworkClientError) -> NapiError {
-    let value = match error {
+    let outcome_unknown = error.is_outcome_unknown();
+    let mut value = match error {
         CaseworkClientError::Configuration { .. } => json!({
             "kind": "configuration",
             "message": "Casework client configuration is invalid",
@@ -1557,8 +1564,9 @@ fn client_error(error: CaseworkClientError) -> NapiError {
             "message": "Registry Casework client failed",
         }),
     };
+    value["outcomeUnknown"] = Value::Bool(outcome_unknown);
     NapiError::from_reason(serde_json::to_string(&value).unwrap_or_else(|_| {
-        r#"{"kind":"protocol","message":"the failure could not be described"}"#.into()
+        r#"{"kind":"protocol","message":"the failure could not be described","outcomeUnknown":true}"#.into()
     }))
 }
 
@@ -1576,8 +1584,27 @@ fn protocol_failure(failure: registry_casework_client::CaseworkProtocolFailure) 
     }
 }
 
+/// A failure the binding detects itself. Only a protocol failure follows an
+/// exchange, a result the binding cannot represent, so only it leaves the
+/// outcome unknown.
 fn binding_error(kind: &'static str, message: &'static str) -> NapiError {
-    NapiError::from_reason(json!({ "kind": kind, "message": message }).to_string())
+    NapiError::from_reason(
+        json!({ "kind": kind, "message": message, "outcomeUnknown": kind == "protocol" })
+            .to_string(),
+    )
+}
+
+/// The retry ceiling as a JavaScript number. Only a whole number in the
+/// `u8` range reaches the client, which refuses one above its own bound.
+fn mutation_retries(value: f64) -> Result<u8> {
+    if value.fract() == 0.0 && (0.0..=f64::from(u8::MAX)).contains(&value) {
+        Ok(value as u8)
+    } else {
+        Err(binding_error(
+            "configuration",
+            "Casework client configuration is invalid",
+        ))
+    }
 }
 
 #[cfg(test)]
