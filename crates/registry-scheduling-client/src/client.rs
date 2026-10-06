@@ -5,8 +5,8 @@ use std::fmt;
 use chrono::{DateTime, SecondsFormat, Utc};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
-    build_client, read_failure_kind, retry_keyed_mutation, send_failure_kind, KeyedMutationAttempt,
-    OutboundOptions, RetryAfter, ServiceBaseUrl,
+    build_client, classify_keyed_attempt, read_failure_kind, retry_keyed_mutation,
+    send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
     read_bounded, url::append_path_segments, validate_response_headers,
@@ -390,13 +390,13 @@ impl SchedulingClient {
             };
             let response = match self.send(attempt).await {
                 Ok(response) => response,
-                Err(error) => return keyed_attempt(Err(error), false, RetryAfter::Absent),
+                Err(error) => return keyed_attempt(Err(error), None, RetryAfter::Absent),
             };
-            let server_error = response.status().is_server_error();
+            let status = response.status();
             let retry_after = RetryAfter::from_headers(response.headers());
             keyed_attempt(
                 self.json_answer(response, expected_status).await,
-                server_error,
+                Some(status),
                 retry_after,
             )
         })
@@ -565,21 +565,21 @@ pub(crate) fn domain_problem(
     }
 }
 
-/// Classify one attempt of a keyed command for the shared retry loop. Any
-/// failure on a 5xx answer is resent, whatever stage of decoding it reached.
+/// Classify one attempt of a keyed command for the shared retry loop, with
+/// the shared rule. Any unknown outcome on a 5xx answer is resent, whatever
+/// stage of decoding it reached.
 fn keyed_attempt<T>(
     result: Result<T, SchedulingClientError>,
-    server_error: bool,
+    status: Option<StatusCode>,
     retry_after: RetryAfter,
 ) -> KeyedMutationAttempt<T, SchedulingClientError> {
-    match result {
-        Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
-        Err(error) if server_error || error.resend_may_settle() => {
-            KeyedMutationAttempt::Retryable { error, retry_after }
-        }
-        Err(error) if error.is_outcome_unknown() => KeyedMutationAttempt::Unknown(error),
-        Err(error) => KeyedMutationAttempt::Settled(Err(error)),
-    }
+    classify_keyed_attempt(
+        result,
+        status,
+        retry_after,
+        SchedulingClientError::is_outcome_unknown,
+        SchedulingClientError::resend_may_settle,
+    )
 }
 
 fn response_trace(

@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
 use registry_platform_httputil::client::{
-    retry_keyed_mutation, BearerToken, KeyedMutationAttempt, RetryAfter, TokenError, TokenProvider,
+    classify_keyed_attempt, retry_keyed_mutation, BearerToken, KeyedMutationAttempt, RetryAfter,
+    TokenError, TokenProvider,
 };
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_MATCH, LINK,
@@ -1807,11 +1808,11 @@ impl BaseRegistryClient {
             };
             let response = match self.transport.send(attempt).await {
                 Ok(response) => response,
-                Err(error) => return keyed_attempt(Err(error), false, RetryAfter::Absent),
+                Err(error) => return keyed_attempt(Err(error), None, RetryAfter::Absent),
             };
-            let server_error = response.status().is_server_error();
+            let status = response.status();
             let retry_after = RetryAfter::from_headers(response.headers());
-            keyed_attempt(decode(response).await, server_error, retry_after)
+            keyed_attempt(decode(response).await, Some(status), retry_after)
         })
         .await
     }
@@ -2209,24 +2210,23 @@ fn snapshot_extensions(
     Ok((snapshot, valid_at))
 }
 
-/// Classify one attempt of an idempotency-keyed mutation. A failure with an
-/// unknown outcome on a 5xx answer, a timeout, or a broken exchange may settle
-/// on a resend; any other unknown outcome would be answered the same way
-/// again. A typed 5xx the engine returns only with the attempt rolled back is
-/// a known failure and is never resent.
+/// Classify one attempt of an idempotency-keyed mutation with the shared
+/// rule. A failure with an unknown outcome on a 5xx answer, a timeout, or a
+/// broken exchange may settle on a resend; any other unknown outcome would be
+/// answered the same way again. A typed 5xx the engine returns only with the
+/// attempt rolled back is a known failure and is never resent.
 fn keyed_attempt<T>(
     result: Result<T, BaseRegistryClientError>,
-    server_error: bool,
+    status: Option<StatusCode>,
     retry_after: RetryAfter,
 ) -> KeyedMutationAttempt<T, BaseRegistryClientError> {
-    match result {
-        Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
-        Err(error) if (server_error && error.is_outcome_unknown()) || error.resend_may_settle() => {
-            KeyedMutationAttempt::Retryable { error, retry_after }
-        }
-        Err(error) if error.is_outcome_unknown() => KeyedMutationAttempt::Unknown(error),
-        Err(error) => KeyedMutationAttempt::Settled(Err(error)),
-    }
+    classify_keyed_attempt(
+        result,
+        status,
+        retry_after,
+        BaseRegistryClientError::is_outcome_unknown,
+        BaseRegistryClientError::resend_may_settle,
+    )
 }
 
 fn body_error<T>(complete: &BRegComplete<T>) -> BaseRegistryClientError {
