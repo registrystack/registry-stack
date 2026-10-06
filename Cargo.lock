@@ -6369,6 +6369,7 @@ dependencies = [
  "registry-messaging-client",
  "registry-platform-httputil",
  "registry-record",
+ "serde_json",
 ]
 
 [[package]]

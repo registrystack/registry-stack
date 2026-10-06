@@ -19,3 +19,6 @@ registry-evidence-client.workspace = true
 registry-messaging-client.workspace = true
 registry-platform-httputil.workspace = true
 registry-record.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
