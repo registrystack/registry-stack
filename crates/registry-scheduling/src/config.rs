@@ -267,9 +267,7 @@ impl DestinationsConfig {
         for (id, destination) in &self.hooks {
             if !valid_logical_destination_id(id)
                 || !valid_destination_url(&destination.url)
-                || !(MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS..=MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS)
-                    .contains(&destination.attempt_timeout_milliseconds)
-                || !(1..=MAX_HOOK_ATTEMPTS).contains(&destination.maximum_attempts)
+                || !destination.within_delivery_budget()
             {
                 return Err(RuntimeConfigError::InvalidHookDestination);
             }
@@ -308,6 +306,18 @@ pub struct HookDestinationConfig {
     #[serde(default = "default_hook_maximum_attempts")]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_HOOK_ATTEMPTS)))]
     pub maximum_attempts: u8,
+}
+
+impl HookDestinationConfig {
+    /// Whether the attempt timeout and attempt count stay inside the
+    /// delivery budget: the bound [`DestinationsConfig::check`] enforces at
+    /// load and hook activation enforces again before it binds the
+    /// destination.
+    pub(crate) fn within_delivery_budget(&self) -> bool {
+        (MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS..=MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS)
+            .contains(&self.attempt_timeout_milliseconds)
+            && (1..=MAX_HOOK_ATTEMPTS).contains(&self.maximum_attempts)
+    }
 }
 
 const fn default_hook_attempt_timeout_milliseconds() -> u32 {
@@ -684,7 +694,10 @@ fn valid_destination_url(value: &str) -> bool {
     }
 }
 
-fn valid_logical_destination_id(value: &str) -> bool {
+/// A logical hook destination id is a lowercase ASCII letter followed by up
+/// to 63 lowercase letters, digits, `-`, or `_`. The runtime configuration
+/// and hook compilation and activation all decide ids with this one check.
+pub(crate) fn valid_logical_destination_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value

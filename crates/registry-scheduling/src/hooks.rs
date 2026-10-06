@@ -48,7 +48,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::audit::{SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
-use crate::config::HookDestinationConfig;
+use crate::config::{
+    valid_logical_destination_id, HookDestinationConfig, MAX_HOOK_ATTEMPTS,
+    MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+};
 use crate::store::{ClaimRow, PostgresStore};
 
 const DESTINATION_BINDING_SCHEMA: &str = "registry.scheduling-hook-destinations/v1";
@@ -58,8 +61,6 @@ const IDEMPOTENCY_DOMAIN: &[u8] = b"scheduling-hook-idempotency-v1";
 const ENTITY_ID: &str = "appointment";
 
 const MIN_HMAC_SHA256_KEY_BYTES: usize = 32;
-const MAX_ATTEMPT_TIMEOUT_MS: u32 = 10_000;
-const MAXIMUM_ATTEMPTS: u8 = 20;
 const INITIAL_BACKOFF_MS: i64 = 30_000;
 const MAXIMUM_BACKOFF_MS: i64 = 3_600_000;
 const BACKOFF_MULTIPLIER: i16 = 2;
@@ -70,7 +71,9 @@ const MINIMUM_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const MAXIMUM_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const IDENTITY_LOCK_TIMEOUT_MS: i32 = 5_000;
 
-const RETRY_DELAYS_MS: [i64; 19] = [
+// One delay sits between each pair of attempts, so the schedule must grow
+// with the attempt ceiling.
+const RETRY_DELAYS_MS: [i64; MAX_HOOK_ATTEMPTS as usize - 1] = [
     30_000, 60_000, 120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000, 3_600_000, 3_600_000,
     3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000,
     3_600_000,
@@ -391,11 +394,11 @@ impl ActivatedHooks {
                     classification_ceiling: "restricted",
                     authentication_profile: "hmac_sha256_v1",
                     delivery_mode: "after_commit",
-                    attempt_timeout_ms: i64::from(MAX_ATTEMPT_TIMEOUT_MS),
+                    attempt_timeout_ms: i64::from(MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS),
                     initial_backoff_ms: INITIAL_BACKOFF_MS,
                     maximum_backoff_ms: MAXIMUM_BACKOFF_MS,
                     exponential_backoff_multiplier: BACKOFF_MULTIPLIER,
-                    maximum_attempts: i16::from(MAXIMUM_ATTEMPTS),
+                    maximum_attempts: i16::from(MAX_HOOK_ATTEMPTS),
                     retry_delays_ms: &RETRY_DELAYS_MS,
                     maximum_payload_bytes: MAXIMUM_PAYLOAD_BYTES as i64,
                     payload: &payload,
@@ -543,10 +546,7 @@ impl ActivatedDestination {
         config: &HookDestinationConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, HookActivationError> {
-        if !valid_logical_destination_id(logical_id)
-            || !(100..=MAX_ATTEMPT_TIMEOUT_MS).contains(&config.attempt_timeout_milliseconds)
-            || !(1..=MAXIMUM_ATTEMPTS).contains(&config.maximum_attempts)
-        {
+        if !valid_logical_destination_id(logical_id) || !config.within_delivery_budget() {
             return Err(HookActivationError::DeliveryBudgetWidening);
         }
         let (origin, request_target, profile) = destination_parts(&config.url)?;
@@ -1027,18 +1027,6 @@ fn validate_identity(
     Ok(())
 }
 
-fn valid_logical_destination_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase())
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
-}
-
 fn valid_schema_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 63
@@ -1156,9 +1144,11 @@ fn transition_code(
 #[cfg(test)]
 mod tests {
     use chrono::{TimeDelta, Utc};
+    use registry_platform_config::SecretProvider;
     use registry_scheduling_core::LedgerKind;
 
     use super::*;
+    use crate::config::{DestinationsConfig, MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS};
     use crate::store::{ClaimOwner, ClaimState};
 
     #[test]
@@ -1267,5 +1257,77 @@ mod tests {
         }
         assert!(destination_parts("http://receiver.example/hooks").is_err());
         assert!(destination_parts("https://receiver.example/hooks?token=secret").is_err());
+    }
+
+    /// Activation refuses a binding as a budget widening exactly when the
+    /// runtime configuration refuses it, at each bound's edge on both sides,
+    /// so a bound moved in the configuration moves activation with it.
+    #[test]
+    fn activation_refuses_exactly_the_bindings_the_configuration_refuses() {
+        // No enabled provider resolves the signing key, so a binding inside
+        // the budget is refused one step later, for its signing material.
+        let secrets = SecretResolver::new([SecretProvider::Environment], "/")
+            .expect("the test secret resolver");
+        let binding = |timeout: u32, attempts: u8| HookDestinationConfig {
+            url: "https://events.example.test/scheduling".to_owned(),
+            hmac_sha256_key_ref: "secret:file/hook-key".to_owned(),
+            attempt_timeout_milliseconds: timeout,
+            maximum_attempts: attempts,
+        };
+        let id = "appointment-events".to_owned();
+        let mut cases = Vec::new();
+        for timeout in [
+            0,
+            MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS - 1,
+            MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+            MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+            MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS + 1,
+            u32::MAX,
+        ] {
+            cases.push((id.clone(), binding(timeout, 8)));
+        }
+        for attempts in [0, 1, MAX_HOOK_ATTEMPTS, MAX_HOOK_ATTEMPTS + 1, u8::MAX] {
+            cases.push((id.clone(), binding(5_000, attempts)));
+        }
+        for id in [
+            "a".to_owned(),
+            "events_2".to_owned(),
+            "a".repeat(64),
+            "a".repeat(65),
+            String::new(),
+            "Events".to_owned(),
+            "2events".to_owned(),
+            "-events".to_owned(),
+            "events.v1".to_owned(),
+            "\u{e9}v\u{e9}nements".to_owned(),
+        ] {
+            cases.push((id, binding(5_000, 8)));
+        }
+        let mut accepted = 0;
+        for (id, config) in cases {
+            let configured = DestinationsConfig {
+                reminders: None,
+                hooks: BTreeMap::from([(id.clone(), config.clone())]),
+            }
+            .check()
+            .is_ok();
+            let activated = ActivatedDestination::activate(&id, &config, &secrets);
+            if configured {
+                accepted += 1;
+                assert!(
+                    matches!(activated, Err(HookActivationError::InvalidSigningMaterial)),
+                    "activation refused {id:?} {config:?} for its budget, which the configuration accepts"
+                );
+            } else {
+                assert!(
+                    matches!(activated, Err(HookActivationError::DeliveryBudgetWidening)),
+                    "activation did not refuse {id:?} {config:?}, which the configuration refuses"
+                );
+            }
+        }
+        assert_eq!(
+            accepted, 7,
+            "every accepted edge reached the signing material"
+        );
     }
 }
