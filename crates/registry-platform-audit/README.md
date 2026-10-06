@@ -17,7 +17,7 @@ authorization event shape for Registry Stack services.
 - `AuditKeyHasher::audit_reference_hash` for versioned, scoped audit reference
   handles whose service-owned canonical input stays outside the platform domain.
 - `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
-  values used by redaction helpers.
+  values.
 - `redact` helpers for query strings, email addresses, and phone numbers.
 - `AuthorizationAuditEvent` for one privacy-safe authorization event shape
   across products, using pseudonyms from each product's existing audit profile.
@@ -30,9 +30,11 @@ use registry_platform_audit::{
     AuditDestination, AuditEntry, AuditProfile, AuditWriter, FileDestination,
 };
 use serde_json::json;
+use zeroize::Zeroizing;
 
 async fn write_audit_entries() -> Result<(), Box<dyn std::error::Error>> {
-    let profile = AuditProfile::production_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
+    let master_secret = Zeroizing::new(std::fs::read("/run/secrets/registry-audit-hash")?);
+    let profile = AuditProfile::production_from_secret_bytes(master_secret)?;
     let destination = FileDestination::new("/var/lib/registry/audit/audit.jsonl")?;
     let writer = AuditWriter::open(AuditDestination::File(destination)).await?;
 
@@ -84,8 +86,7 @@ async fn write_audit_entries() -> Result<(), Box<dyn std::error::Error>> {
 
 - Entries are not hash-chained. Tamper evidence is a deployment concern: ship
   the stream to append-only storage or a SIEM that the service cannot rewrite.
-- Use `AuditProfile::production_from_env` or
-  `AuditProfile::production_from_secret_bytes` in production.
+- Use `AuditProfile::production_from_secret_bytes` in production.
   `unkeyed_dev_only` is for tests and local development.
 - The identifier key is an HKDF-derived sub-key of the deployment secret. Its
   derivation and the reference framing are pinned by known-answer tests, so

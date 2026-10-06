@@ -2034,22 +2034,6 @@ impl AuditSegments {
         companion_path(&self.path, TORN_LINE_SUFFIX)
     }
 
-    /// The sealed segment for `sequence`, `<path>.<8 digits>`.
-    #[must_use]
-    pub fn sealed_path(&self, sequence: u64) -> PathBuf {
-        segment_path(&self.path, sequence)
-    }
-
-    /// The sequence `candidate` is sealed under, if it is named as a sealed
-    /// segment of this namespace.
-    #[must_use]
-    pub fn sequence_of(&self, candidate: &Path) -> Option<u64> {
-        if candidate.parent() != self.path.parent() {
-            return None;
-        }
-        segment_sequence(&self.path, candidate)
-    }
-
     /// Whether `candidate` is the active file or a name the writer owns
     /// beside it.
     #[must_use]
@@ -4885,20 +4869,26 @@ mod tests {
             Path::new("/var/audit/events.jsonl.torn")
         );
         assert_eq!(
-            segments.sealed_path(7),
+            segment_path(segments.active(), 7),
             Path::new("/var/audit/events.jsonl.00000007")
         );
         assert_eq!(
-            segments.sequence_of(Path::new("/var/audit/events.jsonl.00000007")),
+            segment_sequence(
+                segments.active(),
+                Path::new("/var/audit/events.jsonl.00000007")
+            ),
             Some(7)
         );
         for other in [
             "/var/audit/events.jsonl.0000007",
             "/var/audit/events.jsonl.lock",
-            "/elsewhere/events.jsonl.00000007",
             "/var/audit/other.jsonl.00000007",
         ] {
-            assert_eq!(segments.sequence_of(Path::new(other)), None, "{other}");
+            assert_eq!(
+                segment_sequence(segments.active(), Path::new(other)),
+                None,
+                "{other}"
+            );
         }
         for reserved in [
             "/var/audit/events.jsonl",
@@ -4911,6 +4901,7 @@ mod tests {
             assert!(segments.reserves(Path::new(reserved)), "{reserved}");
         }
         assert!(!segments.reserves(Path::new("/var/audit/events.jsonl.tmp")));
+        assert!(!segments.reserves(Path::new("/elsewhere/events.jsonl.00000007")));
     }
 
     #[test]
