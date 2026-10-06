@@ -11,7 +11,7 @@ source_repos:
   - registry-casework
   - registry-scheduling
   - registry-messaging
-last_reviewed: "2026-10-03"
+last_reviewed: "2026-10-07"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -61,13 +61,18 @@ safely:
 1. Derive each step's `Idempotency-Key` from the source event and the step, for example
    `<event-id>:register` and `<event-id>:book`, and persist it before the first send. A random key
    makes a resumed step a second request, and a key built from personal data copies that data into
-   the product's idempotency records. Every product in this journey accepts a key of at most 128
-   visible ASCII characters without a comma or semicolon.
-2. Retry under the persisted key. The maintained clients for these products already resend a
-   mutation whose outcome is unknown under the same key, at most twice by default, as
+   the product's idempotency records. Keep each key to the form every product in this journey
+   accepts: 1 to 128 visible ASCII characters, with no comma or semicolon. BReg accepts up to 256
+   bytes but refuses those two characters; the others accept them but stop at 128.
+2. Retry under the persisted key, within the receipt horizon. The maintained clients for these
+   products already resend a mutation whose outcome is unknown under the same key, at most twice by
+   default, as
    [unknown outcomes](../../reference/client-api/#unknown-outcomes-and-the-same-key-retry)
    describes. When the error still reports an unknown outcome, your later retries reuse that key;
-   a new key can apply the step twice.
+   a new key can apply the step twice. Each product holds a key's first answer only for its receipt
+   horizon, 7 days by default in BReg (`idempotency.receiptRetentionDays`). Past it, BReg answers
+   an exact retry with `410 idempotency.expired` and runs nothing: the write committed, so read the
+   record instead.
 3. When a step acts on a human approval, obtain a task grant for that step close to when it runs,
    instead of holding one grant across a wait. A Registry Casework grant lasts at most 900 seconds,
    and each assertion minted from it at most 60 seconds. Persist only the grant ID, never an
@@ -80,7 +85,9 @@ safely:
    IDs</DocsetProduct>, and external references. Never keep a token or personal data there; read a
    contact from the source of record when the step that needs it runs.
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, valid_idempotency_key();
+{/* Evidence: crates/registry-breg/src/api/mod.rs, valid_idempotency_key() and
+    MAX_IDEMPOTENCY_KEY_BYTES; crates/registry-breg/src/idempotency.rs, IdempotencyPolicy and
+    lock_and_load();
     crates/registry-scheduling-core/src/naming.rs, MAXIMUM_IDEMPOTENCY_KEY_BYTES;
     crates/registry-scheduling/src/http.rs, idempotency_key();
     crates/registry-messaging/src/messages.rs, valid_idempotency_key();
@@ -92,9 +99,9 @@ safely:
 
 The products differ in where a grant is needed and how you find an outcome you never received.
 
-From BReg, keep the record identifier and revision identifier a write returns. How long BReg
-replays a key, and what an exact retry answers after that, is documented in
-[Deploy a registry](../../operate/breg/).
+From BReg, keep the record identifier and revision identifier a write returns.
+[Idempotency](../../reference/breg-api/#idempotency) gives how long BReg replays a key and what an
+exact retry answers after that.
 
 {/* Evidence: crates/registry-record/src/lib.rs, record_identifier and revision_identifier. */}
 
@@ -115,11 +122,9 @@ gives the receipt horizon and its refusals.
 <DocsetProduct product="registry-messaging">
 
 Messaging takes no task grant: the sender's access profile decides. Keep the message `id` from the
-`202` receipt and call `GET /v1/messages/{message_id}` as the principal that submitted it. An exact
-retry is authorized and rendered again before its key is looked up, so a `403` or `422` answer to
-it does not show that the first submission failed.
+`202` receipt and call `GET /v1/messages/{message_id}` as the principal that submitted it.
 [The Messaging contract boundary](../../reference/apis/registry-messaging/#contract-boundary) gives
-the key horizon and its refusals.
+the key horizon, its refusals, and the recovery when a `403` or `422` answers an exact retry.
 
 {/* Evidence: crates/registry-messaging-core/src/access.rs, resolve();
     crates/registry-messaging-core/src/wire.rs, MessageReceipt;
