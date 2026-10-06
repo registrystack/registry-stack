@@ -118,7 +118,7 @@ def happy_tree() -> dict[str, dict]:
         "security-invariant-matrix.yaml": {
             "apiVersion": "registry.registrystack.org/product-contract/v1",
             "product": "messaging",
-            "invariants": [matrix_row()] + [pending_row(sec(number)) for number in range(2, 11)],
+            "invariants": [matrix_row()] + [pending_row(sec(number)) for number in range(2, 12)],
             "deferred": [deferred_row()],
         },
         "security-test-traceability.yaml": {
@@ -234,12 +234,12 @@ class MatrixValidation(unittest.TestCase):
         tree = happy_tree()
         tree["security-invariant-matrix.yaml"]["invariants"].pop()
         violations = validate_tree(tree, DEFAULT_FILES)
-        self.assertTrue(any("exactly MESSAGING-SEC-01 to MESSAGING-SEC-10" in violation
+        self.assertTrue(any("exactly MESSAGING-SEC-01 to MESSAGING-SEC-11" in violation
                             for violation in violations), violations)
 
-    def test_an_eleventh_invariant_is_refused(self) -> None:
+    def test_a_twelfth_invariant_is_refused(self) -> None:
         tree = happy_tree()
-        tree["security-invariant-matrix.yaml"]["invariants"].append(pending_row(sec(11)))
+        tree["security-invariant-matrix.yaml"]["invariants"].append(pending_row(sec(12)))
         violations = validate_tree(tree, DEFAULT_FILES)
         self.assertTrue(any("exactly MESSAGING-SEC-01" in violation
                             for violation in violations), violations)

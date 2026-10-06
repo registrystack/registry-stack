@@ -10,11 +10,12 @@
 //!   content-free message record stays;
 //! - the message record is deleted `recordDays` after that terminal state,
 //!   and its payload, job, attempts, and delivery receipts go with it; its
-//!   idempotency record stays, holding only the caller's issuer and
-//!   subject, the key, and its times, so the key stays spent;
+//!   idempotency record stays, holding only the digest of the caller and
+//!   the key and its times, so the key stays spent;
 //! - a submission receipt, the stored answer an idempotent replay returns,
-//!   is erased when its `submissionReceiptDays` end, and its key stays
-//!   spent.
+//!   is erased when its `submissionReceiptDays` end, together with the raw
+//!   issuer, subject, and key beside it, and its key stays spent under
+//!   their digest.
 //!
 //! A message still pending, leased, or in an unknown outcome is never
 //! erased, whatever its age: its payload may yet be sent, requeued, or
@@ -405,11 +406,10 @@ fn records_due(lock: &str) -> String {
 /// appended.
 fn submission_receipts_due(lock: &str) -> String {
     format!(
-        "SELECT submitter_issuer, submitter_subject, operation, idempotency_key \
+        "SELECT key_reference \
            FROM messaging_idempotency \
           WHERE erased_at IS NULL AND expires_at <= $1::timestamptz \
-          ORDER BY expires_at, submitter_issuer, submitter_subject, operation, \
-                   idempotency_key \
+          ORDER BY expires_at, key_reference \
           LIMIT $2{lock}"
     )
 }
@@ -458,8 +458,9 @@ async fn erase_payloads(
         .await?)
 }
 
-/// Erase every submission receipt past its period. The row stays, so its
-/// key stays spent and a replay answers `idempotency.expired`.
+/// Erase every submission receipt past its period, with the raw issuer,
+/// subject, and key beside it. The row stays under their digest, so its key
+/// stays spent for that caller and a replay answers `idempotency.expired`.
 async fn expire_submission_receipts(
     transaction: &Transaction<'_>,
     before: SystemTime,
@@ -471,9 +472,10 @@ async fn expire_submission_receipts(
             &format!(
                 "UPDATE messaging_idempotency \
                     SET status_code = NULL, receipt = NULL, \
+                        submitter_issuer = NULL, submitter_subject = NULL, \
+                        idempotency_key = NULL, \
                         erased_at = transaction_timestamp() \
-                  WHERE (submitter_issuer, submitter_subject, operation, idempotency_key) \
-                        IN ({due})"
+                  WHERE key_reference IN ({due})"
             ),
             &[&before, &limit],
         )
@@ -482,8 +484,9 @@ async fn expire_submission_receipts(
 
 /// Delete every message record past its period. The payload, the job, the
 /// attempts, and the receipts cascade. The idempotency record is kept with
-/// its message, request hash, and any receipt nulled, so a retry under its
-/// key is refused as expired rather than accepted as a new message.
+/// its message, request hash, any receipt, and the raw issuer, subject, and
+/// key nulled, so a retry under its key is refused as expired rather than
+/// accepted as a new message.
 async fn delete_records(
     transaction: &Transaction<'_>,
     before: SystemTime,
@@ -498,6 +501,8 @@ async fn delete_records(
                       keys AS (UPDATE messaging_idempotency AS key \
                                   SET message_id = NULL, request_hash = NULL, \
                                       status_code = NULL, receipt = NULL, \
+                                      submitter_issuer = NULL, submitter_subject = NULL, \
+                                      idempotency_key = NULL, \
                                       erased_at = coalesce(key.erased_at, \
                                                            transaction_timestamp()) \
                                  FROM due WHERE key.message_id = due.message_id) \

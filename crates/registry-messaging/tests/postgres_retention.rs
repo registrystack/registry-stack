@@ -20,17 +20,21 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use axum::http::StatusCode;
-use registry_messaging::messages::MESSAGE_ACCEPTED_EVENT;
+use registry_messaging::messages::{
+    idempotency_key_reference, MESSAGE_ACCEPTED_EVENT, SUBMIT_OPERATION,
+};
 use registry_messaging::retention::{
     erase_expired, erase_expired_in_batches, RetentionActor, RetentionError, RetentionSweep,
     RETENTION_ERASED_EVENT,
 };
 use registry_messaging::runtime::{erase_expired_as_operator, RuntimeError};
+use registry_messaging_core::CallerIdentity;
 use registry_platform_audit::AuditWriter;
 use serde_json::Value;
 use support::{
     assert_absent, assert_logs_clean, email_submission, rotated_test_audit, sender_token,
-    submit_to, test_audit, Harness, RefusingAuditSink, ISSUER, SENDER_PRINCIPAL,
+    sender_token_for, submit_to, test_audit, Harness, RefusingAuditSink, ISSUER,
+    OTHER_SENDER_PRINCIPAL, SENDER_PRINCIPAL,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -289,31 +293,39 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
     assert_eq!(rows_of(&harness, unknown).await, [1, 1, 1, 0, 0, 1]);
     assert!(!payload_erased(&harness, unknown).await);
 
-    // With its record gone, the key stays spent: the row keeps the key
-    // under the caller's issuer and subject and nothing of the message, and
-    // a retry under it, with the same body or another, before or after an
-    // audit key rotation, is refused as expired and sends nothing.
+    // With its record gone, the key stays spent: the row keeps only the
+    // digest of the caller and the key, nothing of the message, and a retry
+    // under it, with the same body or another, before or after an audit key
+    // rotation, is refused as expired and sends nothing.
     let retained = harness
         .isolated
         .admin
         .query_one(
-            "SELECT (to_jsonb(key) - 'submitter_issuer' - 'submitter_subject')::text, \
-                    submitter_issuer, submitter_subject, \
+            "SELECT to_jsonb(key)::text, \
+                    submitter_issuer IS NULL AND submitter_subject IS NULL \
+                    AND idempotency_key IS NULL, \
                     message_id IS NULL AND request_hash IS NULL \
                     AND status_code IS NULL AND receipt IS NULL AND erased_at IS NOT NULL \
-               FROM messaging_idempotency AS key WHERE idempotency_key = $1",
-            &[&key],
+               FROM messaging_idempotency AS key WHERE key_reference = $1",
+            &[&sender_key_reference(SENDER_PRINCIPAL, &key)],
         )
         .await
         .unwrap();
-    assert_eq!(retained.get::<_, String>(1), ISSUER);
-    assert_eq!(retained.get::<_, String>(2), SENDER_PRINCIPAL);
     assert!(
-        retained.get::<_, bool>(3),
+        retained.get::<_, bool>(1),
+        "the retained key holds no raw caller or key"
+    );
+    assert!(
+        retained.get::<_, bool>(2),
         "the retained key holds no record"
     );
     let retained: String = retained.get(0);
-    for value in [ISSUER, SENDER_PRINCIPAL, receipt["id"].as_str().unwrap()] {
+    for value in [
+        ISSUER,
+        SENDER_PRINCIPAL,
+        key.as_str(),
+        receipt["id"].as_str().unwrap(),
+    ] {
         assert!(!retained.contains(value), "the retained key holds {value}");
     }
     let messages = harness
@@ -389,8 +401,8 @@ async fn a_submission_receipt_expires_after_its_period_and_its_key_stays_spent()
         .admin
         .query_one(
             "SELECT status_code IS NULL AND receipt IS NULL AND erased_at IS NOT NULL \
-               FROM messaging_idempotency WHERE idempotency_key = $1",
-            &[&key],
+               FROM messaging_idempotency WHERE key_reference = $1",
+            &[&sender_key_reference(SENDER_PRINCIPAL, &key)],
         )
         .await
         .unwrap();
@@ -406,6 +418,201 @@ async fn a_submission_receipt_expires_after_its_period_and_its_key_stays_spent()
         .await;
     assert_eq!(status, StatusCode::GONE, "{replay}");
     assert_eq!(replay["code"], "idempotency.expired");
+}
+
+/// The reference the test issuer's `subject` spends `key` under.
+fn sender_key_reference(subject: &str, key: &str) -> String {
+    idempotency_key_reference(
+        &CallerIdentity {
+            issuer: ISSUER.to_owned(),
+            subject: subject.to_owned(),
+        },
+        SUBMIT_OPERATION,
+        key,
+    )
+}
+
+/// The raw issuer, subject, and key a spent-key row still holds, whether
+/// its receipt is erased, and the whole row as text.
+async fn spent_key(harness: &Harness, reference: &str) -> (Vec<Option<String>>, bool, String) {
+    let row = harness
+        .isolated
+        .admin
+        .query_one(
+            "SELECT submitter_issuer, submitter_subject, idempotency_key, \
+                    erased_at IS NOT NULL, to_jsonb(spent)::text \
+               FROM messaging_idempotency AS spent WHERE key_reference = $1",
+            &[&reference],
+        )
+        .await
+        .expect("the spent-key row stays");
+    (
+        vec![row.get(0), row.get(1), row.get(2)],
+        row.get(3),
+        row.get(4),
+    )
+}
+
+/// MESSAGING-SEC-11. When retention erases a submission receipt it clears
+/// the raw issuer, subject, and key from the spent-key row, which stays
+/// under their digest alone. The key stays spent for the caller that used
+/// it, whatever audit key the runtime holds then, and stays free for every
+/// other caller. A row whose receipt is still inside its period keeps them.
+#[tokio::test]
+async fn a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent() {
+    let harness = Harness::start().await;
+    let key = "staff-retry-0001";
+    let (status, receipt) = harness
+        .submit(&sender_token(), key, &email_submission())
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+    let inside = "inside-the-horizon";
+    let (status, _) = harness
+        .submit(&sender_token(), inside, &email_submission())
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    harness
+        .execute(
+            "UPDATE messaging_idempotency SET expires_at = now() - interval '1 minute' \
+              WHERE key_reference = $1",
+            &[&sender_key_reference(SENDER_PRINCIPAL, key)],
+        )
+        .await;
+
+    let report = erase_expired(
+        &harness.store,
+        Some(&harness.audit),
+        harness.config.retention,
+        None,
+        true,
+        RetentionActor::Runtime,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.submission_receipts, 1);
+
+    let (raw, erased, row) =
+        spent_key(&harness, &sender_key_reference(SENDER_PRINCIPAL, key)).await;
+    assert_eq!(raw, [None, None, None], "{row}");
+    assert!(erased, "{row}");
+    for value in [ISSUER, SENDER_PRINCIPAL, key] {
+        assert!(!row.contains(value), "the spent key still holds {value}");
+    }
+    let (raw, erased, row) =
+        spent_key(&harness, &sender_key_reference(SENDER_PRINCIPAL, inside)).await;
+    assert_eq!(
+        raw,
+        [
+            Some(ISSUER.to_owned()),
+            Some(SENDER_PRINCIPAL.to_owned()),
+            Some(inside.to_owned())
+        ],
+        "{row}"
+    );
+    assert!(!erased, "{row}");
+
+    // The same caller's exact retry, and a retry with another body, are
+    // refused as expired before and after an audit key rotation, and
+    // record nothing.
+    let messages = harness
+        .count("SELECT count(*) FROM messaging_messages")
+        .await;
+    let accepted = accepted_records(&harness).await;
+    let mut other = email_submission();
+    other["correlationId"] = serde_json::json!("another-body");
+    let rotated = harness
+        .app_with_audit(rotated_test_audit(AuditWriter::from_line_sink(Box::new(
+            RefusingAuditSink::after(usize::MAX),
+        ))))
+        .await;
+    for app in [harness.app.clone(), rotated] {
+        for body in [email_submission(), other.clone()] {
+            let (status, _, again) = submit_to(app.clone(), &sender_token(), key, &body).await;
+            assert_eq!(status, StatusCode::GONE, "{again}");
+            assert_eq!(again["code"], "idempotency.expired");
+        }
+    }
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        messages
+    );
+    assert_eq!(accepted_records(&harness).await, accepted);
+
+    // Another caller's identical key is its own, and sends.
+    let (status, _, fresh) = submit_to(
+        harness.app.clone(),
+        &sender_token_for(OTHER_SENDER_PRINCIPAL),
+        key,
+        &email_submission(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{fresh}");
+    assert_ne!(fresh["id"], receipt["id"]);
+    let (raw, erased, _) =
+        spent_key(&harness, &sender_key_reference(OTHER_SENDER_PRINCIPAL, key)).await;
+    assert_eq!(raw[1].as_deref(), Some(OTHER_SENDER_PRINCIPAL));
+    assert!(!erased);
+    assert_eq!(
+        harness
+            .count("SELECT count(*) FROM messaging_messages")
+            .await,
+        messages + 1
+    );
+}
+
+/// The schema holds a spent key's raw issuer, subject, and key together:
+/// all three while its submission receipt stands, none once it is erased.
+#[tokio::test]
+async fn the_schema_refuses_a_spent_key_that_keeps_part_of_its_caller() {
+    let harness = Harness::start().await;
+    let (status, receipt) = harness
+        .submit(&sender_token(), "key-1", &email_submission())
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+    let reference = sender_key_reference(SENDER_PRINCIPAL, "key-1");
+    for refused in [
+        "UPDATE messaging_idempotency SET submitter_subject = NULL WHERE key_reference = $1",
+        "UPDATE messaging_idempotency SET idempotency_key = NULL WHERE key_reference = $1",
+        "UPDATE messaging_idempotency \
+            SET submitter_issuer = NULL, submitter_subject = NULL, idempotency_key = NULL \
+          WHERE key_reference = $1",
+        "UPDATE messaging_idempotency \
+            SET status_code = NULL, receipt = NULL, erased_at = now() \
+          WHERE key_reference = $1",
+        "UPDATE messaging_idempotency \
+            SET status_code = NULL, receipt = NULL, erased_at = now(), \
+                submitter_issuer = NULL, submitter_subject = NULL \
+          WHERE key_reference = $1",
+        "UPDATE messaging_idempotency SET submitter_subject = '' WHERE key_reference = $1",
+        "UPDATE messaging_idempotency SET key_reference = 'principal' WHERE key_reference = $1",
+    ] {
+        let error = harness
+            .isolated
+            .admin
+            .execute(refused, &[&reference])
+            .await
+            .expect_err(refused);
+        assert_eq!(
+            error.code(),
+            Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION),
+            "{refused}: {error}"
+        );
+    }
+    let cleared = harness
+        .isolated
+        .admin
+        .execute(
+            "UPDATE messaging_idempotency \
+                SET status_code = NULL, receipt = NULL, erased_at = now(), \
+                    submitter_issuer = NULL, submitter_subject = NULL, idempotency_key = NULL \
+              WHERE key_reference = $1",
+            &[&reference],
+        )
+        .await
+        .expect("a receipt erased with its whole caller");
+    assert_eq!(cleared, 1);
 }
 
 #[tokio::test]

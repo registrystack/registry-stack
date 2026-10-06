@@ -12,7 +12,9 @@
 //! and its dispatch job. The HTTP edge records the accepted outcome after
 //! that transaction commits.
 //!
-//! The idempotency key is scoped to the caller's issuer and subject. The
+//! The idempotency key is scoped to the caller's issuer and subject, and
+//! recorded and found under a digest of the two with the key, which
+//! outlives the raw values once retention erases the receipt. The
 //! same key with the same canonical request replays the stored status and
 //! receipt; the same key with another request is refused with
 //! `idempotency.key-reused`; a key whose receipt is older than
@@ -65,7 +67,27 @@ pub const MESSAGE_SETTLED_EVENT: &str = "messaging.message.settled";
 pub const MASKED_CONTACT: &str = "redacted";
 
 const REQUEST_HASH_DOMAIN: &[u8] = b"registry-messaging-submit-v1";
+const KEY_REFERENCE_DOMAIN: &[u8] = b"registry-messaging-idempotency-key-v1";
 const SECONDS_PER_DAY: u64 = 86_400;
+
+/// The reference a spent idempotency key is recorded and found under: a
+/// SHA-256 digest over a fixed domain and the length-prefixed issuer,
+/// subject, operation, and key. It is not keyed, so rotating
+/// `audit.hashKeyRef` never changes it, and it stays with the row after
+/// retention clears the raw caller and key with the submission receipt, so
+/// the key stays spent for that caller alone.
+#[must_use]
+pub fn idempotency_key_reference(caller: &CallerIdentity, operation: &str, key: &str) -> String {
+    idempotency_key(
+        KEY_REFERENCE_DOMAIN,
+        &[
+            caller.issuer.as_bytes(),
+            caller.subject.as_bytes(),
+            operation.as_bytes(),
+            key.as_bytes(),
+        ],
+    )
+}
 
 /// Whether `key` is an acceptable `Idempotency-Key`: one to
 /// [`MAXIMUM_IDEMPOTENCY_KEY_BYTES`] bytes of visible ASCII.
@@ -1076,7 +1098,8 @@ impl MessageService {
             .query_one("SELECT transaction_timestamp()", &[])
             .await?
             .try_get(0)?;
-        if let Some(stored) = lookup_key(&transaction, &caller.identity, key).await? {
+        let key_reference = idempotency_key_reference(&caller.identity, SUBMIT_OPERATION, key);
+        if let Some(stored) = lookup_key(&transaction, &key_reference).await? {
             transaction.commit().await?;
             return replay(stored, submission).map(Some);
         }
@@ -1085,7 +1108,7 @@ impl MessageService {
             lock_daily_limit(&transaction, &caller.profile.id).await?;
             // A submission under the same key may have committed while this
             // one waited on the lock; it is replayed, never counted against.
-            if let Some(stored) = lookup_key(&transaction, &caller.identity, key).await? {
+            if let Some(stored) = lookup_key(&transaction, &key_reference).await? {
                 transaction.commit().await?;
                 return replay(stored, submission).map(Some);
             }
@@ -1102,11 +1125,13 @@ impl MessageService {
         let inserted = transaction
             .execute(
                 "INSERT INTO messaging_idempotency \
-                     (submitter_issuer, submitter_subject, operation, idempotency_key, \
-                      request_hash, message_id, status_code, receipt, created_at, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, 202, $7, transaction_timestamp(), $8) \
+                     (key_reference, submitter_issuer, submitter_subject, operation, \
+                      idempotency_key, request_hash, message_id, status_code, receipt, \
+                      created_at, expires_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 202, $8, transaction_timestamp(), $9) \
                  ON CONFLICT DO NOTHING",
                 &[
+                    &key_reference,
                     &caller.identity.issuer,
                     &caller.identity.subject,
                     &SUBMIT_OPERATION,
@@ -1295,13 +1320,15 @@ async fn check_daily_limit(
 /// The advisory-lock name prefix a profile's daily count is taken under.
 const DAILY_LIMIT_LOCK_NAMESPACE: &str = "registry-messaging.daily-limit:";
 
-/// The idempotency record `key` has under the caller's verified issuer and
-/// subject. The record is found by the caller itself, not by its keyed audit
-/// pseudonym, so rotating `audit.hashKeyRef` never frees a spent key.
+/// The idempotency record under `key_reference`, the
+/// [`idempotency_key_reference`] of the caller's verified issuer and
+/// subject and the key. The record is found by the caller itself, not by
+/// its keyed audit pseudonym, so rotating `audit.hashKeyRef` never frees a
+/// spent key, and by the digest rather than the raw values, so a key stays
+/// spent after retention clears them.
 async fn lookup_key(
     transaction: &tokio_postgres::Transaction<'_>,
-    caller: &CallerIdentity,
-    key: &str,
+    key_reference: &str,
 ) -> Result<Option<StoredKey>, Refusal> {
     let row = transaction
         .query_opt(
@@ -1309,9 +1336,8 @@ async fn lookup_key(
                     erased_at IS NOT NULL OR expires_at <= transaction_timestamp(), \
                     status_code, receipt, message_id \
                FROM messaging_idempotency \
-              WHERE submitter_issuer = $1 AND submitter_subject = $2 \
-                AND operation = $3 AND idempotency_key = $4",
-            &[&caller.issuer, &caller.subject, &SUBMIT_OPERATION, &key],
+              WHERE key_reference = $1",
+            &[&key_reference],
         )
         .await?;
     row.map(|row| {
@@ -1531,6 +1557,53 @@ mod tests {
         ] {
             assert!(!valid_idempotency_key(refused), "{refused:?}");
         }
+    }
+
+    fn caller(issuer: &str, subject: &str) -> CallerIdentity {
+        CallerIdentity {
+            issuer: issuer.to_owned(),
+            subject: subject.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_key_reference_digests_a_domain_and_the_length_prefixed_caller_operation_and_key() {
+        let issuer = "https://identity.example.test";
+        let subject = "staff.member@example.org";
+        let mut preimage = b"registry-messaging-idempotency-key-v1".to_vec();
+        for part in [issuer, subject, SUBMIT_OPERATION, "key-1"] {
+            preimage.extend_from_slice(&u64::try_from(part.len()).unwrap().to_be_bytes());
+            preimage.extend_from_slice(part.as_bytes());
+        }
+        let reference =
+            idempotency_key_reference(&caller(issuer, subject), SUBMIT_OPERATION, "key-1");
+        assert_eq!(
+            reference,
+            format!(
+                "sha256:{}",
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&preimage))
+            )
+        );
+    }
+
+    #[test]
+    fn a_key_reference_keeps_every_caller_and_key_apart() {
+        let references = [
+            idempotency_key_reference(&caller("issuer", "subject"), SUBMIT_OPERATION, "key"),
+            // A boundary moved between the issuer and the subject.
+            idempotency_key_reference(&caller("issue", "rsubject"), SUBMIT_OPERATION, "key"),
+            idempotency_key_reference(&caller("other", "subject"), SUBMIT_OPERATION, "key"),
+            idempotency_key_reference(&caller("issuer", "other"), SUBMIT_OPERATION, "key"),
+            idempotency_key_reference(&caller("issuer", "subject"), SUBMIT_OPERATION, "other"),
+            idempotency_key_reference(&caller("issuer", "subject"), "other-operation", "key"),
+        ];
+        let distinct: BTreeSet<&String> = references.iter().collect();
+        assert_eq!(distinct.len(), references.len(), "{references:?}");
+        assert_eq!(
+            references[0],
+            idempotency_key_reference(&caller("issuer", "subject"), SUBMIT_OPERATION, "key"),
+            "one caller's key always has one reference"
+        );
     }
 
     #[test]

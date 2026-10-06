@@ -167,3 +167,11 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_stop_request_ends_the_run_after_the_batch_in_progress_and_the_next_run_resumes}
       - {path: crates/registry-messagingctl/tests/postgres_messages_cli.rs, name: retention_previews_by_default_and_erases_only_expired_terminal_messages_with_apply}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_malformed_or_future_cutoff_is_refused_before_any_file_or_database}
+  - id: MESSAGING-SEC-11
+    tests:
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_schema_refuses_a_spent_key_that_keeps_part_of_its_caller}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller}
+      - {path: crates/registry-messaging/src/messages.rs, name: a_key_reference_digests_a_domain_and_the_length_prefixed_caller_operation_and_key}
+      - {path: crates/registry-messaging/src/messages.rs, name: a_key_reference_keeps_every_caller_and_key_apart}

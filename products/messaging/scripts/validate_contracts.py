@@ -5,8 +5,8 @@ The three documents under products/messaging/contracts/ are the review
 baseline for every later Messaging change. This validator holds them to the
 shape the product committed to:
 
-- the matrix lists exactly the ten invariants of the product specification,
-  MESSAGING-SEC-01 to MESSAGING-SEC-10;
+- the matrix lists exactly the eleven invariants of the product,
+  MESSAGING-SEC-01 to MESSAGING-SEC-11;
 - every invariant names a threat, an enforcement point, and a refusal;
 - an enforced or partial invariant names a negative test, and every cited
   test exists in the cited file and is selectable by its runner. Rust
@@ -44,7 +44,7 @@ SECURITY_ID = re.compile(r"^MESSAGING-SEC-\d{2}$")
 DEFERRED_ID = re.compile(r"^MESSAGING-DEF-\d{2}$")
 DECISION_ID = re.compile(r"^MESSAGING-DEC-\d{2}$")
 PLANNED_SLICE = re.compile(r"^S[2-6]$")
-EXPECTED_INVARIANTS = tuple(f"MESSAGING-SEC-{number:02d}" for number in range(1, 11))
+EXPECTED_INVARIANTS = tuple(f"MESSAGING-SEC-{number:02d}" for number in range(1, 12))
 STATES = ("enforced", "partial", "pending")
 
 TextResolver = Callable[[str], str | None]
@@ -139,7 +139,7 @@ def matrix_violations(matrix: dict, resolve: TextResolver) -> list[str]:
         violations.extend(_row_violations(row, label, resolve))
     if tuple(ids) != EXPECTED_INVARIANTS:
         violations.append(
-            "matrix: the invariants must be exactly MESSAGING-SEC-01 to MESSAGING-SEC-10, in order"
+            "matrix: the invariants must be exactly MESSAGING-SEC-01 to MESSAGING-SEC-11, in order"
         )
 
     deferred = matrix.get("deferred", [])
