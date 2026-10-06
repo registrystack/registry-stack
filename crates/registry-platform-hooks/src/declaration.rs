@@ -2,7 +2,7 @@
 
 //! Hook declarations: the project-side half of the hook configuration.
 //!
-//! A hooks document is an ordered list. Nothing registers implicitly, every
+//! A product declares its hooks as an ordered list. Nothing registers implicitly, every
 //! hook carries an explicit `id`, and declaration order is the execution order
 //! among hooks on one trigger; that is the answer to import-order signals.
 //! `trigger`, `when`, `principal`, and `projection` are product vocabulary
@@ -10,12 +10,8 @@
 
 use std::collections::BTreeSet;
 
-use registry_platform_canonical_json::parse_json_strict;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thiserror::Error;
-
-use crate::error::{bounded_token, redacted_message};
 
 /// The one handler ABI defined in hook contract version one.
 pub const HOOK_HANDLER_ABI_V1: &str = "registry.hook-handler/v1";
@@ -173,91 +169,9 @@ impl HookHandlerKind {
     }
 }
 
-/// The project's declared hooks, in declaration order.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct HooksDocument {
-    /// Every declared hook. Order is preserved and is the execution order.
-    pub hooks: Vec<HookDeclaration>,
-}
-
-impl HooksDocument {
-    /// Parse a hooks document from untrusted JSON bytes.
-    ///
-    /// Untrusted input goes through the shared strict parser, which rejects
-    /// duplicate object members at every depth; the caller remains responsible
-    /// for bounding `bytes` before parsing. Shape violations, including
-    /// kind/source pairing violations in either direction, are refused here.
-    /// Compile-time semantic rules live in [`crate::validate_hooks`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`HookDeclarationError`] when the bytes are not strict JSON or
-    /// do not match the declaration shape. A shape refusal names the member
-    /// path it failed at, so an author of a long document is told which hook
-    /// to look at.
-    pub fn from_strict_json(bytes: &[u8]) -> Result<Self, HookDeclarationError> {
-        use serde::de::IntoDeserializer as _;
-
-        let value = parse_json_strict(bytes)?;
-        serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
-            let path = bounded_token(&error.path().to_string());
-            HookDeclarationError::Shape {
-                path,
-                message: redacted_message(&error.into_inner().to_string()),
-            }
-        })
-    }
-
-    /// Apply the compile-time rules to the declared hooks, in order.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first [`crate::validate::HookValidationError`] in
-    /// declaration order.
-    pub fn validate(&self) -> Result<(), crate::validate::HookValidationError> {
-        crate::validate::validate_hooks(&self.hooks)
-    }
-}
-
-/// Failure to parse a hooks document.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum HookDeclarationError {
-    /// The document is not strict JSON.
-    #[error("hooks document is not strict JSON: {0}")]
-    Json(#[from] registry_platform_canonical_json::StrictJsonError),
-    /// The document violates the declaration shape, at `path`. The
-    /// deserializer's own wording, with the untrusted values it repeats
-    /// redacted and bounded.
-    #[error("hooks document violates the hook declaration shape at `{path}`: {message}")]
-    Shape {
-        /// The member path the refusal happened at, `.` at the document root.
-        path: String,
-        /// The redacted deserializer wording.
-        message: String,
-    },
-}
-
-impl HookDeclarationError {
-    /// The stable diagnostic code for this refusal.
-    ///
-    /// Codes are part of the contract: operators and products match on them,
-    /// so existing codes never change meaning and new refusals get new codes.
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        match self {
-            Self::Json(_) => "hook.declaration.not_strict_json",
-            Self::Shape { .. } => "hook.declaration.bad_shape",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MAX_DISPLAYED_TOKEN_BYTES;
     use serde_json::json;
 
     fn wasm_handler() -> Value {
@@ -280,22 +194,16 @@ mod tests {
 
     #[test]
     fn parses_a_full_declaration_and_round_trips() {
-        let document = json!({
-            "hooks": [{
-                "id": "birth-registered-followup",
-                "phase": "after",
-                "trigger": "created",
-                "when": {"kind": "fields", "changed": ["familyName"]},
-                "projection": ["givenName", "familyName"],
-                "handler": wasm_handler(),
-            }],
+        let declaration = json!({
+            "id": "birth-registered-followup",
+            "phase": "after",
+            "trigger": "created",
+            "when": {"kind": "fields", "changed": ["familyName"]},
+            "projection": ["givenName", "familyName"],
+            "handler": wasm_handler(),
         });
 
-        let parsed =
-            HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
-                .expect("parses");
-        assert_eq!(parsed.hooks.len(), 1);
-        let hook = &parsed.hooks[0];
+        let hook: HookDeclaration = serde_json::from_value(declaration).expect("parses");
         assert_eq!(hook.id, "birth-registered-followup");
         assert_eq!(hook.phase, HookPhase::After);
         assert_eq!(hook.trigger, "created");
@@ -315,7 +223,7 @@ mod tests {
             }
         );
         assert_eq!(
-            serde_json::to_value(hook).expect("serializes"),
+            serde_json::to_value(&hook).expect("serializes"),
             json!({
                 "id": "birth-registered-followup",
                 "phase": "after",
@@ -408,20 +316,16 @@ mod tests {
         // authoring error, parse never refuses it, and the compile-time rules
         // never demand one; the product decides what a proposal from such a
         // hook means, at delivery time.
-        let document = json!({"hooks": [declaration_json(wasm_handler())]});
-        let parsed =
-            HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
-                .expect("a declaration without a principal parses");
-        assert_eq!(parsed.hooks.len(), 1);
-        assert_eq!(parsed.hooks[0].principal, None);
-        parsed
-            .validate()
+        let parsed: HookDeclaration = serde_json::from_value(declaration_json(wasm_handler()))
+            .expect("a declaration without a principal parses");
+        assert_eq!(parsed.principal, None);
+        crate::validate_hooks(std::slice::from_ref(&parsed))
             .expect("a missing principal is not a compile-time refusal");
         let mut expected = declaration_json(wasm_handler());
         // The projection is a set, so serialization order is sorted.
         expected["projection"] = json!(["familyName", "givenName"]);
         assert_eq!(
-            serde_json::to_value(&parsed.hooks[0]).expect("serializes"),
+            serde_json::to_value(&parsed).expect("serializes"),
             expected,
             "an absent principal is not written back as a member"
         );
@@ -451,48 +355,6 @@ mod tests {
     }
 
     #[test]
-    fn declaration_order_is_preserved() {
-        let document = json!({
-            "hooks": [
-                {"id": "a-first", "phase": "after", "trigger": "created",
-                 "projection": [], "handler": wasm_handler()},
-                {"id": "b-second", "phase": "after", "trigger": "created",
-                 "projection": [], "handler": wasm_handler()},
-                {"id": "c-third", "phase": "after", "trigger": "patched",
-                 "projection": [], "handler": wasm_handler()},
-            ],
-        });
-
-        let parsed =
-            HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
-                .expect("parses");
-        let ids: Vec<&str> = parsed.hooks.iter().map(|hook| hook.id.as_str()).collect();
-        assert_eq!(ids, ["a-first", "b-second", "c-third"]);
-    }
-
-    #[test]
-    fn strict_parse_refuses_duplicate_members_at_every_depth() {
-        let duplicated_handler = r#"{"hooks":[{"id":"a","phase":"after","trigger":"created","projection":[],"handler":{"kind":"url","destinationId":"a","destinationId":"b"}}]}"#;
-        for raw in [
-            br#"{"hooks":[],"hooks":[]}"#.to_vec(),
-            duplicated_handler.as_bytes().to_vec(),
-        ] {
-            let error = HooksDocument::from_strict_json(&raw).expect_err("duplicate refused");
-            assert!(
-                error.to_string().contains("duplicate JSON object member"),
-                "unexpected error: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn unknown_document_fields_are_refused() {
-        let raw = br#"{"hooks":[],"extra":true}"#;
-        let error = HooksDocument::from_strict_json(raw).expect_err("unknown field refused");
-        assert!(error.to_string().contains("unknown field"), "{error}");
-    }
-
-    #[test]
     fn declaration_json_carries_the_abi_opaquely_until_validation() {
         // An unknown ABI string parses: the closed-set check is a compile-time
         // rule with a pinned diagnostic, not a parse accident.
@@ -517,90 +379,6 @@ mod tests {
         .expect("parses");
         assert_eq!(rhai.kind(), HookHandlerKind::Rhai);
         assert_eq!(wasm_handler_serialized().kind(), HookHandlerKind::Wasm);
-    }
-
-    #[test]
-    fn document_validate_applies_the_compile_time_rules_after_parse() {
-        let document = json!({
-            "hooks": [
-                {"id": "a-first", "phase": "after", "trigger": "created",
-                 "projection": [], "handler": wasm_handler()},
-                {"id": "b-second", "phase": "before", "trigger": "patched",
-                 "projection": [], "handler": {"kind": "url", "destinationId": "case-intake"}},
-            ],
-        });
-        let parsed =
-            HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
-                .expect("parses");
-        let error = parsed.validate().expect_err("before with url is refused");
-        assert_eq!(error.code(), "hook.declaration.before_phase_remote_handler");
-        assert_eq!(error.index(), Some(1));
-    }
-
-    #[test]
-    fn an_empty_document_parses_and_validates() {
-        let parsed = HooksDocument::from_strict_json(br#"{"hooks":[]}"#).expect("parses");
-        assert!(parsed.hooks.is_empty());
-        parsed.validate().expect("no hooks, no refusals");
-    }
-
-    #[test]
-    fn a_shape_violation_names_the_member_path() {
-        let document = json!({
-            "hooks": [
-                {"id": "a-first", "phase": "after", "trigger": "created",
-                 "projection": [], "handler": wasm_handler()},
-                {"id": "b-second", "phase": "after", "trigger": "created",
-                 "projection": [], "handler": {"kind": "wasm", "abi": HOOK_HANDLER_ABI_V1}},
-            ],
-        });
-        let error =
-            HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
-                .expect_err("the second handler has no module");
-        assert!(
-            error.to_string().contains("hooks[1].handler"),
-            "the path to the offending member is reported: {error}"
-        );
-    }
-
-    #[test]
-    fn an_untrusted_member_name_never_reaches_display_unbounded() {
-        let huge = "x".repeat(64 * 1024);
-        let raw =
-            serde_json::to_vec(&json!({"hooks": [], huge.clone(): true})).expect("serializes");
-        let rendered = HooksDocument::from_strict_json(&raw)
-            .expect_err("unknown member refused")
-            .to_string();
-        assert!(rendered.len() < 1_024, "{} bytes rendered", rendered.len());
-        assert!(
-            !rendered.contains(&"x".repeat(MAX_DISPLAYED_TOKEN_BYTES + 1)),
-            "no run of the input longer than the token ceiling survives"
-        );
-    }
-
-    #[test]
-    fn every_declaration_code_is_distinct_and_in_its_namespace() {
-        let variants = [
-            HookDeclarationError::Json(
-                parse_json_strict(b"{").expect_err("a truncated object is not strict JSON"),
-            ),
-            HookDeclarationError::Shape {
-                path: String::new(),
-                message: String::new(),
-            },
-        ];
-        let codes: Vec<&str> = variants.iter().map(HookDeclarationError::code).collect();
-        assert_eq!(
-            codes.iter().collect::<BTreeSet<_>>().len(),
-            codes.len(),
-            "codes are distinct: {codes:?}"
-        );
-        for code in codes {
-            assert!(
-                code.starts_with("hook.declaration."),
-                "{code} is outside the namespace"
-            );
-        }
     }
 
     fn wasm_handler_serialized() -> HookHandlerSource {

@@ -14,7 +14,7 @@ stay with the owning product.
 
 ## What the crate holds
 
-- Declaration types: an ordered hooks document where every hook has an explicit
+- Declaration types: ordered hook declarations where every hook has an explicit
   `id`, a `phase` (`before` or `after`), a product trigger, opaque `when` and
   `projection` fields, and exactly one handler source kind (`rhai` requires
   `script`, `wasm` requires `module`, `url` requires `destinationId`, and
