@@ -414,6 +414,19 @@ activation.
     crates/registry-messagingctl/tests/postgres_messages_cli.rs, plan_apply_and_status_are_one_operator_journey;
     crates/registry-messaging/tests/postgres_package.rs, reapplying_the_active_package_over_stale_grants_records_the_repair. */}
 
+:::caution[Drain senders and stop v0.39.0 before you upgrade]
+Upgrading from v0.39.0 discards every idempotency record, so every key spent before the upgrade can
+be used again, and a retry the new runtime receives under a discarded key sends its message a second
+time. Before you run `messagingctl apply` with this release, stop new submissions, let in-flight
+senders finish retrying the submissions whose answers they lost, then stop every v0.39.0 runtime.
+Start the new runtime only after `apply` succeeds.
+:::
+
+{/* Evidence: crates/registry-messaging/migrations/0003_idempotency_caller.sql;
+    crates/registry-messaging/tests/postgres_migrate.rs,
+    version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller;
+    products/messaging/CHANGELOG.md, Unreleased (#1912). */}
+
 Read the active state and activation history with the runtime credential:
 
 ```sh
