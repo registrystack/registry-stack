@@ -1241,9 +1241,13 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         package = upgraded
     breg.write_runtime(breg.runtime, "registry", package, breg.port)
     # Count rows before the upgraded runtime writes: its own records would
-    # refill a table the upgrade emptied. No applied schema empties a table:
-    # the caller-scoped spent-key install keeps earlier spent keys as
-    # tombstones, so every table is held to its count.
+    # refill a table the upgrade emptied. The caller-scoped spent-key install
+    # keeps earlier spent keys as tombstones. The ingestion run install is the
+    # exception: over a v0.39.0 run table, which names no verified creator, it
+    # deletes every stored run, and the cascade empties
+    # registry_ingestion_run_chunks and registry_ingestion_run_chunk_records.
+    # `breg.seed` starts no ingestion run, so those tables hold no rows to
+    # lose and every table is held to its count.
     losses = row_count_losses(before_counts, postgres.row_counts("registry"))
     claim_after = instance_claim(new, breg.runtime)
     upgraded_views = serve("breg-upgraded.log")

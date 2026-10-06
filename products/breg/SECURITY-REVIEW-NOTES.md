@@ -2062,9 +2062,12 @@ BREG-SEC-166.
 - **Horizon.** A held response stays available for
   `idempotency.receiptRetentionDays` after its commit: default 7, at least 1,
   at most 365, fixed on the row when it commits. Reading a spent key checks
-  the binding first and the horizon second, so a changed request is told it
-  conflicts and an exact retry past the horizon is `410 idempotency.expired`.
-  Either way nothing executes, whether or not the held bytes were dropped.
+  the binding first, erasure second, and the horizon third, so a changed
+  request is told it conflicts, any retry of a key whose held response an
+  erasure removed is `409 idempotency.conflict` on either side of the
+  horizon, and any other exact retry past the horizon is
+  `410 idempotency.expired`. In every case nothing executes, whether or not
+  the held bytes were dropped.
   Only successful responses are held; a refusal spends no key.
 - **Sweep.** Expiry is enforced when the row is read, so the sweep only
   bounds how long held bytes stay stored, as `evidence-retention
@@ -2089,7 +2092,9 @@ BREG-SEC-166.
   rebuilt v0.39.0 package an engine-capability successor, so the apply runs
   the schema install. When `registry_idempotency` lacks the caller columns,
   the install adds them and converts every existing row into a tombstone.
-  No row is deleted and no table is emptied. A tombstone keeps its
+  The conversion deletes no row and empties no table; the same install
+  discards stored ingestion runs, as the BREG-SEC-167 notes below record. A
+  tombstone keeps its
   `key_reference` (the earlier audit-keyed `hmac-sha256:` digest), binding,
   result kind, result references, erasure time, and commit time. It is
   written already dropped: no raw issuer, subject, or key, the `mutation`
@@ -2136,7 +2141,8 @@ tombstones and leaves the spent row.
   (the sweep clears the raw caller, the exact retry answers 410, a changed
   one 409, and another caller's identical key executes as its own),
   `real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key`
-  (a held and an erased receipt are both cleared and both stay spent), and
+  (a held and an erased receipt are both cleared and both stay spent: the
+  held key's exact retry answers 410 and the erased key's 409), and
   `real_postgres_upgrade_from_the_audit_keyed_idempotency_shape_tombstones_spent_rows`
   (tombstones carry no raw caller, and the table check refuses a cleared row
   that is still held, a partly cleared row, a dropped row that keeps its raw

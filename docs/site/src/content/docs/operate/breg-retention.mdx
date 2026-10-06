@@ -347,12 +347,15 @@ configuration chooses another value between 1 and 365. A horizon is fixed when t
 so changing the setting applies to later writes only.
 
 Past the horizon an exact retry answers `410 idempotency.expired` and never executes, whether or not
-the held response is still stored. The key itself stays spent for good. The drop removes the held
-response and the raw issuer, principal value, and key, and keeps a digest of them with the request
-binding and times, so the same caller's exact retry still answers `410 idempotency.expired`, a
-changed retry answers `409 idempotency.conflict`, and another caller's identical key is that
-caller's own fresh key. Schedule the drop on the operator host, under the migration authority and
-the exclusive registry lock the rest of this page uses:
+the held response is still stored. A key whose held response `history erase` or
+`request-retention erase` removed answers `409 idempotency.conflict` to every retry instead, on
+either side of the horizon. The key itself stays spent for good. The drop removes the held response
+and the raw issuer, principal value, and key, and keeps a digest of them with the request binding
+and times, so every key answers as it did before the drop: the same caller's exact retry of a key
+no erasure reached answers `410 idempotency.expired`, a changed retry answers
+`409 idempotency.conflict`, any retry of an erased key answers `409 idempotency.conflict`, and
+another caller's identical key is that caller's own fresh key. Schedule the drop on the operator
+host, under the migration authority and the exclusive registry lock the rest of this page uses:
 
 ```sh
 bregctl idempotency-retention erase-expired \
