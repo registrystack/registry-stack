@@ -1240,6 +1240,11 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         predecessor_activation = "successor"
         package = upgraded
     breg.write_runtime(breg.runtime, "registry", package, breg.port)
+    # Count rows before the upgraded runtime writes: its own records would
+    # refill a table the upgrade emptied. No applied schema empties a table:
+    # the caller-scoped spent-key install keeps earlier spent keys as
+    # tombstones, so every table is held to its count.
+    losses = row_count_losses(before_counts, postgres.row_counts("registry"))
     claim_after = instance_claim(new, breg.runtime)
     upgraded_views = serve("breg-upgraded.log")
 
@@ -1259,6 +1264,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
         raise RehearsalError(f"the activation ledger recorded {ledger}, expected it to end "
                              f"with {expected}")
     successor_views = serve("breg-successor.log")
+    losses += row_count_losses(before_counts, postgres.row_counts("registry"))
     service = Service(new, "breg", breg_arguments(breg.runtime), work / "breg-written.log",
                       ready)
     try:
@@ -1267,7 +1273,6 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     finally:
         service.stop()
     new.run_json("bregctl", "--format", "json", "doctor", "--runtime-config", str(breg.runtime))
-    losses = row_count_losses(before_counts, postgres.row_counts("registry"))
     differences = (breg_view_differences(before_views, upgraded_views)
                    + breg_view_differences(before_views, successor_views)
                    + claim_differences(claim_before, claim_after))

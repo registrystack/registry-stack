@@ -562,14 +562,29 @@ class BregLedgerTest(unittest.TestCase):
     EMPTY_PLAN = {"ok": False, "command": "plan", "diagnostics": [
         {"severity": "error", "code": "apply.package.empty_plan", "path": "package"}]}
 
-    def rehearse_ledger_upgrade(self, root: Path, upgraded_plan: dict[str, Any] | None):
+    def rehearse_ledger_upgrade(self, root: Path, upgraded_plan: dict[str, Any] | None,
+                                *, upgrade_loses_rows: bool = False):
         """Run rehearse_breg against mocked binaries. `upgraded_plan` is what
         bregctl plan prints, exiting 1, for the rebuilt predecessor; None plans
-        it as a pending successor."""
+        it as a pending successor. `upgrade_loses_rows` empties the table the
+        previous release seeded until the upgraded runtime writes again."""
         old = unittest.mock.Mock()
         new = unittest.mock.Mock()
         postgres = unittest.mock.Mock()
-        postgres.row_counts.return_value = {"registry_data.records": 1}
+        counted = {"calls": 0, "written": False}
+
+        def row_counts(database):
+            counted["calls"] += 1
+            held = (counted["calls"] == 1 or counted["written"]
+                    or not upgrade_loses_rows)
+            return {"registry_data.records": 1 if held else 0}
+
+        def seed(phase):
+            if phase == "after":
+                counted["written"] = True
+            return {"records": ["1"]}
+
+        postgres.row_counts.side_effect = row_counts
         breg = unittest.mock.Mock()
         breg.project = root / "project"
         breg.runtime = root / "runtime.yaml"
@@ -646,7 +661,7 @@ class BregLedgerTest(unittest.TestCase):
 
         breg.package.side_effect = package
         breg.write_runtime.side_effect = runtime
-        breg.seed.return_value = {"records": ["1"]}
+        breg.seed.side_effect = seed
         breg.views.return_value = {"records/1": {"domainData": {"code": "a"}}}
         new.run_json.side_effect = command
         new.run.side_effect = process
@@ -691,6 +706,18 @@ class BregLedgerTest(unittest.TestCase):
                          "the new runtime serves the predecessor package it kept")
         self.assertEqual(current["active"], self.DIGEST)
         self.assertIn(("package", "build-successor", packages["old"]), events)
+
+    def test_rows_the_upgrade_loses_are_counted_before_the_upgraded_runtime_writes(
+            self) -> None:
+        # The upgraded runtime writes records of its own, which would refill a
+        # table the upgrade emptied before a later count could see the loss.
+        for upgraded_plan in (None, self.EMPTY_PLAN):
+            with (self.subTest(upgraded_plan=upgraded_plan),
+                  tempfile.TemporaryDirectory() as directory,
+                  self.assertRaisesRegex(
+                      Error, "registry_data.records dropped from 1 to 0 rows")):
+                self.rehearse_ledger_upgrade(Path(directory), upgraded_plan,
+                                             upgrade_loses_rows=True)
 
     def test_a_rebuild_refused_for_another_reason_stops_the_rehearsal(self) -> None:
         refused = {"ok": False, "command": "plan", "diagnostics": [
