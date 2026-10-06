@@ -2103,6 +2103,68 @@ async fn a_create_answered_with_a_5xx_is_resent_byte_identically_under_the_same_
     assert_eq!(first.body, second.body);
 }
 
+/// A failed handler is rolled back before commit and fails the same way on a
+/// resend, so the action is not resent; a failed Evidence dependency may
+/// follow a transient source failure, so it is.
+#[tokio::test]
+async fn a_lifecycle_action_is_resent_after_an_evidence_failure_but_not_a_handler_failure() {
+    for (code, resent) in [
+        (BRegProblemCode::ActionHandlerFailed, false),
+        (BRegProblemCode::ActionEvidenceFailed, true),
+    ] {
+        let fixture = test_client(vec![
+            metadata_response(),
+            lifecycle_record_response(),
+            problem_response(code),
+            lifecycle_response(receipt_body(RECORD_ID, "submitted")),
+        ])
+        .await;
+        let metadata = fixture
+            .client
+            .registry_contract(Some("company-writer"))
+            .await
+            .unwrap()
+            .value;
+        let authority = metadata
+            .select_lifecycle("company", "company-writer")
+            .expect("select lifecycle authority");
+        let record = fixture
+            .client
+            .get_record(
+                "companies",
+                RECORD_ID,
+                &BRegRecordOptions::default()
+                    .access_profile("company-writer")
+                    .unwrap(),
+            )
+            .await
+            .expect("request record")
+            .value;
+        let action = fixture
+            .client
+            .lifecycle_actions(&authority, &record)
+            .expect("promote action")
+            .remove(0);
+        let result = fixture
+            .client
+            .execute_lifecycle_action(&action, &key("action-resend-1"))
+            .await;
+        if resent {
+            result.expect("the resent action settles");
+        } else {
+            let error = result.expect_err("the handler failure is returned");
+            assert_eq!(error.problem_code(), Some(code));
+            assert!(!error.is_outcome_unknown());
+        }
+        let requests = fixture.requests.lock().unwrap();
+        let sends = requests.len() - 2;
+        assert_eq!(sends, if resent { 2 } else { 1 }, "{code}");
+        assert!(requests[2..]
+            .iter()
+            .all(|send| send.idempotency_key.as_deref() == Some("action-resend-1")));
+    }
+}
+
 #[tokio::test]
 async fn source_mismatch_and_invalid_bodies_are_refused_before_token_or_io() {
     let source = test_client(vec![metadata_response()]).await;

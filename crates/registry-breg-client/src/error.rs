@@ -277,6 +277,17 @@ impl BRegProblemCode {
         }
     }
 
+    /// Whether the engine returns this 5xx code only with the attempt rolled
+    /// back, for a failure a resend meets again unless the registry's package
+    /// or records change: a handler that could not produce an accepted
+    /// result, or a statistic outside its declared dimension domain.
+    const fn fails_before_commit(self) -> bool {
+        matches!(
+            self,
+            Self::ActionHandlerFailed | Self::StatisticalDatasetDomainViolation
+        )
+    }
+
     pub(crate) const fn title(self) -> &'static str {
         match self.status() {
             400 => "Bad Request",
@@ -601,16 +612,18 @@ impl BaseRegistryClientError {
     /// oversized or unparseable answer, and a 5xx answer: a 5xx may follow a
     /// commit. False for a configuration or request defect, a credential the
     /// token provider could not supply, a connection that was never
-    /// established, and every typed 4xx refusal. When it is true, the safe
-    /// recovery for an idempotency-keyed mutation is the same request under
-    /// the same key, which the engine either replays or executes once; a new
-    /// key could apply the mutation twice.
+    /// established, every typed 4xx refusal, and the two typed 5xx failures
+    /// the engine returns only with the attempt rolled back,
+    /// `action.handler_failed` and `statistical_dataset.domain_violation`.
+    /// When it is true, the safe recovery for an idempotency-keyed mutation is
+    /// the same request under the same key, which the engine either replays or
+    /// executes once; a new key could apply the mutation twice.
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
             Self::Configuration { .. } | Self::InvalidRequest { .. } | Self::Token(_) => false,
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
-            Self::Problem { status, .. } => *status >= 500,
+            Self::Problem { status, code, .. } => *status >= 500 && !code.fails_before_commit(),
             Self::Protocol { .. } => true,
         }
     }
@@ -623,7 +636,8 @@ impl BaseRegistryClientError {
             Self::Transport { kind } => {
                 matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
             }
-            Self::Problem { status, .. } | Self::Protocol { status, .. } => *status >= 500,
+            Self::Problem { status, code, .. } => *status >= 500 && !code.fails_before_commit(),
+            Self::Protocol { status, .. } => *status >= 500,
             Self::Configuration { .. } | Self::InvalidRequest { .. } | Self::Token(_) => false,
         }
     }
@@ -811,12 +825,17 @@ mod tests {
         for error in &settled {
             assert!(!error.is_outcome_unknown(), "{error:?}");
         }
-        // Every 4xx code is a deterministic refusal; every 5xx code may follow
-        // a commit.
+        // Every 4xx code is a deterministic refusal, and so are the two 5xx
+        // codes the engine returns only with the attempt rolled back; every
+        // other 5xx code may follow a commit.
+        let rolled_back = [
+            BRegProblemCode::ActionHandlerFailed,
+            BRegProblemCode::StatisticalDatasetDomainViolation,
+        ];
         for code in BRegProblemCode::ALL {
             assert_eq!(
                 problem(code).is_outcome_unknown(),
-                code.status() >= 500,
+                code.status() >= 500 && !rolled_back.contains(&code),
                 "{code}"
             );
         }
@@ -825,11 +844,13 @@ mod tests {
             BRegProblemCode::IdempotencyConflict,
             BRegProblemCode::StatisticalDatasetVersionWithdrawn,
             BRegProblemCode::ActionRefused,
+            BRegProblemCode::ActionHandlerFailed,
+            BRegProblemCode::StatisticalDatasetDomainViolation,
         ] {
             assert!(!problem(code).is_outcome_unknown(), "{code}");
         }
         for code in [
-            BRegProblemCode::ActionHandlerFailed,
+            BRegProblemCode::ActionEvidenceFailed,
             BRegProblemCode::ServiceUnavailable,
             BRegProblemCode::RequestTimeout,
         ] {
@@ -843,6 +864,7 @@ mod tests {
             BaseRegistryClientError::transport(TransportKind::Timeout),
             BaseRegistryClientError::transport(TransportKind::Exchange),
             problem(BRegProblemCode::ServiceUnavailable),
+            problem(BRegProblemCode::ActionEvidenceFailed),
             BaseRegistryClientError::protocol(500, BRegProtocolFailure::Problem, None),
         ];
         for error in &resent {
@@ -853,6 +875,8 @@ mod tests {
             BaseRegistryClientError::transport(TransportKind::ResponseTooLarge),
             BaseRegistryClientError::protocol(201, BRegProtocolFailure::Body, None),
             problem(BRegProblemCode::IdempotencyConflict),
+            problem(BRegProblemCode::ActionHandlerFailed),
+            problem(BRegProblemCode::StatisticalDatasetDomainViolation),
             BaseRegistryClientError::Token(TokenError::Unavailable),
             BaseRegistryClientError::invalid_request("fixture reason"),
         ];

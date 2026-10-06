@@ -2210,9 +2210,11 @@ fn snapshot_extensions(
     Ok((snapshot, valid_at))
 }
 
-/// Classify one attempt of an idempotency-keyed mutation. Any failure on a
-/// 5xx answer, a timeout, or a broken exchange may settle on a resend; any
-/// other unknown outcome would be answered the same way again.
+/// Classify one attempt of an idempotency-keyed mutation. A failure with an
+/// unknown outcome on a 5xx answer, a timeout, or a broken exchange may settle
+/// on a resend; any other unknown outcome would be answered the same way
+/// again. A typed 5xx the engine returns only with the attempt rolled back is
+/// a known failure and is never resent.
 fn keyed_attempt<T>(
     result: Result<T, BaseRegistryClientError>,
     server_error: bool,
@@ -2220,7 +2222,7 @@ fn keyed_attempt<T>(
 ) -> KeyedMutationAttempt<T, BaseRegistryClientError> {
     match result {
         Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
-        Err(error) if server_error || error.resend_may_settle() => {
+        Err(error) if (server_error && error.is_outcome_unknown()) || error.resend_may_settle() => {
             KeyedMutationAttempt::Retryable {
                 error,
                 retry_after_seconds,

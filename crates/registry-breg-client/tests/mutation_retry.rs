@@ -233,6 +233,7 @@ async fn a_timed_out_mutation_is_resent_identically_under_the_same_key() {
 async fn a_5xx_answer_is_resent_and_the_later_result_returned() {
     for unavailable in [
         Answer::Problem(BRegProblemCode::ServiceUnavailable, None),
+        Answer::Problem(BRegProblemCode::ActionEvidenceFailed, None),
         Answer::Problem(BRegProblemCode::RequestTimeout, None),
         Answer::Json(StatusCode::BAD_GATEWAY, r#"{"edge":true}"#),
     ] {
@@ -293,6 +294,28 @@ async fn a_deterministic_refusal_is_never_resent() {
             .await
             .expect_err("a refusal is returned");
         assert_eq!(error.problem_code(), Some(code));
+        assert!(!error.is_outcome_unknown(), "{code}");
+        assert_eq!(script.observations().len(), 1, "{code}");
+        server.abort();
+    }
+}
+
+/// The engine returns these two typed 5xx codes only with the attempt rolled
+/// back, and a resend would meet the same failure, so the outcome is known.
+/// The classification follows the code, whichever keyed route answers it.
+#[tokio::test]
+async fn a_5xx_failure_the_engine_rolls_back_is_known_and_never_resent() {
+    for code in [
+        BRegProblemCode::ActionHandlerFailed,
+        BRegProblemCode::StatisticalDatasetDomainViolation,
+    ] {
+        let (address, script, server) =
+            serve(&[Answer::Problem(code, None), Answer::Published]).await;
+        let error = publish(&client(config(&address)))
+            .await
+            .expect_err("the rolled-back failure is returned");
+        assert_eq!(error.problem_code(), Some(code));
+        assert_eq!(error.status(), Some(500), "{code}");
         assert!(!error.is_outcome_unknown(), "{code}");
         assert_eq!(script.observations().len(), 1, "{code}");
         server.abort();

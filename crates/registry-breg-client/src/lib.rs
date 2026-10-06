@@ -6,8 +6,10 @@
 //!
 //! The client never generates an idempotency key. An idempotency-keyed
 //! mutation whose outcome is unknown (a timeout or broken exchange after the
-//! request was sent, or a 5xx answer) is resent, byte for byte and under the
-//! same key and credential, at most
+//! request was sent, or a 5xx answer other than `action.handler_failed` and
+//! `statistical_dataset.domain_violation`, which the engine returns only with
+//! the attempt rolled back) is resent, byte for byte and under the same key
+//! and credential, at most
 //! `BaseRegistryClientConfig::with_max_mutation_retries` times (2 by default,
 //! 0 disables it). Reads and unkeyed exchanges, such as ingestion runs and
 //! action target conditions, are never resent. A 5xx answer may follow a

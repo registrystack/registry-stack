@@ -172,8 +172,17 @@ Messaging</DocsetProduct> mutation that carries an idempotency key has an unknow
 and after an oversized or unparseable answer. Its outcome is known after a refusal before sending, a
 connection that was never established, and a typed 4xx refusal such as an idempotency conflict.
 
+Two typed BReg 500 failures are known outcomes too: `action.handler_failed` and
+`statistical_dataset.domain_violation`. The engine returns them only with the attempt rolled back,
+and the same request fails the same way, so the client never resends them. `action.evidence_failed`
+and `service.unavailable` (503) stay unknown and are resent.
+
+{/* Evidence: crates/registry-breg/src/mutation/action.rs, execute_immediate_action_after_attempt;
+    crates/registry-breg/src/postgres/statistics.rs, map_statistics_error;
+    crates/registry-breg-client/src/error.rs, fails_before_commit */}
+
 The client resends the identical request, with the same key, headers, and body bytes, after a 5xx
-answer, a timeout, or a broken exchange: at most twice by default, waiting 250 ms and then 500 ms, or
+answer with an unknown outcome, a timeout, or a broken exchange: at most twice by default, waiting 250 ms and then 500 ms, or
 the service's `Retry-After` when that is longer and at most 5 seconds. A longer requested wait ends
 the retries. Each attempt has the full request timeout. Reads, and operations that carry no
 idempotency key, are never resent.
