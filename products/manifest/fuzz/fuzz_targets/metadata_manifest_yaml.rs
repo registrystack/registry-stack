@@ -5,9 +5,9 @@ use registry_manifest_cli::{manifest_digest, read_metadata};
 use registry_manifest_core::{
     canonicalize_json, compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
     render_cpsv_ap, render_dataset_policy_document, render_dcat_profile,
-    render_entity_schema_draft_2020_12, render_entity_shacl, render_evidence_offering,
-    render_evidence_offerings, render_form_schema_draft_2020_12, render_ogc_records_item,
-    render_ogc_records_items, render_policy_collection, render_shacl, CompiledMetadata,
+    render_entity_schema_draft_2020_12, render_evidence_offering, render_evidence_offerings,
+    render_form_schema_draft_2020_12, render_ogc_records_item, render_ogc_records_items,
+    render_policy_collection, render_shacl, CompiledMetadata,
 };
 use serde_json::Value;
 
@@ -51,9 +51,6 @@ fn exercise_renderers(compiled: &CompiledMetadata) {
             if let Some(value) =
                 render_entity_schema_draft_2020_12(compiled, &dataset.dataset_id, &entity.name)
             {
-                exercise_json(value);
-            }
-            if let Some(value) = render_entity_shacl(compiled, &dataset.dataset_id, &entity.name) {
                 exercise_json(value);
             }
         }

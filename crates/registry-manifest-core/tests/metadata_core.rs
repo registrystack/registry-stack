@@ -5,10 +5,10 @@ mod support;
 use registry_manifest_core::{
     compile_manifest, compute_evidence_pack_policy_hash, compute_policy_hash, render_base_dcat,
     render_breg_dcat_ap, render_catalog, render_cpsv_ap, render_dataset_policy_document,
-    render_dcat_profile, render_entity_schema_draft_2020_12, render_entity_shacl,
-    render_evidence_offering, render_form_schema_draft_2020_12, render_ogc_records_items,
-    render_policy_collection, render_shacl, validate_manifest, verify_evidence_pack_policy_hash,
-    CodelistConcept, CodelistManifest, LocalizedText, MetadataError, MetadataManifest,
+    render_dcat_profile, render_entity_schema_draft_2020_12, render_evidence_offering,
+    render_form_schema_draft_2020_12, render_ogc_records_items, render_policy_collection,
+    render_shacl, validate_manifest, verify_evidence_pack_policy_hash, CodelistConcept,
+    CodelistManifest, CompiledMetadata, LocalizedText, MetadataError, MetadataManifest,
     ProfileClaim, ValidationCondition, ODRL_ENFORCEMENT_PROFILE, SUPPORTED_ODRL_ENFORCEMENT_TERMS,
 };
 use serde_json::{json, Value};
@@ -4197,17 +4197,15 @@ fn breg_dcat_emits_standard_public_service_evidence_without_source_truth_claims(
     assert_eq!(service["cpsv:produces"], json!("#dataset-vital-events"));
     assert!(
         service["registry_manifest:sourceOfTruth"].is_null(),
-        "Registry Relay publishes standard CPSV evidence, not an authority verdict"
+        "the catalog publishes standard CPSV evidence, not an authority verdict"
     );
 }
 
 #[test]
 fn shacl_uses_standard_constraint_slots() {
     let compiled = compile_manifest(&fixture("example-civil-registration")).expect("compile");
-    let shape = render_entity_shacl(&compiled, "vital-events", "person").expect("shape");
-    let properties = shape["shape"]["sh:property"]
-        .as_array()
-        .expect("properties");
+    let shape = entity_shacl_shape(&compiled, "vital-events", "person");
+    let properties = shape["sh:property"].as_array().expect("properties");
     let person_id = properties
         .iter()
         .find(|property| property["sh:name"] == "person_id")
@@ -4396,7 +4394,7 @@ fn ogc_records_items_are_link_free() {
 #[test]
 fn field_concept_count_selects_the_generated_property_identity() {
     let compiled = compile_manifest(&aligned_person_concepts_fixture()).expect("compile");
-    let shape = render_entity_shacl(&compiled, "person-register", "person").expect("shape");
+    let shape = entity_shacl_shape(&compiled, "person-register", "person");
 
     assert_eq!(
         field_shape_path(&shape, "person_id"),
@@ -4470,7 +4468,7 @@ fn concept_order_is_significant_and_carries_no_mapping_claim() {
 
     assert_eq!(
         field_shape_path(
-            &render_entity_shacl(&semic_first, "person-register", "person").expect("shape"),
+            &entity_shacl_shape(&semic_first, "person-register", "person"),
             "birth_date"
         ),
         json!("http://data.europa.eu/m8g/birthDate"),
@@ -4478,11 +4476,11 @@ fn concept_order_is_significant_and_carries_no_mapping_claim() {
     );
     assert_ne!(
         field_shape_path(
-            &render_entity_shacl(&publicschema_first, "person-register", "person").expect("shape"),
+            &entity_shacl_shape(&publicschema_first, "person-register", "person"),
             "birth_date"
         ),
         field_shape_path(
-            &render_entity_shacl(&semic_first, "person-register", "person").expect("shape"),
+            &entity_shacl_shape(&semic_first, "person-register", "person"),
             "birth_date"
         ),
         "concept order must be observable in generated output"
@@ -4662,9 +4660,9 @@ fn semic_and_publicschema_concepts_render_deterministically() {
         );
     }
 
-    let shape = render_entity_shacl(&first, "person-register", "person").expect("shape");
+    let shape = entity_shacl_shape(&first, "person-register", "person");
     assert_eq!(
-        shape["shape"]["sh:targetClass"],
+        shape["sh:targetClass"],
         json!("https://publicschema.org/Person")
     );
     assert_eq!(
@@ -4717,7 +4715,7 @@ codelists: []
     .expect("manifest parses");
 
     let compiled = compile_manifest(&manifest).expect("compile");
-    let shape = render_entity_shacl(&compiled, "dataset", "entity").expect("shape");
+    let shape = entity_shacl_shape(&compiled, "dataset", "entity");
     assert_eq!(
         field_shape_path(&shape, "entity_id"),
         json!("https://vocabulary.invalid/terms/Entity.identifier"),
@@ -4732,8 +4730,18 @@ fn aligned_person_concepts_fixture() -> MetadataManifest {
     .expect("aligned person concepts fixture parses")
 }
 
+fn entity_shacl_shape(compiled: &CompiledMetadata, dataset_id: &str, entity_name: &str) -> Value {
+    render_shacl(compiled)["@graph"]
+        .as_array()
+        .expect("SHACL graph")
+        .iter()
+        .find(|node| node["dcterms:identifier"] == format!("{dataset_id}:{entity_name}"))
+        .unwrap_or_else(|| panic!("node shape for {dataset_id}:{entity_name}"))
+        .clone()
+}
+
 fn field_shape(entity_shape: &Value, field_name: &str) -> Value {
-    entity_shape["shape"]["sh:property"]
+    entity_shape["sh:property"]
         .as_array()
         .expect("property shapes")
         .iter()
