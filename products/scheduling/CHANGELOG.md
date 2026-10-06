@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A hold or an appointment is owned by the verified token issuer and subject
+  that booked it, stored on the claim, rather than by the audit-keyed
+  pseudonym of that pair. Listing by external reference, reading,
+  rescheduling, cancelling, releasing a hold, and the per-caller hold ceiling
+  all decide on the stored pair, so rotating `audit.hashKeyRef` no longer
+  detaches any claim from its owner. History and audit still carry the
+  pseudonym. Migration 12 adds the owner; a hold or appointment written before
+  it recorded only the pseudonym, keeps its capacity and history, and is
+  owned by no caller, so its booker can no longer list, read, confirm,
+  reschedule, cancel, or release it. Run `schedulingctl plan` and
+  `schedulingctl apply` with this release before starting the runtime.
 - The retention sweep that erases an idempotency receipt also clears the
   attempt's raw token issuer, subject, and key. The attempt is identified by a
   SHA-256 digest of those three and the command and is never deleted, so the
@@ -35,9 +46,6 @@
   expired grant refuses its whole token on every `/v1` route, so the caller
   reads with a token for the same issuer and subject that carries the read
   scope and no grant, listing by external reference or reading by identifier.
-  Ownership is the audit-keyed pseudonym of that issuer and subject, so
-  rotating `audit.hashKeyRef` detaches every existing hold and appointment
-  from its owner.
 
 ## v0.39.0 - 2026-10-06
 

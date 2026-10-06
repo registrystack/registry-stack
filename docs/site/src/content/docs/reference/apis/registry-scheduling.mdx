@@ -250,21 +250,19 @@ both cases, observe the outcome by reading:
 - After a reschedule or a cancel, read `GET /v1/appointments/{appointmentId}` with the same kind of
   token and compare its `revision` and `state` with the ones you acted on.
 
-The listing is per principal by design. Ownership is the keyed pseudonym of the issuer and subject
-that booked, derived with the deployment's audit hash key (`audit.hashKeyRef`), so another principal
-sees an empty page even when it serves the same product. Book and observe under one principal.
+The listing is per principal by design. A hold or appointment is owned by the verified token issuer
+and subject that booked it, so another principal sees an empty page even when it serves the same
+product. Book and observe under one principal. History and audit carry a pseudonym keyed with the
+deployment's audit hash key (`audit.hashKeyRef`) instead, which decides nothing: rotating that key
+leaves every hold and appointment with the caller that booked it.
 
-Rotating the audit hash key detaches every existing hold and appointment from its owner. The caller
-that booked then gets an empty page, and its read by identifier, reschedule, cancel, or hold release
-is refused with `operation.not-authorized`, while the claims stay committed. An empty page proves no
-booking only if the audit key has not been rotated since the attempt.
-
-{/* Evidence: crates/registry-scheduling/src/store.rs, list_appointments_by_external_reference();
-    crates/registry-scheduling/src/service.rs, Caller::actor_pseudonym(), list_appointments(),
-    get_appointment(), and owned_booking(); crates/registry-platform-oidc/src/authorization_claims.rs,
-    grant_claims(); crates/registry-scheduling/tests/postgres_commitments.rs,
+{/* Evidence: crates/registry-scheduling/src/store.rs, list_appointments_by_external_reference(),
+    ClaimRow::is_owned_by(), and lock_caller_and_count_active_holds();
+    crates/registry-scheduling/src/service.rs, list_appointments(), get_appointment(), and
+    owned_booking(); crates/registry-platform-oidc/src/authorization_claims.rs, grant_claims();
+    crates/registry-scheduling/tests/postgres_commitments.rs,
     a_booking_stays_observable_by_reference_after_its_grant_expires and
-    rotating_the_audit_key_detaches_existing_claims_from_their_owner;
+    rotating_the_audit_key_keeps_existing_claims_with_their_owner;
     crates/registry-scheduling/src/store.rs, erase_expired_attempts();
     crates/registry-scheduling/src/store/attempt_key.rs, attempt_key_reference();
     crates/registry-scheduling/tests/postgres_commitments.rs,

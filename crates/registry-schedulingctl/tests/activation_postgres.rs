@@ -383,7 +383,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert_eq!(report["schemaVersion"], 0);
     assert_eq!(
         report["pendingSchemaVersions"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     );
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
@@ -478,7 +478,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .starts_with("single-role mode"));
     assert_eq!(
         initial["schemaVersionsApplied"],
-        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+        serde_json::json!([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     );
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
@@ -575,7 +575,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 11);
+    assert_eq!(report["schemaVersion"], 12);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
     deployment.drop().await;
@@ -751,6 +751,98 @@ async fn attempt_key_reference_migration_rekeys_spent_keys_and_clears_erased_cal
             "{statement}"
         );
     }
+
+    deployment.drop().await;
+}
+
+/// Migration 12 adds the verified owner beside the pseudonym. A claim
+/// written before it recorded only the pseudonym, so it keeps its capacity,
+/// its pseudonym, and its state with no owner, and the constraint holds every
+/// owner as a whole non-empty pair.
+#[tokio::test]
+async fn claim_owner_migration_keeps_existing_claims_and_refuses_a_partial_owner() {
+    let deployment = Deployment::single("activation_claim_owner").await;
+    let first = deployment.package("first", POLICY);
+    let second = deployment.package("second", &successor_policy());
+    let first_config = deployment.config("first.yaml", &first, ConfigOptions::default());
+    let second_config = deployment.config("second.yaml", &second, ConfigOptions::default());
+    apply(&first_config).expect("the initial package activates");
+
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE {schema}.scheduling_claims
+                 DROP CONSTRAINT scheduling_claims_owner_check,
+                 DROP COLUMN owner_issuer,
+                 DROP COLUMN owner_subject;
+             DELETE FROM {schema}.scheduling_schema_migrations WHERE version=12;
+             INSERT INTO {schema}.scheduling_claims
+                (claim_id, kind, state, offering, supply_id, displayed_start,
+                 displayed_end, occupied_start, occupied_end, units, revision,
+                 policy_revision, actor)
+             VALUES ('00000000-0000-4000-8000-000000001930', 'booking', 'active',
+                     'registry-update-30', 'update-stations', now(), now() + interval '30 minutes',
+                     now(), now() + interval '30 minutes', 1, 1, 1, 'legacy-actor');",
+            schema = deployment.schema
+        ))
+        .await
+        .expect("simulate a populated schema immediately before migration 12");
+
+    let report = apply(&second_config).expect("the successor applies migration 12");
+    assert_eq!(report["schemaVersionsApplied"], serde_json::json!([12]));
+    let row = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT state, actor, owner_issuer, owner_subject
+                   FROM {}.scheduling_claims
+                  WHERE claim_id='00000000-0000-4000-8000-000000001930'",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the pre-migration claim remains");
+    assert_eq!(row.get::<_, String>(0), "active");
+    assert_eq!(row.get::<_, String>(1), "legacy-actor");
+    assert_eq!(row.get::<_, Option<String>>(2), None);
+    assert_eq!(row.get::<_, Option<String>>(3), None);
+
+    for statement in [
+        "UPDATE {schema}.scheduling_claims SET owner_issuer='https://issuer.test' \
+         WHERE claim_id='00000000-0000-4000-8000-000000001930'",
+        "UPDATE {schema}.scheduling_claims SET owner_subject='subject-1' \
+         WHERE claim_id='00000000-0000-4000-8000-000000001930'",
+        "UPDATE {schema}.scheduling_claims SET owner_issuer='', owner_subject='subject-1' \
+         WHERE claim_id='00000000-0000-4000-8000-000000001930'",
+        "UPDATE {schema}.scheduling_claims SET owner_issuer='https://issuer.test', owner_subject='' \
+         WHERE claim_id='00000000-0000-4000-8000-000000001930'",
+    ] {
+        let error = deployment
+            .admin
+            .batch_execute(&statement.replace("{schema}", &deployment.schema))
+            .await
+            .expect_err("a partial or empty owner is refused");
+        let constraint = error
+            .as_db_error()
+            .and_then(|error| error.constraint())
+            .map(str::to_owned);
+        assert_eq!(
+            constraint.as_deref(),
+            Some("scheduling_claims_owner_check"),
+            "{statement}"
+        );
+    }
+    deployment
+        .admin
+        .batch_execute(&format!(
+            "UPDATE {}.scheduling_claims
+                SET owner_issuer='https://issuer.test', owner_subject='subject-1'
+              WHERE claim_id='00000000-0000-4000-8000-000000001930'",
+            deployment.schema
+        ))
+        .await
+        .expect("a whole owner is accepted");
 
     deployment.drop().await;
 }

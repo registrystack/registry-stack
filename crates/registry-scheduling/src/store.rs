@@ -95,9 +95,11 @@ const EXTERNAL_REFERENCES_MIGRATION_VERSION: i64 = 10;
 const ATTEMPT_KEY_REFERENCE_MIGRATION: &str =
     include_str!("../migrations/0011_attempt_key_reference.sql");
 const ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION: i64 = 11;
+const CLAIM_OWNER_MIGRATION: &str = include_str!("../migrations/0012_claim_owner.sql");
+const CLAIM_OWNER_MIGRATION_VERSION: i64 = 12;
 
 /// Every schema version in ledger order.
-const SCHEMA_VERSIONS: [i64; 11] = [
+const SCHEMA_VERSIONS: [i64; 12] = [
     1,
     2,
     HOOK_DELIVERY_MIGRATION_VERSION,
@@ -109,6 +111,7 @@ const SCHEMA_VERSIONS: [i64; 11] = [
     ACTIVATIONS_MIGRATION_VERSION,
     EXTERNAL_REFERENCES_MIGRATION_VERSION,
     ATTEMPT_KEY_REFERENCE_MIGRATION_VERSION,
+    CLAIM_OWNER_MIGRATION_VERSION,
 ];
 
 /// Serializes schema migration and package activation on one transaction
@@ -118,11 +121,11 @@ const SCHEMA_VERSIONS: [i64; 11] = [
 const MIGRATION_LOCK_KEY: i64 = 0x7363_6865_6475_6c65;
 
 /// The advisory-lock namespace the hold ceiling serializes one caller in. The
-/// second half of the key is the caller's pseudonym, which is already keyed to
-/// this deployment, so two deployments sharing a database do not serialize each
-/// other. The lock is a transaction lock: PostgreSQL releases it when the
-/// capacity transaction ends, committed or rolled back. The namespace spells
-/// the ASCII bytes of "SCHD".
+/// second half of the key hashes the deployment's schema with the caller's
+/// verified issuer and subject, so two deployments sharing a database do not
+/// serialize each other. The lock is a transaction lock: PostgreSQL releases
+/// it when the capacity transaction ends, committed or rolled back. The
+/// namespace spells the ASCII bytes of "SCHD".
 const HOLD_CEILING_LOCK_NAMESPACE: i32 = 0x5343_4844;
 
 /// The send deadline must fit inside the remaining dispatch lease.
@@ -524,15 +527,42 @@ pub struct ClaimRow {
     pub hold_expires_at: Option<DateTime<Utc>>,
     pub revision: i64,
     pub policy_revision: i64,
+    /// The pseudonym of the caller that booked, which history and audit
+    /// carry. It decides nothing: ownership is `owner`.
     pub actor: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<DateTime<Utc>>,
+    /// The verified caller that owns the claim, read from its row. It is
+    /// never serialized, so a receipt, a payload, or a hook projection built
+    /// from a claim cannot carry it, and a claim read back from a receipt has
+    /// none. `None` also covers a claim written before owners were stored,
+    /// which no caller owns.
+    #[serde(skip)]
+    pub owner: Option<ClaimOwner>,
+}
+
+/// The verified token issuer and subject that own a claim. Every ownership
+/// decision compares these, never the pseudonym, so rotating the audit hash
+/// key leaves each hold and appointment with the caller that booked it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimOwner {
+    pub issuer: String,
+    pub subject: String,
 }
 
 impl ClaimRow {
+    /// Whether the verified `issuer` and `subject` own this claim. A claim
+    /// with no stored owner is owned by nobody.
+    #[must_use]
+    pub fn is_owned_by(&self, issuer: &str, subject: &str) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| owner.issuer == issuer && owner.subject == subject)
+    }
+
     /// Whether this claim holds its offering's terms still. This is the Rust
     /// twin of the sentence `apply_policy` selects on: publication refuses to
     /// change the service, location, mode or supply of an offering under a
@@ -595,6 +625,9 @@ pub struct Commitment<'c> {
     pub facts_revision: i64,
     /// The pseudonymized actor reference history and audit carry.
     pub actor: &'c str,
+    /// The verified token issuer and subject: the owner of every claim this
+    /// commitment writes or acts on, and the raw caller of its idempotency
+    /// attempt while that attempt's receipt is retained.
     pub actor_issuer: &'c str,
     pub actor_subject: &'c str,
     pub idempotency_key: &'c str,
@@ -1134,11 +1167,13 @@ impl PostgresStore {
         row.map(map_claim_row).transpose()
     }
 
-    /// Appointments owned by `actor` that carry exactly the requested opaque
-    /// reference, ordered by identifier for stable cursor paging.
+    /// Appointments owned by the verified `issuer` and `subject` that carry
+    /// exactly the requested opaque reference, ordered by identifier for
+    /// stable cursor paging.
     pub async fn list_appointments_by_external_reference(
         &self,
-        actor: &str,
+        issuer: &str,
+        subject: &str,
         reference: &ExternalReference,
         after_id: Option<Uuid>,
         limit: i64,
@@ -1150,11 +1185,12 @@ impl PostgresStore {
                 "SELECT claim_id, kind, state, offering, supply_id, channel, \
                  displayed_start, displayed_end, occupied_start, occupied_end, units, duplicate_key, \
                  external_references, hold_expires_at, revision, policy_revision, actor, reason, \
-                 created_at, closed_at FROM scheduling_claims \
-                 WHERE kind='booking' AND actor=$1 AND external_references @> $2::jsonb \
-                   AND ($3::uuid IS NULL OR claim_id > $3) \
-                 ORDER BY claim_id LIMIT $4",
-                &[&actor, &reference, &after_id, &limit],
+                 created_at, closed_at, owner_issuer, owner_subject FROM scheduling_claims \
+                 WHERE kind='booking' AND owner_issuer=$1 AND owner_subject=$2 \
+                   AND external_references @> $3::jsonb \
+                   AND ($4::uuid IS NULL OR claim_id > $4) \
+                 ORDER BY claim_id LIMIT $5",
+                &[&issuer, &subject, &reference, &after_id, &limit],
             )
             .await?;
         rows.into_iter().map(map_claim_row).collect()
@@ -1343,7 +1379,11 @@ impl PostgresStore {
         // hold transaction acquires the two in that one order, so no pair of
         // them can hold what the other is waiting for.
         if transaction
-            .lock_caller_and_count_active_holds(commitment.actor, commitment.now)
+            .lock_caller_and_count_active_holds(
+                commitment.actor_issuer,
+                commitment.actor_subject,
+                commitment.now,
+            )
             .await?
             >= i64::from(max_per_caller)
         {
@@ -1384,6 +1424,8 @@ impl PostgresStore {
                 revision: 1,
                 policy_revision: commitment.policy_revision,
                 actor: commitment.actor,
+                owner_issuer: commitment.actor_issuer,
+                owner_subject: commitment.actor_subject,
                 reason: None,
             })
             .await?;
@@ -1477,6 +1519,8 @@ impl PostgresStore {
                 revision: 1,
                 policy_revision: commitment.policy_revision,
                 actor: commitment.actor,
+                owner_issuer: commitment.actor_issuer,
+                owner_subject: commitment.actor_subject,
                 reason: None,
             })
             .await?;
@@ -1578,7 +1622,7 @@ impl PostgresStore {
         if hold.policy_revision != commitment.policy_revision {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }
-        if hold.actor != commitment.actor {
+        if !hold.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
             // Confirming another caller's hold is never a state error: it is
             // an authorization refusal the audit entries record.
             return Err(CommitError::Unauthorized);
@@ -1604,6 +1648,8 @@ impl PostgresStore {
                 revision: 1,
                 policy_revision: commitment.policy_revision,
                 actor: commitment.actor,
+                owner_issuer: commitment.actor_issuer,
+                owner_subject: commitment.actor_subject,
                 reason: None,
             })
             .await?;
@@ -1701,7 +1747,7 @@ impl PostgresStore {
         if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
-        if hold.actor != commitment.actor {
+        if !hold.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
             return Err(CommitError::Unauthorized);
         }
         self.recheck_grant(&commitment)?;
@@ -1787,7 +1833,7 @@ impl PostgresStore {
         {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }
-        if appointment.actor != commitment.actor {
+        if !appointment.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
             return Err(CommitError::Unauthorized);
         }
         if u64::try_from(appointment.revision) != Ok(observed_revision) {
@@ -1931,7 +1977,7 @@ impl PostgresStore {
         if appointment.kind != LedgerKind::Booking || appointment.state != ClaimState::Active {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
-        if appointment.actor != commitment.actor {
+        if !appointment.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
             return Err(CommitError::Unauthorized);
         }
         if u64::try_from(appointment.revision) != Ok(observed_revision) {
@@ -2334,8 +2380,8 @@ impl PostgresStore {
 
 const SELECT_CLAIM: &str = "SELECT claim_id, kind, state, offering, supply_id, channel, \
      displayed_start, displayed_end, occupied_start, occupied_end, units, duplicate_key, \
-     external_references, hold_expires_at, revision, policy_revision, actor, reason, created_at, closed_at \
-     FROM scheduling_claims WHERE claim_id=$1";
+     external_references, hold_expires_at, revision, policy_revision, actor, reason, created_at, closed_at, \
+     owner_issuer, owner_subject FROM scheduling_claims WHERE claim_id=$1";
 
 /// The consuming-claim filter, with hold expiry evaluated in the query. This
 /// is the sentence the whole capacity contract turns on: an expired hold
@@ -2383,6 +2429,10 @@ fn map_claim_row(row: Row) -> Result<ClaimRow, StoreError> {
         reason: row.get(17),
         created_at: row.get(18),
         closed_at: row.get(19),
+        owner: match (row.get(20), row.get(21)) {
+            (Some(issuer), Some(subject)) => Some(ClaimOwner { issuer, subject }),
+            _ => None,
+        },
     })
 }
 
@@ -3394,6 +3444,8 @@ struct NewClaim<'c> {
     revision: i64,
     policy_revision: i64,
     actor: &'c str,
+    owner_issuer: &'c str,
+    owner_subject: &'c str,
     reason: Option<&'c str>,
 }
 
@@ -3475,7 +3527,8 @@ trait CapacityStatements {
     /// method so neither can be taken without the other.
     async fn lock_caller_and_count_active_holds(
         &self,
-        actor: &str,
+        issuer: &str,
+        subject: &str,
         now: DateTime<Utc>,
     ) -> Result<i64, StoreError>;
 }
@@ -3510,8 +3563,9 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             .query_one(
                 "INSERT INTO scheduling_claims(claim_id, kind, state, offering, supply_id, \
                  channel, displayed_start, displayed_end, occupied_start, occupied_end, units, \
-                 duplicate_key, external_references, hold_expires_at, revision, policy_revision, actor, reason) \
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) \
+                 duplicate_key, external_references, hold_expires_at, revision, policy_revision, actor, reason, \
+                 owner_issuer, owner_subject) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
                  RETURNING created_at",
                 &[
                     &claim.claim_id,
@@ -3532,6 +3586,8 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
                     &claim.policy_revision,
                     &claim.actor,
                     &claim.reason,
+                    &claim.owner_issuer,
+                    &claim.owner_subject,
                 ],
             )
             .await?;
@@ -3556,6 +3612,10 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             reason: claim.reason.map(str::to_owned),
             created_at: row.get(0),
             closed_at: None,
+            owner: Some(ClaimOwner {
+                issuer: claim.owner_issuer.to_owned(),
+                subject: claim.owner_subject.to_owned(),
+            }),
         })
     }
 
@@ -3721,19 +3781,22 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
 
     async fn lock_caller_and_count_active_holds(
         &self,
-        actor: &str,
+        issuer: &str,
+        subject: &str,
         now: DateTime<Utc>,
     ) -> Result<i64, StoreError> {
         self.execute(
-            "SELECT pg_advisory_xact_lock($1, hashtext($2))",
-            &[&HOLD_CEILING_LOCK_NAMESPACE, &actor],
+            "SELECT pg_advisory_xact_lock($1, \
+             hashtext(jsonb_build_array(current_schema(), $2::text, $3::text)::text))",
+            &[&HOLD_CEILING_LOCK_NAMESPACE, &issuer, &subject],
         )
         .await?;
         let row = self
             .query_one(
                 "SELECT count(*) FROM scheduling_claims \
-                 WHERE actor=$1 AND kind='hold' AND state='active' AND hold_expires_at > $2",
-                &[&actor, &now],
+                 WHERE owner_issuer=$1 AND owner_subject=$2 \
+                   AND kind='hold' AND state='active' AND hold_expires_at > $3",
+                &[&issuer, &subject, &now],
             )
             .await?;
         Ok(row.get(0))
