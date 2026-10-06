@@ -24,4 +24,8 @@ release are never resent. When the returned `SchedulingClientError` still
 reports `outcomeUnknown`, the command may have taken effect: recover by
 sending it again under the same key, because a new key could apply it twice.
 `outcomeUnknown` is false for a configuration or request defect, a connection
-never established, and every 4xx refusal.
+never established, and every 4xx refusal. It is false for
+`410 idempotency.expired` too, but there an earlier attempt under the key was
+answered and may have committed: read an appointment by its external reference
+or identifier before choosing a new key. A hold cannot be read and expires on
+its own, so start a new request.

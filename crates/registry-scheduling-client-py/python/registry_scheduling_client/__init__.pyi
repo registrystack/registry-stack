@@ -238,7 +238,11 @@ class SchedulingClientError(Exception):
     # or a 5xx. When True, recover a keyed request by sending it again under
     # the same idempotency key; a new key could apply it twice. False for a
     # configuration or request defect, a connection never established, and
-    # every 4xx refusal.
+    # every 4xx refusal. It is False for 410 idempotency.expired too, but
+    # there an earlier attempt under the key was answered and may have
+    # committed: read an appointment by its external reference or identifier
+    # before choosing a new key. A hold cannot be read and expires on its own,
+    # so start a new request.
     outcome_unknown: bool
 
 class SchedulingClient:

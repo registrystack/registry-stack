@@ -124,7 +124,10 @@ attempt rolled back. When the returned error still reports `outcomeUnknown`,
 the mutation may have taken effect, and the caller must explicitly choose
 whether to retry the same action with the same idempotency key; a new key
 could apply it twice. Reads, unkeyed calls, connection failures, and every 4xx
-refusal are never resent.
+refusal are never resent. A `410 idempotency.expired` does not report
+`outcomeUnknown` either, but there an earlier attempt under the key committed
+and only its held response is gone: read the resource before choosing a new
+key.
 
 ## Specialized reads
 

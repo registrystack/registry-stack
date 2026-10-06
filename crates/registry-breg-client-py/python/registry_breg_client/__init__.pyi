@@ -75,7 +75,9 @@ class BaseRegistryClientError(Exception):
     # it again under the same idempotency key; a new key could apply it twice.
     # False for a configuration or request defect, a credential the token
     # provider could not supply, a connection never established, and every
-    # 4xx refusal.
+    # 4xx refusal. It is False for 410 idempotency.expired too, but there an
+    # earlier attempt under the key committed and only its held response is
+    # gone: read the resource before choosing a new key.
     outcome_unknown: bool
 
 class BRegCreateBinding: ...
