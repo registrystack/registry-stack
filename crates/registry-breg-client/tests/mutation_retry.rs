@@ -48,6 +48,10 @@ enum Answer {
     Json(StatusCode, &'static str),
     /// The statistics publication the service answers on success.
     Published,
+    /// The engine's `idempotency.expired` refusal, written out as the engine
+    /// sends it: an exact retry of a key whose held response passed the
+    /// receipt horizon.
+    Expired,
 }
 
 #[derive(Clone)]
@@ -124,6 +128,19 @@ async fn answer(
                 HeaderValue::from_str(&digest).expect("digest header"),
             );
             (StatusCode::CREATED, headers, PUBLISHED).into_response()
+        }
+        Some(Answer::Expired) => {
+            let document = serde_json::json!({
+                "type": "https://id.registrystack.org/problems/registry-breg/idempotency/expired",
+                "title": "Gone",
+                "status": 410,
+                "detail": "The held response of the idempotency key expired; the key stays spent.",
+                "code": "idempotency.expired",
+                "traceId": TRACE_ID,
+            });
+            let mut headers = traced("application/problem+json");
+            headers.insert("cache-control", HeaderValue::from_static("no-store"));
+            (StatusCode::GONE, headers, document.to_string()).into_response()
         }
         None => StatusCode::IM_A_TEAPOT.into_response(),
     }
@@ -323,6 +340,25 @@ async fn a_deterministic_refusal_is_never_resent() {
         assert_eq!(script.observations().len(), 1, "{code}");
         server.abort();
     }
+}
+
+/// A key past its receipt horizon stays spent: the first attempt committed,
+/// and the engine will never run the request again under that key, so the
+/// refusal is a known outcome and is never resent.
+#[tokio::test]
+async fn an_expired_receipt_is_a_known_refusal_and_never_resent() {
+    let (address, script, server) = serve(&[Answer::Expired, Answer::Published]).await;
+    let error = publish(&client(config(&address)))
+        .await
+        .expect_err("the expired receipt is returned");
+    assert_eq!(
+        error.problem_code().map(BRegProblemCode::code),
+        Some("idempotency.expired")
+    );
+    assert_eq!(error.status(), Some(410));
+    assert!(!error.is_outcome_unknown());
+    assert_eq!(script.observations().len(), 1);
+    server.abort();
 }
 
 /// The engine returns these two typed 5xx codes only with the attempt rolled

@@ -1945,6 +1945,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::ActionRefused => REFUSAL_LABEL,
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
         Code::IdempotencyConflict => "The idempotency key is bound to another request.",
+        Code::IdempotencyExpired => {
+            "The held response of the idempotency key expired; the key stays spent."
+        }
         Code::IngestionChunkMismatch => "The chunk does not match the expected next chunk.",
         Code::IngestionProfileMismatch => {
             "The selected access profile does not match the run's bound profile."
