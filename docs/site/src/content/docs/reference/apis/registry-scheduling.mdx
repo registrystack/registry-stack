@@ -199,6 +199,20 @@ Send `externalReferences` naming the record you book for on every create an orch
 reference is how you find an outcome you never received without the idempotency key or the task grant
 that produced it.
 
+A lost answer or a `503 service.unavailable` from a commitment does not prove that nothing was written:
+when the audit destination refuses the response entry of a committed commitment, the call answers
+`service.unavailable` with the commitment in place. Retry with the same `Idempotency-Key` and the same
+request. The retry answers with the stored first outcome once the audit destination accepts its entry,
+and it never commits a second time. A retry is itself a commitment, so it needs a live task grant that
+covers the action. The Scheduling Rust client classifies an answer whose outcome is unknown and retries
+it under the same key.
+
+{/* Evidence: crates/registry-scheduling/src/store.rs, replay_stored_attempt() runs before
+    check_grant_current(); crates/registry-scheduling/src/service.rs, require_permission();
+    crates/registry-scheduling/tests/postgres_commitments.rs,
+    a_refused_response_entry_answers_unavailable_with_the_commitment_committed and
+    a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted. */}
+
 Once a task grant has expired, the token that carries it is refused with `authentication.refused` on
 every route, its read scope included, and once the stored response has passed
 `retention.attemptReceiptDays`, a retry answers `410 idempotency.expired`. In both cases, observe the
