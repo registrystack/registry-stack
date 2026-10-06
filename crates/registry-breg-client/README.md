@@ -160,8 +160,12 @@ A 5xx answer may follow a commit, and so may a timeout or a broken exchange
 after the request was sent. `BaseRegistryClientError::is_outcome_unknown()`
 reports those cases, and an oversized or unparseable answer, as true; it is
 false for a request or configuration defect, a token failure, a connection
-that was never established, and every typed 4xx refusal such as
-`idempotency.conflict` (409).
+that was never established, every typed 4xx refusal such as
+`idempotency.conflict` (409), and two typed 500 failures:
+`action.handler_failed` and `statistical_dataset.domain_violation`. The engine
+returns those two only with the attempt rolled back, and the same request
+fails the same way, so the client never resends them. `action.evidence_failed`
+and `service.unavailable` (503) stay unknown and are resent.
 
 The client resends a keyed mutation (Create, PATCH, attachment upload and
 delete, lifecycle actions, immediate actions, batches, tombstones, and
@@ -175,8 +179,7 @@ are never resent. Each attempt has the full request timeout, so a call can
 take up to three request timeouts plus the waits.
 
 BReg holds a response under the key only for a committed success, so a resend
-after a 5xx either replays that success or runs the operation again; a handler
-that fails the same way each time fails on every attempt.
+after a 5xx either replays that success or runs the operation again.
 
 When the returned error still reports `is_outcome_unknown()`, recover by
 sending the same request with the same key. A new key could apply the
