@@ -10,9 +10,8 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
 use registry_platform_httputil::client::{
-    retry_keyed_mutation, BearerToken, KeyedMutationAttempt, TokenError, TokenProvider,
+    retry_keyed_mutation, BearerToken, KeyedMutationAttempt, RetryAfter, TokenError, TokenProvider,
 };
-use registry_platform_httputil::retry_after_seconds;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_MATCH, LINK,
     LOCATION, VARY,
@@ -1808,10 +1807,10 @@ impl BaseRegistryClient {
             };
             let response = match self.transport.send(attempt).await {
                 Ok(response) => response,
-                Err(error) => return keyed_attempt(Err(error), false, None),
+                Err(error) => return keyed_attempt(Err(error), false, RetryAfter::Absent),
             };
             let server_error = response.status().is_server_error();
-            let retry_after = retry_after_seconds(response.headers(), u64::MAX);
+            let retry_after = RetryAfter::from_headers(response.headers());
             keyed_attempt(decode(response).await, server_error, retry_after)
         })
         .await
@@ -2218,15 +2217,12 @@ fn snapshot_extensions(
 fn keyed_attempt<T>(
     result: Result<T, BaseRegistryClientError>,
     server_error: bool,
-    retry_after_seconds: Option<u64>,
+    retry_after: RetryAfter,
 ) -> KeyedMutationAttempt<T, BaseRegistryClientError> {
     match result {
         Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
         Err(error) if (server_error && error.is_outcome_unknown()) || error.resend_may_settle() => {
-            KeyedMutationAttempt::Retryable {
-                error,
-                retry_after_seconds,
-            }
+            KeyedMutationAttempt::Retryable { error, retry_after }
         }
         Err(error) if error.is_outcome_unknown() => KeyedMutationAttempt::Unknown(error),
         Err(error) => KeyedMutationAttempt::Settled(Err(error)),

@@ -6,10 +6,10 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, retry_keyed_mutation, send_failure_kind, KeyedMutationAttempt,
-    OutboundOptions, ServiceBaseUrl,
+    OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, retry_after_seconds, url::append_path_segments, validate_response_headers,
+    read_bounded, url::append_path_segments, validate_response_headers,
 };
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AppointmentDocument,
@@ -390,10 +390,10 @@ impl SchedulingClient {
             };
             let response = match self.send(attempt).await {
                 Ok(response) => response,
-                Err(error) => return keyed_attempt(Err(error), false, None),
+                Err(error) => return keyed_attempt(Err(error), false, RetryAfter::Absent),
             };
             let server_error = response.status().is_server_error();
-            let retry_after = retry_after_seconds(response.headers(), u64::MAX);
+            let retry_after = RetryAfter::from_headers(response.headers());
             keyed_attempt(
                 self.json_answer(response, expected_status).await,
                 server_error,
@@ -570,15 +570,12 @@ pub(crate) fn domain_problem(
 fn keyed_attempt<T>(
     result: Result<T, SchedulingClientError>,
     server_error: bool,
-    retry_after_seconds: Option<u64>,
+    retry_after: RetryAfter,
 ) -> KeyedMutationAttempt<T, SchedulingClientError> {
     match result {
         Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
         Err(error) if server_error || error.resend_may_settle() => {
-            KeyedMutationAttempt::Retryable {
-                error,
-                retry_after_seconds,
-            }
+            KeyedMutationAttempt::Retryable { error, retry_after }
         }
         Err(error) if error.is_outcome_unknown() => KeyedMutationAttempt::Unknown(error),
         Err(error) => KeyedMutationAttempt::Settled(Err(error)),

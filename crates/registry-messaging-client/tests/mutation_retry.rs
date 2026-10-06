@@ -250,6 +250,36 @@ async fn a_retry_after_above_the_bound_ends_the_retries() {
     server.abort();
 }
 
+/// An HTTP-date, a fraction, or any other value outside delta-seconds names a
+/// wait the client cannot honor, so it ends the resends like a long wait.
+#[tokio::test]
+async fn an_unusable_retry_after_ends_the_retries() {
+    for unusable in ["Wed, 21 Oct 2026 07:28:00 GMT", "soon", "1.5"] {
+        let (address, script, server) = serve(&[
+            Answer::Problem(ProblemCode::ServiceUnavailable, Some(unusable)),
+            Answer::Json(StatusCode::ACCEPTED, RECEIPT),
+        ])
+        .await;
+        let error = client(config(&address))
+            .submit(&token(), IDEMPOTENCY_KEY, &submission())
+            .await
+            .expect_err("the service asked for a wait the client cannot read");
+        assert!(
+            matches!(
+                error,
+                MessagingClientError::Problem {
+                    code: ProblemCode::ServiceUnavailable,
+                    ..
+                }
+            ),
+            "{unusable}"
+        );
+        assert!(error.is_outcome_unknown(), "{unusable}");
+        assert_eq!(script.observations().len(), 1, "{unusable}");
+        server.abort();
+    }
+}
+
 #[tokio::test]
 async fn a_deterministic_refusal_is_never_resent() {
     for code in [

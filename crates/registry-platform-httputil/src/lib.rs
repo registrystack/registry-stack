@@ -73,18 +73,12 @@ pub fn validate_response_headers(headers: &HeaderMap) -> Result<(), ResponseHead
 /// `maximum_seconds` are deliberately not actionable.
 #[must_use]
 pub fn retry_after_seconds(headers: &HeaderMap, maximum_seconds: u64) -> Option<u64> {
-    let mut values = headers.get_all(http::header::RETRY_AFTER).iter();
-    let value = match (values.next(), values.next()) {
-        (Some(value), None) => value.to_str().ok()?,
-        _ => return None,
-    };
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
+    match client::RetryAfter::from_headers(headers) {
+        client::RetryAfter::Seconds(seconds) if (1..=maximum_seconds).contains(&seconds) => {
+            Some(seconds)
+        }
+        _ => None,
     }
-    value
-        .parse::<u64>()
-        .ok()
-        .filter(|seconds| (1..=maximum_seconds).contains(seconds))
 }
 
 /// Default timeout for requests built from [`ValidatedFetchUrl`].
