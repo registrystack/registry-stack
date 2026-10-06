@@ -554,6 +554,44 @@ test('an invalid configuration is a configuration error', () => {
   }
 });
 
+test('a configuration member outside the declared set is a configuration error', () => {
+  const { SchedulingClient, SchedulingClientError } = require('../client');
+  const baseUrl = 'https://scheduling.example/';
+  assert.ok(new SchedulingClient({
+    baseUrl,
+    requestTimeoutMilliseconds: 1500,
+    connectTimeoutMilliseconds: 1500,
+    maxResponseBytes: 1500,
+    userAgent: 'scheduling-test',
+    trustedRootCertificates: null,
+    maxMutationRetries: 1,
+  }));
+  for (const member of ['maxMutationRetry', 'requestTimeoutMs', 'authorization']) {
+    for (const value of [0, null]) {
+      assert.throws(() => new SchedulingClient({ baseUrl, [member]: value }), (error) => {
+        assert.ok(error instanceof SchedulingClientError, member);
+        assert.equal(error.kind, 'configuration', member);
+        assert.equal(error.outcomeUnknown, false);
+        return true;
+      });
+    }
+  }
+});
+
+test('every optional configuration member accepts null, as its declaration says', () => {
+  const { SchedulingClient } = require('../client');
+  for (const member of [
+    'requestTimeoutMilliseconds',
+    'connectTimeoutMilliseconds',
+    'maxResponseBytes',
+    'userAgent',
+    'trustedRootCertificates',
+    'maxMutationRetries',
+  ]) {
+    assert.ok(new SchedulingClient({ baseUrl: 'https://scheduling.example/', [member]: null }), member);
+  }
+});
+
 test('a timeout or response bound that is not a whole number in range is a configuration error', () => {
   const { SchedulingClient, SchedulingClientError } = require('../client');
   const baseUrl = 'https://scheduling.example/';

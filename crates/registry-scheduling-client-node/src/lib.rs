@@ -21,17 +21,20 @@ use url::Url;
 const MAXIMUM_JAVASCRIPT_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 const INVALID_ARGUMENTS: &str = "Scheduling client arguments are invalid";
 
-#[napi(object)]
-pub struct SchedulingClientConfig {
-    pub base_url: String,
-    pub request_timeout_milliseconds: Option<f64>,
-    pub connect_timeout_milliseconds: Option<f64>,
-    pub max_response_bytes: Option<f64>,
-    pub user_agent: Option<String>,
-    pub trusted_root_certificates: Option<String>,
+/// The client settings. A member outside this set is refused rather than
+/// ignored, so a misspelled setting cannot silently keep its default.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SchedulingClientConfig {
+    base_url: String,
+    request_timeout_milliseconds: Option<f64>,
+    connect_timeout_milliseconds: Option<f64>,
+    max_response_bytes: Option<f64>,
+    user_agent: Option<String>,
+    trusted_root_certificates: Option<String>,
     /// How many times a keyed command whose outcome is unknown is resent under
     /// the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
-    pub max_mutation_retries: Option<f64>,
+    max_mutation_retries: Option<f64>,
 }
 
 #[napi(object)]
@@ -67,7 +70,13 @@ pub struct SchedulingClient {
 #[napi]
 impl SchedulingClient {
     #[napi(constructor)]
-    pub fn new(config: SchedulingClientConfig) -> Result<Self> {
+    pub fn new(config: Value) -> Result<Self> {
+        let config: SchedulingClientConfig = serde_json::from_value(config).map_err(|_| {
+            binding_error(
+                "configuration",
+                "Scheduling client configuration is invalid",
+            )
+        })?;
         let base_url = Url::parse(&config.base_url).map_err(|_| {
             binding_error(
                 "configuration",
