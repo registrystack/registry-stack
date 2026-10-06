@@ -208,6 +208,37 @@
   state file offline, without resolving a secret reference, and exits 0, 1,
   or 3 under the shared check contract; `--format json` reports the
   diagnostics.
+- BREAKING: remove shared primitives whose only consumer was Registry Relay,
+  retired in v0.39.0. Removed from `registry-platform-sqlite`:
+  `execute_before`. Removed from `registry-platform-httpsec`:
+  `ProblemDefinition`, `ProblemDocument::matches`, and
+  `ProblemDocument::definition_index`. Removed from `registry-platform-oidc`:
+  `registry_relay_access_profile` and `with_related_token_typ`. Removed from
+  `registry-platform-audit`: `AUDIT_PATH_SEGMENT_PATTERN`.
+- BREAKING: `registry-platform-httputil` drops the destination helpers and
+  decoders only Relay used. Removed: the closed JSON decoder
+  (`ClosedJsonDecoder`, `ClosedJsonSchema`, `ClosedJsonField`,
+  `ClosedJsonRecordRoot`, `ClosedJsonScalarProjection`,
+  `ClosedJsonPresenceProjection`, `ClosedJsonOutcome`, their errors, the
+  `MAX_CLOSED_JSON_*` bounds other than `MAX_CLOSED_JSON_ENCODED_BODY_BYTES`,
+  and the `ProjectedJsonRecord`, `ProjectedJsonField`, and
+  `ProjectedJsonScalar` results); the script text and fixture decoders
+  (`ScriptTextResponse`, `decode_script_text`, `decode_script_fixture_text`,
+  `decode_script_fixture_json`, and `ScriptResponseDecodeError::InvalidText`);
+  the no-expiry OAuth token decoder (`NoExpiryOAuthTokenDecoder`,
+  `FreshBearerToken`, and their errors); the read-only script destination
+  (`DataDestinationRequestTemplate::new_script` and
+  `validate_script_destination_path_rule`); the single path segment
+  templates (`new_with_path_segment`, `render_with_path_segment`,
+  `render_zeroizing_with_path_segment`, `MAX_DESTINATION_PATH_SEGMENT_BYTES`,
+  and `DestinationRequestError::InvalidPathSegment`); the request effect
+  values (`noncredential_effect_value`, `effect_value_without_api_key_header`,
+  `effect_value_without_api_key_query`, and
+  `credential_exchange_effect_value`); `canonicalize_same_origin_target` and
+  `DestinationTargetCanonicalizationError`; `require_json_content_type`; and
+  the `validate_for_immediate_fetch` alias, replaced by
+  `validate_dns_pinned_for_immediate_fetch`. The crate no longer depends on
+  `time`.
 
 ## v0.39.0 - 2026-10-06
 
