@@ -294,9 +294,11 @@ async fn a_record_is_deleted_record_days_after_a_terminal_state_with_everything_
     assert!(!payload_erased(&harness, unknown).await);
 
     // With its record gone, the key stays spent: the row keeps only the
-    // digest of the caller and the key, nothing of the message, and a retry
-    // under it, with the same body or another, before or after an audit key
-    // rotation, is refused as expired and sends nothing.
+    // digest of the caller and the key, nothing of the message. The request
+    // hash went with the record, so no retry can be told apart from the
+    // first request: a retry under the key, with the same body or another,
+    // before or after an audit key rotation, is refused as expired and
+    // sends nothing.
     let retained = harness
         .isolated
         .admin
@@ -396,17 +398,21 @@ async fn a_submission_receipt_expires_after_its_period_and_its_key_stays_spent()
     .await
     .unwrap();
     assert_eq!(report.submission_receipts, 1);
+    // The receipt goes; the request hash stays with the message, so a
+    // retry under the key can still be told exact or changed.
     let row = harness
         .isolated
         .admin
         .query_one(
-            "SELECT status_code IS NULL AND receipt IS NULL AND erased_at IS NOT NULL \
+            "SELECT status_code IS NULL AND receipt IS NULL AND erased_at IS NOT NULL, \
+                    request_hash IS NOT NULL AND message_id IS NOT NULL \
                FROM messaging_idempotency WHERE key_reference = $1",
             &[&sender_key_reference(SENDER_PRINCIPAL, &key)],
         )
         .await
         .unwrap();
     assert!(row.get::<_, bool>(0));
+    assert!(row.get::<_, bool>(1));
     assert_eq!(
         harness
             .count("SELECT count(*) FROM messaging_idempotency WHERE erased_at IS NULL")
@@ -511,9 +517,9 @@ async fn a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spe
     );
     assert!(!erased, "{row}");
 
-    // The same caller's exact retry, and a retry with another body, are
-    // refused as expired before and after an audit key rotation, and
-    // record nothing.
+    // Before and after an audit key rotation, the same caller's exact retry
+    // is refused as expired and a retry with another body as a reuse of the
+    // key, and neither records anything.
     let messages = harness
         .count("SELECT count(*) FROM messaging_messages")
         .await;
@@ -526,10 +532,17 @@ async fn a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spe
         ))))
         .await;
     for app in [harness.app.clone(), rotated] {
-        for body in [email_submission(), other.clone()] {
+        for (body, status_code, code) in [
+            (email_submission(), StatusCode::GONE, "idempotency.expired"),
+            (
+                other.clone(),
+                StatusCode::CONFLICT,
+                "idempotency.key-reused",
+            ),
+        ] {
             let (status, _, again) = submit_to(app.clone(), &sender_token(), key, &body).await;
-            assert_eq!(status, StatusCode::GONE, "{again}");
-            assert_eq!(again["code"], "idempotency.expired");
+            assert_eq!(status, status_code, "{again}");
+            assert_eq!(again["code"], code);
         }
     }
     assert_eq!(

@@ -111,12 +111,13 @@ decisions:
     decision: >-
       POST /v1/messages authorizes the caller, validates the body, and renders
       the template on every request, including one that repeats an
-      idempotency key, and only then consults the key. An expired key answers
-      idempotency.expired before its request hash is compared, and a key is
-      scoped to the issuer and subject of the caller that used it
-      (MESSAGING-DEC-17). An exact retry refused with 403 or 422 therefore
-      says nothing about the first attempt, which may have been accepted
-      under the package or profile active then.
+      idempotency key, and only then consults the key. A different request
+      under the key answers idempotency.key-reused whether or not its receipt
+      expired, the exact request past the receipt horizon answers
+      idempotency.expired, and a key is scoped to the issuer and subject of
+      the caller that used it (MESSAGING-DEC-17). An exact retry refused
+      with 403 or 422 therefore says nothing about the first attempt, which
+      may have been accepted under the package or profile active then.
     reasoning: >-
       A replay answered from the key alone would let a caller whose profile
       lost a template keep sending it by repeating an old key, and would let
@@ -311,11 +312,16 @@ decisions:
       the caller, and never by the caller's keyed audit pseudonym. The raw
       issuer, subject, and key stay beside the digest only while the
       submission receipt does: when retention erases the receipt it clears
-      all three (MESSAGING-SEC-11), and when a record is deleted its row
-      stays with the message and the request hash nulled too, so the digest
-      row alone keeps the key spent indefinitely and a repeat of it by the
-      same caller is refused with idempotency.expired, the refusal every
-      spent key gets. Another caller's identical key is fresh. Rotating
+      all three (MESSAGING-SEC-11) and keeps the message and the request
+      hash, so past the receipt horizon the same caller's exact retry is
+      refused with idempotency.expired and a changed one with
+      idempotency.key-reused, as Base Registry Engine, Scheduling, and
+      Casework answer a changed request under a spent key. When a record is
+      deleted its row stays with the message and the request hash nulled
+      too, so the digest row alone keeps the key spent indefinitely and every
+      repeat of it by the same caller, which can then no longer be told exact
+      or changed, is refused with idempotency.expired. Another caller's
+      identical key is fresh. Rotating
       audit.hashKeyRef changes pseudonyms only: an exact retry after the
       rotation replays its receipt or is refused as expired, and never sends
       again. The audit journal keeps naming the caller by pseudonym. Schema
@@ -324,10 +330,15 @@ decisions:
     reasoning: >-
       Freeing a key would turn a caller's mistaken retry into a second message
       sent to the same recipient, which is the duplicate the key exists to
-      prevent. A key scoped to the pseudonym was freed by every audit key
-      rotation, so routine key hygiene reopened that duplicate for every
-      caller with a retry in flight, and a digest keyed with any rotating
-      secret would do the same; the digest therefore takes no key. The raw
+      prevent. A changed request under a spent key is a caller defect
+      whatever the key's age, so it answers the conflict it answers inside
+      the horizon; telling it apart takes only the request hash the row
+      already holds until recordDays, and the record deletion drops that hash
+      with the message rather than keeping it for this answer alone. A key
+      scoped to the pseudonym was freed by every audit key rotation, so
+      routine key hygiene reopened that duplicate for every caller with a
+      retry in flight, and a digest keyed with any rotating secret would do
+      the same; the digest therefore takes no key. The raw
       issuer and subject name the authenticated caller, not a recipient, and
       under a profile that admits a human or agent actor or reads the
       principal from a claim other than sub they may identify a person, such
@@ -342,6 +353,7 @@ decisions:
       caller would replay one caller's receipt to another.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
+      - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
       - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}

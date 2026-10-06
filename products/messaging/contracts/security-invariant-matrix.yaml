@@ -244,11 +244,13 @@ invariants:
       while the receipt stands and all three NULL once it is erased.
     refusal: >-
       Keep the digest row indefinitely, so the same caller's retry after the
-      horizon, exact or changed, is refused with 410 idempotency.expired and
-      sends nothing, whatever audit key the runtime holds; answer another
-      caller's identical key as a fresh submission; refuse at the schema any
-      erased row that keeps part of its caller or any live row that lacks
-      it; touch no row whose receipt is still inside its period.
+      horizon is refused and sends nothing, whatever audit key the runtime
+      holds: the exact request with 410 idempotency.expired, and a changed
+      one with 409 idempotency.key-reused while the request hash stays with
+      the message record, 410 once the record deletion clears it; answer
+      another caller's identical key as a fresh submission; refuse at the
+      schema any erased row that keeps part of its caller or any live row
+      that lacks it; touch no row whose receipt is still inside its period.
     negativeTest:
       path: crates/registry-messaging/tests/postgres_retention.rs
       name: a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent

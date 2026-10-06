@@ -17,9 +17,9 @@
 //! outlives the raw values once retention erases the receipt. The
 //! same key with the same canonical request replays the stored status and
 //! receipt; the same key with another request is refused with
-//! `idempotency.key-reused`; a key whose receipt is older than
-//! `retention.submissionReceiptDays` is spent and refused with
-//! `idempotency.expired`. A replay is authorized and rendered again against
+//! `idempotency.key-reused`, whatever the key's age; the same request under
+//! a key whose receipt is older than `retention.submissionReceiptDays` is
+//! refused with `idempotency.expired`. A replay is authorized and rendered again against
 //! the active package before its receipt is answered.
 //!
 //! The status view and every operator report name the recipient's kind
@@ -1352,12 +1352,21 @@ async fn lookup_key(
     .transpose()
 }
 
+/// Answer a submission under a key `stored` already holds. A different
+/// request under the key is a reuse whether or not its receipt is still
+/// held, as Base Registry Engine, Scheduling, and Casework answer it: the
+/// caller is told the key is not theirs to re-aim before being told the
+/// answer is gone. Only the exact request past the receipt horizon is
+/// refused as expired, and so is every request once retention deleted the
+/// message and its request hash with it, since none can then be told apart
+/// from the first.
 fn replay(stored: StoredKey, submission: &PreparedSubmission) -> Result<SubmissionAnswer, Refusal> {
-    if stored.spent {
-        return Err(Refusal::Problem(ProblemCode::IdempotencyExpired));
-    }
-    if stored.request_hash.as_deref() != Some(submission.request_hash.as_str()) {
-        return Err(Refusal::Problem(ProblemCode::IdempotencyKeyReused));
+    match stored.request_hash.as_deref() {
+        Some(hash) if hash != submission.request_hash => {
+            return Err(Refusal::Problem(ProblemCode::IdempotencyKeyReused));
+        }
+        Some(_) if !stored.spent => {}
+        _ => return Err(Refusal::Problem(ProblemCode::IdempotencyExpired)),
     }
     match (
         stored.status.and_then(|status| u16::try_from(status).ok()),
