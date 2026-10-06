@@ -108,8 +108,11 @@ impl MessagingClient {
     /// accepted the message: recover with the same key and request, never a
     /// new key. The runtime authorizes and renders a replay before it looks
     /// up the key, so a 403 or 422 answering an exact retry does not show
-    /// that the first attempt failed; never resubmit it under a new key, and
-    /// read the message status instead. A key that is empty, longer than
+    /// that the first attempt failed. Never resubmit it under a new key:
+    /// have the operator restore the access, template version, or locale the
+    /// refusal names, then retry under the same key within the deployment's
+    /// `retention.submissionReceiptDays`, after which an accepted key is
+    /// spent. A key that is empty, longer than
     /// `MAXIMUM_IDEMPOTENCY_KEY_BYTES`, or carries a byte outside visible
     /// ASCII is refused before a request is sent. A templated submission's
     /// identifier and version must also follow the package naming grammar.
