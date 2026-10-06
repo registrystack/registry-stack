@@ -1,7 +1,7 @@
 # Registry Stack client guidance
 
 This guide covers the six product clients, the Node.js and Python bindings
-maintained for five of them, `registry-stack-client`, the unified
+maintained for each of them, `registry-stack-client`, the unified
 native-package facades, and shared `registry-record` DTOs. Apply the owning
 product guide as well.
 
@@ -16,9 +16,8 @@ that every checkout or release ships it.
 |---|---|
 | `registry-{breg,casework,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
-| BReg, Casework, Discovery, Evidence, and Messaging `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
-| `registry-scheduling-client` | Rust-only Scheduling client over `registry-scheduling-core` wire types |
-| `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, and Messaging, with separate product, record, and auth modules |
+| BReg, Casework, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
+| `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `registry-stack-client-py` | Public `registry-stack-client` Python metadata and `registry_client` facade, assembled with all native bindings |
 | `registry-record` | Neutral Registry Record DTOs and strict envelope decoding, without product authorization semantics |
@@ -64,6 +63,12 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   view, receipt, and template preview come from the Rust client unchanged. A
   429 limit refusal carries the bounded `Retry-After` wait the Rust client
   read; waiting and retrying stay the caller's decision.
+- Scheduling holds, bookings, reschedules, and cancellations take a
+  caller-chosen idempotency key; a binding never generates one or retries a
+  capacity mutation. Bindings parse every instant they send as RFC 3339 before
+  any request and add no Scheduling semantics: the closed problem catalogue
+  and the hold, appointment, and availability documents come from the Rust
+  client unchanged.
 - Preserve strict duplicate-member rejection, bounded responses, product media
   types, trace/Problem validation, and value-free errors. Bindings must not
   expose URLs, headers, payloads, selectors, credentials, or transport chains
@@ -102,12 +107,13 @@ tree. `build:debug` builds the addon without writing the committed `index.js`
 or `index.d.ts`, and `check:types` generates both into ignored `.check` files and
 requires them to match the committed ones byte for byte. When a napi-rs CLI bump
 changes that output, `check:types` fails. Run `npm ci && npm run build` in each
-of the five `-client-node` directories, which rewrites both files with the
+of the six `-client-node` directories, which rewrites both files with the
 pinned CLI (Discovery's loader normalizer included), and commit every
 `index.js` and `index.d.ts` together with the bump.
 
 For Python bindings, run from the changed `-client-py` directory, replacing
-`<product>` with `breg`, `casework`, `discovery`, `evidence`, or `messaging`:
+`<product>` with `breg`, `casework`, `discovery`, `evidence`, `messaging`, or
+`scheduling`:
 
 ```sh
 cargo build --locked -p registry-<product>-client-py --lib --features registry-<product>-client-py/extension-module
@@ -135,10 +141,12 @@ registry_prepare_cargo_runtime "$PWD" --locked -p registry-<product>-client-node
 ```
 
 In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Discovery, Evidence, and Messaging
-bindings. Published packages include Messaging from v0.38.0; earlier release
-assembly preserves its version-selected inventory. Source CI uses the explicit
-local `--include-messaging` override when assembling the current five bindings.
+are generated from the BReg, Casework, Discovery, Evidence, Messaging, and
+Scheduling bindings. Published packages include Messaging from v0.38.0 and
+Scheduling from v0.40.0; earlier release assembly preserves its
+version-selected inventory. Source CI uses the explicit local
+`--include-messaging` and `--include-scheduling` overrides when assembling the
+current six bindings.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo

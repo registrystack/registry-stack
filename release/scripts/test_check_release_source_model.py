@@ -157,6 +157,27 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
+    def test_monorepo_mode_requires_every_scheduling_client_crate(self) -> None:
+        for crate, name in (
+            ("registry-scheduling-client", "registry-scheduling client crate"),
+            (
+                "registry-scheduling-client-node",
+                "registry-scheduling Node client binding",
+            ),
+            (
+                "registry-scheduling-client-py",
+                "registry-scheduling Python client binding",
+            ),
+        ):
+            with self.subTest(crate=crate):
+                with MonorepoFixture() as stack_root:
+                    shutil.rmtree(stack_root / "crates" / crate)
+
+                    result = run_monorepo_validator(stack_root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+
     def test_monorepo_mode_records_all_declared_external_release_refs(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_monorepo_validator(stack_root)
@@ -289,6 +310,9 @@ class MonorepoFixture:
             "crates/registry-messaging-client",
             "crates/registry-messaging-client-node",
             "crates/registry-messaging-client-py",
+            "crates/registry-scheduling-client",
+            "crates/registry-scheduling-client-node",
+            "crates/registry-scheduling-client-py",
             "crates/registry-stack-client-node",
             "crates/registry-stack-client-py",
         ):

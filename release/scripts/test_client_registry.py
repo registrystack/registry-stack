@@ -84,19 +84,32 @@ class ClientRegistryTest(unittest.TestCase):
         self._write_distribution(self.client)
 
     def _write_distribution(
-        self, client: str, *, include_casework: bool = False, include_messaging: bool = False
+        self,
+        client: str,
+        *,
+        include_casework: bool = False,
+        include_messaging: bool = False,
+        include_scheduling: bool = False,
     ) -> None:
         definition = self.module.client_definition(client)
         optional = {
             f"{definition.npm_root_package}-{platform}": self.version
             for platform, _binary in self.module.npm_platforms(
-                client, self.version, include_casework=include_casework, include_messaging=include_messaging
+                client,
+                self.version,
+                include_casework=include_casework,
+                include_messaging=include_messaging,
+                include_scheduling=include_scheduling,
             )
         }
         for path, (platform, binary) in zip(
             self.module.npm_tarballs(self.directory, self.version, client)[:-1],
             self.module.npm_platforms(
-                client, self.version, include_casework=include_casework, include_messaging=include_messaging
+                client,
+                self.version,
+                include_casework=include_casework,
+                include_messaging=include_messaging,
+                include_scheduling=include_scheduling,
             ),
             strict=True,
         ):
@@ -113,7 +126,10 @@ class ClientRegistryTest(unittest.TestCase):
             optional_dependencies=optional,
             facade_namespaces=(
                 self.module.stack_python_namespaces(
-                    self.version, include_casework=include_casework, include_messaging=include_messaging
+                    self.version,
+                    include_casework=include_casework,
+                    include_messaging=include_messaging,
+                    include_scheduling=include_scheduling,
                 )
                 if client == "stack"
                 else ()
@@ -125,7 +141,10 @@ class ClientRegistryTest(unittest.TestCase):
                 project=definition.pypi_project,
                 namespaces=(
                     self.module.stack_python_namespaces(
-                        self.version, include_casework=include_casework, include_messaging=include_messaging
+                        self.version,
+                        include_casework=include_casework,
+                        include_messaging=include_messaging,
+                        include_scheduling=include_scheduling,
                     )
                     if client == "stack"
                     else ()
@@ -147,7 +166,7 @@ class ClientRegistryTest(unittest.TestCase):
         self.module.validate_distribution(self.directory, self.version, "relay")
 
     def test_validates_the_unified_distribution_with_all_native_bindings(self) -> None:
-        self.version = "0.39.0"
+        self.version = "0.40.0"
         self._write_distribution("stack")
         self.module.validate_distribution(self.directory, self.version, "stack")
         platform = self.module.npm_tarballs(
@@ -162,6 +181,7 @@ class ClientRegistryTest(unittest.TestCase):
                 "package/discovery-client.darwin-arm64.node",
                 "package/evidence-client.darwin-arm64.node",
                 "package/messaging-client.darwin-arm64.node",
+                "package/scheduling-client.darwin-arm64.node",
             ],
         )
 
@@ -214,6 +234,72 @@ class ClientRegistryTest(unittest.TestCase):
             self.module.ClientRegistryError, "unexpectedly contains the messaging namespace"
         ):
             self.module.validate_wheels(self.directory, self.version, "stack")
+
+    def test_scheduling_joins_the_unified_clients_at_v0_40(self) -> None:
+        self.assertNotIn(
+            "scheduling-client",
+            self.module.native_binary_stems("stack", "0.39.99"),
+        )
+        self.assertNotIn(
+            "scheduling", self.module.stack_python_namespaces("0.39.99")
+        )
+        self.assertIn(
+            "scheduling-client",
+            self.module.native_binary_stems("stack", "0.40.0"),
+        )
+        self.assertIn("scheduling", self.module.stack_python_namespaces("0.40.0"))
+
+    def test_local_scheduling_integration_does_not_change_historical_validation(self) -> None:
+        self.version = "0.39.0"
+        self._write_distribution("stack", include_scheduling=True)
+        self.module.validate_distribution(
+            self.directory, self.version, "stack", include_scheduling=True,
+        )
+        with self.assertRaises(self.module.ClientRegistryError):
+            self.module.validate_distribution(self.directory, self.version, "stack")
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError, "unexpectedly contains the scheduling namespace"
+        ):
+            self.module.validate_wheels(self.directory, self.version, "stack")
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = self.module.main(
+                [
+                    "validate-dist",
+                    "--directory",
+                    str(self.directory),
+                    "--version",
+                    self.version,
+                    "--client",
+                    "stack",
+                    "--include-scheduling",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "validated\n")
+
+    def test_v0_39_rejects_a_root_package_that_exposes_scheduling(self) -> None:
+        self.version = "0.39.0"
+        self._write_distribution("stack")
+        definition = self.module.client_definition("stack")
+        root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
+        write_npm_package(
+            root,
+            name=definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self.module.expected_optional_dependencies(
+                "stack", self.version
+            ),
+            facade_namespaces=self.module.stack_python_namespaces(self.version)
+            + ("scheduling",),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "unexpectedly exposes the scheduling facade",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
 
     def test_explicit_0_29_candidate_validation_includes_casework(self) -> None:
         self.version = "0.29.0"
@@ -332,6 +418,32 @@ class ClientRegistryTest(unittest.TestCase):
                 self.directory, self.version, "stack"
             )
 
+    def test_selected_scheduling_requires_its_root_facade(self) -> None:
+        self.version = "0.40.0"
+        self._write_distribution("stack")
+        definition = self.module.client_definition("stack")
+        root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
+        write_npm_package(
+            root,
+            name=definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self.module.expected_optional_dependencies(
+                "stack", self.version
+            ),
+            facade_namespaces=tuple(
+                namespace
+                for namespace in self.module.stack_python_namespaces(self.version)
+                if namespace != "scheduling"
+            ),
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "incomplete scheduling facade",
+        ):
+            self.module.validate_npm_packages(
+                self.directory, self.version, "stack"
+            )
+
     def test_rejects_a_unified_wheel_without_casework(self) -> None:
         self._write_distribution("stack")
         wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
@@ -367,6 +479,26 @@ class ClientRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(
             self.module.ClientRegistryError,
             "has no messaging namespace",
+        ):
+            self.module.validate_wheels(self.directory, self.version, "stack")
+
+    def test_rejects_a_v0_40_unified_wheel_without_scheduling(self) -> None:
+        self.version = "0.40.0"
+        self._write_distribution("stack")
+        wheel = self.module.wheel_paths(self.directory, self.version, "stack")[0]
+        write_wheel(
+            wheel,
+            project="registry-stack-client",
+            namespaces=tuple(
+                value
+                for value in self.module.stack_python_namespaces(self.version)
+                if value != "scheduling"
+            ),
+            version=self.version,
+        )
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError,
+            "has no scheduling namespace",
         ):
             self.module.validate_wheels(self.directory, self.version, "stack")
 
@@ -649,6 +781,7 @@ class CheckedInClientManifestTest(unittest.TestCase):
             "evidence": repo / "crates/registry-evidence-client-node",
             "casework": repo / "crates/registry-casework-client-node",
             "messaging": repo / "crates/registry-messaging-client-node",
+            "scheduling": repo / "crates/registry-scheduling-client-node",
             "stack": repo / "crates/registry-stack-client-node",
         }
         for client, root in roots.items():
@@ -673,9 +806,9 @@ class ClientReadmeInstallTest(unittest.TestCase):
             for pattern in ("*-client-node", "*-client-py")
             for path in (repo / "crates").glob(f"{pattern}/README.md")
         )
-        # Six products have Rust, Node and Python coverage, and both unified
+        # Six products have Node and Python bindings, and both unified
         # facades remain present.
-        self.assertEqual(12, len(found), found)
+        self.assertEqual(14, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:
@@ -699,11 +832,13 @@ class ClientReadmeInstallTest(unittest.TestCase):
             "registry-discovery-client-node": "@registrystack/client",
             "registry-evidence-client-node": "@registrystack/client",
             "registry-messaging-client-node": "@registrystack/client",
+            "registry-scheduling-client-node": "@registrystack/client",
             "registry-breg-client-py": "registry-stack-client",
             "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",
             "registry-evidence-client-py": "registry-stack-client",
             "registry-messaging-client-py": "registry-stack-client",
+            "registry-scheduling-client-py": "registry-stack-client",
         }
         for readme in self.readmes():
             crate = readme.parent.name

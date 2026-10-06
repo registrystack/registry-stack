@@ -989,6 +989,16 @@ class GateInventoryTest(unittest.TestCase):
                 "true # Scheduling package activation disabled",
                 "Scheduling package activation suite",
             ),
+            (
+                "registry-messaging-client-py registry-scheduling-client-py",
+                "registry-messaging-client-py",
+                "Scheduling Python client binding coverage",
+            ),
+            (
+                "registry-messaging-client-node registry-scheduling-client-node",
+                "registry-messaging-client-node",
+                "Scheduling Node client binding coverage",
+            ),
         ):
             with self.subTest(gate=gate):
                 text = self.workflow.replace(snippet, replacement, 1)
@@ -1169,10 +1179,10 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("for client in discovery evidence", proof)
         # The source facade loads every binding from its platform package.
-        # Both the build loop and the copy loop must include Messaging.
+        # Both the build loop and the copy loop must include every binding.
         self.assertEqual(
             proof.count(
-                "for client in discovery evidence breg casework messaging; do"
+                "for client in discovery evidence breg casework messaging scheduling; do"
             ),
             2,
         )

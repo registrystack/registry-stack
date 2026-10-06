@@ -25,6 +25,11 @@ first ships the Registry Messaging binaries, image, rehearsal leg, and
 security evidence. The unified Node and Python client facades add Messaging in
 the same release. Those packaging surfaces join in v0.38.0, together with
 Messaging's shared package activation contract.
+
+``SCHEDULING_CLIENT_FIRST_RELEASE`` is the single place that decides which
+release first adds the Registry Scheduling namespace and native bindings to the
+unified Node and Python client packages. The Scheduling runtime, image, and
+operator CLI already ship; only the client facades join, in v0.40.0.
 """
 
 from __future__ import annotations
@@ -41,6 +46,8 @@ MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 DISCOVERYCTL_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
 SCHEDULING_BINARY_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+
+SCHEDULING_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 40, 0)
 
 RENDER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
@@ -87,6 +94,15 @@ def scheduling_binary_in_release(version: tuple[int, int, int]) -> bool:
     """Return whether Scheduling also ships as a standalone runtime binary."""
 
     first_release = SCHEDULING_BINARY_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
+def scheduling_client_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the unified client packages carry Registry Scheduling.
+
+    The constant is read at call time so tests can patch it.
+    """
+    first_release = SCHEDULING_CLIENT_FIRST_RELEASE
     return first_release is not None and tuple(version) >= first_release
 
 
@@ -146,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     scheduling_binary.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     scheduling_binary.set_defaults(in_release=scheduling_binary_in_release)
+    scheduling_client = commands.add_parser(
+        "scheduling-client-in-release",
+        help="print true when the unified client packages carry Registry Scheduling, else false",
+    )
+    scheduling_client.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    scheduling_client.set_defaults(in_release=scheduling_client_in_release)
     render = commands.add_parser(
         "render-in-release",
         help="print true when the release version ships Registry Render, else false",

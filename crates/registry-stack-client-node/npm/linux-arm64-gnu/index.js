@@ -5,4 +5,5 @@ module.exports = {
   breg: require('./breg-client.linux-arm64-gnu.node'),
   casework: require('./casework-client.linux-arm64-gnu.node'),
   messaging: require('./messaging-client.linux-arm64-gnu.node'),
+  scheduling: require('./scheduling-client.linux-arm64-gnu.node'),
 };

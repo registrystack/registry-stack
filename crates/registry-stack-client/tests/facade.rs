@@ -1,4 +1,6 @@
-use registry_stack_client::{auth, breg, casework, discovery, evidence, messaging, record};
+use registry_stack_client::{
+    auth, breg, casework, discovery, evidence, messaging, record, scheduling,
+};
 
 #[test]
 fn facade_keeps_every_product_under_its_own_module() {
@@ -12,6 +14,8 @@ fn facade_keeps_every_product_under_its_own_module() {
     assert!(names::<casework::CaseworkClient>().contains("registry_casework_client"));
     assert!(names::<messaging::MessagingClient>().contains("registry_messaging_client"));
     assert!(names::<messaging::ProblemCode>().contains("registry_messaging_core"));
+    assert!(names::<scheduling::SchedulingClient>().contains("registry_scheduling_client"));
+    assert!(names::<scheduling::ProblemCode>().contains("registry_scheduling_core"));
     assert!(names::<discovery::DiscoveryClient>().contains("registry_discovery_client"));
     assert!(names::<evidence::EvidenceClient>().contains("registry_evidence_client"));
     assert!(names::<record::RegistryRecord>().contains("registry_record"));

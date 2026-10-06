@@ -79,6 +79,23 @@ pub mod messaging {
     };
 }
 
+pub mod scheduling {
+    pub use registry_scheduling_client::{
+        type_uri, AdmissionRequest, AppointmentDocument, AppointmentHistoryEntryDocument,
+        AppointmentStateDocument, AvailabilityEntry, BearerToken, CancelAppointmentRequest,
+        CreateAppointmentRequest, ExplainDocument, ExternalReference, HoldDocument,
+        LocationDocument, OfferingDocument, PageDocument, PartyCounts, ProblemCode,
+        ReminderDocument, RescheduleAppointmentRequest, ResourceDocument, SchedulingAuth,
+        SchedulingClient, SchedulingClientConfig, SchedulingClientError, SchedulingComplete,
+        SchedulingModeDocument, SchedulingProtocolFailure, SchedulingServiceDocument,
+        ServiceDocument, TransportKind, WindowDocument, APPOINTMENTS_PATH,
+        AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH,
+        IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH,
+        MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH,
+        SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
+    };
+}
+
 pub mod discovery {
     pub use registry_discovery_client::{
         accept_service_selection, renew_unchanged_service_selection, AcceptedServiceSelection,

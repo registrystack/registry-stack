@@ -73,6 +73,8 @@ SHARDS = {
         "registry-scheduling",
         "registry-schedulingctl",
         "registry-scheduling-client",
+        "registry-scheduling-client-node",
+        "registry-scheduling-client-py",
     ),
     "messaging": (
         "registry-messaging-core",
@@ -359,12 +361,16 @@ CASEWORK_BINDING_PACKAGES = frozenset(
 MESSAGING_BINDING_PACKAGES = frozenset(
     {"registry-messaging-client-node", "registry-messaging-client-py"}
 )
+SCHEDULING_BINDING_PACKAGES = frozenset(
+    {"registry-scheduling-client-node", "registry-scheduling-client-py"}
+)
 NATIVE_BINDING_PACKAGES = (
     DISCOVERY_BINDING_PACKAGES
     | EVIDENCE_BINDING_PACKAGES
     | BREG_BINDING_PACKAGES
     | CASEWORK_BINDING_PACKAGES
     | MESSAGING_BINDING_PACKAGES
+    | SCHEDULING_BINDING_PACKAGES
 )
 
 # The breg-contracts matrix lanes. Review runs the first; the merge queue, the

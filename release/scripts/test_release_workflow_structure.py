@@ -1170,6 +1170,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "    fi",
             node_smoke,
         )
+        self.assertIn('scheduling-client-in-release "${CLIENT_VERSION}"', node_smoke)
+        self.assertIn(
+            'if [[ "${scheduling_in_release}" == true ]]; then\n'
+            '      expected_addons=$((expected_addons + 1))\n'
+            "    fi",
+            node_smoke,
+        )
         self.assertIn(
             "node_modules/@registrystack/client-${{ matrix.napi_platform }}",
             node_smoke,
@@ -1304,13 +1311,20 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         _, document = workflow("release-candidate.yml")
         node = step_run(document, "clients", "Smoke Node client packages")
         count = node.split("expected_addons=3", 1)[1].split('test "$(find', 1)[0]
-        for admitted, expected in (("false", "4"), ("true", "5")):
-            with self.subTest(messaging_in_release=admitted):
+        for messaging, scheduling, expected in (
+            ("false", "false", "4"),
+            ("true", "false", "5"),
+            ("true", "true", "6"),
+        ):
+            with self.subTest(
+                messaging_in_release=messaging, scheduling_in_release=scheduling
+            ):
                 result = subprocess.run(
                     [
                         "bash",
                         "-c",
-                        f"include_casework=1\nmessaging_in_release={admitted}\n"
+                        f"include_casework=1\nmessaging_in_release={messaging}\n"
+                        f"scheduling_in_release={scheduling}\n"
                         f"expected_addons=3{count}\nprintf '%s' \"${{expected_addons}}\"",
                     ],
                     capture_output=True,
@@ -1322,7 +1336,14 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         stem = python.split('wheel_stem="registry_${client}_client"', 1)[1].split(
             'wheel="${wheel_stem}', 1
         )[0]
-        for product in ("breg", "casework", "messaging", "discovery", "evidence"):
+        for product in (
+            "breg",
+            "casework",
+            "messaging",
+            "scheduling",
+            "discovery",
+            "evidence",
+        ):
             with self.subTest(product=product):
                 result = subprocess.run(
                     [
@@ -1336,7 +1357,11 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                     text=True,
                     check=True,
                 )
-                suffix = "_native" if product in {"breg", "casework", "messaging"} else ""
+                suffix = (
+                    "_native"
+                    if product in {"breg", "casework", "messaging", "scheduling"}
+                    else ""
+                )
                 self.assertEqual(f"registry_{product}_client{suffix}", result.stdout)
 
     def test_scopes_canonical_cache_to_exact_builder_recipe(self) -> None:

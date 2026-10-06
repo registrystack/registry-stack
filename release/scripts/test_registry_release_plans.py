@@ -475,6 +475,10 @@ version = "1.1.0"
                 "crates/registry-messaging-client-node",
                 "@registrystack/messaging-client-native",
             ),
+            (
+                "crates/registry-scheduling-client-node",
+                "@registrystack/scheduling-client-native",
+            ),
         ):
             client_root = self.root / relative_root
             write_json(
@@ -561,6 +565,11 @@ version = "1.1.0"
                 "crates/registry-messaging-client-py",
                 "registry-messaging-client-native",
                 "messaging-client-sdk",
+            ),
+            (
+                "crates/registry-scheduling-client-py",
+                "registry-scheduling-client-native",
+                "scheduling-client-sdk",
             ),
         ):
             client_root = self.root / relative_root
@@ -819,6 +828,9 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "crates/registry-messaging-client-node/package.json",
             "crates/registry-messaging-client-node/index.js",
             "crates/registry-messaging-client-py/pyproject.toml",
+            "crates/registry-scheduling-client-node/package.json",
+            "crates/registry-scheduling-client-node/index.js",
+            "crates/registry-scheduling-client-py/pyproject.toml",
             "crates/registry-breg-client-py/pyproject.toml",
             "products/breg/wasm-handler-sdk/Cargo.lock",
             "products/evidence/fuzz/Cargo.lock",

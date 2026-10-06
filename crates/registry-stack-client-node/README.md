@@ -1,7 +1,7 @@
 # @registrystack/client
 
 One versioned Node.js package for the Discovery, Evidence, Base Registry
-Engine, Casework, and Messaging client APIs in Registry Stack.
+Engine, Casework, Messaging, and Scheduling client APIs in Registry Stack.
 
 ## Install
 
@@ -11,13 +11,13 @@ npm install "@registrystack/client@<version>"
 
 Requires Node.js 22.12 or newer. Supported targets are macOS arm64, Linux
 arm64 with glibc, and Linux x64 with glibc; installing the package pulls in
-one platform-specific optional dependency containing all five native
+one platform-specific optional dependency containing all six native
 bindings.
 
 ## Usage
 
 ```js
-const { discovery, evidence, breg, casework, messaging } = require('@registrystack/client');
+const { discovery, evidence, breg, casework, messaging, scheduling } = require('@registrystack/client');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
@@ -27,6 +27,9 @@ const work = new casework.CaseworkClient({
 });
 const messages = new messaging.MessagingClient({
   baseUrl: 'https://messaging.example.invalid/',
+});
+const appointments = new scheduling.SchedulingClient({
+  baseUrl: 'https://scheduling.example.invalid/',
 });
 ```
 
@@ -42,6 +45,8 @@ const messages = new messaging.MessagingClient({
   recovery, history, holdings, and directory bootstrap.
 - `messaging`: Registry Messaging, submit, inspect, cancel, and preview
   institution-owned messages.
+- `scheduling`: Registry Scheduling, published offerings, availability,
+  holds, and appointments over operator-anchored supply.
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different.
@@ -105,6 +110,9 @@ Registry Stack v0.30.0.
 
 The `messaging` namespace is part of the unified package beginning with
 Registry Stack v0.38.0.
+
+The `scheduling` namespace is part of the unified package beginning with
+Registry Stack v0.40.0.
 
 ## Casework notes
 

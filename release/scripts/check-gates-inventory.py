@@ -325,6 +325,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "registry-casework-client-py registry-messaging-client-py",
     ),
     (
+        "Scheduling Python client binding coverage",
+        "registry-messaging-client-py registry-scheduling-client-py",
+    ),
+    (
+        "Scheduling Node client binding coverage",
+        "registry-messaging-client-node registry-scheduling-client-node",
+    ),
+    (
         "Scheduling contract path filter",
         "scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}",
     ),

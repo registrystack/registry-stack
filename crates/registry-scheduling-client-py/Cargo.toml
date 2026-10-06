@@ -1,0 +1,35 @@
+[package]
+name = "registry-scheduling-client-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Python binding for the Registry Scheduling client, via PyO3."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "registry_scheduling_client"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+chrono.workspace = true
+pyo3.workspace = true
+# Keep the SDK name distinct from this extension's Python module name.
+scheduling-client-sdk = { package = "registry-scheduling-client", path = "../registry-scheduling-client", version = "0.40.0" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true
+
+[dev-dependencies]
+pyo3 = { workspace = true, features = ["auto-initialize"] }

@@ -18,6 +18,17 @@ PRODUCT_PREFIXES = ("registry-breg", "registry-casework", "registry-evidence")
 # for the core, free of every other scheduling crate.
 NEUTRAL_CRATES = ("registry-scheduling-core", "registry-scheduling-client")
 
+# The Scheduling runtime and its adopter tooling.
+SCHEDULING_RUNTIME = ("registry-scheduling", "registry-schedulingctl")
+
+# The Rust client and its Node.js and Python bindings. They reach the runtime
+# over its public HTTP contract only, never through a dependency.
+SCHEDULING_CLIENT_PREFIX = "registry-scheduling-client"
+
+# The unified client facade composes every product client side by side. It
+# may use the Scheduling client but never the runtime or adopter tooling.
+UNIFIED_CLIENT_PREFIX = "registry-stack-client"
+
 
 def package_graph(metadata: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
     names = {package["id"]: package["name"] for package in metadata["packages"]}
@@ -74,18 +85,15 @@ def internal_violations(name: str, package_id: str, names: dict[str, str], edges
             failures.append(
                 f"registry-scheduling-core transitively depends on scheduling crate(s): {', '.join(internal)}"
             )
-    if name == "registry-scheduling-client":
-        # The client may share the core, never the runtime or adopter tooling.
+    if name.startswith(SCHEDULING_CLIENT_PREFIX):
+        # The client and its bindings may share the core, never the runtime or
+        # adopter tooling.
         reaching_runtime = sorted(
-            {
-                names[item]
-                for item in reached
-                if names[item] in ("registry-scheduling", "registry-schedulingctl")
-            }
+            {names[item] for item in reached if names[item] in SCHEDULING_RUNTIME}
         )
         if reaching_runtime:
             failures.append(
-                f"registry-scheduling-client transitively depends on runtime crate(s): {', '.join(reaching_runtime)}"
+                f"{name} transitively depends on runtime crate(s): {', '.join(reaching_runtime)}"
             )
     return failures
 
@@ -119,6 +127,24 @@ def violations(metadata: dict) -> list[str]:
         if forbidden:
             failures.append(
                 f"{package_name} transitively depends on Scheduling package(s): {', '.join(forbidden)}"
+            )
+
+    # The unified client may compose the Scheduling client beside other
+    # products' clients, and may never reach the runtime or adopter tooling.
+    for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
+        if not package_name.startswith(UNIFIED_CLIENT_PREFIX):
+            continue
+        forbidden = sorted(
+            {
+                names[item]
+                for item in closure(package_id, edges)
+                if names[item] in SCHEDULING_RUNTIME
+            }
+        )
+        if forbidden:
+            failures.append(
+                f"{package_name} transitively depends on Scheduling runtime package(s): "
+                f"{', '.join(forbidden)}"
             )
     return failures
 
