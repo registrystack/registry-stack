@@ -532,14 +532,65 @@ impl CaseworkClientError {
     }
 
     /// Classify a mutation failure for exact-key recovery decisions.
+    ///
+    /// `Ambiguous` exactly when [`Self::is_outcome_unknown`] holds, and
+    /// `Deterministic` otherwise.
     #[must_use]
     pub fn mutation_class(&self) -> registry_review_client::ReviewMutationErrorClass {
         use registry_review_client::ReviewMutationErrorClass::{Ambiguous, Deterministic};
 
+        if self.is_outcome_unknown() {
+            Ambiguous
+        } else {
+            Deterministic
+        }
+    }
+
+    /// Whether the request may have taken effect although this error was
+    /// returned.
+    ///
+    /// True for a timeout or broken exchange after the request was sent, an
+    /// oversized or unparseable answer, and a 5xx answer: a 5xx may follow a
+    /// commit. False for a request defect, a connection that was never
+    /// established, and every typed 4xx refusal. When it is true, the safe
+    /// recovery for an idempotency-keyed mutation is the same request under
+    /// the same key, which the service either replays or settles; a new key
+    /// could apply the mutation twice.
+    ///
+    /// It is false for `410 idempotency.expired` too, but there an earlier
+    /// attempt under the key committed and only its stored response was
+    /// erased by retention: reconcile the original operation, by reading the
+    /// item, review request, or directory, before choosing a new key.
+    ///
+    /// A protocol failure, such as a 3xx answer or an answer that cannot be
+    /// parsed or does not meet the contract, counts as unknown conservatively,
+    /// as an oversized answer does: the request may have been processed before
+    /// the answer went wrong. The client resends such an answer only when it
+    /// came with a 5xx status, because any other answer would be replayed
+    /// unchanged. It never resends after a 4xx status line, even when the rest
+    /// of that answer could not be read and the error is therefore unknown.
+    #[must_use]
+    pub fn is_outcome_unknown(&self) -> bool {
         match self {
-            Self::Configuration { .. } | Self::InvalidRequest { .. } => Deterministic,
-            Self::Problem { status, .. } if *status < 500 => Deterministic,
-            Self::Transport { .. } | Self::Problem { .. } | Self::Protocol { .. } => Ambiguous,
+            Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
+            Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
+            Self::Problem { status, .. } => *status >= 500,
+            Self::Protocol { .. } => true,
+        }
+    }
+
+    /// Whether resending the identical request under the same key may settle
+    /// an unknown outcome. An oversized or unparseable non-5xx answer would be
+    /// replayed unchanged, so it is not resent. A transport failure carries no
+    /// status, so the shared classifier, which sees the answer's status line,
+    /// still refuses to resend a timeout or broken exchange after a 4xx one.
+    pub(crate) fn resend_may_settle(&self) -> bool {
+        match self {
+            Self::Transport { kind } => {
+                matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
+            }
+            Self::Problem { status, .. } | Self::Protocol { status, .. } => *status >= 500,
+            Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
         }
     }
 
@@ -695,6 +746,104 @@ mod tests {
             invalid_response.mutation_class(),
             registry_review_client::ReviewMutationErrorClass::Ambiguous
         );
+    }
+
+    fn problem(status: u16, code: CaseworkProblemCode) -> CaseworkClientError {
+        CaseworkClientError::Problem {
+            status,
+            code,
+            detail: None,
+            trace_id: None,
+            original_attempt_id: None,
+            validation: None,
+        }
+    }
+
+    fn protocol(status: u16, failure: CaseworkProtocolFailure) -> CaseworkClientError {
+        CaseworkClientError::Protocol {
+            status,
+            failure,
+            trace_id: None,
+        }
+    }
+
+    fn transport(kind: TransportKind) -> CaseworkClientError {
+        CaseworkClientError::Transport { kind }
+    }
+
+    fn maybe_committed() -> Vec<CaseworkClientError> {
+        vec![
+            transport(TransportKind::Timeout),
+            transport(TransportKind::Exchange),
+            transport(TransportKind::ResponseTooLarge),
+            problem(500, CaseworkProblemCode::RuntimeFailure),
+            problem(502, CaseworkProblemCode::SourceBadGateway),
+            problem(503, CaseworkProblemCode::ServiceUnavailable),
+            problem(503, CaseworkProblemCode::WorkItemSourceUnavailable),
+            protocol(502, CaseworkProtocolFailure::Status),
+            protocol(201, CaseworkProtocolFailure::Body),
+            protocol(200, CaseworkProtocolFailure::TraceContext),
+            protocol(409, CaseworkProtocolFailure::Problem),
+        ]
+    }
+
+    fn refused() -> Vec<CaseworkClientError> {
+        vec![
+            CaseworkClientError::configuration("fixture reason"),
+            CaseworkClientError::invalid_request("fixture reason"),
+            transport(TransportKind::Connect),
+            problem(401, CaseworkProblemCode::AuthenticationRefused),
+            problem(403, CaseworkProblemCode::OperationNotAuthorized),
+            problem(409, CaseworkProblemCode::IdempotencyKeyReused),
+            problem(410, CaseworkProblemCode::IdempotencyExpired),
+            problem(412, CaseworkProblemCode::PreconditionFailed),
+        ]
+    }
+
+    #[test]
+    fn the_unknown_outcome_predicate_separates_maybe_committed_from_refused() {
+        for error in &maybe_committed() {
+            assert!(error.is_outcome_unknown(), "{error:?}");
+        }
+        for error in &refused() {
+            assert!(!error.is_outcome_unknown(), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn the_mutation_class_agrees_with_the_unknown_outcome_predicate() {
+        use registry_review_client::ReviewMutationErrorClass::{Ambiguous, Deterministic};
+
+        for error in &maybe_committed() {
+            assert_eq!(error.mutation_class(), Ambiguous, "{error:?}");
+        }
+        for error in &refused() {
+            assert_eq!(error.mutation_class(), Deterministic, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_timeout_a_broken_exchange_or_a_5xx_is_resent() {
+        let resent = [
+            transport(TransportKind::Timeout),
+            transport(TransportKind::Exchange),
+            problem(500, CaseworkProblemCode::RuntimeFailure),
+            problem(503, CaseworkProblemCode::ServiceUnavailable),
+            protocol(500, CaseworkProtocolFailure::Status),
+        ];
+        for error in &resent {
+            assert!(error.resend_may_settle(), "{error:?}");
+        }
+        let kept = [
+            transport(TransportKind::Connect),
+            transport(TransportKind::ResponseTooLarge),
+            protocol(201, CaseworkProtocolFailure::Body),
+            problem(409, CaseworkProblemCode::IdempotencyKeyReused),
+            CaseworkClientError::invalid_request("fixture reason"),
+        ];
+        for error in &kept {
+            assert!(!error.resend_may_settle(), "{error:?}");
+        }
     }
 
     #[test]

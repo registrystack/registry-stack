@@ -1773,7 +1773,11 @@ async fn mutation_forwards_one_call_token_profile_revision_and_key_once() {
         })
     ));
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 1, "a mutation is never retried");
+    assert_eq!(
+        observations.len(),
+        1,
+        "an unreadable 2xx mutation answer is never resent"
+    );
     let headers = &observations[0];
     assert_eq!(headers["authorization"], "Bearer one-call-secret");
     assert_eq!(headers["registry-casework-profile"], "staff");
@@ -1885,7 +1889,11 @@ async fn decision_forwards_the_selected_source_profile() {
         })
     ));
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 1, "a decision is never retried");
+    assert_eq!(
+        observations.len(),
+        1,
+        "an unreadable 2xx decision answer is never resent"
+    );
     let headers = &observations[0];
     assert_eq!(headers["registry-source-profile"], "reviewer");
     assert_eq!(headers["if-match"], "\"9\"");
@@ -1987,7 +1995,7 @@ async fn review_note_forwards_the_selected_source_profile() {
 
     assert_eq!(response.value.kind, "note");
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 1, "a review note is never retried");
+    assert_eq!(observations.len(), 1, "a settled review note is sent once");
     assert_eq!(observations[0]["authorization"], "Bearer one-call-secret");
     assert_eq!(observations[0]["registry-casework-profile"], "staff");
     assert_eq!(observations[0]["registry-source-profile"], "reviewer");

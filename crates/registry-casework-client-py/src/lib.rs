@@ -23,7 +23,7 @@ use casework_client_sdk::{
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
     prelude::*,
-    types::PyDict,
+    types::{PyBool, PyDict},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use url::Url;
@@ -52,6 +52,7 @@ struct MappedError {
     validation: Option<serde_json::Value>,
     transport_kind: Option<String>,
     protocol_failure: Option<&'static str>,
+    outcome_unknown: bool,
 }
 
 fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
@@ -91,6 +92,9 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
     instance
         .setattr("protocol_failure", mapped.protocol_failure)
         .expect("fresh exception accepts attributes");
+    instance
+        .setattr("outcome_unknown", mapped.outcome_unknown)
+        .expect("fresh exception accepts attributes");
     error
 }
 
@@ -106,6 +110,7 @@ fn binding_error(py: Python<'_>, kind: &'static str, message: &'static str) -> P
 }
 
 fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
+    let outcome_unknown = error.is_outcome_unknown();
     let mut mapped = match &error {
         RustClientError::Configuration { .. } => MappedError {
             kind: "configuration",
@@ -181,6 +186,7 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
         }
         _ => {}
     }
+    mapped.outcome_unknown = outcome_unknown;
     to_py_err(py, mapped)
 }
 
@@ -219,6 +225,23 @@ fn bearer(py: Python<'_>, value: &str) -> PyResult<BearerToken> {
 
 fn uuid(py: Python<'_>, value: &str) -> PyResult<Uuid> {
     Uuid::parse_str(value).map_err(|_| binding_error(py, "invalid_request", "the UUID is invalid"))
+}
+
+/// The retry ceiling as a Python integer. Only an `int` in the `u8` range
+/// reaches the client, which refuses one above its own bound; a `bool` is not
+/// a count.
+fn mutation_retries(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u8> {
+    let invalid = || {
+        binding_error(
+            py,
+            "configuration",
+            "Casework client configuration is invalid",
+        )
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(invalid());
+    }
+    value.extract::<u8>().map_err(|_| invalid())
 }
 
 fn duration(py: Python<'_>, value: f64) -> PyResult<Duration> {
@@ -337,7 +360,7 @@ struct CaseworkClient {
 #[pymethods]
 impl CaseworkClient {
     #[new]
-    #[pyo3(signature = (base_url, request_timeout_seconds=None, connect_timeout_seconds=None, max_response_bytes=None, user_agent=None, trusted_root_certificates=None))]
+    #[pyo3(signature = (base_url, request_timeout_seconds=None, connect_timeout_seconds=None, max_response_bytes=None, user_agent=None, trusted_root_certificates=None, max_mutation_retries=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -347,6 +370,7 @@ impl CaseworkClient {
         max_response_bytes: Option<u64>,
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
+        max_mutation_retries: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let base_url = Url::parse(base_url).map_err(|_| {
             binding_error(
@@ -370,6 +394,9 @@ impl CaseworkClient {
         }
         if let Some(value) = trusted_root_certificates {
             config = config.with_trusted_root_certificates(value);
+        }
+        if let Some(value) = max_mutation_retries {
+            config = config.with_max_mutation_retries(mutation_retries(py, value)?);
         }
         let inner = py
             .detach(|| RustClient::new(config))

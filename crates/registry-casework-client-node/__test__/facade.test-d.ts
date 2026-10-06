@@ -17,6 +17,8 @@ import {
 } from '../client'
 
 const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/' })
+const once = new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxMutationRetries: 0 })
+void once
 const token: string = 'header.payload.signature'
 const profile: string = 'staff'
 const sourceProfile: string = 'reviewer'
@@ -270,3 +272,9 @@ void client.taskGrantStatus(token, item.itemId)
 void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1', resource: 'urn:forged' })
 // @ts-expect-error Agent assertion calls do not accept human profiles.
 void client.taskAssertion(token, profile, sourceProfile, item.itemId)
+
+function mayHaveTakenEffect(error: CaseworkClientError): boolean {
+  const unknown: boolean = error.outcomeUnknown
+  return unknown
+}
+void mayHaveTakenEffect

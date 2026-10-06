@@ -88,10 +88,10 @@ trace, ETag, location, and opaque continuation. See
 [Exact JSON in Node](https://docs.registrystack.org/reference/client-api/#exact-json-in-node)
 for the full rules.
 
-A keyed BReg, Messaging, or Scheduling mutation whose outcome is unknown is
-resent identically under the same idempotency key up to `maxMutationRetries`
-times, a client option: 0 to 2, default 2, and 0 sends it once. Reads,
-unkeyed calls, and every 4xx refusal are never resent. When the returned error
+A keyed BReg, Casework, Messaging, or Scheduling mutation whose outcome is
+unknown is resent identically under the same idempotency key up to
+`maxMutationRetries` times, a client option: 0 to 2, default 2, and 0 sends it
+once. Reads, unkeyed calls, and every 4xx refusal are never resent. When the returned error
 still reports `outcomeUnknown`, the mutation may have taken effect: recover by
 sending it again under the same key, because a new key could apply it twice.
 `outcomeUnknown` is false for `410 idempotency.expired`, but there an earlier
@@ -132,7 +132,8 @@ selected source profile. The client does not retain them. Browsers should send
 only the host's session cookie. Claim, release, and decide consume the
 caller-filtered action returned on the item, including its exact route and
 `ifMatch` revision. Mutations require a caller-controlled idempotency key and
-are never retried automatically. After a lost response, use
+are resent only under the bounded same-key retry above; review request create
+and cancel are never resent. After a lost response, use
 `recoverDecisionByKey` with the original key so recovery does not depend on the
 attempt identifier being received.
 
