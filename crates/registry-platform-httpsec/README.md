@@ -21,8 +21,8 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 - `response_trace_id` for exact-one canonical W3C v0 response correlation.
 - `ProblemDocument::parse_exact` for exact-six-member received problems, and
   `parse_with_field_path` for products that define the one optional bounded
-  `fieldPath`. Products retain their own closed `ProblemDefinition` catalogs
-  and location grammars.
+  `fieldPath`. Products retain their own closed problem catalogs and
+  location grammars.
 
 ## Typical Use
 
