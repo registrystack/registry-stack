@@ -36,12 +36,16 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   one exception is the bounded same-key resend of an idempotency-keyed
   mutation whose outcome is unknown (a timeout or broken exchange after
   sending, or a 5xx answer other than a typed failure the product returns only
-  with the attempt rolled back): `registry_platform_httputil::client::retry_keyed_mutation`
-  owns its loop and waits, each client exposes the count as
+  with the attempt rolled back), and never after a 4xx status line:
+  `registry_platform_httputil::client::retry_keyed_mutation` owns its loop and
+  waits, the BReg, Messaging, and Scheduling clients expose the count as
   `with_max_mutation_retries` (2 by default, at most 2, 0 disables), and the
-  resend repeats the caller's exact key, headers, and body. Reads and unkeyed
-  operations are never resent. Acquire credentials only for operations the
-  product contract protects.
+  resend repeats the caller's exact key, headers, and body. The other clients
+  never resend. Reads and unkeyed operations are never resent. Those three
+  clients treat a connection that was never established, a connect timeout
+  included, as a known failure; the Casework client's `mutation_class` still
+  classifies every transport failure, that one included, as ambiguous.
+  Acquire credentials only for operations the product contract protects.
 - Evidence verification delegates to `registry-evidence-verifier`. Preserve
   request binding and the distinction between verified, raw, unsigned, and
   holder-bound results across language conversions. Portable verifier means
