@@ -33,6 +33,18 @@
   links that reference them: a request committed before the upgrade and
   retried after it executes again.
 
+- `registry-breg-client` resends an idempotency-keyed mutation whose outcome
+  is unknown, a timeout or broken exchange after sending or a 5xx answer, up
+  to 2 times by default, with the same key, headers, and body. A caller that
+  must not resend sets `with_max_mutation_retries(0)`. A call can now take up
+  to three request timeouts plus the waits between them (250 ms, then 500 ms,
+  or a `Retry-After` of at most 5 seconds). `is_outcome_unknown()` tells a
+  caller whether a returned error may still have taken effect, in which case
+  the recovery is the same request under the same key. The engine's
+  `action.handler_failed` and `statistical_dataset.domain_violation` answers
+  are rolled back before commit, so they are known outcomes and are not
+  resent; neither is any answer with a 4xx status line.
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: `bregctl dev` takes PostgreSQL loopback port 15432 on a first
