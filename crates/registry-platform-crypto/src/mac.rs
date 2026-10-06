@@ -11,9 +11,6 @@ use aws_lc_rs::constant_time::verify_slices_are_equal;
 use aws_lc_rs::hmac;
 use thiserror::Error;
 
-/// The byte length of an HMAC-SHA1 tag.
-pub const HMAC_SHA1_TAG_BYTES: usize = 20;
-
 /// The byte length of an HMAC-SHA256 tag.
 pub const HMAC_SHA256_TAG_BYTES: usize = 32;
 
@@ -22,13 +19,6 @@ pub const HMAC_SHA256_TAG_BYTES: usize = 32;
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error("the message authentication tag does not match")]
 pub struct MacMismatch;
-
-/// The HMAC-SHA1 tag of `message` under `key`, for legacy interoperability
-/// only.
-#[must_use]
-pub fn hmac_sha1(key: &[u8], message: &[u8]) -> [u8; HMAC_SHA1_TAG_BYTES] {
-    tag(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, key, message)
-}
 
 /// The HMAC-SHA256 tag of `message` under `key`.
 #[must_use]
@@ -102,7 +92,6 @@ mod tests {
 
     #[test]
     fn hmac_sha1_matches_its_known_answer() {
-        assert_eq!(hmac_sha1(SHA1_KEY, SHA1_MESSAGE).to_vec(), decode(SHA1_TAG));
         assert_eq!(
             verify_hmac_sha1(SHA1_KEY, SHA1_MESSAGE, &decode(SHA1_TAG)),
             Ok(())

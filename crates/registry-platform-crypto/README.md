@@ -19,10 +19,10 @@ Crypto primitives shared by registry services.
 - Version 1 hook delivery signing and receiver verification, including input
   bounds, signature-version checks, constant-time comparison, and
   receiver-selected delivery-time skew.
-- HMAC-SHA256 and legacy-interoperability HMAC-SHA1 tags in `mac`, with
-  constant-time verification that refuses a tag of the wrong length, and a
-  constant-time byte comparison for shared secrets such as URL tokens.
-- Constant-time comparison dependencies for consumers that need them.
+- HMAC-SHA256 tags and legacy-interoperability HMAC-SHA1 verification in
+  `mac`, with constant-time verification that refuses a tag of the wrong
+  length, and a constant-time byte comparison for shared secrets such as URL
+  tokens.
 
 ## Typical Use
 
