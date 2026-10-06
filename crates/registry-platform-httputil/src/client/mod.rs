@@ -11,6 +11,7 @@ mod exchange_authorization;
 mod exchange_config;
 mod outbound;
 mod private_key_jwt;
+mod retry;
 mod token;
 
 pub use exchange_authorization::{
@@ -28,6 +29,10 @@ pub use private_key_jwt::{
     DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
     MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
     MAXIMUM_SCOPE_PARAMETER_BYTES, MAXIMUM_TOKEN_RESPONSE_BYTES,
+};
+pub use retry::{
+    retry_keyed_mutation, KeyedMutationAttempt, DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES,
+    MAXIMUM_MUTATION_RETRY_AFTER_SECONDS,
 };
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};
 
