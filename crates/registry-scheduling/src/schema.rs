@@ -184,7 +184,7 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::RetentionConfig;
+    use crate::config::{DestinationsConfig, RetentionConfig, MAX_HOOK_DESTINATIONS};
     use registry_platform_config::blocks::SECRET_REFERENCE_PATTERN;
 
     #[test]
@@ -374,6 +374,98 @@ mod tests {
                     "the schema and the runtime disagree on {document}"
                 );
             }
+        }
+    }
+
+    /// Issue #1928: every hook destination binding the schema accepts is one
+    /// the runtime starts on, and every one it refuses is one the runtime
+    /// refuses, at each bound's edge on both sides.
+    #[test]
+    fn the_schema_states_the_hook_destination_bounds_the_runtime_enforces() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let destinations = serde_json::json!({
+            "$defs": document["$defs"],
+            "$ref": "#/$defs/DestinationsConfig"
+        });
+        let validator = jsonschema::JSONSchema::compile(&destinations).unwrap();
+        let binding = |timeout: u32, attempts: u8| {
+            serde_json::json!({
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/hook-key",
+                "attemptTimeoutMilliseconds": timeout,
+                "maximumAttempts": attempts
+            })
+        };
+        let mut cases = Vec::new();
+        for (timeout, accepted) in [
+            (0, false),
+            (99, false),
+            (100, true),
+            (5_000, true),
+            (10_000, true),
+            (10_001, false),
+            (u32::MAX, false),
+        ] {
+            cases.push((
+                serde_json::json!({"appointment-events": binding(timeout, 8)}),
+                accepted,
+            ));
+        }
+        for (attempts, accepted) in [
+            (0, false),
+            (1, true),
+            (8, true),
+            (20, true),
+            (21, false),
+            (u8::MAX, false),
+        ] {
+            cases.push((
+                serde_json::json!({"appointment-events": binding(5_000, attempts)}),
+                accepted,
+            ));
+        }
+        for (id, accepted) in [
+            ("a".to_owned(), true),
+            ("appointment-events".to_owned(), true),
+            ("events_2".to_owned(), true),
+            ("a".repeat(64), true),
+            ("a".repeat(65), false),
+            (String::new(), false),
+            ("Events".to_owned(), false),
+            ("2events".to_owned(), false),
+            ("-events".to_owned(), false),
+            ("events.v1".to_owned(), false),
+            ("events v1".to_owned(), false),
+            ("\u{e9}v\u{e9}nements".to_owned(), false),
+            ("events\n".to_owned(), false),
+        ] {
+            cases.push((serde_json::json!({id: binding(5_000, 8)}), accepted));
+        }
+        for (count, accepted) in [
+            (0, true),
+            (1, true),
+            (MAX_HOOK_DESTINATIONS, true),
+            (MAX_HOOK_DESTINATIONS + 1, false),
+        ] {
+            let hooks: serde_json::Map<String, Value> = (0..count)
+                .map(|n| (format!("destination-{n}"), binding(5_000, 8)))
+                .collect();
+            cases.push((Value::Object(hooks), accepted));
+        }
+        for (hooks, accepted) in cases {
+            let document = serde_json::json!({"hooks": hooks});
+            let config: DestinationsConfig = serde_json::from_value(document.clone()).unwrap();
+            assert_eq!(
+                config.check().is_ok(),
+                accepted,
+                "the runtime decides {document} against its stated bounds"
+            );
+            assert_eq!(
+                validator.is_valid(&document),
+                accepted,
+                "the schema and the runtime disagree on {document}"
+            );
         }
     }
 

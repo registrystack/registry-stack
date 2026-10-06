@@ -54,6 +54,23 @@ pub const DEFAULT_ATTEMPT_RECEIPT_DAYS: u16 = 7;
 /// dead-letter inspection.
 pub const MAX_HOOK_PAYLOAD_DAYS: u16 = 30;
 
+/// The most hook destinations one deployment may bind.
+pub const MAX_HOOK_DESTINATIONS: usize = 128;
+
+/// The shortest one hook delivery attempt may be bounded to, in milliseconds.
+pub const MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 100;
+
+/// The longest one hook delivery attempt may be bounded to, in milliseconds.
+pub const MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 10_000;
+
+/// The most delivery attempts a hook destination may allow one event.
+pub const MAX_HOOK_ATTEMPTS: u8 = 20;
+
+/// The logical hook destination id grammar `valid_logical_destination_id`
+/// checks, as a JSON Schema pattern.
+#[cfg(feature = "schema")]
+const HOOK_DESTINATION_ID_PATTERN: &str = "^[a-z][a-z0-9_-]{0,63}$";
+
 /// The envelope every Scheduling runtime configuration carries.
 pub const SCHEDULING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: SCHEDULING_RUNTIME_API_VERSION,
@@ -220,8 +237,45 @@ pub struct DestinationsConfig {
     pub reminders: Option<ReminderDestinationConfig>,
     /// Logical URL hook destinations. The governed policy names only these
     /// ids; URL, signing secret, and retry ceilings stay deployment-owned.
+    /// At most 128 are bound, each id a lowercase ASCII letter followed by up
+    /// to 63 lowercase letters, digits, `-`, or `_`.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend(
+            "maxProperties" = MAX_HOOK_DESTINATIONS,
+            "propertyNames" = {"pattern": HOOK_DESTINATION_ID_PATTERN}
+        ))
+    )]
     pub hooks: BTreeMap<String, HookDestinationConfig>,
+}
+
+impl DestinationsConfig {
+    /// Refuse a destination the dispatcher does not honour: a reminder URL
+    /// outside the destination rules, more than [`MAX_HOOK_DESTINATIONS`]
+    /// hook bindings, or a hook binding whose id, URL, attempt timeout, or
+    /// attempt count is outside its bounds.
+    pub fn check(&self) -> Result<(), RuntimeConfigError> {
+        if let Some(reminders) = &self.reminders {
+            if !valid_destination_url(&reminders.url) {
+                return Err(RuntimeConfigError::InvalidDestination);
+            }
+        }
+        if self.hooks.len() > MAX_HOOK_DESTINATIONS {
+            return Err(RuntimeConfigError::InvalidHookDestination);
+        }
+        for (id, destination) in &self.hooks {
+            if !valid_logical_destination_id(id)
+                || !valid_destination_url(&destination.url)
+                || !(MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS..=MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS)
+                    .contains(&destination.attempt_timeout_milliseconds)
+                || !(1..=MAX_HOOK_ATTEMPTS).contains(&destination.maximum_attempts)
+            {
+                return Err(RuntimeConfigError::InvalidHookDestination);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -239,9 +293,20 @@ pub struct ReminderDestinationConfig {
 pub struct HookDestinationConfig {
     pub url: String,
     pub hmac_sha256_key_ref: String,
+    /// How long one delivery attempt may take, from 100 through 10000
+    /// milliseconds.
     #[serde(default = "default_hook_attempt_timeout_milliseconds")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+            max = MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS
+        ))
+    )]
     pub attempt_timeout_milliseconds: u32,
+    /// How many delivery attempts one event gets, from 1 through 20.
     #[serde(default = "default_hook_maximum_attempts")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_HOOK_ATTEMPTS)))]
     pub maximum_attempts: u8,
 }
 
@@ -466,23 +531,7 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::InvalidDatabaseReference);
         }
         self.retention.check()?;
-        if let Some(reminders) = &self.destinations.reminders {
-            if !valid_destination_url(&reminders.url) {
-                return Err(RuntimeConfigError::InvalidDestination);
-            }
-        }
-        if self.destinations.hooks.len() > 128 {
-            return Err(RuntimeConfigError::InvalidHookDestination);
-        }
-        for (id, destination) in &self.destinations.hooks {
-            if !valid_logical_destination_id(id)
-                || !valid_destination_url(&destination.url)
-                || !(100..=10_000).contains(&destination.attempt_timeout_milliseconds)
-                || !(1..=20).contains(&destination.maximum_attempts)
-            {
-                return Err(RuntimeConfigError::InvalidHookDestination);
-            }
-        }
+        self.destinations.check()?;
         self.validate_secret_references()?;
 
         let policy = self.load_policy()?.policy;
@@ -1136,11 +1185,26 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
                 serde_json::json!({"reminders": {"url": "not-a-url"}}),
                 RuntimeConfigError::InvalidDestination,
             ),
+            (
+                serde_json::json!({"hooks": {"Appointment-Events": {
+                    "url": "https://events.example.test/scheduling",
+                    "hmacSha256KeyRef": "secret:file/hook-key"
+                }}}),
+                RuntimeConfigError::InvalidHookDestination,
+            ),
+            (
+                serde_json::json!({"hooks": {"appointment-events": {
+                    "url": "https://events.example.test/scheduling",
+                    "hmacSha256KeyRef": "secret:file/hook-key",
+                    "maximumAttempts": MAX_HOOK_ATTEMPTS + 1
+                }}}),
+                RuntimeConfigError::InvalidHookDestination,
+            ),
         ] {
             let mut document = operator_value(&package, "development-loopback");
             if patch.get("attemptReceiptDays").is_some() || patch.get("hookPayloadDays").is_some() {
                 document["retention"] = patch;
-            } else if patch.get("reminders").is_some() {
+            } else if patch.get("reminders").is_some() || patch.get("hooks").is_some() {
                 document["destinations"] = patch;
             } else {
                 document["authentication"]["oidc"]
