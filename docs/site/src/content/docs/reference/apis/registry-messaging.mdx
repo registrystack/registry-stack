@@ -39,17 +39,24 @@ callback verifier authenticates them instead.
 scoped to the calling principal, named by the token's issuer and subject. The same key with the
 same request answers the stored receipt again, and the same key with a different request is refused
 with `idempotency.key-reused`. A key whose stored receipt is older than the deployment's
-`retention.submissionReceiptDays` is refused with `idempotency.expired`, because the first answer is
-no longer held. A key whose message has since been deleted by `retention.recordDays` answers the
-same `idempotency.expired`: the row stays under the caller's issuer and subject with its message,
-request hash, and receipt nulled, so a repeat is refused rather than accepted as a new message to
-the same recipient. A rotation of the deployment's audit reference key frees no spent key.
+`retention.submissionReceiptDays` is refused with `idempotency.expired`, with the same or a different
+request, because the first answer is no longer held. Retention then clears the raw issuer, subject,
+and key from the row and keeps only a SHA-256 digest of them, so the key stays spent for that caller
+alone; another caller's identical key is a fresh submission. A key whose message has since been
+deleted by `retention.recordDays` answers the same `idempotency.expired`: the digest row stays with
+its message, request hash, and receipt nulled, so a repeat is refused rather than accepted as a new
+message to the same recipient. A rotation of the deployment's audit reference key frees no spent
+key. Choose a random key, such as a UUID: the digest takes no secret, so anyone who reads the
+database and can guess your issuer, subject, and key can confirm that you used it.
 
 {/* Evidence: crates/registry-messaging-core/src/wire.rs, idempotency key bounds;
-    crates/registry-messaging/src/messages.rs, SUBMIT_OPERATION, lookup_key(), and replay();
-    crates/registry-messaging/src/retention.rs, delete_records();
+    crates/registry-messaging/src/messages.rs, SUBMIT_OPERATION, idempotency_key_reference(),
+    lookup_key(), and replay();
+    crates/registry-messaging/src/retention.rs, expire_submission_receipts() and delete_records();
     crates/registry-messaging/tests/postgres_messages.rs,
     an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again;
+    crates/registry-messaging/tests/postgres_retention.rs,
+    a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent;
     products/messaging/RUNTIME-CONFIG.md, Keys. */}
 
 A repeated key is authorized and rendered again under the active package before the key is looked

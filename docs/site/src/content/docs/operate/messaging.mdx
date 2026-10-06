@@ -297,8 +297,8 @@ keeps its payload:
 | Period ends | What is erased |
 | --- | --- |
 | `payloadDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
-| `recordDays` after the terminal state | The message record, with its attempts and receipts. The idempotency key stays spent, held only with the caller's issuer and subject and its times, and a repeat of it is refused with `idempotency.expired` |
-| `submissionReceiptDays` after acceptance | The stored submission receipt. A repeat of its key is refused with `idempotency.expired` |
+| `recordDays` after the terminal state | The message record, with its attempts and receipts. The idempotency key stays spent, held only as a digest of the caller and the key with its times, and a repeat of it is refused with `idempotency.expired` |
+| `submissionReceiptDays` after acceptance | The stored submission receipt, with the raw issuer, subject, and key beside it. Their SHA-256 digest keeps the key spent for that caller alone: the caller's repeat of it is refused with `idempotency.expired`, and another caller's identical key is fresh |
 
 A message that is queued, sending, or held in an unknown outcome is never erased, whatever its age.
 The runtime sweeps once at start and then hourly with the runtime credential. A sweep erases in
@@ -308,7 +308,9 @@ batches of at most 1,000 of each kind, each batch its own transaction, and journ
 operator host.
 
 {/* Evidence: products/messaging/RUNTIME-CONFIG.md, Keys; crates/registry-messaging/src/retention.rs,
-    RETENTION_ERASED_EVENT, SWEEP_INTERVAL, and erase_expired(). */}
+    RETENTION_ERASED_EVENT, SWEEP_INTERVAL, erase_expired(), and expire_submission_receipts();
+    crates/registry-messaging/tests/postgres_retention.rs,
+    a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent. */}
 
 ### Create the secret files
 
@@ -336,8 +338,9 @@ appear in a message or a log.
 The key derives the minimized caller and recipient references the audit journal carries. Keep the
 same key across upgrades: rotating it changes those references, so records written before and after
 the rotation no longer join on them. A rotation frees no spent idempotency key, because a key
-belongs to the caller's issuer and subject: an exact retry across a rotation answers its stored
-receipt or is refused with `idempotency.expired`, and never sends again. The stream is not signed or
+belongs to the caller's issuer and subject and is found by an unkeyed digest of them: an exact retry
+across a rotation answers its stored receipt or is refused with `idempotency.expired`, and never
+sends again. The stream is not signed or
 hash-chained; ship records to append-only storage if you require external tamper evidence.
 :::
 

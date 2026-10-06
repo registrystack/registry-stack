@@ -14,7 +14,8 @@ reviewRule: >-
   slice that owes its enforcement and carries no test until that slice lands;
   it becomes partial or enforced only in the change that adds the negative
   test that earns it. The matrix lists the ten invariants of the product
-  specification, no fewer.
+  specification and the one later data-minimization invariant, eleven in
+  all, no fewer.
 invariants:
   - id: MESSAGING-SEC-01
     state: enforced
@@ -222,4 +223,33 @@ invariants:
     negativeTest:
       path: crates/registry-messaging/tests/postgres_retention.rs
       name: a_payload_is_erased_payload_days_after_a_terminal_state_and_never_while_sending_or_unknown
+  - id: MESSAGING-SEC-11
+    state: enforced
+    threat: >-
+      A spent idempotency key keeps naming its caller for as long as it stays
+      spent, which is indefinitely: under a profile that admits a human or
+      agent actor, the raw subject is a person, such as a staff member's
+      email address, held long after the submission receipt it served is
+      gone. Or the fix frees the key instead, so a late retry sends its
+      message a second time, or one caller's spent key blocks another's.
+    enforcementPoint: >-
+      A spent key is recorded and found under key_reference, an unkeyed
+      SHA-256 digest over the domain registry-messaging-idempotency-key-v1
+      and the length-prefixed issuer, subject, operation, and key. The
+      retention statement that erases a submission receipt, in the runtime
+      sweep and messagingctl retention erase-expired alike, clears the raw
+      submitter_issuer, submitter_subject, and idempotency_key in the same
+      update, and so does the record deletion after recordDays. The
+      messaging_idempotency_caller constraint holds all three non-empty
+      while the receipt stands and all three NULL once it is erased.
+    refusal: >-
+      Keep the digest row indefinitely, so the same caller's retry after the
+      horizon, exact or changed, is refused with 410 idempotency.expired and
+      sends nothing, whatever audit key the runtime holds; answer another
+      caller's identical key as a fresh submission; refuse at the schema any
+      erased row that keeps part of its caller or any live row that lacks
+      it; touch no row whose receipt is still inside its period.
+    negativeTest:
+      path: crates/registry-messaging/tests/postgres_retention.rs
+      name: a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent
 deferred: []

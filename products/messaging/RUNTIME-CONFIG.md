@@ -143,11 +143,13 @@ Each period counts from the moment the message reached a terminal state
 still waiting in a retry keeps its payload. `payloadDays` after that moment
 the rendered parts and the recipient contact are erased and the message
 record stays; `recordDays` after it the record is deleted with its attempts
-and receipts. The idempotency key stays spent, held only with the caller's
-issuer and subject and its times, and a repeat of it is refused with
+and receipts. The idempotency key stays spent, held only as a digest of
+the caller and the key with its times, and a repeat of it is refused with
 `idempotency.expired`.
 `submissionReceiptDays` after acceptance the stored submission receipt is
-dropped and a repeat of its key is refused with `idempotency.expired`. A
+dropped together with the raw issuer, subject, and key beside it, and a
+repeat of its key by the same caller is refused with `idempotency.expired`;
+their SHA-256 digest keeps the key spent for that caller alone. A
 message that is queued, sending, or in an unknown outcome is never erased,
 and an operator retry committed while a sweep waits for the message keeps
 its payload.

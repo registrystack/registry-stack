@@ -130,6 +130,7 @@ decisions:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: concurrent_submissions_under_one_key_record_one_message}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_the_caller_may_no_longer_send_is_refused_while_the_first_attempt_stands}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent}
   - id: MESSAGING-DEC-08
     subject: The recipient is masked for every reader, the operator included
     decision: >-
@@ -304,13 +305,17 @@ decisions:
   - id: MESSAGING-DEC-17
     subject: A spent idempotency key belongs to the caller's issuer and subject
     decision: >-
-      An idempotency row is keyed by the caller's verified issuer and
-      subject, the operation, and the key, as Scheduling and Casework key
-      theirs, and never by the caller's keyed audit pseudonym. When a record
-      is deleted its row stays with the message, the request hash, and any
-      stored receipt nulled, holding only the issuer, the subject, the key,
-      and its times, so a repeat of the key after recordDays is refused with
-      idempotency.expired, the refusal every spent key gets. Rotating
+      An idempotency row is keyed by an unkeyed SHA-256 digest over a fixed
+      domain and the caller's verified issuer and subject, the operation, and
+      the key, length-prefixed, as Scheduling and Casework scope theirs to
+      the caller, and never by the caller's keyed audit pseudonym. The raw
+      issuer, subject, and key stay beside the digest only while the
+      submission receipt does: when retention erases the receipt it clears
+      all three (MESSAGING-SEC-11), and when a record is deleted its row
+      stays with the message and the request hash nulled too, so the digest
+      row alone keeps the key spent indefinitely and a repeat of it by the
+      same caller is refused with idempotency.expired, the refusal every
+      spent key gets. Another caller's identical key is fresh. Rotating
       audit.hashKeyRef changes pseudonyms only: an exact retry after the
       rotation replays its receipt or is refused as expired, and never sends
       again. The audit journal keeps naming the caller by pseudonym. Schema
@@ -321,25 +326,30 @@ decisions:
       sent to the same recipient, which is the duplicate the key exists to
       prevent. A key scoped to the pseudonym was freed by every audit key
       rotation, so routine key hygiene reopened that duplicate for every
-      caller with a retry in flight. Keeping the raw issuer and subject in a
-      spent-key row is the accepted cost, and no command erases them:
-      neither the runtime's retention sweep nor messagingctl retention
-      erase-expired deletes the row, because the row is what keeps its key
-      spent. They name the authenticated caller, not a recipient, and under a
-      profile that admits a human or agent actor or reads the principal from
-      a claim other than sub they may identify a person, such as a staff
-      member's email address. The cost is accepted because the message row
-      already held them for recordDays and the tombstone holds no request
-      hash, receipt, or message. Version 3 discarded the records it replaced
-      rather than re-keying them because no deployment held Messaging records
-      worth keeping, and a key attributed to the wrong caller would replay one
-      caller's receipt to another.
+      caller with a retry in flight, and a digest keyed with any rotating
+      secret would do the same; the digest therefore takes no key. The raw
+      issuer and subject name the authenticated caller, not a recipient, and
+      under a profile that admits a human or agent actor or reads the
+      principal from a claim other than sub they may identify a person, such
+      as a staff member's email address. They are kept for at most
+      submissionReceiptDays, no longer than the message row already holds
+      them, and the spent-key row holds them no longer. The residual is that
+      an unkeyed digest lets anyone who reads the table and can guess a
+      caller's issuer, subject, and key confirm that the caller spent that
+      key, which a random key makes impractical. Version 3 discarded the
+      records it replaced rather than re-keying them because no deployment
+      held Messaging records worth keeping, and a key attributed to the wrong
+      caller would replay one caller's receipt to another.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
       - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_record_is_deleted_record_days_after_a_terminal_state_with_everything_it_holds}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_submission_receipt_expires_after_its_period_and_its_key_stays_spent}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_spent_key_forgets_its_caller_once_its_receipt_is_erased_and_stays_spent}
+      - {path: crates/registry-messaging/tests/postgres_retention.rs, name: the_schema_refuses_a_spent_key_that_keeps_part_of_its_caller}
+      - {path: crates/registry-messaging/src/messages.rs, name: a_key_reference_digests_a_domain_and_the_length_prefixed_caller_operation_and_key}
+      - {path: crates/registry-messaging/src/messages.rs, name: a_key_reference_keeps_every_caller_and_key_apart}
   - id: MESSAGING-DEC-18
     subject: The runtime sweeps hourly and journals only what it erased
     decision: >-

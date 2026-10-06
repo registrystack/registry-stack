@@ -251,6 +251,20 @@ async fn version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys
         .expect("the caller's keys")
         .get(0);
     assert_eq!(caller_keys, 2);
+    // A record is found by the digest of its caller and key, which outlives
+    // the raw values once retention erases the record's receipt.
+    let primary_key: String = harness
+        .isolated
+        .admin
+        .query_one(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
+              WHERE conrelid = 'messaging_idempotency'::regclass AND contype = 'p'",
+            &[],
+        )
+        .await
+        .expect("the idempotency primary key")
+        .get(0);
+    assert_eq!(primary_key, "PRIMARY KEY (key_reference)");
     assert_eq!(
         harness
             .count("SELECT count(*) FROM messaging_messages")

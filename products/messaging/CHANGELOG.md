@@ -6,9 +6,12 @@
   subject, as in Scheduling and Casework, instead of the caller's keyed audit
   pseudonym, so rotating `audit.hashKeyRef` no longer frees spent keys: an
   exact retry across a rotation replays its receipt or is refused with
-  `410 idempotency.expired`, and never sends again. A deleted record's
-  idempotency tombstone now holds the caller's issuer and subject. Audit
-  records keep the pseudonym. The upgrade discards existing idempotency
+  `410 idempotency.expired`, and never sends again. A spent key is
+  recorded and found under a SHA-256 digest of the issuer, subject,
+  operation, and key; the raw issuer, subject, and key stay beside it only
+  until retention erases the submission receipt, which clears all three,
+  and the digest alone keeps the key spent for that caller after
+  `submissionReceiptDays`. Audit records keep the pseudonym. The upgrade discards existing idempotency
   records, so every key spent before it can be used again, and a retry the
   new runtime receives under a discarded key sends its message a second
   time. Before you run `messagingctl apply` with this release, stop new

@@ -291,30 +291,44 @@ payload, its dispatch job, and the acceptance audit; concurrent submissions
 under one key produce exactly one message, which the `postgres_messages`
 suite proves.
 
-Review note, data minimization (security-sensitive, accepted 2026-10-06).
-The spent-key row stores the caller's raw issuer and subject instead of a
-keyed pseudonym, and the row outlives the message: when retention deletes a
-record after `recordDays`, its idempotency tombstone keeps the issuer, the
-subject, the key, and its times indefinitely. No command erases a
-tombstone's issuer and subject: neither the runtime's retention sweep nor
-`messagingctl retention erase-expired` deletes the row, because the row is
-what keeps its key spent. Before schema version 3 the tombstone held only
-the pseudonym. The issuer and subject name the authenticated caller, not a
-recipient, and that caller is not always a service: an access profile may
-admit a human or agent actor, or read the principal from a claim other
-than `sub`, so under such a profile the stored subject may identify a
-person, such as a staff member's email address. The tradeoff is accepted
-because the pseudonym scope let every audit key rotation free every spent
-key and so reopen duplicate sends; the message row already held the issuer
-and subject for `recordDays`; and the tombstone keeps no request hash,
-receipt, message, recipient reference, or content. The audit journal and
-the rate limiter keep the pseudonym. Schema version 3 discarded every
+Review note, data minimization (security-sensitive, accepted 2026-10-06,
+revised 2026-10-07). A spent key is recorded and found under
+`key_reference`, an unkeyed SHA-256 digest over the fixed domain
+`registry-messaging-idempotency-key-v1` and the length-prefixed issuer,
+subject, operation, and key. The row also holds the caller's raw issuer and
+subject and the raw key, and only while its submission receipt does: when
+retention erases the receipt after `submissionReceiptDays`, whether the
+runtime sweep or `messagingctl retention erase-expired` runs it, the same
+statement clears all three, and the record deletion after `recordDays`
+clears them too if they remain (MESSAGING-SEC-11). A schema constraint
+holds the pair: a row whose receipt is erased holds none of the three, and
+a row whose receipt stands holds all three. The digest row then stays
+indefinitely with the operation and its times, and the message and request
+hash until `recordDays`, so the key stays spent for that caller alone: the
+same caller's retry, exact or changed, is `410 idempotency.expired` and
+sends nothing, another caller's identical key is fresh, and an audit key
+rotation frees nothing, since the digest takes no key. The issuer and
+subject name the authenticated caller, not a recipient, and that caller is
+not always a service: an access profile may admit a human or agent actor,
+or read the principal from a claim other than `sub`, so under such a
+profile the raw subject may identify a person, such as a staff member's
+email address. The raw values are accepted for at most
+`submissionReceiptDays`, a period no longer than the one the message row
+already holds the issuer and subject for (`recordDays`). The residual is the
+digest itself: it is not keyed, because a keyed digest would let a key
+rotation free every spent key, the duplicate-send failure the pseudonym
+scope had before schema version 3. Anyone who reads the table and can guess
+a caller's issuer, subject, and key can therefore confirm that the caller
+spent that key. A random key makes the guess impractical, and the API
+reference tells callers to choose one; a short or predictable key does not. The audit journal
+and the rate limiter keep the pseudonym. Schema version 3 discarded every
 idempotency record written under the pseudonym scope, request hashes and
 receipts included, so no pseudonym-keyed row survives the upgrade and every
 key spent before it is free again (`postgres_migrate.rs`,
 `version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`).
 
-Tests: MESSAGING-SEC-01 and -02 in `contracts/security-test-traceability.yaml`.
+Tests: MESSAGING-SEC-01, -02, and -11 in
+`contracts/security-test-traceability.yaml`.
 
 ## Limits
 
@@ -799,11 +813,12 @@ acceptance plus `payloadDays`. Past `payloadDays` the recipient and the
 rendered parts are nulled and the content-free record stays; past
 `recordDays` the record is deleted with its payload, job, attempts, and
 delivery receipts; its idempotency row stays with the message, the request
-hash, and any stored receipt nulled, holding only the caller's issuer and
-subject and the key, so a repeat is still `410 idempotency.expired`
-(MESSAGING-DEC-17), whatever audit hash key the runtime holds then. Past
-`submissionReceiptDays` the stored receipt is dropped and a repeat of its key
-is `410 idempotency.expired`.
+hash, any stored receipt, and the raw issuer, subject, and key nulled,
+holding only their digest and its times, so a repeat is still
+`410 idempotency.expired` (MESSAGING-DEC-17), whatever audit hash key the
+runtime holds then. Past `submissionReceiptDays` the stored receipt is
+dropped together with the raw issuer, subject, and key, and a repeat of its
+key by the same caller is `410 idempotency.expired` (MESSAGING-SEC-11).
 
 An applied run erases in batches of at most 1,000 of each kind, oldest
 first, and ends at the first batch shorter than that. Each batch is one
@@ -836,7 +851,7 @@ erases nothing, so a backlog stalls only when one batch of 1,000 cannot
 complete in sixty seconds. Audit segment retention is independent of
 payload and record erasure; off-host shipping must precede local expiry.
 
-Tests: MESSAGING-SEC-10 in `contracts/security-test-traceability.yaml`.
+Tests: MESSAGING-SEC-10 and -11 in `contracts/security-test-traceability.yaml`.
 
 ## Development session (MESSAGING-DEC-27)
 
