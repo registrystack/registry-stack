@@ -33,6 +33,59 @@
   the `validate_for_immediate_fetch` alias, replaced by
   `validate_dns_pinned_for_immediate_fetch`. The crate no longer depends on
   `time`.
+- BREAKING: remove public items no Registry Stack crate uses. Removed from
+  `registry-platform-activation`: `Layout::migrations_relation` and
+  `SchemaState::unknown_version`.
+- BREAKING: `registry-platform-audit` drops its environment-variable key
+  loaders and unused helpers. Removed: `AuditProfile::production_from_env`,
+  `AuditKeyHasher::from_env_derived`, `QueryRedactor::with_hasher`,
+  `AuditSegments::sealed_path`, and `AuditSegments::sequence_of`. Load the
+  master secret through `AuditProfile::production_from_secret_bytes` instead.
+- BREAKING: `registry-platform-crypto` drops unused helpers. Removed:
+  `validate_did_web_https_issuer_binding` with the
+  `DidError::InvalidIssuerUrl`, `DidError::IssuerMustUseHttps`, and
+  `DidError::IssuerHostMismatch` variants, `pairwise_subject_ref_hash`,
+  `hmac_sha1`, and `HMAC_SHA1_TAG_BYTES`. `verify_hmac_sha1` stays. The crate
+  no longer depends on `subtle`.
+- BREAKING: remove `CapturedSnapshot::verify_unchanged` from
+  `registry-platform-sqlite`; `verify_unchanged_before` is the one snapshot
+  verification and always takes a deadline.
+- BREAKING: `registry-platform-hooks` drops the unused whole-document parser.
+  Removed: `HooksDocument` (with `from_strict_json` and `validate`),
+  `HookDeclarationError`, and `EnvelopeLimits::max_envelope_bytes`. Products
+  parse `HookDeclaration` values within their own configuration and check them
+  with `validate_hooks`. The crate no longer depends on `serde_path_to_error`.
+- BREAKING: remove the standalone header helpers from
+  `registry-platform-httpsec`: `hsts_header`, `apply_hsts`,
+  `CrossOriginIsolation`, and `apply_cross_origin_isolation`.
+  `SecurityHeadersLayer` still sets HSTS.
+- BREAKING: `registry-platform-httputil` drops unused public items. Removed:
+  the proxy header filters (`ProxyHeaderPolicy`,
+  `filter_proxy_request_headers`, and `filter_proxy_response_headers`);
+  `ValidatedFetchUrl::resolved_ips`, `resolved_addrs`, `validated_at`,
+  `immediate_post`, `immediate_post_with_timeout`, and `immediate_request`;
+  `ServiceBaseUrl::into_url`; the service-hop data destination
+  (`ServiceHopDataDestinationPolicy` and `MAX_SERVICE_HOP_OPERATION_TIMEOUT`);
+  `DESTINATION_IANA_REGISTRY_SNAPSHOT`; `DestinationMethod::is_side_effecting`;
+  `MAX_DESTINATION_RESPONSE_HEADERS` and
+  `MAX_DESTINATION_RESPONSE_HEADER_BYTES`, which duplicated
+  `MAXIMUM_RESPONSE_HEADER_FIELDS` and `MAXIMUM_RESPONSE_HEADER_BYTES`;
+  `BoundedDestinationResponse::require_exact_json_content_type` and
+  `DestinationResponseMediaTypeError`; the test-support
+  `BoundedDestinationBody::from_test_bytes`; and the type aliases
+  `CredentialDestinationRequest`, `DataDestinationResponse`,
+  `CredentialDestinationResponse`, `EventDestinationResponse`, and
+  `EventDestinationBody`.
+- BREAKING: remove `TokenVerifierConfig::with_scope_map`,
+  `TokenVerifierConfig::with_userinfo_requires_exp`, and
+  `fetch_userinfo_jwt_with_policy` from `registry-platform-oidc`; the
+  `scope_map` and `userinfo_requires_exp` fields stay public. The crate no
+  longer depends on `registry-platform-crypto`.
+- BREAKING: `registry-platform-testing` drops unused fixtures. Removed:
+  `MockIdp::mint_token_without_typ`, `sign_ed25519_compact_jwt_with_provider`,
+  `jwks_from_signing_provider`, `fixtures::ed25519_signer`,
+  `MockHttpUpstream::assert_max_request_bytes` with its request-size tracking,
+  `MockExpectation::respond_body`, and `TestClient::service_subject`.
 
 ## v0.39.0 - 2026-10-06
 
