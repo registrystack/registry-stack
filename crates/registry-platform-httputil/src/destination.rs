@@ -83,10 +83,6 @@ pub const MAX_AWS_SIGV4_SESSION_TOKEN_BYTES: usize = 8_192;
 pub const MAX_AWS_JSON_ACTION_BYTES: usize = 256;
 /// Maximum response-body ceiling accepted by the platform transport.
 pub const MAX_DESTINATION_RESPONSE_BODY_BYTES: usize = 16_777_216;
-/// Maximum parsed upstream response-header count.
-pub const MAX_DESTINATION_RESPONSE_HEADERS: usize = crate::MAXIMUM_RESPONSE_HEADER_FIELDS;
-/// Maximum aggregate parsed upstream response-header name and value bytes.
-pub const MAX_DESTINATION_RESPONSE_HEADER_BYTES: usize = crate::MAXIMUM_RESPONSE_HEADER_BYTES;
 /// Maximum configured private CA bundle bytes retained during TLS activation.
 pub const MAX_DESTINATION_CA_BUNDLE_BYTES: usize =
     crate::MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES;
@@ -96,20 +92,17 @@ pub const MAX_DESTINATION_CA_CERTIFICATES: usize = crate::MAXIMUM_TRUSTED_ROOT_C
 pub const MAX_DESTINATION_CLIENT_IDENTITY_BYTES: usize = 524_288;
 /// Frozen hard maximum for DNS, connect, send, and response body read together.
 pub const MAX_DESTINATION_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
-/// Fixed hard maximum for a data request made across one internal service hop.
-pub const MAX_SERVICE_HOP_OPERATION_TIMEOUT: Duration = Duration::from_secs(25);
 /// Process-wide ceiling for concurrent destination DNS resolutions.
 pub const MAX_CONCURRENT_DESTINATION_RESOLUTIONS: usize = 32;
 
-/// Date of the pinned IANA special-purpose and IPv6 allocation registry snapshot.
-///
-/// Classification below follows the IANA IPv4 and IPv6 Special-Purpose Address
-/// Registries and IPv6 unicast assignments as published on 2026-07-11. Updating
-/// this date requires reviewing the tables and their boundary tests together.
-/// See <https://www.iana.org/assignments/iana-ipv4-special-registry/>,
-/// <https://www.iana.org/assignments/iana-ipv6-special-registry/>, and
-/// <https://www.iana.org/assignments/ipv6-unicast-address-assignments/>.
-pub const DESTINATION_IANA_REGISTRY_SNAPSHOT: &str = "2026-07-11";
+// Pinned IANA registry snapshot: 2026-07-11.
+//
+// Classification below follows the IANA IPv4 and IPv6 Special-Purpose Address
+// Registries and IPv6 unicast assignments as published on 2026-07-11. Updating
+// this date requires reviewing the tables and their boundary tests together.
+// See <https://www.iana.org/assignments/iana-ipv4-special-registry/>,
+// <https://www.iana.org/assignments/iana-ipv6-special-registry/>, and
+// <https://www.iana.org/assignments/ipv6-unicast-address-assignments/>.
 
 static DESTINATION_DNS_PERMITS: Semaphore =
     Semaphore::const_new(MAX_CONCURRENT_DESTINATION_RESOLUTIONS);
@@ -132,7 +125,7 @@ fn destination_native_roots() -> &'static [reqwest::Certificate] {
 ///
 /// `2000::/3` is the assignable pool, not an assertion that every address in
 /// that pool is allocated or publicly routable. Keep this list synchronized
-/// with [`DESTINATION_IANA_REGISTRY_SNAPSHOT`] and its boundary tests.
+/// with the pinned IANA registry snapshot (2026-07-11) and its boundary tests.
 const IPV6_GLOBAL_UNICAST_ALLOCATIONS: &[(Ipv6Addr, u32)] = &[
     (Ipv6Addr::new(0x2001, 0x0200, 0, 0, 0, 0, 0, 0), 23),
     (Ipv6Addr::new(0x2001, 0x0400, 0, 0, 0, 0, 0, 0), 23),
@@ -372,114 +365,6 @@ pub type DataDestinationPolicy = FixedDestinationPolicy<DataDestination>;
 pub type CredentialDestinationPolicy = FixedDestinationPolicy<CredentialDestination>;
 /// Event-delivery fixed destination policy.
 pub type EventDestinationPolicy = FixedDestinationPolicy<EventDestination>;
-
-/// Fixed data destination for one bounded internal service hop.
-///
-/// This deliberately narrow wrapper reuses the data destination's validation,
-/// DNS, SSRF, TLS, redirect, proxy, retry, and body semantics while permitting
-/// an absolute operation deadline up to [`MAX_SERVICE_HOP_OPERATION_TIMEOUT`].
-/// It does not expose the ordinary relative-duration send API or the underlying
-/// data policy.
-///
-/// Credential requests cannot be sent through the service-hop policy:
-///
-/// ```compile_fail
-/// use registry_platform_httputil::destination::{
-///     CredentialDestinationRequest, ServiceHopDataDestinationPolicy,
-/// };
-/// use tokio::time::Instant;
-///
-/// async fn cannot_send_credentials(
-///     service_hop: &ServiceHopDataDestinationPolicy,
-///     request: CredentialDestinationRequest,
-/// ) {
-///     service_hop
-///         .send_with_deadline(request, Instant::now())
-///         .await
-///         .unwrap();
-/// }
-/// ```
-///
-/// A credential policy cannot be substituted for this policy:
-///
-/// ```compile_fail
-/// use registry_platform_httputil::destination::{
-///     CredentialDestinationPolicy, ServiceHopDataDestinationPolicy,
-/// };
-///
-/// fn requires_service_hop(_: ServiceHopDataDestinationPolicy) {}
-///
-/// fn cannot_use_credential_policy(policy: CredentialDestinationPolicy) {
-///     requires_service_hop(policy);
-/// }
-/// ```
-///
-/// The wrapper is also distinct from an ordinary data policy:
-///
-/// ```compile_fail
-/// use registry_platform_httputil::destination::{
-///     DataDestinationPolicy, ServiceHopDataDestinationPolicy,
-/// };
-///
-/// fn requires_data_policy(_: DataDestinationPolicy) {}
-///
-/// fn cannot_erase_service_hop(policy: ServiceHopDataDestinationPolicy) {
-///     requires_data_policy(policy);
-/// }
-/// ```
-pub struct ServiceHopDataDestinationPolicy {
-    policy: DataDestinationPolicy,
-}
-
-impl ServiceHopDataDestinationPolicy {
-    /// Validate and freeze a service-hop data destination binding.
-    pub fn new(
-        origin_id: &str,
-        origin: &str,
-        profile: DestinationProfile,
-        allowed_private_cidrs: &[IpNet],
-    ) -> Result<Self, DestinationPolicyError> {
-        DataDestinationPolicy::new(origin_id, origin, profile, allowed_private_cidrs)
-            .map(|policy| Self { policy })
-    }
-
-    /// Mark this fixed service hop as fail-closed until configured TLS
-    /// material has been loaded by the deployment runtime.
-    #[must_use]
-    pub fn require_configured_tls(mut self) -> Self {
-        self.policy = self.policy.require_configured_tls();
-        self
-    }
-
-    /// Install already parsed configured TLS material for this service hop.
-    pub fn install_configured_tls(
-        &mut self,
-        material: DestinationTlsMaterial,
-    ) -> Result<(), DestinationTlsMaterialError> {
-        self.policy.install_configured_tls(material)
-    }
-
-    /// Resolve, validate, pin, and send under one existing absolute deadline.
-    ///
-    /// DNS, connect, send, and the bounded response-body read share the same
-    /// instant, which must be no later than
-    /// [`MAX_SERVICE_HOP_OPERATION_TIMEOUT`] from the time of this call.
-    pub async fn send_with_deadline(
-        &self,
-        request: DataDestinationRequest,
-        deadline: Instant,
-    ) -> Result<DataDestinationResponse, DestinationSendError> {
-        self.policy
-            .send_with_deadline_bounded(
-                request,
-                deadline,
-                MAX_SERVICE_HOP_OPERATION_TIMEOUT,
-                &SystemResolver,
-                TransportTrust::Policy,
-            )
-            .await
-    }
-}
 
 impl<S: DestinationSlot> fmt::Debug for FixedDestinationPolicy<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1299,12 +1184,6 @@ pub enum DestinationMethod {
 }
 
 impl DestinationMethod {
-    /// Return whether this class performs a side effect at the destination.
-    #[must_use]
-    pub fn is_side_effecting(self) -> bool {
-        matches!(self, Self::SideEffectingSend(_))
-    }
-
     /// Whether a script template of this class carries a host-typed body.
     fn carries_script_body(self) -> bool {
         matches!(
@@ -3139,8 +3018,6 @@ struct SensitiveHeader {
 
 /// Registry-data operation request.
 pub type DataDestinationRequest = BoundedDestinationRequest<DataDestination>;
-/// Credential-exchange operation request.
-pub type CredentialDestinationRequest = BoundedDestinationRequest<CredentialDestination>;
 /// Event-delivery operation request.
 pub type EventDestinationRequest = BoundedDestinationRequest<EventDestination>;
 
@@ -3655,13 +3532,6 @@ pub struct BoundedDestinationResponse<S: DestinationSlot> {
     slot: PhantomData<fn() -> S>,
 }
 
-/// Registry-data response.
-pub type DataDestinationResponse = BoundedDestinationResponse<DataDestination>;
-/// Credential-exchange response.
-pub type CredentialDestinationResponse = BoundedDestinationResponse<CredentialDestination>;
-/// Event-delivery response.
-pub type EventDestinationResponse = BoundedDestinationResponse<EventDestination>;
-
 impl<S: DestinationSlot> fmt::Debug for BoundedDestinationResponse<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3716,17 +3586,6 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
         Ok(selected)
     }
 
-    /// Require exactly one response media type with the exact JSON value.
-    ///
-    /// Parameters, comma-joined alternatives, duplicate fields, and missing
-    /// fields are rejected. The failure deliberately does not expose the
-    /// upstream value.
-    pub fn require_exact_json_content_type(&self) -> Result<(), DestinationResponseMediaTypeError> {
-        exact_json_content_type(self.response.headers())
-            .then_some(())
-            .ok_or(DestinationResponseMediaTypeError::NotExactJson)
-    }
-
     /// Consume the response body under both the operation deadline and byte cap.
     pub async fn read_bounded(
         self,
@@ -3773,21 +3632,6 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             .await
             .map_err(|_| DestinationResponseError::DeadlineExceeded)?
     }
-}
-
-fn exact_json_content_type(headers: &HeaderMap) -> bool {
-    let mut values = headers.get_all(CONTENT_TYPE).iter();
-    matches!(
-        (values.next(), values.next()),
-        (Some(value), None) if value.as_bytes() == b"application/json"
-    )
-}
-
-/// Value-free strict response-media-type failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum DestinationResponseMediaTypeError {
-    #[error("destination response media type is not exactly application/json")]
-    NotExactJson,
 }
 
 /// Value-free failure selecting script-visible response headers.
@@ -3849,8 +3693,6 @@ pub struct BoundedDestinationBody<S: DestinationSlot> {
 pub type DataDestinationBody = BoundedDestinationBody<DataDestination>;
 /// Credential-exchange response bytes.
 pub type CredentialDestinationBody = BoundedDestinationBody<CredentialDestination>;
-/// Event-delivery response bytes.
-pub type EventDestinationBody = BoundedDestinationBody<EventDestination>;
 
 impl<S: DestinationSlot> fmt::Debug for BoundedDestinationBody<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -3889,22 +3731,6 @@ impl BoundedDestinationBody<EventDestination> {
     #[must_use]
     pub fn to_event_answer(&self) -> Vec<u8> {
         self.bytes.to_vec()
-    }
-}
-
-#[cfg(feature = "test-support")]
-impl BoundedDestinationBody<DataDestination> {
-    /// Construct opaque data-destination bytes for cross-crate contract tests.
-    ///
-    /// This remains input-only: the production boundary still exposes no raw
-    /// response-body extraction API.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn from_test_bytes(bytes: impl AsRef<[u8]>) -> Self {
-        Self {
-            bytes: Zeroizing::new(bytes.as_ref().to_vec()),
-            slot: PhantomData,
-        }
     }
 }
 
@@ -4497,7 +4323,7 @@ fn cidr_is_metadata_singleton(cidr: IpNet) -> bool {
     }
 }
 
-/// Pinned to [`DESTINATION_IANA_REGISTRY_SNAPSHOT`].
+/// Pinned to the IANA registry snapshot of 2026-07-11.
 fn is_globally_routable(ip: IpAddr) -> bool {
     match normalize_ipv4_mapped(ip) {
         IpAddr::V4(ip) => is_ipv4_globally_routable(ip),
@@ -4961,21 +4787,6 @@ mod tests {
             production(&[]).install_configured_tls(material),
             Err(DestinationTlsMaterialError::NotRequired)
         );
-
-        let service_material =
-            DestinationTlsMaterial::from_pem(Some(certificate_pem.as_bytes()), None)
-                .expect("valid service-hop private root");
-        let mut service = ServiceHopDataDestinationPolicy::new(
-            "registry-service",
-            "https://registry.example.test/",
-            DestinationProfile::ProductionHttps,
-            &[],
-        )
-        .expect("service-hop policy validates")
-        .require_configured_tls();
-        service
-            .install_configured_tls(service_material)
-            .expect("required service-hop material installs");
     }
 
     #[tokio::test]
@@ -5024,25 +4835,6 @@ mod tests {
         assert!(credential.with_bytes(|bytes| bytes == b"credential-token"));
         assert!(!format!("{data:?}").contains("registry-record"));
         assert!(!format!("{credential:?}").contains("credential-token"));
-    }
-
-    #[test]
-    fn exact_json_response_media_type_rejects_missing_wrong_and_duplicate_values() {
-        let mut headers = HeaderMap::new();
-        assert!(!exact_json_content_type(&headers));
-
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        assert!(exact_json_content_type(&headers));
-
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json; charset=utf-8"),
-        );
-        assert!(!exact_json_content_type(&headers));
-
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        assert!(!exact_json_content_type(&headers));
     }
 
     #[test]
@@ -6450,7 +6242,7 @@ mod tests {
     #[test]
     fn parsed_response_headers_are_bounded_before_response_exposure() {
         let mut too_many = HeaderMap::new();
-        for index in 0..=MAX_DESTINATION_RESPONSE_HEADERS {
+        for index in 0..=crate::MAXIMUM_RESPONSE_HEADER_FIELDS {
             let name = HeaderName::from_bytes(format!("x-upstream-{index}").as_bytes())
                 .expect("test header name");
             too_many.insert(name, HeaderValue::from_static("value"));
@@ -6463,7 +6255,7 @@ mod tests {
         let mut too_large = HeaderMap::new();
         too_large.insert(
             HeaderName::from_static("x-upstream-large"),
-            HeaderValue::from_bytes(&vec![b'a'; MAX_DESTINATION_RESPONSE_HEADER_BYTES])
+            HeaderValue::from_bytes(&vec![b'a'; crate::MAXIMUM_RESPONSE_HEADER_BYTES])
                 .expect("large test header value"),
         );
         assert_eq!(
@@ -7370,70 +7162,6 @@ mod tests {
         assert_eq!(credential_resolver.calls.load(Ordering::SeqCst), 0);
     }
 
-    #[tokio::test]
-    async fn service_hop_policy_rejects_a_twenty_six_second_deadline() {
-        let policy = ServiceHopDataDestinationPolicy::new(
-            "relay-service",
-            "https://relay.example.test/",
-            DestinationProfile::ProductionHttps,
-            &[],
-        )
-        .expect("service-hop policy validates");
-        let request =
-            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
-                .expect("data request validates");
-
-        let result = policy
-            .send_with_deadline(request, Instant::now() + Duration::from_secs(26))
-            .await;
-
-        assert!(matches!(
-            result,
-            Err(DestinationSendError::InvalidRemainingTimeout)
-        ));
-    }
-
-    #[tokio::test]
-    async fn service_hop_accepts_an_eleven_second_deadline_for_bounded_loopback_data() {
-        let app = Router::new().route(
-            "/record",
-            get(|| async { (StatusCode::OK, "service-hop-response") }),
-        );
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind service-hop test server");
-        let address = listener.local_addr().expect("service-hop test address");
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve service-hop test app");
-        });
-
-        let policy = ServiceHopDataDestinationPolicy::new(
-            "relay-service",
-            &format!("http://127.0.0.1:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
-            &[],
-        )
-        .expect("service-hop policy validates");
-        let request =
-            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
-                .expect("data request validates");
-        let deadline = Instant::now() + Duration::from_secs(11);
-
-        let response = policy
-            .send_with_deadline(request, deadline)
-            .await
-            .expect("service-hop send accepts a deadline beyond ten seconds");
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.deadline, deadline);
-        let body = response
-            .read_bounded(64)
-            .await
-            .expect("service-hop response body remains bounded");
-        assert_eq!(body.as_bytes(), b"service-hop-response");
-    }
-
     /// One captured request as the loopback destination saw it.
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct CapturedSend {
@@ -7711,7 +7439,6 @@ mod tests {
             16 * 1024,
         )
         .expect("acknowledged side-effecting GET compiles");
-        assert!(DestinationMethod::SideEffectingSend(method).is_side_effecting());
 
         let request = template
             .render_script(
@@ -7763,7 +7490,6 @@ mod tests {
         );
         for send in [SideEffectingSendMethod::Post, acknowledged] {
             let method = DestinationMethod::SideEffectingSend(send);
-            assert!(method.is_side_effecting());
             let body = if send == SideEffectingSendMethod::Post {
                 DestinationBodyTemplate::Required { max_bytes: 64 }
             } else {
@@ -7808,14 +7534,6 @@ mod tests {
                 .unwrap_err(),
                 DestinationRequestError::MethodSlotMismatch
             );
-        }
-        for read_only in [
-            DestinationMethod::Get,
-            DestinationMethod::ReviewedReadOnlyPost,
-            DestinationMethod::OAuth2ClientCredentialsPost,
-            DestinationMethod::EventPost,
-        ] {
-            assert!(!read_only.is_side_effecting());
         }
     }
 
