@@ -1002,6 +1002,33 @@ async fn no_contact_content_data_principal_or_credential_reaches_the_journal_or_
     support::assert_logs_clean();
 }
 
+/// A subject past the stored bound fails the idempotency insert on its
+/// CHECK, and PostgreSQL's account of that failure repeats the failing row:
+/// the caller's issuer, subject, and key. The operational log names the
+/// failure and none of the row: a store error displays the driver's kind of
+/// failure, and the database's message and detail stay its source.
+#[tokio::test]
+async fn a_refused_store_write_logs_no_part_of_the_refused_row() {
+    let harness = Harness::start().await;
+    let subject = format!("over-long-subject-{}", "s".repeat(1024));
+    let key = "a-key-the-log-never-names";
+    let (status, problem) = harness
+        .submit(&sender_token_for(&subject), key, &email_submission())
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    assert_eq!(problem["code"], "service.unavailable");
+
+    let logs = support::captured_logs();
+    assert!(
+        logs.contains("the Messaging store could not record a submission"),
+        "{logs}"
+    );
+    for value in ["over-long-subject", key, "Failing row"] {
+        assert!(!logs.contains(value), "the log names {value}: {logs}");
+    }
+    support::assert_logs_clean();
+}
+
 /// Give the starter's sender profile a daily limit of `limit`.
 fn with_daily_limit(limit: u32) -> impl FnOnce(&std::path::Path) {
     move |package: &std::path::Path| {
