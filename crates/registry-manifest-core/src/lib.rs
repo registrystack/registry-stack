@@ -3403,20 +3403,6 @@ pub fn render_shacl(compiled: &CompiledMetadata) -> Value {
     })
 }
 
-/// Render the compiled metadata as a per-entity SHACL document.
-pub fn render_entity_shacl(
-    compiled: &CompiledMetadata,
-    dataset_id: &str,
-    entity_name: &str,
-) -> Option<Value> {
-    let dataset = compiled.dataset(dataset_id)?;
-    let entity = dataset.entities.get(entity_name)?;
-    Some(json!({
-        "@context": jsonld_context(),
-        "shape": entity_shape(compiled, dataset, entity),
-    }))
-}
-
 pub fn render_entity_schema_draft_2020_12(
     compiled: &CompiledMetadata,
     dataset_id: &str,
@@ -6839,7 +6825,7 @@ fn records_collection_json() -> Value {
     json!({
         "id": DATASETS_COLLECTION_ID,
         "title": "Dataset catalog records",
-        "description": "Records describing Registry Relay datasets visible to the caller.",
+        "description": "Records describing the datasets visible to the caller.",
         "itemType": "record",
     })
 }
