@@ -169,7 +169,14 @@ Scopes authorize reads only. Every commitment takes its authority from a task
 grant instead, which [TASK_GRANTS.md](TASK_GRANTS.md) documents.
 
 `audit.hashKeyRef` supplies the key that pseudonymizes principals and grants in
-audit entries. `audit.destination` is `file`, the default, or `stdout`. A `file`
+audit entries. The same key derives hold and appointment ownership: a claim
+records the keyed pseudonym of the issuer and subject that made it, never the
+pair itself. Rotating the key therefore orphans every existing claim. The
+claims stay committed and keep their capacity, but the caller that made them
+no longer sees them in its listing, and its read by identifier, reschedule,
+cancel, or hold release is refused with `operation.not-authorized`. An empty
+listing proves no booking only if the key has not been rotated since the
+attempt. `audit.destination` is `file`, the default, or `stdout`. A `file`
 destination requires `audit.path`, the absolute active audit file, which one
 process writes at a time; the file rotates at `audit.rotateBytes` (default 100
 MiB, at least 1 MiB, at most 4294967295) and rotated files are removed after
@@ -235,13 +242,14 @@ finish with their exact original binding. Startup refuses if a retained event's
 binding is no longer available.
 
 `retention.attemptReceiptDays` covers idempotency attempt receipts and is at
-least one day; listing cursors keep their fixed fifteen-minute lifetime. `retention.hookPayloadDays`
-sets the canonical observer payload's retry and dead-letter lifetime from 1
-through 30 days. Both configured values default to seven days, which is not a
-jurisdictional recommendation. Appointment, history, and reminder outbox
-retention remain deferred; `audit.retainDays` bounds rotated audit files. An idempotency receipt past its period is
-erased, so an exact retry after expiry answers `idempotency.expired` with HTTP
-410 instead of replaying the first answer.
+least one day; listing cursors keep their fixed fifteen-minute lifetime.
+`retention.hookPayloadDays` sets the canonical observer payload's retry and
+dead-letter lifetime from 1 through 30 days. Both configured values default to
+seven days, which is not a jurisdictional recommendation. Appointment, history,
+and reminder outbox retention remain deferred; `audit.retainDays` bounds
+rotated audit files. An idempotency receipt past its period is erased, so an
+exact retry after expiry answers `idempotency.expired` with HTTP 410 instead of
+replaying the first answer.
 
 See the complete maintained
 [`runtime.example.yaml`](examples/standalone-exact-time/runtime.example.yaml),

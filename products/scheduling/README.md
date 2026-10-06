@@ -300,7 +300,7 @@ bound to both that caller and tuple, and ownership is rechecked on every page.
 The link lets another product find appointments created by its stable service
 principal without giving Scheduling access to that product.
 
-An orchestrator that books for another product's record should send
+An orchestrator that books for another product's record needs
 `externalReferences` on every create it makes. The reference is how it learns
 an outcome it never received: the listing needs only the read scope, so a
 token for the same issuer and subject that carries no task grant finds the
@@ -309,10 +309,16 @@ the expired grant cannot do this, because an expired grant refuses the whole
 token, read scope included. A hold is not listed; one that is never confirmed
 expires and returns its capacity.
 
-Listing is per principal by design. Ownership is the issuer and subject that
-booked, so another principal sees an empty page even when it serves the same
-product, and an orchestrator that must observe its own outcomes books and
-reads under one principal. The published
+Listing is per principal by design. Ownership is the keyed pseudonym of the
+issuer and subject that booked, derived with the audit hash key
+(`audit.hashKeyRef`), so another principal sees an empty page even when it
+serves the same product, and an orchestrator that must observe its own
+outcomes books and reads under one principal. Rotating the audit hash key
+detaches every existing hold and appointment from its owner: the caller that
+booked then gets an empty page and is refused when it reads, reschedules,
+cancels, or releases one of them, while the claims stay committed. An empty
+page proves no booking only if the audit key has not been rotated since the
+attempt. The published
 [Registry Scheduling API reference](https://docs.registrystack.org/reference/apis/registry-scheduling/)
 gives the full recovery rules for an unknown outcome.
 
