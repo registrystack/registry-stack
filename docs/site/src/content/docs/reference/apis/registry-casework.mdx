@@ -51,6 +51,24 @@ reaching the caller.
 {/* Evidence: crates/registry-casework-core/src/http.rs, IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER, and
     MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES; crates/registry-casework/src/http.rs, recover_by_key(). */}
 
+Recovering an attempt that has no settled outcome is not a lookup: Casework sends the attempt's
+prepared source action again under the original key with the caller's current token, so the source
+can receive the same action twice under one key. A work-item key has no time limit and no setting:
+an exact retry answers from the stored response until an operator erases the request's source-backed
+copies with `caseworkctl retention erase --apply`. After that, an exact retry answers
+`410 idempotency.expired`, and the key is never freed. Review keys follow the review periods in
+[what Casework retains](../../../operate/casework-retention/#what-casework-retains).
+
+{/* Evidence: crates/registry-casework/src/service.rs, recover_by_key() and execute_prepared;
+    crates/registry-casework-core/src/adapter.rs, PreparedExecution;
+    crates/registry-casework-breg/tests/prepared_recovery.rs,
+    apply_recovers_under_the_same_actor_with_a_refreshed_human_token;
+    crates/registry-casework/src/store.rs, casework_idempotency;
+    crates/registry-casework/src/source_retention.rs, erase_source_retention();
+    crates/registry-casework/src/problem.rs, IdempotencyExpired;
+    crates/registry-casework/tests/source_retention_postgres.rs,
+    source_erasure_scrubs_payloads_fences_rehydration_and_preserves_expired_replay. */}
+
 A refusal answers `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
 `traceId`. The `type` is the code with each dot replaced by a slash under
 `https://id.registrystack.org/problems/registry-casework/`, and `detail` is the fixed sentence that
