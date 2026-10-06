@@ -144,8 +144,9 @@ pub const MAX_RECEIPT_RETENTION_DAYS: u16 = 365;
 
 /// Who a spent key belongs to and how long its held response is kept.
 ///
-/// A key is spent per caller: the verified token issuer and subject, the
-/// operation domain, and the key itself find the spent row. Nothing that finds
+/// A key is spent per caller: the verified token issuer and subject, the key
+/// scope, and the key itself find the spent row. Every ordinary write shares
+/// one scope, so a key is not spent per operation. Nothing that finds
 /// or binds a row is derived from the audit hash key, so rotating
 /// `audit.hashKeyRef` changes pseudonyms only.
 #[derive(Clone, Debug, Eq, PartialEq)]
