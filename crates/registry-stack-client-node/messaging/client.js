@@ -19,6 +19,12 @@ class MessagingClientError extends Error {
   }
 }
 
+const FALLBACK_MESSAGES = {
+  configuration: 'Messaging client configuration is invalid',
+  invalid_request: 'Messaging client arguments are invalid',
+  protocol: 'Registry Messaging client failed',
+};
+
 function normalized(error, fallbackKind) {
   if (error instanceof MessagingClientError) return error;
   if (error instanceof Error && typeof error.message === 'string') {
@@ -32,9 +38,11 @@ function normalized(error, fallbackKind) {
   if (fallbackKind) {
     return new MessagingClientError({
       kind: fallbackKind,
-      message: fallbackKind === 'configuration'
-        ? 'Messaging client configuration is invalid'
-        : 'Messaging client arguments are invalid',
+      message: FALLBACK_MESSAGES[fallbackKind],
+      // A rejection after the native client took the call may follow an
+      // exchange, so it leaves the outcome unknown as a native protocol
+      // failure does.
+      outcomeUnknown: fallbackKind === 'protocol',
     });
   }
   return error;
@@ -112,7 +120,7 @@ for (const [method, jsonIndexes] of [
       for (const index of jsonIndexes) {
         if (args[index] !== undefined && args[index] !== null) args[index] = sanitize(args[index]);
       }
-      return this.native[method](...args).catch((error) => { throw normalized(error); });
+      return this.native[method](...args).catch((error) => { throw normalized(error, 'protocol'); });
     } catch (error) {
       throw normalized(error, 'invalid_request');
     }
