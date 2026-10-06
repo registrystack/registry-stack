@@ -346,7 +346,9 @@ fn snapshot_readiness_rehashes_the_exact_captured_bytes() {
     let directory = TempDir::new().unwrap();
     let path = database(&directory);
     let snapshot = CapturedSnapshot::capture(&path).unwrap();
-    snapshot.verify_unchanged().unwrap();
+    snapshot
+        .verify_unchanged_before(Instant::now() + Duration::from_secs(30))
+        .unwrap();
 
     make_writable(&path);
     let connection = Connection::open(&path).unwrap();
@@ -358,7 +360,9 @@ fn snapshot_readiness_rehashes_the_exact_captured_bytes() {
     permissions.set_readonly(true);
     fs::set_permissions(&path, permissions).unwrap();
 
-    let error = snapshot.verify_unchanged().unwrap_err();
+    let error = snapshot
+        .verify_unchanged_before(Instant::now() + Duration::from_secs(30))
+        .unwrap_err();
     assert!(matches!(
         error.kind(),
         ErrorKind::DatabaseChanged | ErrorKind::DatabaseReplaced
