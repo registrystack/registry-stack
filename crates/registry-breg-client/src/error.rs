@@ -618,6 +618,14 @@ impl BaseRegistryClientError {
     /// When it is true, the safe recovery for an idempotency-keyed mutation is
     /// the same request under the same key, which the engine either replays or
     /// executes once; a new key could apply the mutation twice.
+    ///
+    /// A protocol failure, such as a 3xx answer or an answer that cannot be
+    /// parsed or does not meet the contract, counts as unknown conservatively,
+    /// as an oversized answer does: the request may have been processed before
+    /// the answer went wrong. The client resends such an answer only when it
+    /// came with a 5xx status, because any other answer would be replayed
+    /// unchanged. It never resends after a 4xx status line, even when the rest
+    /// of that answer could not be read and the error is therefore unknown.
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
