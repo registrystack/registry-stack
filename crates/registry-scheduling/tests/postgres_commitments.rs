@@ -997,6 +997,107 @@ async fn external_references_survive_the_lifecycle_and_filter_only_owned_appoint
     assert_eq!(blocked["code"], "profile.not-authorized");
 }
 
+/// Issue #1914. An orchestrator that booked under a task grant learns the
+/// outcome after the grant has expired by reading, not by replaying: the
+/// expired grant is refused at the door on every route, a grantless read
+/// token for the same issuer and subject finds the appointment by its
+/// external reference, and another principal sees nothing.
+#[tokio::test]
+async fn a_booking_stays_observable_by_reference_after_its_grant_expires() {
+    let fx = fixture().await;
+    let reference = case_reference("case-1914");
+    let reference_uri = appointments_by_reference_uri("case-1914", 10, None);
+
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let mut referenced = admission(&fx, OFFERING, slot);
+    referenced["externalReferences"] = json!([reference.clone()]);
+    let body = json!({"hold": null, "admission": referenced});
+    let (status, booked) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "orchestrated-booking",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{booked}");
+    let appointment_id = booked["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier")
+        .to_owned();
+
+    // The grant's deadline passes: the capacity clock moves beyond it, and
+    // the booking principal's token now carries a grant whose deadline the
+    // edge judges as passed. The pinned instant is tomorrow at ten, so two
+    // days before it is already behind the system clock the edge reads.
+    let later = pinned_now() + TimeDelta::minutes(20);
+    fx.store.pin_clock(Arc::new(move || later));
+    let mut lapsed_claims = grant_claims();
+    lapsed_claims["registry_grant_exp"] = json!(pinned_now().timestamp() - 2 * 86_400);
+    let lapsed_object = lapsed_claims
+        .as_object_mut()
+        .expect("the grant claims are an object");
+    lapsed_object.insert("sub".to_owned(), json!("principal-agent"));
+    lapsed_object.insert("azp".to_owned(), json!(CLIENT));
+    lapsed_object.insert(
+        "registry_scopes".to_owned(),
+        json!("scheduling-read scheduling-explain"),
+    );
+    let lapsed = token(lapsed_claims);
+
+    let (status, problem) = fx
+        .post("/v1/appointments", &lapsed, "orchestrated-booking", body)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{problem}");
+    assert_eq!(
+        problem["code"], "authentication.refused",
+        "a replay needs a live grant"
+    );
+    let (status, problem) = fx.get(&reference_uri, &lapsed).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{problem}");
+    assert_eq!(
+        problem["code"], "authentication.refused",
+        "an expired grant refuses the whole token, its read scope included"
+    );
+
+    let same_principal = token(json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    }));
+    let (status, page) = fx.get(&reference_uri, &same_principal).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page["nextCursor"].is_null(), "{page}");
+    let items = page["items"].as_array().expect("a page of appointments");
+    assert_eq!(items.len(), 1, "{page}");
+    assert_eq!(items[0]["appointmentId"], json!(appointment_id));
+    assert_eq!(items[0]["state"], "confirmed");
+    assert_eq!(items[0]["externalReferences"], json!([reference.clone()]));
+    let (status, read) = fx
+        .get(
+            &format!("/v1/appointments/{appointment_id}"),
+            &same_principal,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["appointmentId"], json!(appointment_id));
+    assert_eq!(read["externalReferences"], json!([reference]));
+
+    let (status, hidden) = fx.get(&reference_uri, &fx.reader).await;
+    assert_eq!(status, StatusCode::OK, "{hidden}");
+    assert_eq!(
+        hidden["items"],
+        json!([]),
+        "listing is scoped to the principal that booked"
+    );
+    let (status, refused) = fx
+        .get(&format!("/v1/appointments/{appointment_id}"), &fx.reader)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "operation.not-authorized");
+}
+
 async fn hook_fixture() -> Fixture {
     hook_fixture_at("http://127.0.0.1:9/scheduling-hooks").await
 }

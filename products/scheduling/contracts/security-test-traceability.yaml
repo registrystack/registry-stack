@@ -62,6 +62,7 @@ entries:
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cursors_page_their_own_listing_and_refuse_foreign_contexts}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: external_references_survive_the_lifecycle_and_filter_only_owned_appointments, features: [postgres-test]}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_booking_stays_observable_by_reference_after_its_grant_expires, features: [postgres-test]}
       - {path: crates/registry-scheduling/src/cursors.rs, name: a_cursor_binds_to_its_listing_context_and_expires}
       - {path: crates/registry-scheduling/src/cursors.rs, name: cursor_expiry_is_fifteen_minutes_out}
       - {path: crates/registry-scheduling/src/cursors.rs, name: positions_round_trip_and_refuse_foreign_shapes}
