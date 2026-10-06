@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-10-07"
 doc_type: tutorial
 persona:
   - data publisher
@@ -515,9 +515,13 @@ If it fails, the registry is stopped: start it again with the command from
 | `bregctl dev` refuses over a reported version | The `breg` it resolved comes from another release than `bregctl`. Install both from the same release, or put the matching build first on `PATH`. |
 | `bregctl dev` refuses a port | Something else listens on 8090, 8091, or 15432. Pass `--breg-port`, `--issuer-port`, or `--database-port` on the first start; later starts keep the ports you chose. |
 | `bregctl dev` fails before it reports `ready` | Read the refusal: it names the check that failed, such as `test.step.failed` with the journey step's own message. Otherwise check that Docker is running. The private logs are under `tutorial-work/project/.breg/dev/logs/`; do not share the credential or secret files beside them. |
-| A create returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body, or choose a new key for a new write. |
+| A create returns `409` with code `idempotency.conflict` | The key is already spent: on a different body, on another write such as a patch, or on the same body under a different package or access profile. Resend the exact first request only to repeat that write; choose a new key for any other write. |
+| A retried write returns `410` with code `idempotency.expired` | The write committed, but its held response passed the receipt horizon, 7 days by default, and the key stays spent. Read the record instead of retrying, and choose a new key for a new write. |
 | A create returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |
 | You opened a fresh terminal | Run the `registry_url` and `authorization_header` assignments from [Get a token](#get-a-token) again. The header file and `tutorial-work` directory are still there. |
+
+{/* Evidence: crates/registry-breg/src/idempotency.rs, resolve_binding(), lock_and_load(), and
+    IdempotencyPolicy; crates/registry-breg/src/problem.rs, IdempotencyExpired. */}
 
 ## Next
 
