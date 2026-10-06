@@ -2492,15 +2492,43 @@ async fn attachment_downloads_write_a_subject_access_log_entry() {
     };
     assert!(logged_downloads().await.is_empty());
 
-    let downloaded = send(
+    let download = format!("/v1/records/correction-requests/{}/attachments/evidence?proposalVersion=1&accessProfile=submitter", draft.id);
+    let journal_before = database.audit_entries().len();
+    let unaccepted = send(
         &app,
-        Method::GET,
-        &format!("/v1/records/correction-requests/{}/attachments/evidence?proposalVersion=1&accessProfile=submitter", draft.id),
-        Some(submitter),
+        Method::PUT,
+        &download,
+        Some(submitter.clone()),
         &[],
         vec![],
     )
     .await;
+    let head = send(
+        &app,
+        Method::HEAD,
+        &download,
+        Some(submitter.clone()),
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        head.status(),
+        unaccepted.status(),
+        "an attachment download refuses HEAD as it refuses PUT"
+    );
+    assert_eq!(
+        database.audit_entries().len(),
+        journal_before,
+        "a refused HEAD journals no download"
+    );
+    assert!(
+        logged_downloads().await.is_empty(),
+        "a refused HEAD logs no subject access"
+    );
+
+    let downloaded = send(&app, Method::GET, &download, Some(submitter), &[], vec![]).await;
     assert_eq!(downloaded.status(), StatusCode::OK);
     assert_eq!(
         logged_downloads().await,

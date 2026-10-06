@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
+  on every `GET` route by running the whole read, writing a subject access log
+  row, and journaling a `GET` the caller did not send. A `HEAD` now receives
+  the concealed 404 a method the route does not accept already receives; under
+  `/v1/statistics/` an authenticated caller's `HEAD` is journaled as a `HEAD`
+  refusal. `/health`, `/healthz`, and `/ready` still answer `HEAD`. A client
+  that sent `HEAD` to a record, history, statistics, attachment, GIS,
+  ingestion-run, or discovery route must send `GET`.
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: `bregctl dev` takes PostgreSQL loopback port 15432 on a first

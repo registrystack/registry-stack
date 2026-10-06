@@ -1924,3 +1924,66 @@ and release provenance (the release image and the upgrade rehearsal).
 - **The authored `temporal.scopeFields` key stays accepted.** Predecessor
   rehearsal recompiles the v0.38.0 package's own sources, which may carry the
   key, so removing it would refuse a supported upgrade.
+
+## HEAD on governed read routes
+
+The change refuses HEAD on every governed GET route (BREG-SEC-161). It
+touches audit integrity: the journal and the subject access log must name
+only reads the engine served under the method the caller sent.
+
+### Threat
+
+axum's `get` routing also answers HEAD by running the same handler and
+discarding the body. The engine takes the audited method from the compiled
+route, so a HEAD to a record, history, statistics, attachment, GIS,
+ingestion-run, or metadata route ran the whole read, wrote a subject access
+log row where the entity keeps one, and journaled a GET the caller did not
+send. No operation in the published OpenAPI document declares HEAD.
+
+### Enforcement and defaults
+
+`route_set` in `crates/registry-breg/src/api/mod.rs` applies one
+`refuse_head` route layer after every governed route and merged route family
+is registered. A HEAD request is handed to `not_found`, the handler the
+router already uses for an unknown path or a method a route does not accept,
+before profile authorization or record I/O. Under `/v1/statistics/` that path
+journals an authenticated caller's HEAD as a refusal with method `HEAD` and
+the fixed `statistics.unknown` identity; elsewhere it returns the concealed
+404 without a journal entry, exactly as it does for PUT. Bearer verification
+in `authenticated_router` still runs first, so an invalid credential is
+refused as before.
+
+The operational probes `/health`, `/healthz`, and `/ready` are registered
+after the layer and keep answering HEAD. They return no registry data, are
+not journaled, and probe tooling may send HEAD to them.
+
+### Tests
+
+Each route family has a negative test asserting the 404, no new journal
+entry (exactly one HEAD refusal for statistics), and no subject access log
+row, beside a GET control that is served. Outside statistics each test also
+asserts that HEAD receives the status a PUT receives:
+
+- `tests/postgres_access_log.rs`:
+  `head_on_record_reads_is_refused_without_a_journaled_read`,
+  `head_on_history_reads_is_refused_without_a_journaled_read`, and
+  `head_on_subject_access_log_reads_is_refused_without_a_journaled_read`.
+- `tests/postgres_statistics_http.rs`:
+  `head_on_statistical_reads_is_refused_and_journaled_as_head`.
+- `tests/postgres_spatial_read.rs`:
+  `head_on_gis_reads_is_refused_without_a_journaled_read`.
+- `tests/postgres_ingestion_runs.rs`:
+  `head_on_ingestion_run_reads_is_refused_without_a_journaled_read`.
+- `tests/postgres_change_requests.rs`:
+  `attachment_downloads_write_a_subject_access_log_entry`.
+- `tests/http_read_only.rs`:
+  `head_is_refused_on_governed_reads_and_answered_only_by_probes`, covering
+  the discovery routes and proving the probes still answer HEAD.
+
+### Accepted residuals
+
+Outside the statistics root a refused HEAD, like any other method a route
+does not accept, leaves no journal entry. Journaling unaccepted methods on
+every route family would be a separate change to the refusal path itself.
+A caller that sent HEAD to a governed route now receives a 404 and must send
+GET.

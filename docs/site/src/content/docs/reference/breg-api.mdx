@@ -65,11 +65,13 @@ therefore cannot distinguish a record that does not exist from one it may not se
 `readPaths`. `{stage}` is a review stage identifier, `{action}` under `/v1/actions` is an
 immediate action identifier, `{runId}` is an ingestion-run identifier, and `{chunkIndex}` is a
 chunk position. An unknown path or a method the route does not accept returns the
-same concealed 404 as an unauthorized request.
+same concealed 404 as an unauthorized request. Read routes accept `GET` only: a `HEAD`
+request to any of them, including the discovery documents, receives that 404. Only
+`/health`, `/healthz`, and `/ready` answer `HEAD`.
 
 <ApiReferenceTable id="routes" />
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, router(), registry_metadata(), entity_schema(), revision_dispatch(), and tombstone_dispatch();
+{/* Evidence: crates/registry-breg/src/api/mod.rs, router(), refuse_head(), registry_metadata(), entity_schema(), revision_dispatch(), and tombstone_dispatch();
     crates/registry-breg/src/api/access_log.rs, routes();
     crates/registry-breg/src/api/attachments.rs, routes();
     crates/registry-breg/src/api/gis.rs, routes();

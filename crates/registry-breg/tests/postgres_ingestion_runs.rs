@@ -1997,6 +1997,71 @@ async fn chunk_receipt_recovery_correlates_a_request_and_a_response_entry() {
     );
 }
 
+/// HEAD on an ingestion-run read takes the concealed path of any method the
+/// route does not accept: no run or receipt is read and nothing is journaled,
+/// so a receipt is never released, or audited as released, to a HEAD.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn head_on_ingestion_run_reads_is_refused_without_a_journaled_read() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("receipt-head", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let receipt = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt");
+    for uri in [
+        "/v1/records/widgets/ingestion-runs".to_owned(),
+        format!("/v1/records/widgets/ingestion-runs/{run_id}"),
+        receipt.clone(),
+    ] {
+        let journal_before = harness.database.audit_entries().len();
+        let unaccepted = send(
+            &harness.app,
+            Method::PUT,
+            &uri,
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        let head = send(
+            &harness.app,
+            Method::HEAD,
+            &uri,
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(head.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(
+            head.status(),
+            unaccepted.status(),
+            "{uri} refuses HEAD as it refuses PUT"
+        );
+        let journal = harness.database.audit_entries();
+        assert_eq!(
+            journal.len(),
+            journal_before,
+            "{uri} refuses before any journaled read: {:#?}",
+            &journal[journal_before..]
+        );
+    }
+    let recovered = harness.get_json(&receipt, &claims).await;
+    assert_eq!(
+        recovered.status(),
+        StatusCode::OK,
+        "the same read is served to GET"
+    );
+}
+
 /// Recovery of a chunk that was never committed still closes its own request
 /// entry with a response entry: an audit outage is the only thing allowed to
 /// leave a caller-visible refusal unanswered.
