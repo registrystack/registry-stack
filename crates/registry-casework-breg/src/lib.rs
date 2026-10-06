@@ -833,6 +833,12 @@ fn initial_refusal(
     if code == BRegProblemCode::IdempotencyConflict {
         return Some(SourceAdapterError::RequestRejected);
     }
+    // A key past the receipt horizon stays spent: an earlier attempt under it
+    // committed and nothing runs again. That is no refusal, so the attempt
+    // stays uncertain for an operator to settle as applied.
+    if code == BRegProblemCode::IdempotencyExpired {
+        return None;
+    }
     Some(match status {
         400 | 422 => SourceAdapterError::RequestRejected,
         404 => SourceAdapterError::RecordMissing,
@@ -1657,5 +1663,11 @@ mod tests {
             ),
             None
         );
+        for execution in [PreparedExecution::Initial, PreparedExecution::Recovery] {
+            assert_eq!(
+                initial_refusal(410, BRegProblemCode::IdempotencyExpired, execution),
+                None
+            );
+        }
     }
 }
