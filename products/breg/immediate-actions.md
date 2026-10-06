@@ -667,7 +667,7 @@ use the same concealment behavior as the rest of the protected API.
 | `422 action.refused` | Correct the input using the declared `refusalCode`, static detail and optional input `fieldPath`. No effects were committed. |
 | `409` | Inspect the problem code: `idempotency.conflict` is a consumed-key binding mismatch; `mutation.conflict` is a state or configured constraint conflict. |
 | `410 idempotency.expired` | The first attempt committed and its receipt horizon passed. Read the affected records instead of retrying; the key never executes again. |
-| `503 service.unavailable` or a lost response | Retry the identical request with the same key to recover a possible committed receipt. Do not generate a fresh key automatically. |
+| `503 service.unavailable` or a lost response | Retry the identical request with the same key, within the deployment's `idempotency.receiptRetentionDays` (default 7 days), to recover a possible committed receipt. Do not generate a fresh key automatically. |
 
 The compiler bounds an action to 16 target roles, 128 field mutations and a
 2 MiB maximum snapshot. Multiple non-overlapping effects that resolve to the

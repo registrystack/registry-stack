@@ -205,14 +205,15 @@ pub(crate) struct IdempotencyBinding<'a> {
     pub package_revision: &'a str,
     pub response_fields: &'a BTreeSet<String>,
     pub canonical_request_digest: [u8; 32],
-    /// The operation domain the key is spent in. Server-derived ingestion
-    /// keys carry their own, so no caller-supplied key, however derived, can
-    /// reserve, preseed, or replay a run chunk's cached result through the
-    /// ordinary mutation routes.
+    /// The key scope the key is spent in. Every ordinary write route shares
+    /// one scope. Server-derived ingestion keys carry their own, so no
+    /// caller-supplied key, however derived, can reserve, preseed, or replay
+    /// a run chunk's cached result through the ordinary mutation routes.
     pub key_domain: IdempotencyKeyDomain,
 }
 
-/// The operation domain one idempotency key is spent in.
+/// The key scope one idempotency key is spent in. It separates caller keys
+/// from server-derived ones, not one write route from another.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum IdempotencyKeyDomain {
     /// Keys callers supply on ordinary mutation routes.
@@ -253,7 +254,7 @@ pub(crate) struct ActionIdempotencyBinding<'a> {
 }
 
 pub(crate) struct ResolvedIdempotencyBinding {
-    /// A SHA-256 digest of the caller, the operation domain, and the key. It
+    /// A SHA-256 digest of the caller, the key scope, and the key. It
     /// keys the spent row, its dependents, and the advisory lock.
     pub key_reference: String,
     /// A SHA-256 digest of the exact verified authority and request the key
