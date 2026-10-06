@@ -13,7 +13,6 @@ workspace = true
 [dependencies]
 base64.workspace = true
 jsonwebtoken.workspace = true
-registry-platform-crypto = { workspace = true }
 registry-platform-httputil = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true

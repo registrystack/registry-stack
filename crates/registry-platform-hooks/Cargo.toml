@@ -33,7 +33,6 @@ registry-platform-yaml.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
-serde_path_to_error.workspace = true
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
 time = { workspace = true, features = ["serde-well-known", "formatting"] }
