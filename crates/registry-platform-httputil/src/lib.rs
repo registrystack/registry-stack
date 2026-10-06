@@ -1,9 +1,8 @@
 //! HTTP utilities shared by Registry Platform consumers.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use http::header::{HeaderName, AUTHORIZATION, CONNECTION, COOKIE, HOST};
 use http::HeaderMap;
 use thiserror::Error;
 
@@ -311,188 +310,6 @@ pub async fn read_bounded(
     Ok(body)
 }
 
-/// Header forwarding policy for HTTP proxy request filtering.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProxyHeaderPolicy {
-    allow_authorization: bool,
-    allow_cookie: bool,
-    allow_forwarding_headers: bool,
-    allow_host: bool,
-    private_prefixes: Vec<String>,
-}
-
-impl Default for ProxyHeaderPolicy {
-    fn default() -> Self {
-        Self::strict()
-    }
-}
-
-impl ProxyHeaderPolicy {
-    /// Create a policy that strips hop-by-hop headers, `Connection`-nominated
-    /// headers, caller identity/authority forwarding headers, `Authorization`,
-    /// and `Cookie`.
-    #[must_use]
-    pub fn strict() -> Self {
-        Self {
-            allow_authorization: false,
-            allow_cookie: false,
-            allow_forwarding_headers: false,
-            allow_host: false,
-            private_prefixes: Vec::new(),
-        }
-    }
-
-    /// Allow or deny forwarding the caller's `Authorization` header.
-    #[must_use]
-    pub fn allow_authorization(mut self, allow: bool) -> Self {
-        self.allow_authorization = allow;
-        self
-    }
-
-    /// Allow or deny forwarding the caller's `Cookie` header.
-    #[must_use]
-    pub fn allow_cookie(mut self, allow: bool) -> Self {
-        self.allow_cookie = allow;
-        self
-    }
-
-    /// Allow or deny forwarding caller-supplied proxy identity headers.
-    ///
-    /// The strict default strips `Forwarded`, `X-Forwarded-*`, and `X-Real-IP`
-    /// so an upstream only receives forwarding metadata injected by a trusted
-    /// proxy boundary.
-    #[must_use]
-    pub fn allow_forwarding_headers(mut self, allow: bool) -> Self {
-        self.allow_forwarding_headers = allow;
-        self
-    }
-
-    /// Allow or deny forwarding the caller's `Host` header.
-    ///
-    /// The strict default strips `Host` so a proxy adapter can set the
-    /// authority expected by its upstream.
-    #[must_use]
-    pub fn allow_host(mut self, allow: bool) -> Self {
-        self.allow_host = allow;
-        self
-    }
-
-    /// Strip headers whose names start with this case-insensitive prefix.
-    ///
-    /// This is intended for service-owned private headers that must not be
-    /// accepted from callers before the proxy injects verified values.
-    #[must_use]
-    pub fn strip_private_prefix(mut self, prefix: &str) -> Self {
-        self.private_prefixes.push(prefix.to_ascii_lowercase());
-        self
-    }
-
-    fn strips_private_header(&self, name: &HeaderName) -> bool {
-        self.private_prefixes
-            .iter()
-            .any(|prefix| name.as_str().starts_with(prefix))
-    }
-}
-
-/// Return request headers safe to forward through a generic HTTP proxy.
-///
-/// The filter removes RFC hop-by-hop headers, headers nominated by the request's
-/// `Connection` header, service private prefixes from [`ProxyHeaderPolicy`],
-/// caller-supplied forwarding/authority metadata, and caller auth material
-/// unless explicitly allowed by the policy.
-#[must_use]
-pub fn filter_proxy_request_headers(headers: &HeaderMap, policy: &ProxyHeaderPolicy) -> HeaderMap {
-    let mut out = HeaderMap::with_capacity(headers.len());
-    let connection_tokens = connection_header_tokens(headers);
-    for (name, value) in headers {
-        if is_hop_by_hop(name)
-            || connection_tokens.iter().any(|token| token == name)
-            || policy.strips_private_header(name)
-        {
-            continue;
-        }
-        if !policy.allow_authorization && name == AUTHORIZATION {
-            continue;
-        }
-        if !policy.allow_cookie && name == COOKIE {
-            continue;
-        }
-        if !policy.allow_forwarding_headers && is_forwarding_header(name) {
-            continue;
-        }
-        if !policy.allow_host && name == HOST {
-            continue;
-        }
-        out.append(name.clone(), value.clone());
-    }
-    out
-}
-
-/// Return response headers safe to forward through a generic HTTP proxy.
-///
-/// The filter removes RFC hop-by-hop headers and headers nominated by the
-/// response's `Connection` header.
-#[must_use]
-pub fn filter_proxy_response_headers(headers: &HeaderMap) -> HeaderMap {
-    let mut out = HeaderMap::with_capacity(headers.len());
-    let connection_tokens = connection_header_tokens(headers);
-    for (name, value) in headers {
-        if !is_hop_by_hop(name) && !connection_tokens.iter().any(|token| token == name) {
-            out.append(name.clone(), value.clone());
-        }
-    }
-    out
-}
-
-fn is_hop_by_hop(name: &HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "proxy-connection"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    )
-}
-
-fn is_forwarding_header(name: &HeaderName) -> bool {
-    let name = name.as_str();
-    name == "forwarded" || name == "x-real-ip" || name.starts_with("x-forwarded-")
-}
-
-fn connection_header_tokens(headers: &HeaderMap) -> Vec<HeaderName> {
-    headers
-        .get_all(CONNECTION)
-        .iter()
-        .flat_map(connection_header_value_tokens)
-        .collect()
-}
-
-fn connection_header_value_tokens(value: &http::HeaderValue) -> Vec<HeaderName> {
-    value
-        .as_bytes()
-        .split(|byte| *byte == b',')
-        .filter_map(|token| {
-            let token = trim_ascii_http_whitespace(token);
-            HeaderName::from_bytes(token).ok()
-        })
-        .collect()
-}
-
-fn trim_ascii_http_whitespace(mut bytes: &[u8]) -> &[u8] {
-    while matches!(bytes.first(), Some(b' ' | b'\t')) {
-        bytes = &bytes[1..];
-    }
-    while matches!(bytes.last(), Some(b' ' | b'\t')) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
-}
-
 /// URL construction helpers.
 pub mod url {
     use thiserror::Error;
@@ -661,7 +478,6 @@ impl FetchUrlPolicy {
         Ok(ValidatedFetchUrl {
             url: url.clone(),
             resolved_addrs,
-            validated_at: SystemTime::now(),
         })
     }
 
@@ -709,7 +525,6 @@ impl FetchUrlPolicy {
 pub struct ValidatedFetchUrl {
     url: reqwest::Url,
     resolved_addrs: Vec<SocketAddr>,
-    validated_at: SystemTime,
 }
 
 impl ValidatedFetchUrl {
@@ -717,24 +532,6 @@ impl ValidatedFetchUrl {
     #[must_use]
     pub fn url(&self) -> &reqwest::Url {
         &self.url
-    }
-
-    /// IP addresses returned by DNS or IP-literal parsing during validation.
-    #[must_use]
-    pub fn resolved_ips(&self) -> Vec<IpAddr> {
-        self.resolved_addrs.iter().map(|addr| addr.ip()).collect()
-    }
-
-    /// Socket addresses pinned into request clients built from this value.
-    #[must_use]
-    pub fn resolved_addrs(&self) -> &[SocketAddr] {
-        &self.resolved_addrs
-    }
-
-    /// Time at which validation completed.
-    #[must_use]
-    pub fn validated_at(&self) -> SystemTime {
-        self.validated_at
     }
 
     /// Build an immediate GET request from this validated URL.
@@ -771,22 +568,6 @@ impl ValidatedFetchUrl {
         additional_roots: &[reqwest::Certificate],
     ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
         self.immediate_request_trusting(reqwest::Method::GET, timeout, additional_roots)
-    }
-
-    /// Build an immediate POST request from this validated URL.
-    ///
-    /// This is useful for token endpoints and other SSRF-sensitive POST
-    /// requests that need the same DNS pinning guarantee as [`Self::immediate_get`].
-    pub fn immediate_post(&self) -> Result<reqwest::RequestBuilder, FetchUrlError> {
-        self.immediate_post_with_timeout(DEFAULT_VALIDATED_FETCH_TIMEOUT)
-    }
-
-    /// Build an immediate POST request with an explicit request timeout.
-    pub fn immediate_post_with_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
-        self.immediate_request_with_timeout(reqwest::Method::POST, timeout)
     }
 
     /// Build an immediate POST using the hardened service-client options while
@@ -840,14 +621,6 @@ impl ValidatedFetchUrl {
         Ok(client
             .request(method, self.url.clone())
             .timeout(request_timeout))
-    }
-
-    /// Build an immediate request from this validated URL.
-    pub fn immediate_request(
-        &self,
-        method: reqwest::Method,
-    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
-        self.immediate_request_with_timeout(method, DEFAULT_VALIDATED_FETCH_TIMEOUT)
     }
 
     /// Build an immediate request with an explicit request timeout.
@@ -1336,157 +1109,6 @@ mod tests {
     }
 
     #[test]
-    fn proxy_request_policy_strips_hop_by_hop_sensitive_and_private_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            "Bearer caller-secret".parse().unwrap(),
-        );
-        headers.insert(header::COOKIE, "session=caller-secret".parse().unwrap());
-        headers.insert(
-            header::CONNECTION,
-            "x-hop-token, keep-alive".parse().unwrap(),
-        );
-        headers.insert(
-            HeaderName::from_static("keep-alive"),
-            "timeout=5".parse().unwrap(),
-        );
-        headers.insert(
-            HeaderName::from_static("proxy-connection"),
-            "keep-alive".parse().unwrap(),
-        );
-        headers.insert(header::TE, "trailers".parse().unwrap());
-        headers.insert("x-hop-token", "strip-by-connection-token".parse().unwrap());
-        headers.insert("x-service-private-id", "spoofed".parse().unwrap());
-        headers.insert("x-normal", "forwarded".parse().unwrap());
-
-        let policy = ProxyHeaderPolicy::strict().strip_private_prefix("x-service-private-");
-        let filtered = filter_proxy_request_headers(&headers, &policy);
-
-        assert!(!filtered.contains_key(header::AUTHORIZATION));
-        assert!(!filtered.contains_key(header::COOKIE));
-        assert!(!filtered.contains_key(header::CONNECTION));
-        assert!(!filtered.contains_key("keep-alive"));
-        assert!(!filtered.contains_key("proxy-connection"));
-        assert!(!filtered.contains_key(header::TE));
-        assert!(!filtered.contains_key("x-hop-token"));
-        assert!(!filtered.contains_key("x-service-private-id"));
-        assert_eq!(filtered["x-normal"], "forwarded");
-    }
-
-    #[test]
-    fn proxy_request_policy_can_allow_authorization_and_cookie() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            "Bearer caller-token".parse().unwrap(),
-        );
-        headers.insert(header::COOKIE, "session=caller-cookie".parse().unwrap());
-
-        let policy = ProxyHeaderPolicy::strict()
-            .allow_authorization(true)
-            .allow_cookie(true);
-        let filtered = filter_proxy_request_headers(&headers, &policy);
-
-        assert_eq!(filtered[header::AUTHORIZATION], "Bearer caller-token");
-        assert_eq!(filtered[header::COOKIE], "session=caller-cookie");
-    }
-
-    #[test]
-    fn proxy_request_policy_strips_spoofable_forwarding_and_authority_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, "trusted.internal".parse().unwrap());
-        headers.insert("forwarded", "for=10.0.0.1;proto=https".parse().unwrap());
-        headers.insert("x-forwarded-for", "10.0.0.1".parse().unwrap());
-        headers.insert("x-forwarded-host", "admin.internal".parse().unwrap());
-        headers.insert("x-forwarded-proto", "https".parse().unwrap());
-        headers.insert("x-forwarded-port", "443".parse().unwrap());
-        headers.insert("x-real-ip", "10.0.0.1".parse().unwrap());
-        headers.insert("x-normal", "forwarded".parse().unwrap());
-
-        let filtered = filter_proxy_request_headers(&headers, &ProxyHeaderPolicy::strict());
-
-        assert!(!filtered.contains_key(header::HOST));
-        assert!(!filtered.contains_key("forwarded"));
-        assert!(!filtered.contains_key("x-forwarded-for"));
-        assert!(!filtered.contains_key("x-forwarded-host"));
-        assert!(!filtered.contains_key("x-forwarded-proto"));
-        assert!(!filtered.contains_key("x-forwarded-port"));
-        assert!(!filtered.contains_key("x-real-ip"));
-        assert_eq!(filtered["x-normal"], "forwarded");
-    }
-
-    #[test]
-    fn proxy_request_policy_can_preserve_forwarding_and_authority_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, "trusted.internal".parse().unwrap());
-        headers.insert("forwarded", "for=10.0.0.1;proto=https".parse().unwrap());
-        headers.insert("x-forwarded-for", "10.0.0.1".parse().unwrap());
-        headers.insert("x-real-ip", "10.0.0.1".parse().unwrap());
-
-        let policy = ProxyHeaderPolicy::strict()
-            .allow_forwarding_headers(true)
-            .allow_host(true);
-        let filtered = filter_proxy_request_headers(&headers, &policy);
-
-        assert_eq!(filtered[header::HOST], "trusted.internal");
-        assert_eq!(filtered["forwarded"], "for=10.0.0.1;proto=https");
-        assert_eq!(filtered["x-forwarded-for"], "10.0.0.1");
-        assert_eq!(filtered["x-real-ip"], "10.0.0.1");
-    }
-
-    #[test]
-    fn proxy_response_policy_strips_hop_by_hop_and_connection_nominated_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONNECTION,
-            "x-upstream-hop, keep-alive".parse().unwrap(),
-        );
-        headers.insert(
-            HeaderName::from_static("keep-alive"),
-            "timeout=5".parse().unwrap(),
-        );
-        headers.insert(
-            header::PROXY_AUTHENTICATE,
-            "Basic realm=\"upstream\"".parse().unwrap(),
-        );
-        headers.insert(
-            HeaderName::from_static("proxy-connection"),
-            "keep-alive".parse().unwrap(),
-        );
-        headers.insert(
-            "x-upstream-hop",
-            "strip-by-connection-token".parse().unwrap(),
-        );
-        headers.insert("x-normal-response", "forwarded".parse().unwrap());
-
-        let filtered = filter_proxy_response_headers(&headers);
-
-        assert!(!filtered.contains_key(header::CONNECTION));
-        assert!(!filtered.contains_key("keep-alive"));
-        assert!(!filtered.contains_key(header::PROXY_AUTHENTICATE));
-        assert!(!filtered.contains_key("proxy-connection"));
-        assert!(!filtered.contains_key("x-upstream-hop"));
-        assert_eq!(filtered["x-normal-response"], "forwarded");
-    }
-
-    #[test]
-    fn proxy_request_policy_strips_valid_connection_tokens_from_malformed_value() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONNECTION,
-            HeaderValue::from_bytes(b"x-hop-token,\xff").unwrap(),
-        );
-        headers.insert("x-hop-token", "strip-by-connection-token".parse().unwrap());
-        headers.insert("x-normal", "forwarded".parse().unwrap());
-
-        let filtered = filter_proxy_request_headers(&headers, &ProxyHeaderPolicy::strict());
-
-        assert!(!filtered.contains_key("x-hop-token"));
-        assert_eq!(filtered["x-normal"], "forwarded");
-    }
-
-    #[test]
     fn append_path_segments_percent_encodes_segment_delimiters() {
         let base = reqwest::Url::parse("https://example.test/api").expect("url parses");
         let url = url::append_path_segments(&base, &["datasets", "a/b", "q?x#y"])
@@ -1534,11 +1156,12 @@ mod tests {
 
         assert_eq!(validated.url(), &url);
         assert_eq!(
-            validated.resolved_ips(),
-            vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]
+            validated.resolved_addrs,
+            vec![SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
+                443
+            )]
         );
-        assert_eq!(validated.resolved_addrs()[0].port(), 443);
-        assert!(validated.validated_at() <= SystemTime::now());
     }
 
     #[test]
@@ -1584,23 +1207,6 @@ mod tests {
         assert_eq!(request.timeout(), Some(&timeout));
     }
 
-    #[test]
-    fn immediate_post_builds_request_from_validated_url() {
-        let url = reqwest::Url::parse("https://93.184.216.34/token").expect("url parses");
-        let validated = FetchUrlPolicy::strict()
-            .validate_dns_pinned_for_immediate_fetch(&url)
-            .expect("public HTTPS IP accepted");
-
-        let request = validated
-            .immediate_post()
-            .expect("pinned request builder builds")
-            .build()
-            .expect("request builds");
-        assert_eq!(request.method(), reqwest::Method::POST);
-        assert_eq!(request.url(), &url);
-        assert_eq!(request.timeout(), Some(&DEFAULT_VALIDATED_FETCH_TIMEOUT));
-    }
-
     #[tokio::test]
     async fn immediate_get_uses_pinned_resolved_socket_address() {
         let addr = serve_with_addr(Router::new().route("/body", get(|| async { "pinned" }))).await;
@@ -1609,7 +1215,6 @@ mod tests {
         let validated = ValidatedFetchUrl {
             url,
             resolved_addrs: vec![addr],
-            validated_at: SystemTime::now(),
         };
 
         let response = validated
@@ -1640,7 +1245,6 @@ mod tests {
         let validated = ValidatedFetchUrl {
             url,
             resolved_addrs: vec![addr],
-            validated_at: SystemTime::now(),
         };
 
         let response = validated

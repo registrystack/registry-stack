@@ -95,11 +95,6 @@ impl ServiceBaseUrl {
         &self.0
     }
 
-    #[must_use]
-    pub fn into_url(self) -> Url {
-        self.0
-    }
-
     /// Join a relative service path to the validated deployment prefix.
     pub fn join(&self, path: &str) -> Result<Url, ServiceBaseUrlJoinError> {
         if path.is_empty()
