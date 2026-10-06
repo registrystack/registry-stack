@@ -14,9 +14,10 @@ standards_referenced:
 
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. It holds one namespace per product: `discovery` for Registry
-Discovery, `evidence` for Evidence Gateway, and `breg` for Base Registry
-Engine (BReg), <DocsetProduct product="registry-messaging" absent>and </DocsetProduct>`casework` for Registry
-Casework<DocsetProduct product="registry-messaging">, and `messaging` for Registry Messaging</DocsetProduct>. Each namespace keeps its own routes,
+Discovery, `evidence` for Evidence Gateway, `breg` for Base Registry
+Engine (BReg), `casework` for Registry
+Casework<DocsetProduct product="registry-messaging">, `messaging` for Registry Messaging</DocsetProduct>, and `scheduling` for
+Registry Scheduling. Each namespace keeps its own routes,
 authentication, errors, and verification rules, because those contracts differ.
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
@@ -33,7 +34,8 @@ The unified packages are published beginning with Registry Stack v0.26.1. Releas
 carry no Base Registry Engine client package and no unified package; they distribute one standalone
 package per product instead. The `casework` namespace is present in those same unified packages
 beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
-beginning with Registry Stack v0.38.0</DocsetProduct>. Python requires version 3.10 or later and the wheels use the
+beginning with Registry Stack v0.38.0</DocsetProduct>; the `scheduling` namespace is present only in
+packages built from main source, and no release carries it yet. Python requires version 3.10 or later and the wheels use the
 Python 3.10 stable ABI (`abi3-py310`), so a later Python imports the same file. Node requires version 22.12
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
 macOS arm64, and require glibc 2.17 or newer on Linux. The version-specific GitHub Release retains
@@ -79,7 +81,7 @@ The package does not declare that dependency itself, because a JavaScript consum
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
 the facade that re-exports the product clients under `breg`, `casework`, `discovery`,
-`evidence`<DocsetProduct product="registry-messaging">, and `messaging`</DocsetProduct> modules; a single-product application can depend on that product's crate
+`evidence`<DocsetProduct product="registry-messaging">, `messaging`</DocsetProduct>, and `scheduling` modules; a single-product application can depend on that product's crate
 directly instead.
 
 ```toml
@@ -96,15 +98,15 @@ registry-stack-client = { git = "https://github.com/registrystack/registry-stack
 <DocsetProduct product="registry-messaging">
 
 ```python
-from registry_client import breg, casework, discovery, evidence, messaging
+from registry_client import breg, casework, discovery, evidence, messaging, scheduling
 ```
 
 ```js
-const { breg, casework, discovery, evidence, messaging } = require('@registrystack/client');
+const { breg, casework, discovery, evidence, messaging, scheduling } = require('@registrystack/client');
 ```
 
 ```rust
-use registry_stack_client::{breg, casework, discovery, evidence, messaging};
+use registry_stack_client::{breg, casework, discovery, evidence, messaging, scheduling};
 ```
 
 </DocsetProduct>
@@ -112,15 +114,15 @@ use registry_stack_client::{breg, casework, discovery, evidence, messaging};
 <DocsetProduct product="registry-messaging" absent>
 
 ```python
-from registry_client import breg, casework, discovery, evidence
+from registry_client import breg, casework, discovery, evidence, scheduling
 ```
 
 ```js
-const { breg, casework, discovery, evidence } = require('@registrystack/client');
+const { breg, casework, discovery, evidence, scheduling } = require('@registrystack/client');
 ```
 
 ```rust
-use registry_stack_client::{breg, casework, discovery, evidence};
+use registry_stack_client::{breg, casework, discovery, evidence, scheduling};
 ```
 
 </DocsetProduct>
@@ -167,8 +169,8 @@ cannot contain credentials, a query, a fragment, or ambiguous empty path segment
 
 ### Unknown outcomes and the same-key retry
 
-A 5xx answer may follow a commit. A BReg<DocsetProduct product="registry-messaging"> or
-Messaging</DocsetProduct> mutation that carries an idempotency key has an unknown outcome after a 5xx answer, after a timeout or a broken exchange once the request was sent,
+A 5xx answer may follow a commit. A BReg<DocsetProduct product="registry-messaging">, Messaging,</DocsetProduct>
+or Scheduling mutation that carries an idempotency key has an unknown outcome after a 5xx answer, after a timeout or a broken exchange once the request was sent,
 and after an oversized or unparseable answer. Its outcome is known after a refusal before sending, a
 connection that was never established, and a typed 4xx refusal such as an idempotency conflict.
 
@@ -189,7 +191,10 @@ idempotency key, are never resent.
 
 In Rust, `is_outcome_unknown()` on the client error reports the classification, and
 `with_max_mutation_retries` on the client configuration sets the count from 0, which sends once, to
-2. The Python and Node clients run the Rust client and apply the same rule.
+2. The Python and Node clients run the Rust client and apply the same rule. Python takes the count
+as the `max_mutation_retries` constructor keyword and Node as the `maxMutationRetries` config member;
+a value outside 0 to 2 is a `configuration` error. The Python error's `outcome_unknown` attribute and
+the Node error's `outcomeUnknown` property report the classification as a boolean.
 
 When the returned error still has an unknown outcome, the safe recovery is the same request with the
 same key, which the service replays or settles. A new key can apply the mutation twice. A refusal
@@ -200,14 +205,28 @@ earlier unknown-outcome error instead of that refusal.
     DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRY_AFTER_SECONDS;
     crates/registry-breg-client/src/error.rs, is_outcome_unknown;
     crates/registry-breg-client/src/config.rs, with_max_mutation_retries;
-    crates/registry-breg-client/tests/mutation_retry.rs */}
+    crates/registry-breg-client/tests/mutation_retry.rs;
+    crates/registry-breg-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-breg-client-node/__test__/mutation-retry.test.js;
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, max_mutation_retries,
+    outcome_unknown; crates/registry-breg-client-py/tests/python/test_mutation_retry.py */}
 
 <DocsetProduct product="registry-messaging">
 
 {/* Evidence: crates/registry-messaging-client/src/error.rs, is_outcome_unknown;
-    crates/registry-messaging-client/tests/mutation_retry.rs */}
+    crates/registry-messaging-client/tests/mutation_retry.rs;
+    crates/registry-messaging-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-messaging-client-py/tests/python/test_mutation_retry.py */}
 
 </DocsetProduct>
+
+In Scheduling, the keyed commands are hold, appointment create, reschedule, and cancel. Releasing a
+hold carries no key and is never resent.
+
+{/* Evidence: crates/registry-scheduling-client/src/error.rs, is_outcome_unknown;
+    crates/registry-scheduling-client/tests/mutation_retry.rs;
+    crates/registry-scheduling-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-scheduling-client-py/tests/python/test_mutation_retry.py */}
 
 ## Registry Discovery
 
@@ -896,10 +915,10 @@ not retain response-controlled values.
 
 Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
 attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `field_path`, `status`, `trace_id`,
-`transport_kind`, and `token_kind`; an absent member is `None`. Node rejects with
-`breg.BaseRegistryClientError`, an `Error` with `kind` and the optional `code`, `planRefusal`,
-`refusalCode`, `fieldPath`, `status`, `traceId`, `transportKind`, and `tokenKind`; an absent member is
-undefined.
+`transport_kind`, `token_kind`, and the boolean `outcome_unknown`; an absent member is `None`. Node
+rejects with `breg.BaseRegistryClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`,
+and the optional `code`, `planRefusal`, `refusalCode`, `fieldPath`, `status`, `traceId`,
+`transportKind`, and `tokenKind`; an absent member is undefined.
 
 `kind` is one of:
 
@@ -1156,8 +1175,9 @@ const client = new messaging.MessagingClient({
 `MessagingClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
 `with_max_response_bytes`, `with_user_agent`, and `with_trusted_root_certificates`. The Python
 constructor takes the same settings as keyword arguments and the Node constructor as config members.
-In Rust, `with_max_mutation_retries` also sets the
-[same-key retry](#unknown-outcomes-and-the-same-key-retry) count for `submit`.
+`with_max_mutation_retries`, the Python `max_mutation_retries` keyword, and the Node
+`maxMutationRetries` member set the [same-key retry](#unknown-outcomes-and-the-same-key-retry) count
+for `submit`.
 A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
 credential, and its debug output redacts the base URL, the user agent, and any trusted root
 certificates.
@@ -1276,10 +1296,11 @@ still typed. The wait is unset on every other status. The client never waits out
 the refused submission.
 
 Python raises `messaging.MessagingClientError`, an `Exception` whose attributes are `kind`, `code`,
-`title`, `detail`, `status`, `trace_id`, `retry_after_seconds`, `transport_kind`, and
-`protocol_failure`; an absent member is `None`. Node rejects with `messaging.MessagingClientError`,
-an `Error` with `kind` and the optional `code`, `title`, `detail`, `status`, `traceId`,
-`retryAfterSeconds`, `transportKind`, and `protocolFailure`; an absent member is undefined. The
+`title`, `detail`, `status`, `trace_id`, `retry_after_seconds`, `transport_kind`,
+`protocol_failure`, and the boolean `outcome_unknown`; an absent member is `None`. Node rejects with
+`messaging.MessagingClientError`, an `Error` with `kind`, the boolean `outcomeUnknown`, and the
+optional `code`, `title`, `detail`, `status`, `traceId`, `retryAfterSeconds`, `transportKind`, and
+`protocolFailure`; an absent member is undefined. The
 `MessagingProblemCode` type in both bindings names every code of the catalogue, including
 `rate-limit.exceeded` and `quota.exceeded`.
 
@@ -1301,6 +1322,49 @@ an `Error` with `kind` and the optional `code`, `title`, `detail`, `status`, `tr
 
 </DocsetProduct>
 
+## Registry Scheduling
+
+The Scheduling client reads the published catalogue and availability, explains availability at one
+start, places and releases holds, and books, reschedules, cancels, and reads appointments. A hold, a
+booking, a reschedule, and a cancellation take a caller-chosen idempotency key, which a binding never
+generates. The
+[Registry Scheduling API](../apis/registry-scheduling/) holds the authority profiles, task grants,
+and problem codes each operation assumes.
+
+```rust
+use registry_scheduling_client::{SchedulingClient, SchedulingClientConfig};
+use url::Url;
+
+let client = SchedulingClient::new(SchedulingClientConfig::new(
+    Url::parse("https://scheduling.example.invalid/")?,
+))?;
+```
+
+```python
+from registry_client import scheduling
+
+client = scheduling.SchedulingClient("https://scheduling.example.invalid/")
+```
+
+```js
+const { scheduling } = require('@registrystack/client');
+
+const client = new scheduling.SchedulingClient({
+  baseUrl: 'https://scheduling.example.invalid/',
+});
+```
+
+`SchedulingClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
+`with_max_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
+`with_max_mutation_retries`. The Python constructor takes the same settings as keyword arguments and
+the Node constructor as config members.
+
+{/* Evidence: crates/registry-scheduling-client/src/config.rs, SchedulingClientConfig;
+    crates/registry-scheduling-client/src/client.rs, SchedulingClient;
+    crates/registry-stack-client/src/lib.rs, scheduling;
+    crates/registry-scheduling-client-py/python/registry_scheduling_client/__init__.pyi,
+    SchedulingClient; crates/registry-scheduling-client-node/client.d.ts, SchedulingClientConfig */}
+
 ## Shared implementation boundary
 
 The canonical Rust clients own product-neutral outbound policy, bearer acquisition, prefix-safe route
@@ -1317,6 +1381,8 @@ Deployment-defined data stays dynamic at the SDK boundary.
 - [Base Registry Engine API reference](../breg-api/) for the BReg HTTP and Problem contracts.
 - [Registry Casework API](../apis/registry-casework/) for the Casework HTTP, header, and problem
   contracts.
+- [Registry Scheduling API](../apis/registry-scheduling/) for the Scheduling HTTP, authority,
+  idempotency, and problem contracts.
 - [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.
 - [Control access per profile](../../configure/breg-access/) for the profiles and capability bindings
   a BReg selection matches against.
