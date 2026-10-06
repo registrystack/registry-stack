@@ -77,11 +77,6 @@ impl Layout {
         self.ledger_relation
     }
 
-    #[must_use]
-    pub fn migrations_relation(&self) -> &'static str {
-        self.migrations_relation
-    }
-
     fn relation_pattern(&self) -> String {
         format!("{}\\_%", self.object_prefix)
     }
@@ -235,15 +230,6 @@ impl SchemaState {
     #[must_use]
     pub fn current(&self) -> Option<i64> {
         self.applied.iter().copied().max()
-    }
-
-    /// Returns the first applied version unknown to this release.
-    #[must_use]
-    pub fn unknown_version(&self, known_versions: &[i64]) -> Option<i64> {
-        self.applied
-            .iter()
-            .copied()
-            .find(|version| !known_versions.contains(version))
     }
 }
 
@@ -958,12 +944,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_state_reports_the_first_unknown_version() {
+    fn schema_state_reports_the_highest_applied_version() {
         let state = SchemaState {
             applied: vec![1, 2, 9],
             pending: vec![],
         };
         assert_eq!(state.current(), Some(9));
-        assert_eq!(state.unknown_version(&[1, 2, 3]), Some(9));
     }
 }
