@@ -37,6 +37,7 @@ pub enum KeyedMutationAttempt<T, E> {
 
 /// Run one idempotency-keyed mutation, resending the identical request under
 /// the same key at most `max_retries` times while its outcome stays unknown.
+/// A count above [`MAXIMUM_MUTATION_RETRIES`] is treated as that maximum.
 ///
 /// Every `attempt` must send byte-identical content with the same key and
 /// headers. Retry number `n` (zero-based) waits `250 ms * 2^n`, or the server's
@@ -50,6 +51,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = KeyedMutationAttempt<T, E>>,
 {
+    let max_retries = max_retries.min(MAXIMUM_MUTATION_RETRIES);
     let mut retries = 0u8;
     let mut earlier_unknown = None;
     loop {
@@ -162,6 +164,18 @@ mod tests {
         assert_eq!(
             run(0, &[Retryable, Success]).await,
             (Err(Failure::Unknown(0)), 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retry_count_above_the_maximum_is_clamped() {
+        assert_eq!(
+            run(
+                u8::MAX,
+                &[Retryable, Retryable, Retryable, Retryable, Success]
+            )
+            .await,
+            (Err(Failure::Unknown(2)), 3)
         );
     }
 
