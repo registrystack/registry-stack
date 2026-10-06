@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-10-03"
+last_reviewed: "2026-10-07"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -197,10 +197,18 @@ every later revision, and the audit journal in place. Snapshot references at or 
 erased commit become unavailable until `bregctl history rebaseline` writes a new baseline commit.
 
 Change-request detail is separate from record history. `bregctl request-retention erase` removes
-the proposal and target snapshots, request revision snapshots, idempotency results, outbox
+the proposal and target snapshots, request revision snapshots, held idempotency responses, outbox
 payloads, and intake rows of one proposal version, and leaves the value-free lifecycle rows of the
 request. It applies only where the request entity declared `retention.mode: operator_erase`; the
 default, `retain`, keeps every proposal version and refuses operator erasure.
+
+Spent idempotency keys live in `registry_internal.registry_idempotency`, one row per key, with the
+raw issuer, principal value, and key the write was sent under. Neither erasure removes that row:
+both drop or tombstone only the held response, so a retry answers `409 idempotency.conflict`. A
+held response stays replayable for `idempotency.receiptRetentionDays`, 7 days by default, and
+`bregctl idempotency-retention erase-expired` drops the ones past that horizon while the key stays
+spent. [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses)
+gives the command and its limits.
 
 Audit retention uses the shared file writer described in [Audit retention](#audit-retention).
 History erasure leaves those files untouched. The database records committed erasure coverage in
@@ -233,6 +241,9 @@ every activation, and store secrets separately.
 {/* Evidence: crates/registry-breg/src/postgres/schema.rs;
     crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/src/request_retention.rs;
+    crates/registry-breg/src/idempotency.rs, lock_and_load(), tombstone_erased_cached_responses(),
+    and drop_expired_receipts();
+    crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;
     crates/registry-breg/src/audit.rs;
     crates/registry-breg/src/webhook.rs;
     crates/registry-breg/src/subject_access_log.rs, run_retention() and expire_tick();
