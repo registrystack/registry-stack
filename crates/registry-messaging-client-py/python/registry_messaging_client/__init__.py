@@ -1,4 +1,4 @@
-"""Internal Registry Messaging binding, not yet bundled by registry-stack-client."""
+"""Internal Registry Messaging binding bundled by registry-stack-client."""
 
 from .registry_messaging_client import *  # noqa: F401,F403
 from .registry_messaging_client import __version__ as __version__
