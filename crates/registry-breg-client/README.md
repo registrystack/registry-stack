@@ -161,7 +161,8 @@ after the request was sent. `BaseRegistryClientError::is_outcome_unknown()`
 reports those cases, and an oversized or unparseable answer, as true; it is
 false for a request or configuration defect, a token failure, a connection
 that was never established, every typed 4xx refusal such as
-`idempotency.conflict` (409), and two typed 500 failures:
+`idempotency.conflict` (409) and `idempotency.expired` (410), and two typed
+500 failures:
 `action.handler_failed` and `statistical_dataset.domain_violation`. The engine
 returns those two only with the attempt rolled back, and the same request
 fails the same way, so the client never resends them. `action.evidence_failed`
@@ -186,6 +187,13 @@ sending the same request with the same key. A new key could apply the
 mutation twice. A refusal that answers a resend does not prove the earlier
 attempt left no effect, so the client then returns the earlier unknown-outcome
 error instead of the refusal.
+
+BReg keeps a key spent for good but holds its response only for the receipt
+horizon (`idempotency.receiptRetentionDays`, 7 days by default). The same
+request under the same key after that horizon gets `idempotency.expired`
+(410) and does not run again: an earlier attempt committed and its response is
+gone. `is_outcome_unknown()` is false for it and the client never resends it;
+read the resource to learn its current state.
 
 The lifecycle is source-owned and exposes only Submit, Revise, Cancel, and
 Apply. `action.with_reason("Applied after external approval.")?` returns a copy

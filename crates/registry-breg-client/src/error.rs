@@ -145,6 +145,7 @@ pub enum BRegProblemCode {
     ActionRefused,
     AuthenticationRefused,
     IdempotencyConflict,
+    IdempotencyExpired,
     IngestionChunkMismatch,
     IngestionProfileMismatch,
     IngestionReceiptErased,
@@ -172,12 +173,13 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
         Self::IdempotencyConflict,
+        Self::IdempotencyExpired,
         Self::IngestionChunkMismatch,
         Self::IngestionProfileMismatch,
         Self::IngestionReceiptErased,
@@ -218,6 +220,7 @@ impl BRegProblemCode {
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
             Self::IdempotencyConflict => "idempotency.conflict",
+            Self::IdempotencyExpired => "idempotency.expired",
             Self::IngestionChunkMismatch => "ingestion.chunk_mismatch",
             Self::IngestionProfileMismatch => "ingestion.profile_mismatch",
             Self::IngestionReceiptErased => "ingestion.receipt_erased",
@@ -263,7 +266,9 @@ impl BRegProblemCode {
             | Self::IngestionRunNotOpen
             | Self::MutationConflict
             | Self::StatisticalDatasetVersionConflict => 409,
-            Self::IngestionReceiptErased | Self::StatisticalDatasetVersionWithdrawn => 410,
+            Self::IdempotencyExpired
+            | Self::IngestionReceiptErased
+            | Self::StatisticalDatasetVersionWithdrawn => 410,
             Self::PreconditionFailed => 412,
             Self::UnsupportedMediaType => 415,
             Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
@@ -320,6 +325,9 @@ impl BRegProblemCode {
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
             Self::IdempotencyConflict => "The idempotency key is bound to another request.",
+            Self::IdempotencyExpired => {
+                "The held response of the idempotency key expired; the key stays spent."
+            }
             Self::IngestionChunkMismatch => "The chunk does not match the expected next chunk.",
             Self::IngestionProfileMismatch => {
                 "The selected access profile does not match the run's bound profile."
@@ -852,6 +860,7 @@ mod tests {
         for code in [
             BRegProblemCode::AuthenticationRefused,
             BRegProblemCode::IdempotencyConflict,
+            BRegProblemCode::IdempotencyExpired,
             BRegProblemCode::StatisticalDatasetVersionWithdrawn,
             BRegProblemCode::ActionRefused,
             BRegProblemCode::ActionHandlerFailed,
@@ -885,6 +894,7 @@ mod tests {
             BaseRegistryClientError::transport(TransportKind::ResponseTooLarge),
             BaseRegistryClientError::protocol(201, BRegProtocolFailure::Body, None),
             problem(BRegProblemCode::IdempotencyConflict),
+            problem(BRegProblemCode::IdempotencyExpired),
             problem(BRegProblemCode::ActionHandlerFailed),
             problem(BRegProblemCode::StatisticalDatasetDomainViolation),
             BaseRegistryClientError::Token(TokenError::Unavailable),
