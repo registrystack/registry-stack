@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-10-07"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -170,24 +170,34 @@ cannot contain credentials, a query, a fragment, or ambiguous empty path segment
 ### Unknown outcomes and the same-key retry
 
 A 5xx answer may follow a commit. A BReg<DocsetProduct product="registry-messaging">, Messaging,</DocsetProduct>
-or Scheduling mutation that carries an idempotency key has an unknown outcome after a 5xx answer, after a timeout or a broken exchange once the request was sent,
-and after an oversized or unparseable answer. Its outcome is known after a refusal before sending, a
-connection that was never established, and a typed 4xx refusal such as an idempotency conflict.
+or Scheduling mutation that carries an idempotency key has an unknown outcome after every 5xx answer,
+after a timeout or a broken exchange once the request was sent, and after a protocol failure: a 3xx
+answer, or an answer that is oversized, cannot be parsed, or does not meet the contract. Its outcome
+is known after a refusal before sending, a connection that was never established (a connect timeout
+or a TLS failure included), and every typed 4xx refusal, such as a `429` limit or an idempotency
+conflict. A credential the BReg token provider could not supply is known too: the client acquires it
+once, before the first send. BReg's `410 idempotency.expired` is a known refusal as well: the first
+attempt committed, and only its held response is gone.
 
 Two typed BReg 500 failures are known outcomes too: `action.handler_failed` and
 `statistical_dataset.domain_violation`. The engine returns them only with the attempt rolled back,
-and the same request fails the same way, so the client never resends them. `action.evidence_failed`
-and `service.unavailable` (503) stay unknown and are resent.
+and the same request fails the same way, so the client never resends them. Every other 5xx answer
+stays unknown.
 
 {/* Evidence: crates/registry-breg/src/mutation/action.rs, execute_immediate_action_after_attempt;
     crates/registry-breg/src/postgres/statistics.rs, map_statistics_error;
-    crates/registry-breg-client/src/error.rs, fails_before_commit */}
+    crates/registry-breg-client/src/error.rs, fails_before_commit, is_outcome_unknown, and
+    IdempotencyExpired; crates/registry-breg-client/src/client.rs, send_keyed;
+    crates/registry-platform-httputil/src/client/outbound.rs, send_failure_kind;
+    crates/registry-breg/src/idempotency.rs, lock_and_load() */}
 
 The client resends the identical request, with the same key, headers, and body bytes, after a 5xx
 answer with an unknown outcome, a timeout, or a broken exchange: at most twice by default, waiting 250 ms and then 500 ms, or
-the service's `Retry-After` when that is longer and at most 5 seconds. A longer requested wait ends
-the retries. Each attempt has the full request timeout. Reads, and operations that carry no
-idempotency key, are never resent.
+the service's `Retry-After` when that is longer and at most 5 seconds. A longer requested wait, or a
+`Retry-After` that is not one delta-seconds value, ends the retries. A protocol failure is resent
+only when its answer carried a 5xx status, and nothing is resent after a 4xx status line, even when
+the rest of that answer could not be read. Each attempt has the full request timeout. Reads, and
+operations that carry no idempotency key, are never resent.
 
 In Rust, `is_outcome_unknown()` on the client error reports the classification, and
 `with_max_mutation_retries` on the client configuration sets the count from 0, which sends once, to
@@ -197,12 +207,22 @@ a value outside 0 to 2 is a `configuration` error. The Python error's `outcome_u
 the Node error's `outcomeUnknown` property report the classification as a boolean.
 
 When the returned error still has an unknown outcome, the safe recovery is the same request with the
-same key, which the service replays or settles. A new key can apply the mutation twice. A refusal
-that answers a resend does not prove the earlier attempt left no effect, so the client returns the
-earlier unknown-outcome error instead of that refusal.
+same key, sent within the service's receipt horizon: the service replays or settles it. A new key can
+apply the mutation twice. A refusal that answers a resend does not prove the earlier attempt left no
+effect, so the client returns the earlier unknown-outcome error instead of that refusal.
+
+The receipt horizon is how long a service holds a key's first answer: BReg's
+`idempotency.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
+Messaging's `retention.submissionReceiptDays`,</DocsetProduct> and Scheduling's
+`retention.attemptReceiptDays`. Past it, the same request is refused with
+`410 idempotency.expired` and the key stays spent. In BReg that refusal means the first attempt
+committed: read the record or its history rather than sending the write again under a new key.
 
 {/* Evidence: crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation,
+    classify_keyed_attempt, RetryAfter,
     DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRY_AFTER_SECONDS;
+    crates/registry-breg/src/idempotency.rs, IdempotencyPolicy;
+    crates/registry-scheduling-core/src/problem.rs, IdempotencyExpired;
     crates/registry-breg-client/src/error.rs, is_outcome_unknown;
     crates/registry-breg-client/src/config.rs, with_max_mutation_retries;
     crates/registry-breg-client/tests/mutation_retry.rs;
@@ -214,6 +234,8 @@ earlier unknown-outcome error instead of that refusal.
 <DocsetProduct product="registry-messaging">
 
 {/* Evidence: crates/registry-messaging-client/src/error.rs, is_outcome_unknown;
+    crates/registry-messaging/src/config.rs, default_submission_receipt_days;
+    crates/registry-messaging-core/src/problem.rs, IdempotencyExpired;
     crates/registry-messaging-client/tests/mutation_retry.rs;
     crates/registry-messaging-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
     crates/registry-messaging-client-py/tests/python/test_mutation_retry.py */}
@@ -779,11 +801,14 @@ operation serializes under `/data/<field>`.
 The client never creates a key, and resends a mutation only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). A retry after an unknown outcome must
 reuse the same binding, body, precondition, representation, and key. BReg holds a response under the
-key only for a committed success, so a resend after a 5xx either replays that success or runs the
-operation again.
+key only for a committed success, and only for `idempotency.receiptRetentionDays` after that commit.
+A resend after a 5xx replays that success within the horizon, runs the operation again when nothing
+committed, and past the horizon answers `410 idempotency.expired` without running it. The key stays
+spent, so that `410` is a known outcome: the write committed.
 
-{/* Evidence: crates/registry-breg/src/idempotency.rs, ERASED_TOMBSTONE_BODY;
-    crates/registry-breg-client/src/client.rs, send_keyed */}
+{/* Evidence: crates/registry-breg/src/idempotency.rs, ERASED_TOMBSTONE_BODY, IdempotencyPolicy, and
+    lock_and_load(); crates/registry-breg-client/src/client.rs, send_keyed;
+    crates/registry-breg-client/src/error.rs, IdempotencyExpired */}
 
 `create_record` sends the selected create operation and requires a `201` response whose `Location`
 matches the created record. `patch_record` sends the selected patch operation with `If-Match` and
@@ -899,7 +924,8 @@ library to display a number outside the JavaScript safe integer range.
 
 The client resends a mutation only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). After an unknown outcome it still
-reports, the caller decides whether to send the same action again with the same idempotency key.
+reports, the caller decides whether to send the same action again with the same idempotency key,
+within the receipt horizon described under [Writes](#writes).
 
 ### BReg error contract
 
@@ -909,9 +935,10 @@ transport or token category, the validated field path an accepted Problem names,
 refusal code a declared immediate-action refusal names.
 
 A Problem is accepted only when its closed members, code, status, title, detail, type URI, and header
-and body trace match. Unknown Problem codes and malformed responses fail closed as
-`BRegProtocolFailure`. Request, metadata, ETag, idempotency-key, and lifecycle validation errors do
-not retain response-controlled values.
+and body trace match. A Problem code the client does not register, and any malformed response, fails
+closed as `BRegProtocolFailure`. `idempotency.expired` is registered, so its `410` arrives as kind
+`problem` with a known outcome, not as a protocol failure. Request, metadata, ETag, idempotency-key,
+and lifecycle validation errors do not retain response-controlled values.
 
 Python raises `breg.BaseRegistryClientError`, an `Exception` whose message is `str(error)` and whose
 attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `field_path`, `status`, `trace_id`,
@@ -1208,16 +1235,19 @@ A submission requires an idempotency key the caller chose: 1 to 128 visible ASCI
 refused before any exchange otherwise. A key is scoped to the caller's verified issuer and subject.
 The client never generates or replaces a key, and resends a submission only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). After a lost response it still reports,
-send the same key with the same submission, and the runtime answers the stored receipt instead of
-accepting a second message. The runtime authorizes the caller and renders the template again before
-it looks up the key, so a `403` or `422` answering an exact retry does not show that the first
-attempt failed: never resubmit under a new key, and read the message status instead. A message
+send the same key with the same submission within `retention.submissionReceiptDays`, and the runtime
+answers the stored receipt instead of accepting a second message. A `403` or `422` answering an exact
+retry does not show that the first attempt failed, so never resubmit under a new key: have the
+operator restore the access, template version, or locale the refusal names, then retry under the
+same key within `retention.submissionReceiptDays`, as the
+[replay rule](../apis/registry-messaging/#contract-boundary) explains. A message
 identifier must be the lowercase hyphenated UUID the runtime answered; any other value is refused
 before any exchange. The view carries the recipient's channel with the value `redacted`, and no
 rendered content.
 
 {/* Evidence: products/messaging/contracts/recorded-decisions.yaml, MESSAGING-DEC-07,
     an_idempotency_key_replays_one_request_and_refuses_another;
+    crates/registry-messaging-client/src/client.rs, submit;
     crates/registry-messaging-client/tests/mutation_retry.rs,
     a_refusal_after_an_unknown_outcome_keeps_the_outcome_unknown */}
 
