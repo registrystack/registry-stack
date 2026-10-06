@@ -38,6 +38,13 @@
   or its identifier before choosing a new key; a hold cannot be read and
   expires on its own, so start a new request. The OpenAPI document and the
   published problem table carry the new text.
+- The runtime configuration schema publishes the hook destination bounds
+  startup enforces: `destinations.hooks` holds at most 128 bindings whose ids
+  follow the logical destination id grammar, `attemptTimeoutMilliseconds` is
+  from 100 through 10000, and `maximumAttempts` from 1 through 20, where the
+  schema accepted any map, any timeout, and 0 through 255 attempts.
+  Configuration that started before is unaffected, since startup already
+  refused values outside them.
 - The runtime configuration schema publishes the retention bounds startup
   enforces: `retention.attemptReceiptDays` is at least 1, and
   `retention.hookPayloadDays` is from 1 through 30. Configuration that started

@@ -182,7 +182,11 @@
           "additionalProperties": {
             "$ref": "#/$defs/HookDestinationConfig"
           },
-          "description": "Logical URL hook destinations. The governed policy names only these\nids; URL, signing secret, and retry ceilings stay deployment-owned.",
+          "description": "Logical URL hook destinations. The governed policy names only these\nids; URL, signing secret, and retry ceilings stay deployment-owned.\nAt most 128 are bound, each id a lowercase ASCII letter followed by up\nto 63 lowercase letters, digits, `-`, or `_`.",
+          "maxProperties": 128,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+          },
           "type": "object"
         },
         "reminders": {
@@ -223,8 +227,10 @@
       "properties": {
         "attemptTimeoutMilliseconds": {
           "default": 5000,
+          "description": "How long one delivery attempt may take, from 100 through 10000\nmilliseconds.",
           "format": "uint32",
-          "minimum": 0,
+          "maximum": 10000,
+          "minimum": 100,
           "type": "integer"
         },
         "hmacSha256KeyRef": {
@@ -233,9 +239,10 @@
         },
         "maximumAttempts": {
           "default": 8,
+          "description": "How many delivery attempts one event gets, from 1 through 20.",
           "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
+          "maximum": 20,
+          "minimum": 1,
           "type": "integer"
         },
         "url": {

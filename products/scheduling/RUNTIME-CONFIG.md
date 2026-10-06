@@ -227,7 +227,9 @@ readable in the outbox and are marked local, never pretended delivered. The
 README documents the envelope and the event types.
 
 `destinations.hooks` binds the logical destination ids named by policy hooks to
-deployment-owned URLs and HMAC-SHA256 keys. Each entry requires `url` and
+deployment-owned URLs and HMAC-SHA256 keys. It holds at most 128 bindings, and
+each id is a lowercase ASCII letter followed by up to 63 lowercase letters,
+digits, `-`, or `_`. Each entry requires `url` and
 `hmacSha256KeyRef`; `attemptTimeoutMilliseconds` defaults to 5000 and is bounded
 from 100 through 10000, while `maximumAttempts` defaults to 8 and is bounded
 from 1 through 20. URLs use the same HTTPS and explicit-loopback rules as the
