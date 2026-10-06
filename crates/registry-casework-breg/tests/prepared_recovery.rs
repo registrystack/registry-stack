@@ -270,6 +270,14 @@ async fn execute_initial_problem(
     status: u16,
     code: &str,
 ) -> Result<SourceReceipt, SourceAdapterError> {
+    execute_problem(PreparedExecution::Initial, status, code).await
+}
+
+async fn execute_problem(
+    execution: PreparedExecution,
+    status: u16,
+    code: &str,
+) -> Result<SourceReceipt, SourceAdapterError> {
     let server = MockServer::start().await;
     let (source, actor, prepared) = prepare_for_recovery(&server).await;
     mount_recovery_metadata(&server, json_response(metadata())).await;
@@ -285,6 +293,10 @@ async fn execute_initial_problem(
         ),
         404 => ("Not Found", "The requested resource was not found."),
         409 => ("Conflict", "The mutation conflicts with current state."),
+        410 => (
+            "Gone",
+            "The held response of the idempotency key expired; the key stays spent.",
+        ),
         412 => ("Precondition Failed", "The mutation precondition failed."),
         422 => (
             "Unprocessable Entity",
@@ -323,7 +335,7 @@ async fn execute_initial_problem(
     source
         .execute_prepared(ExecutePreparedRequest {
             prepared: &prepared,
-            execution: PreparedExecution::Initial,
+            execution,
             actor: &actor,
             source_profile_id: "reviewer",
             idempotency_key: "casework-attempt-1",
@@ -364,6 +376,21 @@ async fn initial_conflict_problems_remain_action_not_offered() {
         assert_eq!(
             execute_initial_problem(status, code).await,
             Err(SourceAdapterError::ActionNotOffered)
+        );
+    }
+}
+
+/// A key past the source's receipt horizon stays spent: an earlier attempt
+/// under it committed and the source runs nothing again. That proves no
+/// refusal, so neither execution reports the attempt as not applied; it
+/// stays uncertain for an operator to settle.
+#[tokio::test]
+async fn an_expired_source_receipt_never_reads_as_a_refusal() {
+    for execution in [PreparedExecution::Initial, PreparedExecution::Recovery] {
+        assert_eq!(
+            execute_problem(execution, 410, "idempotency.expired").await,
+            Err(SourceAdapterError::Uncertain),
+            "{execution:?}"
         );
     }
 }
