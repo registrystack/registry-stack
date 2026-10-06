@@ -93,23 +93,17 @@ registry-review-client = { path = "crates/registry-review-client", version = "0.
 registry-review-protocol = { path = "crates/registry-review-protocol", version = "0.40.0" }
 registry-thunderid-tooling = { path = "crates/registry-thunderid-tooling", version = "0.40.0" }
 registry-casework = { path = "crates/registry-casework", version = "0.40.0" }
-registry-casework-client-node = { path = "crates/registry-casework-client-node", version = "0.40.0" }
-registry-casework-client-py = { path = "crates/registry-casework-client-py", version = "0.40.0" }
 registry-caseworkctl = { path = "crates/registry-caseworkctl", version = "0.40.0" }
 registry-casework-client = { path = "crates/registry-casework-client", version = "0.40.0" }
 registry-casework-breg = { path = "crates/registry-casework-breg", version = "0.40.0" }
 registry-casework-core = { path = "crates/registry-casework-core", version = "0.40.0" }
 registry-discovery = { path = "crates/registry-discovery", version = "0.40.0", default-features = false }
 registry-discovery-client = { path = "crates/registry-discovery-client", version = "0.40.0" }
-registry-discovery-client-node = { path = "crates/registry-discovery-client-node", version = "0.40.0" }
-registry-discovery-client-py = { path = "crates/registry-discovery-client-py", version = "0.40.0" }
 registry-discovery-profile = { path = "crates/registry-discovery-profile", version = "0.40.0" }
 registry-discoveryctl = { path = "crates/registry-discoveryctl", version = "0.40.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.40.0" }
 registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.40.0" }
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.40.0" }
-registry-evidence-client-node = { path = "crates/registry-evidence-client-node", version = "0.40.0" }
-registry-evidence-client-py = { path = "crates/registry-evidence-client-py", version = "0.40.0" }
 registry-evidence-oid4vci = { path = "crates/registry-evidence-oid4vci", version = "0.40.0" }
 registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.40.0" }
 registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.40.0" }
@@ -121,21 +115,15 @@ registry-render = { path = "crates/registry-render", version = "0.40.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.40.0" }
 registry-breg-mcp = { path = "crates/registry-breg-mcp", version = "0.40.0" }
 registry-breg-review = { path = "crates/registry-breg-review", version = "0.40.0" }
-registry-breg-client-node = { path = "crates/registry-breg-client-node", version = "0.40.0" }
-registry-breg-client-py = { path = "crates/registry-breg-client-py", version = "0.40.0" }
 registry-scheduling = { path = "crates/registry-scheduling", version = "0.40.0" }
 registry-scheduling-core = { path = "crates/registry-scheduling-core", version = "0.40.0" }
 registry-schedulingctl = { path = "crates/registry-schedulingctl", version = "0.40.0" }
-registry-scheduling-client = { path = "crates/registry-scheduling-client", version = "0.40.0" }
 registry-messaging = { path = "crates/registry-messaging", version = "0.40.0" }
 registry-messaging-core = { path = "crates/registry-messaging-core", version = "0.40.0" }
 registry-messagingctl = { path = "crates/registry-messagingctl", version = "0.40.0" }
 registry-messaging-client = { path = "crates/registry-messaging-client", version = "0.40.0" }
-registry-messaging-client-node = { path = "crates/registry-messaging-client-node", version = "0.40.0" }
-registry-messaging-client-py = { path = "crates/registry-messaging-client-py", version = "0.40.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.40.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.40.0" }
-registry-stack-client = { path = "crates/registry-stack-client", version = "0.40.0" }
 registry-platform-activation = { path = "crates/registry-platform-activation", version = "0.40.0" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.40.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.40.0" }
