@@ -55,7 +55,7 @@ use crate::idempotency::{
     resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
     HeldResponse, IdempotencyBinding, IdempotencyError, IdempotencyKeyDomain, IdempotencyPolicy,
     PermittedResponseHeader, StoredResultMetadata, MAX_HELD_BODY_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
-    MAX_IMMEDIATE_ACTION_RESULTS,
+    MAX_IMMEDIATE_ACTION_RESULTS, PRE_CALLER_SCOPE_ISSUER,
 };
 use crate::ingestion_store::{
     record_attempt, IngestionAttemptOutcome, IngestionChunkCommit, IngestionRunStatus,
@@ -298,10 +298,15 @@ pub async fn install_mutation_schema(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     // A spent key is found by its caller: the verified issuer and subject, the
-    // operation scope, and the key. Rows an earlier engine found by an
-    // audit-keyed digest carry no caller and can never be found again, so a
-    // table without the caller columns is emptied before they are added. The
-    // erasure shape is installed here because it reads the receipt columns.
+    // key scope, and the key. Rows an earlier engine found by an audit-keyed
+    // digest carry no caller and can never be found again. They are kept as
+    // tombstones rather than emptied, because an immediate action's stored
+    // results and application rows hang off them, and a revision an earlier
+    // engine journaled under a compiled effect identifier reads its provenance
+    // from those results. Each such row moves under the reserved issuer, with
+    // its digest as its subject so the caller index holds, its receipt dropped,
+    // and its held response and headers removed. The erasure shape is installed
+    // here because it reads the receipt columns.
     migration
         .batch_execute(&format!(
             "DO $breg_idempotency_caller$
@@ -313,14 +318,28 @@ pub async fn install_mutation_schema(
                         AND attname = 'caller_issuer'
                         AND NOT attisdropped
                  ) THEN
-                     TRUNCATE registry_internal.registry_idempotency CASCADE;
                      ALTER TABLE registry_internal.registry_idempotency
-                         ADD COLUMN caller_issuer text NOT NULL,
-                         ADD COLUMN caller_subject text NOT NULL,
-                         ADD COLUMN key_scope text NOT NULL,
-                         ADD COLUMN idempotency_key text NOT NULL,
-                         ADD COLUMN receipt_expires_at timestamptz NOT NULL,
+                         ADD COLUMN caller_issuer text,
+                         ADD COLUMN caller_subject text,
+                         ADD COLUMN key_scope text,
+                         ADD COLUMN idempotency_key text,
+                         ADD COLUMN receipt_expires_at timestamptz,
                          ADD COLUMN receipt_dropped_at timestamptz;
+                     UPDATE registry_internal.registry_idempotency
+                        SET caller_issuer = '{PRE_CALLER_SCOPE_ISSUER}',
+                            caller_subject = key_reference,
+                            key_scope = 'mutation',
+                            idempotency_key = 'pre-caller-scope',
+                            receipt_expires_at = created_at + interval '1 microsecond',
+                            receipt_dropped_at = transaction_timestamp(),
+                            response_body = NULL,
+                            response_headers = decode('0000', 'hex');
+                     ALTER TABLE registry_internal.registry_idempotency
+                         ALTER COLUMN caller_issuer SET NOT NULL,
+                         ALTER COLUMN caller_subject SET NOT NULL,
+                         ALTER COLUMN key_scope SET NOT NULL,
+                         ALTER COLUMN idempotency_key SET NOT NULL,
+                         ALTER COLUMN receipt_expires_at SET NOT NULL;
                  END IF;
              END
              $breg_idempotency_caller$;

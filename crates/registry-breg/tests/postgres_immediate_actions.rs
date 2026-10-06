@@ -848,6 +848,165 @@ async fn action_written_revisions_are_readable_through_revision_history() {
     database.cleanup().await;
 }
 
+/// A revision an immediate action wrote before actions journaled the canonical
+/// record operation is readable only through the action result its spent key
+/// owns. Installing the caller-scoped spent-key shape over a table an earlier
+/// engine keyed by an audit-keyed digest keeps that result, and turns the
+/// earlier row into a tombstone no caller can find.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_caller_scoped_idempotency_upgrade_keeps_legacy_action_revisions_readable() {
+    let (database, registry, identity) =
+        install_action_registry_with_history(history_registry(), true).await;
+    seed_household(
+        &database,
+        &registry,
+        &identity,
+        HOUSEHOLD_ID,
+        "H-001",
+        "zone-a",
+    )
+    .await;
+    let app = action_router(&database, registry.clone(), identity);
+    let create_body = serde_json::to_vec(&json!({
+        "input": {
+            "personCode": "P-UPGRADE",
+            "legalName": "Upton Upgrade",
+            "jurisdiction": "zone-a"
+        }
+    }))
+    .expect("create body serializes");
+    let create = || {
+        send(
+            &app,
+            Method::POST,
+            "/v1/actions/create-local-person",
+            Some(action_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "upgrade-create-key"),
+            ],
+            create_body.clone(),
+        )
+    };
+    let created = response_parts(create().await).await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.body);
+    let person_id = created.body["results"]["person-only"]["recordId"]
+        .as_str()
+        .expect("granted create result names the record")
+        .to_owned();
+    set_journal_operation(&database, "person", &person_id, 1, "person-only", "create").await;
+    let person_detail =
+        format!("/v1/records/people/{person_id}/revisions/1?accessProfile=record-history");
+    let detail = history_read(&app, &person_detail).await;
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+
+    // Restore the shape an earlier engine left: no caller columns, and every
+    // spent key found by an audit-keyed digest its dependents point at.
+    database
+        .admin
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_idempotency
+                 DROP CONSTRAINT registry_idempotency_caller_shape,
+                 DROP CONSTRAINT registry_idempotency_erasure_shape;
+             DROP INDEX registry_internal.registry_idempotency_caller_key;
+             ALTER TABLE registry_internal.registry_idempotency
+                 DROP COLUMN caller_issuer,
+                 DROP COLUMN caller_subject,
+                 DROP COLUMN key_scope,
+                 DROP COLUMN idempotency_key,
+                 DROP COLUMN receipt_expires_at,
+                 DROP COLUMN receipt_dropped_at;
+             ALTER TABLE registry_internal.registry_idempotency
+                 ADD CONSTRAINT registry_idempotency_erasure_shape
+                     CHECK ((response_body IS NULL) = (erased_at IS NOT NULL));
+             INSERT INTO registry_internal.registry_idempotency
+                 (key_reference, binding_reference, result_kind, record_reference,
+                  record_revision, result_count, proposal_version, response_status,
+                  response_body, response_headers, created_at, erased_at)
+             SELECT 'hmac-sha256:' || substr(key_reference, 8), binding_reference,
+                    result_kind, record_reference, record_revision, result_count,
+                    proposal_version, response_status, response_body, response_headers,
+                    created_at, erased_at
+               FROM registry_internal.registry_idempotency;
+             UPDATE registry_internal.registry_immediate_action_results
+                SET key_reference = 'hmac-sha256:' || substr(key_reference, 8);
+             UPDATE registry_internal.registry_immediate_action_applications
+                SET key_reference = 'hmac-sha256:' || substr(key_reference, 8);
+             DELETE FROM registry_internal.registry_idempotency
+              WHERE key_reference NOT LIKE 'hmac-sha256:%';",
+        )
+        .await
+        .expect("the fixture restores the audit-keyed spent-key shape");
+    let before = action_counts(&database, &registry).await;
+    assert_eq!((before.idempotency, before.applications), (1, 1));
+    assert!(before.results > 0);
+
+    let (migration, migration_task) = database.connect_migration().await;
+    registry_breg::mutation::install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("migration installs the caller-scoped spent-key shape");
+    drop(migration);
+    migration_task.abort();
+
+    let detail = history_read(&app, &person_detail).await;
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+    assert_eq!(detail.body["data"]["operationIdentifier"], "person-only");
+    let after = action_counts(&database, &registry).await;
+    assert_eq!(
+        (after.idempotency, after.applications, after.results),
+        (before.idempotency, before.applications, before.results),
+        "the upgrade keeps every spent key and the action results it owns"
+    );
+
+    let tombstone = database
+        .admin
+        .query_one(
+            "SELECT caller_issuer, caller_subject = key_reference, key_scope,
+                    response_body IS NULL, response_headers,
+                    receipt_dropped_at IS NOT NULL,
+                    receipt_expires_at > created_at
+                        AND receipt_expires_at <= created_at + interval '1 second'
+               FROM registry_internal.registry_idempotency
+              WHERE result_kind = 'immediate_action'",
+            &[],
+        )
+        .await
+        .expect("administrator reads the converted spent key");
+    assert_eq!(
+        tombstone.get::<_, String>(0),
+        "urn:registry-breg:pre-caller-scope"
+    );
+    assert!(tombstone.get::<_, bool>(1), "the subject is the old digest");
+    assert_eq!(tombstone.get::<_, String>(2), "mutation");
+    assert!(tombstone.get::<_, bool>(3), "no held response survives");
+    assert_eq!(
+        tombstone.get::<_, Vec<u8>>(4),
+        vec![0, 0],
+        "no held header survives"
+    );
+    assert!(tombstone.get::<_, bool>(5), "the receipt is dropped");
+    assert!(
+        tombstone.get::<_, bool>(6),
+        "the receipt expired at its commit"
+    );
+
+    // The caller's exact retry finds no spent key: it is a fresh request,
+    // and the unique person code refuses it rather than a held response
+    // answering it.
+    let retried = response_parts(create().await).await;
+    assert_eq!(retried.status, StatusCode::CONFLICT, "{}", retried.body);
+    assert_eq!(
+        retried.body["code"], "mutation.conflict",
+        "{}",
+        retried.body
+    );
+    assert_eq!(
+        action_counts(&database, &registry).await.people,
+        before.people
+    );
+    database.cleanup().await;
+}
+
 async fn history_read(app: &axum::Router, uri: &str) -> ResponseParts {
     response_parts(
         send(
