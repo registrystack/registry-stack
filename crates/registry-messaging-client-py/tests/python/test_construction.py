@@ -33,6 +33,40 @@ class ConstructionTests(unittest.TestCase):
             MessagingClient("https://messaging.example.invalid/", request_timeout_seconds=-1.0)
         self.assertEqual(raised.exception.kind, "configuration")
 
+    def test_timeouts_and_response_bound_accept_numbers_in_range(self) -> None:
+        for keyword, value in (
+            ("request_timeout_seconds", 2),
+            ("request_timeout_seconds", 1.5),
+            ("connect_timeout_seconds", 2),
+            ("connect_timeout_seconds", 1.5),
+            ("max_response_bytes", 1500),
+        ):
+            with self.subTest(keyword=keyword, value=value):
+                MessagingClient("https://messaging.example.invalid/", **{keyword: value})
+
+    def test_bool_or_out_of_range_bound_is_a_configuration_error(self) -> None:
+        for keyword, value in (
+            ("request_timeout_seconds", True),
+            ("request_timeout_seconds", False),
+            ("request_timeout_seconds", -1),
+            ("request_timeout_seconds", float("nan")),
+            ("request_timeout_seconds", float("inf")),
+            ("request_timeout_seconds", "2"),
+            ("connect_timeout_seconds", True),
+            ("connect_timeout_seconds", -1),
+            ("max_response_bytes", True),
+            ("max_response_bytes", False),
+            ("max_response_bytes", -1),
+            ("max_response_bytes", 2**64),
+            ("max_response_bytes", 1.5),
+            ("max_response_bytes", "1500"),
+        ):
+            with self.subTest(keyword=keyword, value=value):
+                with self.assertRaises(MessagingClientError) as raised:
+                    MessagingClient("https://messaging.example.invalid/", **{keyword: value})
+                self.assertEqual(raised.exception.kind, "configuration")
+                self.assertIs(raised.exception.outcome_unknown, False)
+
     def test_token_error_does_not_repeat_credential(self) -> None:
         malformed = "bad token with spaces canary"
         client = MessagingClient("https://messaging.example.invalid/")

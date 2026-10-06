@@ -210,14 +210,39 @@ fn mutation_retries(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u8> {
     value.extract::<u8>().map_err(|_| invalid())
 }
 
-fn duration(py: Python<'_>, value: f64) -> PyResult<Duration> {
-    Duration::try_from_secs_f64(value).map_err(|_| {
+/// A timeout as a Python number of seconds. Only a finite non-negative `int`
+/// or `float` reaches the client, which refuses zero; a `bool` is not a
+/// duration.
+fn duration(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Duration> {
+    let invalid = || {
         binding_error(
             py,
             "configuration",
             "client timeouts must be finite non-negative seconds",
         )
-    })
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(invalid());
+    }
+    let seconds = value.extract::<f64>().map_err(|_| invalid())?;
+    Duration::try_from_secs_f64(seconds).map_err(|_| invalid())
+}
+
+/// The response body bound as a Python integer. Only an `int` in the `u64`
+/// range reaches the client, which refuses one outside its own bounds; a
+/// `bool` is not a count.
+fn response_bytes(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u64> {
+    let invalid = || {
+        binding_error(
+            py,
+            "configuration",
+            "Scheduling client configuration is invalid",
+        )
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(invalid());
+    }
+    value.extract::<u64>().map_err(|_| invalid())
 }
 
 fn complete<'py, T: Serialize>(
@@ -246,9 +271,9 @@ impl SchedulingClient {
     fn new(
         py: Python<'_>,
         base_url: &str,
-        request_timeout_seconds: Option<f64>,
-        connect_timeout_seconds: Option<f64>,
-        max_response_bytes: Option<u64>,
+        request_timeout_seconds: Option<&Bound<'_, PyAny>>,
+        connect_timeout_seconds: Option<&Bound<'_, PyAny>>,
+        max_response_bytes: Option<&Bound<'_, PyAny>>,
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
         max_mutation_retries: Option<&Bound<'_, PyAny>>,
@@ -268,7 +293,7 @@ impl SchedulingClient {
             config = config.with_connect_timeout(duration(py, value)?);
         }
         if let Some(value) = max_response_bytes {
-            config = config.with_max_response_bytes(value);
+            config = config.with_max_response_bytes(response_bytes(py, value)?);
         }
         if let Some(value) = user_agent {
             config = config.with_user_agent(value);
