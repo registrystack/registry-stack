@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- The Rust client resends a keyed command (hold create, appointment create,
+  reschedule, cancel) whose outcome is unknown, identically and under the same
+  idempotency key: after a timeout or broken exchange once the request was
+  sent, or after a 5xx answer. It resends at most twice by default,
+  `with_max_mutation_retries(0)` turns the resend off, and reads and the
+  unkeyed hold release are never resent. `is_outcome_unknown()` reports an
+  error after which the command may have taken effect; the Node.js
+  `outcomeUnknown` and Python `outcome_unknown` fields carry the same answer.
+- Scheduling joins the unified clients beginning with v0.40.0: the
+  `scheduling` namespace of `@registrystack/client` and the
+  `registry_client.scheduling` module of `registry-stack-client`.
+- The `idempotency.expired` detail now names the recovery for each command:
+  for an appointment command, read the appointment by its external reference
+  or its identifier before choosing a new key; a hold cannot be read and
+  expires on its own, so start a new request. The OpenAPI document and the
+  published problem table carry the new text.
+- The runtime configuration schema publishes the retention bounds startup
+  enforces: `retention.attemptReceiptDays` is at least 1, and
+  `retention.hookPayloadDays` is from 1 through 30. Configuration that started
+  before is unaffected, since startup already refused values outside them.
+- Document the read that observes an outcome after its task grant expired: an
+  expired grant refuses its whole token on every `/v1` route, so the caller
+  reads with a token for the same issuer and subject that carries the read
+  scope and no grant, listing by external reference or reading by identifier.
+  Ownership is the audit-keyed pseudonym of that issuer and subject, so
+  rotating `audit.hashKeyRef` detaches every existing hold and appointment
+  from its owner.
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: before 1.0, a release reads only the state its immediate
