@@ -11,14 +11,14 @@ use axum::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
 use registry_breg_client::{
-    ingestion_chunk_digest, ingestion_prefix_digest, BRegBatchBuilder, BRegBatchError,
-    BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey,
-    BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
-    BRegLifecycleOperation, BRegMetadataErrorKind, BRegMetadataSelectionErrorKind,
-    BRegPatchRequest, BRegPlanRefusal, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure,
-    BRegRecordFormat, BRegRecordOptions, BRegRefusalCode, BaseRegistryClient,
-    BaseRegistryClientConfig, BaseRegistryClientError, RegistryRecordRepresentation,
-    RegistryRecordResponse, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+    ingestion_chunk_digest, ingestion_prefix_digest, BRegActionInvocationRequest, BRegBatchBuilder,
+    BRegBatchError, BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag,
+    BRegIdempotencyKey, BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest,
+    BRegIngestionRunStatus, BRegLifecycleOperation, BRegMetadataErrorKind,
+    BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegPlanRefusal, BRegProblemCode,
+    BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat, BRegRecordOptions,
+    BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    RegistryRecordRepresentation, RegistryRecordResponse, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
     REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{
@@ -2163,6 +2163,163 @@ async fn a_lifecycle_action_is_resent_after_an_evidence_failure_but_not_a_handle
             .iter()
             .all(|send| send.idempotency_key.as_deref() == Some("action-resend-1")));
     }
+}
+
+/// Three unknown outcomes in a row: the first send and both default resends.
+fn unavailable_sends() -> impl Iterator<Item = MockResponse> {
+    std::iter::repeat_with(|| problem_response(BRegProblemCode::ServiceUnavailable))
+        .take(1 + usize::from(DEFAULT_MUTATION_RETRIES))
+}
+
+/// Every resend repeats the first send exactly: the same method, route,
+/// credential, media types, key, precondition, and body bytes.
+fn assert_resent_identically(sends: &[CapturedRequest], idempotency_key: &str) {
+    assert_eq!(sends.len(), 1 + usize::from(DEFAULT_MUTATION_RETRIES));
+    let first = &sends[0];
+    assert_eq!(first.idempotency_key.as_deref(), Some(idempotency_key));
+    for send in &sends[1..] {
+        assert_eq!(first.method, send.method);
+        assert_eq!(first.uri, send.uri);
+        assert_eq!(first.authorization, send.authorization);
+        assert_eq!(first.accept, send.accept);
+        assert_eq!(first.content_type, send.content_type);
+        assert_eq!(first.idempotency_key, send.idempotency_key);
+        assert_eq!(first.if_match, send.if_match);
+        assert_eq!(first.body, send.body);
+    }
+}
+
+#[tokio::test]
+async fn a_patch_with_an_unknown_outcome_is_resent_byte_identically_under_the_same_key() {
+    let fixture = test_client(
+        std::iter::once(metadata_response())
+            .chain(unavailable_sends())
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let error = fixture
+        .client
+        .patch_record(
+            &patch_binding(&metadata),
+            Uuid::parse_str(RECORD_ID).unwrap(),
+            &BRegEtag::parse(SERVER_ETAG).unwrap(),
+            &patch_request(),
+            &key("patch-resend-1"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .expect_err("no send settles the PATCH");
+    assert!(error.is_outcome_unknown());
+
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests[1].method, "PATCH");
+    assert_eq!(requests[1].if_match.as_deref(), Some(SERVER_ETAG));
+    assert_resent_identically(&requests[1..], "patch-resend-1");
+}
+
+#[tokio::test]
+async fn a_batch_with_an_unknown_outcome_is_resent_byte_identically_under_the_same_key() {
+    let fixture = test_client(
+        std::iter::once(MockResponse::json(
+            StatusCode::OK,
+            metadata_fixture_with_create_batch(),
+        ))
+        .chain(unavailable_sends())
+        .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = metadata
+        .select_batch("company", "company-writer")
+        .expect("select exact batch contract");
+    let request = BRegBatchBuilder::new(&binding)
+        .create(&create_request())
+        .expect("a permitted Create item")
+        .build()
+        .expect("a bounded batch");
+    let error = fixture
+        .client
+        .batch_records(&binding, &request, &key("batch-resend-1"))
+        .await
+        .expect_err("no send settles the batch");
+    assert!(error.is_outcome_unknown());
+
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(
+        requests[1].uri,
+        "/tenant/base/v1/records/companies:batch?accessProfile=company-writer"
+    );
+    assert_resent_identically(&requests[1..], "batch-resend-1");
+}
+
+#[tokio::test]
+async fn an_action_invocation_with_an_unknown_outcome_is_resent_byte_identically_under_the_same_key(
+) {
+    let mut metadata = metadata_fixture();
+    metadata["actions"] = json!([{
+        "id": "register-company", "route": "/v1/actions/register-company",
+        "conditionRoute": null, "contractFingerprint": REVISION,
+        "inputMode": "fixed", "maximumInputStringBytes": null,
+        "inputs": [{"id": "legal-name", "apiName": "legalName", "fieldType": {
+            "type": "string", "minLength": 0, "maxLength": 100},
+            "required": true, "nullable": false, "classification": "internal"}],
+        "referenceInputs": [], "requiredConditionKeys": [],
+        "resultEffects": [{"effect": "company", "entity": "company", "operation": "create"}],
+        "access": {"selectedProfile": "company-writer"},
+        "routes": {"invoke": {"method": "POST", "path": "/v1/actions/register-company",
+            "operationId": "actions.register-company.invoke", "requiresIdempotencyKey": true,
+            "inputSchema": "action-register-company-invoke-input",
+            "responseSchema": "action-register-company-invoke-response"},
+            "targetConditions": null},
+        "bounds": {"maximumTargets": 4, "maximumFieldMutations": 8, "maximumSnapshotBytes": 1024}
+    }]);
+    let fixture = test_client(
+        std::iter::once(MockResponse::json(StatusCode::OK, metadata))
+            .chain(unavailable_sends())
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let action = metadata
+        .select_immediate_action("register-company", "company-writer")
+        .expect("select exact immediate action");
+    let request = BRegActionInvocationRequest::new(
+        &action,
+        Map::from_iter([("legalName".to_owned(), json!("Registered Ltd"))]),
+        None,
+    )
+    .expect("valid invocation inputs");
+    let error = fixture
+        .client
+        .invoke_action(&action, &request, &key("invoke-resend-1"))
+        .await
+        .expect_err("no send settles the invocation");
+    assert!(error.is_outcome_unknown());
+
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(
+        requests[1].uri,
+        "/tenant/base/v1/actions/register-company?accessProfile=company-writer"
+    );
+    assert_resent_identically(&requests[1..], "invoke-resend-1");
 }
 
 #[tokio::test]
