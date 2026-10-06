@@ -67,12 +67,6 @@ impl EnvelopeLimits {
             },
         }
     }
-
-    /// The effective ceiling in bytes.
-    #[must_use]
-    pub const fn max_envelope_bytes(&self) -> usize {
-        self.max_envelope_bytes
-    }
 }
 
 impl Default for EnvelopeLimits {
@@ -925,22 +919,22 @@ mod tests {
     #[test]
     fn the_envelope_ceiling_constant_mirrors_the_outbox_table() {
         assert_eq!(MAX_ENVELOPE_BYTES, 2_097_152);
-        assert_eq!(EnvelopeLimits::default().max_envelope_bytes(), 2_097_152);
+        assert_eq!(EnvelopeLimits::default().max_envelope_bytes, 2_097_152);
     }
 
     #[test]
     fn the_envelope_ceiling_can_only_be_tightened() {
         assert_eq!(
-            EnvelopeLimits::tightened_to(MAX_ENVELOPE_BYTES + 1).max_envelope_bytes(),
+            EnvelopeLimits::tightened_to(MAX_ENVELOPE_BYTES + 1).max_envelope_bytes,
             MAX_ENVELOPE_BYTES,
             "a widened request is clamped to the store's bound"
         );
         assert_eq!(
-            EnvelopeLimits::tightened_to(usize::MAX).max_envelope_bytes(),
+            EnvelopeLimits::tightened_to(usize::MAX).max_envelope_bytes,
             MAX_ENVELOPE_BYTES
         );
         assert_eq!(
-            EnvelopeLimits::tightened_to(4_096).max_envelope_bytes(),
+            EnvelopeLimits::tightened_to(4_096).max_envelope_bytes,
             4_096,
             "a tightened request is honored"
         );
