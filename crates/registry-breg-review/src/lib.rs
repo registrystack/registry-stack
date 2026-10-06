@@ -530,8 +530,14 @@ fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
 
     let base_url = Url::parse(&config.registry.base_url)
         .map_err(|_| RuntimeError::Config(RuntimeConfigError::InvalidRegistry))?;
-    let registry = BaseRegistryClient::new(BaseRegistryClientConfig::new(base_url))
-        .map_err(|error| RuntimeError::Registry(error.to_string()))?;
+    // The page owns same-key recovery: after an uncertain submit the person
+    // retries the original action under the same key from the retained view.
+    // Client resends stacked under each submit would multiply the wait of a
+    // person looking at the page.
+    let registry = BaseRegistryClient::new(
+        BaseRegistryClientConfig::new(base_url).with_max_mutation_retries(0),
+    )
+    .map_err(|error| RuntimeError::Registry(error.to_string()))?;
     let templates =
         Templates::load().map_err(|error| RuntimeError::Templates(error.to_string()))?;
     Ok(Offline {

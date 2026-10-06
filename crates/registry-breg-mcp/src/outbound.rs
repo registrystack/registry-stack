@@ -153,7 +153,12 @@ impl Outbound {
                 BaseRegistryClientConfig::new(self.base_url.clone()),
                 authorization,
             )
-            .with_request_timeout(self.timeout),
+            .with_request_timeout(self.timeout)
+            // The gateway owns same-key recovery: its keys are derived
+            // deterministically and the chat host retries a call whose outcome
+            // is unknown. Client resends stacked under that would multiply
+            // the wait of an interactive turn.
+            .with_max_mutation_retries(0),
         )
         .map_err(|_| TokenError::Configuration {
             reason: "the registry client could not be configured",
