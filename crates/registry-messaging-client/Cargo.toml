@@ -23,4 +23,4 @@ url.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
