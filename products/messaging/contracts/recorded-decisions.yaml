@@ -321,12 +321,18 @@ decisions:
       prevent. A key scoped to the pseudonym was freed by every audit key
       rotation, so routine key hygiene reopened that duplicate for every
       caller with a retry in flight. Keeping the raw issuer and subject in a
-      spent-key row is the accepted cost: they identify a service principal,
-      not a recipient, the message row already held them for recordDays, and
-      the tombstone holds no request hash, receipt, or message. Version 3
-      discarded the records it replaced rather than re-keying them because no
-      deployment held Messaging records worth keeping, and a key attributed
-      to the wrong caller would replay one caller's receipt to another.
+      spent-key row is the accepted cost, and no command erases them:
+      neither the runtime's retention sweep nor messagingctl retention
+      erase-expired deletes the row, because the row is what keeps its key
+      spent. They name the authenticated caller, not a recipient, and under a
+      profile that admits a human or agent actor or reads the principal from
+      a claim other than sub they may identify a person, such as a staff
+      member's email address. The cost is accepted because the message row
+      already held them for recordDays and the tombstone holds no request
+      hash, receipt, or message. Version 3 discarded the records it replaced
+      rather than re-keying them because no deployment held Messaging records
+      worth keeping, and a key attributed to the wrong caller would replay one
+      caller's receipt to another.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_is_scoped_to_the_issuer_as_well_as_the_subject}
