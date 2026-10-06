@@ -250,9 +250,23 @@ fn complete<'py, T: Serialize>(
     result: Result<SchedulingComplete<T>, RustClientError>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let complete = result.map_err(|error| client_error(py, error))?;
+    // The service has answered, so a mutation may already have taken effect:
+    // an answer this binding cannot convert leaves the outcome unknown.
+    let converted = serialize_to_python(py, &complete.value).map_err(|_| {
+        to_py_err(
+            py,
+            MappedError {
+                kind: "protocol",
+                message: "Registry Scheduling client failed".to_owned(),
+                trace_id: Some(complete.trace_id.clone()),
+                outcome_unknown: true,
+                ..MappedError::default()
+            },
+        )
+    })?;
     let value = PyDict::new(py);
     value.set_item("kind", "complete")?;
-    value.set_item("value", serialize_to_python(py, &complete.value)?)?;
+    value.set_item("value", converted)?;
     value.set_item("trace_id", complete.trace_id)?;
     Ok(value.into_any())
 }
@@ -644,4 +658,42 @@ fn registry_scheduling_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An answer the binding cannot turn into Python values.
+    struct Unconvertible;
+
+    impl Serialize for Unconvertible {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("unconvertible"))
+        }
+    }
+
+    #[test]
+    fn an_answer_the_binding_cannot_convert_is_a_protocol_failure_with_an_unknown_outcome() {
+        Python::attach(|py| {
+            let error = complete(
+                py,
+                Ok(SchedulingComplete {
+                    value: Unconvertible,
+                    trace_id: "4bf92f3577b34da6a3ce929d0e0e4736".to_owned(),
+                }),
+            )
+            .expect_err("an unconvertible answer is refused");
+            assert!(error.is_instance_of::<SchedulingClientError>(py));
+            let error = error.value(py);
+            let attribute = |name: &str| error.getattr(name).expect("the attribute is set");
+            assert_eq!(attribute("kind").extract::<String>().unwrap(), "protocol");
+            assert!(attribute("outcome_unknown").extract::<bool>().unwrap());
+            assert_eq!(
+                attribute("trace_id").extract::<String>().unwrap(),
+                "4bf92f3577b34da6a3ce929d0e0e4736"
+            );
+            assert_eq!(error.to_string(), "Registry Scheduling client failed");
+        });
+    }
 }
