@@ -1,8 +1,18 @@
 //! Canonical bounded client for Base Registry Engine.
 //!
 //! One method performs one explicitly initiated exchange. The client does not
-//! follow redirects, use an ambient proxy, retry, fetch linked resources, or
-//! advance a collection on its own.
+//! follow redirects, use an ambient proxy, fetch linked resources, or advance
+//! a collection on its own.
+//!
+//! The client never generates an idempotency key. An idempotency-keyed
+//! mutation whose outcome is unknown (a timeout or broken exchange after the
+//! request was sent, or a 5xx answer) is resent, byte for byte and under the
+//! same key and credential, at most
+//! `BaseRegistryClientConfig::with_max_mutation_retries` times (2 by default,
+//! 0 disables it). Reads and unkeyed exchanges, such as ingestion runs and
+//! action target conditions, are never resent. A 5xx answer may follow a
+//! commit: when `BaseRegistryClientError::is_outcome_unknown` is still true,
+//! the safe recovery is the same request under the same key, never a new key.
 
 mod actions;
 mod attachment;

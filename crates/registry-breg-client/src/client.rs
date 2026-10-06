@@ -9,7 +9,10 @@ use std::fmt;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_platform_httpsec::{response_trace_id, ProblemDocument, TraceId};
-use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
+use registry_platform_httputil::client::{
+    retry_keyed_mutation, BearerToken, KeyedMutationAttempt, TokenError, TokenProvider,
+};
+use registry_platform_httputil::retry_after_seconds;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_MATCH, LINK,
     LOCATION, VARY,
@@ -768,7 +771,11 @@ impl BaseRegistryClient {
         })
     }
 
-    /// Execute one metadata-bound direct Create without automatic retry.
+    /// Execute one metadata-bound direct Create.
+    ///
+    /// A Create whose outcome is unknown is resent identically under the same
+    /// idempotency key, at most as many times as the configured mutation retry
+    /// count; see [`BaseRegistryClientError::is_outcome_unknown`].
     pub async fn create_record(
         &self,
         operation: &BRegCreateBinding,
@@ -785,7 +792,7 @@ impl BaseRegistryClient {
         let segments = fixed_operation_segments(operation.path())?;
         let pairs = access_profile_query(Some(operation.access_profile()))?;
         let url = self.url_with_query(&segments, &pairs)?;
-        let mut builder = self
+        let builder = self
             .transport
             .http
             .request(Method::POST, url)
@@ -793,41 +800,46 @@ impl BaseRegistryClient {
             .header(CONTENT_TYPE, APPLICATION_JSON)
             .header("idempotency-key", idempotency_key.as_str())
             .body(request.body().to_vec());
-        builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        let wire = self
-            .mutation_wire(
-                response,
+        self.send_keyed(builder, move |response| async move {
+            let wire = self
+                .mutation_wire(
+                    response,
+                    StatusCode::CREATED,
+                    format.media_type(),
+                    LocationExpectation::Required,
+                )
+                .await?;
+            let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
+            validate_mutation_record(
+                &complete,
                 StatusCode::CREATED,
-                format.media_type(),
-                LocationExpectation::Required,
-            )
-            .await?;
-        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
-        validate_mutation_record(
-            &complete,
-            StatusCode::CREATED,
-            operation.registry_identifier(),
-            operation.dataset_identifier(),
-            operation.entity_identifier(),
-        )?;
-        let expected_location = format!(
-            "{}{}/{}",
-            self.deployment_prefix(),
-            operation.path(),
-            complete.value.data.record_identifier
-        );
-        if complete.metadata.location() != Some(expected_location.as_str()) {
-            return Err(BaseRegistryClientError::protocol(
-                StatusCode::CREATED.as_u16(),
-                BRegProtocolFailure::Location,
-                Some(complete.metadata.trace_id().clone()),
-            ));
-        }
-        Ok(complete)
+                operation.registry_identifier(),
+                operation.dataset_identifier(),
+                operation.entity_identifier(),
+            )?;
+            let expected_location = format!(
+                "{}{}/{}",
+                self.deployment_prefix(),
+                operation.path(),
+                complete.value.data.record_identifier
+            );
+            if complete.metadata.location() != Some(expected_location.as_str()) {
+                return Err(BaseRegistryClientError::protocol(
+                    StatusCode::CREATED.as_u16(),
+                    BRegProtocolFailure::Location,
+                    Some(complete.metadata.trace_id().clone()),
+                ));
+            }
+            Ok(complete)
+        })
+        .await
     }
 
-    /// Execute one metadata-bound direct PATCH without automatic retry.
+    /// Execute one metadata-bound direct PATCH.
+    ///
+    /// A PATCH whose outcome is unknown is resent identically under the same
+    /// idempotency key and entity tag, at most as many times as the configured
+    /// mutation retry count; see [`BaseRegistryClientError::is_outcome_unknown`].
     pub async fn patch_record(
         &self,
         operation: &BRegPatchBinding,
@@ -842,7 +854,7 @@ impl BaseRegistryClient {
         let segments = fixed_operation_segments(&path)?;
         let pairs = access_profile_query(Some(operation.access_profile()))?;
         let url = self.url_with_query(&segments, &pairs)?;
-        let mut builder = self
+        let builder = self
             .transport
             .http
             .request(Method::PATCH, url)
@@ -851,37 +863,40 @@ impl BaseRegistryClient {
             .header("idempotency-key", idempotency_key.as_str())
             .header(IF_MATCH, etag.as_str())
             .body(request.body().to_vec());
-        builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        let wire = self
-            .mutation_wire(
-                response,
+        self.send_keyed(builder, move |response| async move {
+            let wire = self
+                .mutation_wire(
+                    response,
+                    StatusCode::OK,
+                    format.media_type(),
+                    LocationExpectation::Forbidden,
+                )
+                .await?;
+            let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
+            validate_mutation_record(
+                &complete,
                 StatusCode::OK,
-                format.media_type(),
-                LocationExpectation::Forbidden,
-            )
-            .await?;
-        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
-        validate_mutation_record(
-            &complete,
-            StatusCode::OK,
-            operation.registry_identifier(),
-            operation.dataset_identifier(),
-            operation.entity_identifier(),
-        )?;
-        if complete.value.data.record_identifier != record_identifier.to_string() {
-            return Err(body_failure(
-                StatusCode::OK.as_u16(),
-                complete.metadata.trace_id().clone(),
-            ));
-        }
-        Ok(complete)
+                operation.registry_identifier(),
+                operation.dataset_identifier(),
+                operation.entity_identifier(),
+            )?;
+            if complete.value.data.record_identifier != record_identifier.to_string() {
+                return Err(body_failure(
+                    StatusCode::OK.as_u16(),
+                    complete.metadata.trace_id().clone(),
+                ));
+            }
+            Ok(complete)
+        })
+        .await
     }
 
     /// Replace one governed attachment slot with exact bytes.
     ///
     /// The upload is refused locally when the slot cannot accept it, so a
-    /// refused upload never leaves the process.
+    /// refused upload never leaves the process. An upload whose outcome is
+    /// unknown is resent identically under the same idempotency key, at most
+    /// as many times as the configured mutation retry count.
     pub async fn upload_attachment(
         &self,
         slot: &BRegAttachmentSlot,
@@ -939,7 +954,9 @@ impl BaseRegistryClient {
         self.attachment_wire(response, slot).await
     }
 
-    /// Empty one governed attachment slot.
+    /// Empty one governed attachment slot. A removal whose outcome is unknown
+    /// is resent identically under the same idempotency key, at most as many
+    /// times as the configured mutation retry count.
     pub async fn delete_attachment(
         &self,
         slot: &BRegAttachmentSlot,
@@ -978,8 +995,12 @@ impl BaseRegistryClient {
         request.promote_actions(authority, &record_binding)
     }
 
-    /// Execute one promoted change-request lifecycle action without automatic
-    /// retry. A caller retry must reuse the same action and idempotency key.
+    /// Execute one promoted change-request lifecycle action.
+    ///
+    /// An action whose outcome is unknown is resent identically under the same
+    /// idempotency key, at most as many times as the configured mutation retry
+    /// count. A caller retry after that must reuse the same action and
+    /// idempotency key.
     pub async fn execute_lifecycle_action(
         &self,
         action: &BRegLifecycleAction,
@@ -996,7 +1017,7 @@ impl BaseRegistryClient {
                 "the Base Registry Engine lifecycle action body is invalid",
             )
         })?;
-        let mut builder = self
+        let builder = self
             .transport
             .http
             .request(Method::POST, url)
@@ -1005,18 +1026,19 @@ impl BaseRegistryClient {
             .header("idempotency-key", idempotency_key.as_str())
             .header(IF_MATCH, action.if_match().as_str())
             .body(body);
-        builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        let wire = self.lifecycle_wire(response).await?;
-        let receipt = BRegLifecycleActionReceipt::from_slice(&wire.body)
-            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
-        if !action.accepts_receipt(&receipt) {
-            return Err(body_failure(wire.status, wire.metadata.trace_id().clone()));
-        }
-        Ok(BRegComplete {
-            value: receipt,
-            metadata: wire.metadata,
+        self.send_keyed(builder, move |response| async move {
+            let wire = self.lifecycle_wire(response).await?;
+            let receipt = BRegLifecycleActionReceipt::from_slice(&wire.body)
+                .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+            if !action.accepts_receipt(&receipt) {
+                return Err(body_failure(wire.status, wire.metadata.trace_id().clone()));
+            }
+            Ok(BRegComplete {
+                value: receipt,
+                metadata: wire.metadata,
+            })
         })
+        .await
     }
 
     pub(crate) fn validate_create_binding(
@@ -1089,31 +1111,32 @@ impl BaseRegistryClient {
         record_identifier: Uuid,
         format: BRegRecordFormat,
     ) -> Result<BRegComplete<RegistryRecordSingleResponse>, BaseRegistryClientError> {
-        let builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        let wire = self
-            .mutation_wire(
-                response,
+        self.send_keyed(builder, move |response| async move {
+            let wire = self
+                .mutation_wire(
+                    response,
+                    StatusCode::OK,
+                    format.media_type(),
+                    LocationExpectation::Forbidden,
+                )
+                .await?;
+            let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
+            validate_mutation_record(
+                &complete,
                 StatusCode::OK,
-                format.media_type(),
-                LocationExpectation::Forbidden,
-            )
-            .await?;
-        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
-        validate_mutation_record(
-            &complete,
-            StatusCode::OK,
-            slot.registry_identifier(),
-            slot.dataset_identifier(),
-            slot.entity_identifier(),
-        )?;
-        if complete.value.data.record_identifier != record_identifier.to_string() {
-            return Err(body_failure(
-                StatusCode::OK.as_u16(),
-                complete.metadata.trace_id().clone(),
-            ));
-        }
-        Ok(complete)
+                slot.registry_identifier(),
+                slot.dataset_identifier(),
+                slot.entity_identifier(),
+            )?;
+            if complete.value.data.record_identifier != record_identifier.to_string() {
+                return Err(body_failure(
+                    StatusCode::OK.as_u16(),
+                    complete.metadata.trace_id().clone(),
+                ));
+            }
+            Ok(complete)
+        })
+        .await
     }
 
     /// A binary read carries neither a record representation nor a validator:
@@ -1434,7 +1457,10 @@ impl BaseRegistryClient {
         })
     }
 
-    /// Execute one metadata-bound JSON POST without retry or link following.
+    /// Execute one metadata-bound JSON POST without link following. A POST
+    /// that carries an idempotency key is resent identically under that key
+    /// while its outcome is unknown, at most as many times as the configured
+    /// mutation retry count; one without a key is sent once.
     pub(crate) async fn execute_bound_json(
         &self,
         path: &str,
@@ -1452,18 +1478,21 @@ impl BaseRegistryClient {
             .header(ACCEPT, APPLICATION_JSON)
             .header(CONTENT_TYPE, APPLICATION_JSON)
             .body(body);
-        if let Some(key) = idempotency_key {
-            builder = builder.header("idempotency-key", key.as_str());
-        }
-        builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        let wire = self.bound_json_wire(response, StatusCode::OK).await?;
-        crate::strict_json::from_slice(&wire.body)
-            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
-        Ok(BRegComplete {
-            value: BRegRawDocument::new(wire.media_type, wire.body),
-            metadata: wire.metadata,
-        })
+        let decode = move |response| async move {
+            let wire = self.bound_json_wire(response, StatusCode::OK).await?;
+            crate::strict_json::from_slice(&wire.body)
+                .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+            Ok(BRegComplete {
+                value: BRegRawDocument::new(wire.media_type, wire.body),
+                metadata: wire.metadata,
+            })
+        };
+        let Some(key) = idempotency_key else {
+            builder = self.authorize(builder, Credential::Optional).await?;
+            return decode(self.transport.send(builder).await?).await;
+        };
+        builder = builder.header("idempotency-key", key.as_str());
+        self.send_keyed(builder, decode).await
     }
 
     /// GET one fixed ingestion-run JSON document without retry or link
@@ -1625,21 +1654,22 @@ impl BaseRegistryClient {
             .header(CONTENT_TYPE, APPLICATION_JSON)
             .header("idempotency-key", idempotency_key.as_str())
             .body(body);
-        let builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        let (wire, representation_digest) = self
-            .statistics_wire(response, expected_status, APPLICATION_JSON, true, true)
-            .await?;
-        crate::strict_json::from_slice(&wire.body)
-            .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
-        Ok(BRegComplete {
-            value: BRegRawDocument::with_representation_digest(
-                wire.media_type,
-                wire.body,
-                representation_digest,
-            ),
-            metadata: wire.metadata,
+        self.send_keyed(builder, move |response| async move {
+            let (wire, representation_digest) = self
+                .statistics_wire(response, expected_status, APPLICATION_JSON, true, true)
+                .await?;
+            crate::strict_json::from_slice(&wire.body)
+                .map_err(|_| body_failure(wire.status, wire.metadata.trace_id().clone()))?;
+            Ok(BRegComplete {
+                value: BRegRawDocument::with_representation_digest(
+                    wire.media_type,
+                    wire.body,
+                    representation_digest,
+                ),
+                metadata: wire.metadata,
+            })
         })
+        .await
     }
 
     /// POST one fixed ingestion-run JSON exchange without retry or link
@@ -1692,35 +1722,36 @@ impl BaseRegistryClient {
         let segments = fixed_operation_segments(path)?;
         let pairs = access_profile_query(Some(access_profile))?;
         let url = self.url_with_query(&segments, &pairs)?;
-        let mut builder = self
+        let builder = self
             .transport
             .http
             .request(Method::DELETE, url)
             .header(ACCEPT, format.media_type())
             .header("idempotency-key", idempotency_key.as_str())
             .header(IF_MATCH, etag.as_str());
-        builder = self.authorize(builder, Credential::Optional).await?;
-        let response = self.transport.send(builder).await?;
-        let wire = self
-            .mutation_wire(
-                response,
+        self.send_keyed(builder, move |response| async move {
+            let wire = self
+                .mutation_wire(
+                    response,
+                    StatusCode::OK,
+                    format.media_type(),
+                    LocationExpectation::Forbidden,
+                )
+                .await?;
+            let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
+            validate_mutation_record(
+                &complete,
                 StatusCode::OK,
-                format.media_type(),
-                LocationExpectation::Forbidden,
-            )
-            .await?;
-        let complete = decode_breg_single(wire, format, self.deployment_prefix())?;
-        validate_mutation_record(
-            &complete,
-            StatusCode::OK,
-            registry_identifier,
-            dataset_identifier,
-            entity_identifier,
-        )?;
-        if complete.value.data.record_identifier != record_identifier.to_string() {
-            return Err(body_error(&complete));
-        }
-        Ok(complete)
+                registry_identifier,
+                dataset_identifier,
+                entity_identifier,
+            )?;
+            if complete.value.data.record_identifier != record_identifier.to_string() {
+                return Err(body_error(&complete));
+            }
+            Ok(complete)
+        })
+        .await
     }
 
     async fn get(
@@ -1750,6 +1781,40 @@ impl BaseRegistryClient {
             }
         }
         Ok(builder)
+    }
+
+    /// Send one idempotency-keyed mutation and decode its answer, resending
+    /// the identical request under the same key while its outcome stays
+    /// unknown, at most `max_mutation_retries` times. The credential is
+    /// acquired once, so every attempt carries the same headers and body bytes.
+    async fn send_keyed<T, D, F>(
+        &self,
+        builder: reqwest::RequestBuilder,
+        decode: D,
+    ) -> Result<T, BaseRegistryClientError>
+    where
+        D: Fn(Response) -> F,
+        F: std::future::Future<Output = Result<T, BaseRegistryClientError>>,
+    {
+        let builder = self.authorize(builder, Credential::Optional).await?;
+        let (builder, decode) = (&builder, &decode);
+        retry_keyed_mutation(self.config.max_mutation_retries, || async move {
+            let Some(attempt) = builder.try_clone() else {
+                return KeyedMutationAttempt::Settled(Err(
+                    BaseRegistryClientError::invalid_request(
+                        "the request could not be prepared for sending",
+                    ),
+                ));
+            };
+            let response = match self.transport.send(attempt).await {
+                Ok(response) => response,
+                Err(error) => return keyed_attempt(Err(error), false, None),
+            };
+            let server_error = response.status().is_server_error();
+            let retry_after = retry_after_seconds(response.headers(), u64::MAX);
+            keyed_attempt(decode(response).await, server_error, retry_after)
+        })
+        .await
     }
 
     fn url_with_query(
@@ -2143,6 +2208,27 @@ fn snapshot_extensions(
         return Err(body_error(complete));
     }
     Ok((snapshot, valid_at))
+}
+
+/// Classify one attempt of an idempotency-keyed mutation. Any failure on a
+/// 5xx answer, a timeout, or a broken exchange may settle on a resend; any
+/// other unknown outcome would be answered the same way again.
+fn keyed_attempt<T>(
+    result: Result<T, BaseRegistryClientError>,
+    server_error: bool,
+    retry_after_seconds: Option<u64>,
+) -> KeyedMutationAttempt<T, BaseRegistryClientError> {
+    match result {
+        Ok(value) => KeyedMutationAttempt::Settled(Ok(value)),
+        Err(error) if server_error || error.resend_may_settle() => {
+            KeyedMutationAttempt::Retryable {
+                error,
+                retry_after_seconds,
+            }
+        }
+        Err(error) if error.is_outcome_unknown() => KeyedMutationAttempt::Unknown(error),
+        Err(error) => KeyedMutationAttempt::Settled(Err(error)),
+    }
 }
 
 fn body_error<T>(complete: &BRegComplete<T>) -> BaseRegistryClientError {

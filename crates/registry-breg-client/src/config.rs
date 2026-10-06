@@ -1,6 +1,8 @@
 use std::{fmt, sync::Arc, time::Duration};
 
-use registry_platform_httputil::client::{ServiceBaseUrl, TokenProvider};
+use registry_platform_httputil::client::{
+    ServiceBaseUrl, TokenProvider, DEFAULT_MUTATION_RETRIES, MAXIMUM_MUTATION_RETRIES,
+};
 use url::Url;
 use zeroize::Zeroizing;
 
@@ -19,6 +21,7 @@ pub struct BaseRegistryClientConfig {
     pub(crate) max_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Zeroizing<Vec<u8>>>,
+    pub(crate) max_mutation_retries: u8,
 }
 
 impl BaseRegistryClientConfig {
@@ -32,6 +35,7 @@ impl BaseRegistryClientConfig {
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
+            max_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
 
@@ -72,6 +76,16 @@ impl BaseRegistryClientConfig {
         self
     }
 
+    /// How many times an idempotency-keyed mutation whose outcome is unknown
+    /// is resent, identically and under the same key, before its error is
+    /// returned. Defaults to 2, accepts at most 2, and 0 disables the
+    /// resend.
+    #[must_use]
+    pub fn with_max_mutation_retries(mut self, value: u8) -> Self {
+        self.max_mutation_retries = value;
+        self
+    }
+
     #[must_use]
     pub fn base_url(&self) -> &Url {
         &self.base_url
@@ -93,6 +107,11 @@ impl BaseRegistryClientConfig {
                 "the response body bound must be greater than zero",
             ));
         }
+        if self.max_mutation_retries > MAXIMUM_MUTATION_RETRIES {
+            return Err(BaseRegistryClientError::configuration(
+                "the mutation retry count exceeds the accepted bound",
+            ));
+        }
         Ok(())
     }
 }
@@ -107,6 +126,7 @@ impl fmt::Debug for BaseRegistryClientConfig {
             .field("connect_timeout", &self.connect_timeout)
             .field("max_response_bytes", &self.max_response_bytes)
             .field("user_agent", &self.user_agent.is_some())
+            .field("max_mutation_retries", &self.max_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -137,5 +157,30 @@ mod tests {
         let rendered = format!("{error:?} {error}");
         assert!(!rendered.contains("secret-user"));
         assert!(!rendered.contains("secret-password"));
+    }
+
+    #[test]
+    fn the_mutation_retry_count_is_bounded() {
+        let url = Url::parse("https://registry.example.invalid/").expect("fixture URL");
+        let error = BaseRegistryClientConfig::new(url.clone())
+            .with_max_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1)
+            .validate()
+            .expect_err("a retry count above the bound is refused");
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Configuration {
+                reason: "the mutation retry count exceeds the accepted bound"
+            }
+        ));
+        for retries in 0..=MAXIMUM_MUTATION_RETRIES {
+            assert!(BaseRegistryClientConfig::new(url.clone())
+                .with_max_mutation_retries(retries)
+                .validate()
+                .is_ok());
+        }
+        assert_eq!(
+            BaseRegistryClientConfig::new(url).max_mutation_retries,
+            DEFAULT_MUTATION_RETRIES
+        );
     }
 }

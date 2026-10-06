@@ -28,10 +28,11 @@ const MAXIMUM_API_FIELD_NAME_BYTES: usize = 64;
 
 /// A caller-chosen Base Registry Engine idempotency key.
 ///
-/// The client deliberately has no key generator and never retries a mutation
-/// automatically. A caller may reuse this value only to replay the exact same
-/// method, route, precondition, representation, and body after an uncertain
-/// exchange.
+/// The client deliberately has no key generator. It resends a mutation whose
+/// outcome is unknown under this same key, byte for byte, at most as many
+/// times as the configured mutation retry count. A caller may reuse this value
+/// only to replay the exact same method, route, precondition, representation,
+/// and body after an uncertain exchange.
 #[derive(Clone, PartialEq, Eq)]
 pub struct BRegIdempotencyKey(Zeroizing<String>);
 

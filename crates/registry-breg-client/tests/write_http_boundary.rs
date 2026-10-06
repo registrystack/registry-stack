@@ -21,7 +21,9 @@ use registry_breg_client::{
     RegistryRecordResponse, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
     REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
-use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
+use registry_platform_httputil::client::{
+    BearerToken, TokenError, TokenProvider, DEFAULT_MUTATION_RETRIES,
+};
 use serde_json::{json, Map, Value};
 use tokio::net::TcpListener;
 use url::Url;
@@ -162,6 +164,17 @@ struct TestClient {
 }
 
 async fn test_client(responses: Vec<MockResponse>) -> TestClient {
+    serve_test_client(responses, DEFAULT_MUTATION_RETRIES).await
+}
+
+/// A client that reads each scripted answer exactly once: the same-key resend
+/// of an unknown outcome is disabled, so a 5xx answer under test is decoded
+/// once rather than resent.
+async fn single_attempt_client(responses: Vec<MockResponse>) -> TestClient {
+    serve_test_client(responses, 0).await
+}
+
+async fn serve_test_client(responses: Vec<MockResponse>, max_mutation_retries: u8) -> TestClient {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
     let state = MockState {
@@ -184,7 +197,8 @@ async fn test_client(responses: Vec<MockResponse>) -> TestClient {
     let config = BaseRegistryClientConfig::new(
         Url::parse(&format!("http://{address}/tenant/base")).expect("base URL"),
     )
-    .with_token_provider(token.clone());
+    .with_token_provider(token.clone())
+    .with_max_mutation_retries(max_mutation_retries);
     TestClient {
         client: BaseRegistryClient::new(config).expect("client"),
         requests,
@@ -1166,7 +1180,7 @@ async fn every_registered_problem_is_accepted_exactly_for_a_direct_write() {
     let responses = std::iter::once(metadata_response())
         .chain(BRegProblemCode::ALL.into_iter().map(problem_response))
         .collect();
-    let fixture = test_client(responses).await;
+    let fixture = single_attempt_client(responses).await;
     let metadata = fixture
         .client
         .registry_contract(Some("company-writer"))
@@ -1263,7 +1277,7 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
         ])
         .chain(bad)
         .collect();
-    let fixture = test_client(responses).await;
+    let fixture = single_attempt_client(responses).await;
     let metadata = fixture
         .client
         .registry_contract(Some("company-writer"))
@@ -1302,7 +1316,7 @@ async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata(
     assert_eq!(
         fixture.requests.lock().unwrap().len(),
         1 + 3 + failures,
-        "no retry after a conflict or malformed problem"
+        "each scripted answer is read by exactly one exchange"
     );
 }
 
@@ -1387,7 +1401,7 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
     refused.push(duplicate);
     let accepted_count = accepted.len();
     let total = accepted_count + refused.len();
-    let fixture = test_client(
+    let fixture = single_attempt_client(
         std::iter::once(metadata_response())
             .chain(accepted)
             .chain(refused)
@@ -1438,7 +1452,7 @@ async fn evidence_failure_paths_are_closed_bounded_and_discarded() {
     assert_eq!(
         fixture.requests.lock().unwrap().len(),
         1 + total,
-        "dependency and malformed responses are never retried"
+        "each scripted answer is read by exactly one exchange"
     );
 }
 
@@ -1828,7 +1842,7 @@ async fn statistical_dimension_problem_paths_are_closed_code_bound_and_discarded
 
     let accepted_count = accepted.len();
     let total = accepted_count + refused.len();
-    let fixture = test_client(
+    let fixture = single_attempt_client(
         std::iter::once(metadata_response())
             .chain(accepted)
             .chain(refused)
@@ -2046,6 +2060,47 @@ async fn redirects_and_failures_are_never_followed_or_retried() {
     assert!(!requests
         .iter()
         .any(|request| request.uri.contains("redirect-target")));
+}
+
+#[tokio::test]
+async fn a_create_answered_with_a_5xx_is_resent_byte_identically_under_the_same_key() {
+    let fixture = test_client(vec![
+        metadata_response(),
+        problem_response(BRegProblemCode::ServiceUnavailable),
+        mutation_response(StatusCode::CREATED, BRegRecordFormat::Json, RECORD_ID, true),
+    ])
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let created = fixture
+        .client
+        .create_record(
+            &create_binding(&metadata),
+            &create_request(),
+            &key("create-resend-1"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .expect("the resent Create settles");
+    assert_eq!(created.value.data.record_identifier, RECORD_ID);
+
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3, "one metadata fetch and two Create sends");
+    let (first, second) = (&requests[1], &requests[2]);
+    assert_eq!(first.method, "POST");
+    assert_eq!(first.idempotency_key.as_deref(), Some("create-resend-1"));
+    assert_eq!(first.method, second.method);
+    assert_eq!(first.uri, second.uri);
+    assert_eq!(first.authorization, second.authorization);
+    assert_eq!(first.accept, second.accept);
+    assert_eq!(first.content_type, second.content_type);
+    assert_eq!(first.idempotency_key, second.idempotency_key);
+    assert_eq!(first.if_match, second.if_match);
+    assert_eq!(first.body, second.body);
 }
 
 #[tokio::test]
@@ -2956,7 +3011,7 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
         .chain(refused.iter().map(|_| None))
         .collect();
     let total = expected.len();
-    let fixture = test_client(
+    let fixture = single_attempt_client(
         std::iter::once(metadata_response())
             .chain(accepted.into_iter().map(|(response, _, _)| response))
             .chain(refused)

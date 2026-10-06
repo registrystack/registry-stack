@@ -450,7 +450,9 @@ impl BaseRegistryClient {
     }
 
     /// Invoke one action with the caller's original input, target conditions,
-    /// and idempotency key. The client never retries the mutation.
+    /// and idempotency key. An invocation whose outcome is unknown is resent
+    /// identically under the same key, at most as many times as the configured
+    /// mutation retry count.
     pub async fn invoke_action(
         &self,
         action: &BRegImmediateActionBinding,

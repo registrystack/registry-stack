@@ -404,7 +404,9 @@ impl BRegBatchReceipt {
 }
 
 impl BaseRegistryClient {
-    /// Execute one metadata-bound atomic batch without automatic retry.
+    /// Execute one metadata-bound atomic batch. A batch whose outcome is
+    /// unknown is resent identically under the same idempotency key, at most as
+    /// many times as the configured mutation retry count.
     pub async fn batch_records(
         &self,
         operation: &BRegBatchBinding,
