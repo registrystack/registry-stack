@@ -342,20 +342,6 @@ impl ReadOnlyStatement {
         self.execute_until(values, deadline).await
     }
 
-    /// Execute before a caller's absolute queue-and-engine deadline.
-    ///
-    /// The statement's configured timeout remains an upper bound, so a caller
-    /// may shorten but cannot extend the statement budget.
-    pub async fn execute_before(
-        &self,
-        values: &BTreeMap<String, Value>,
-        caller_deadline: Instant,
-    ) -> Result<ResultSet, SqliteError> {
-        let statement_deadline = deadline(self.plan.limits.timeout)?;
-        self.execute_until(values, caller_deadline.min(statement_deadline))
-            .await
-    }
-
     async fn execute_until(
         &self,
         values: &BTreeMap<String, Value>,
