@@ -117,8 +117,14 @@ class BRegPreparedLifecycle:
     def from_bytes(value: bytes) -> BRegPreparedLifecycle: ...
     def to_bytes(self) -> bytes: ...
 
+class BRegPreparedAction:
+    @staticmethod
+    def from_bytes(value: bytes) -> BRegPreparedAction: ...
+    def to_bytes(self) -> bytes: ...
+
 class BRegRecoveredCreate: ...
 class BRegRecoveredLifecycle: ...
+class BRegRecoveredAction: ...
 
 AttachmentVerificationStatus = Literal["notRequired", "pending", "approved", "rejected"]
 AttachmentClassification = Literal["public", "internal", "restricted"]
@@ -534,6 +540,25 @@ class BaseRegistryClient:
         inputs: dict[str, JsonValue],
         idempotency_key: str,
         conditions: BRegActionTargetConditions | None = None,
+    ) -> dict[str, Any]: ...
+    def prepare_action(
+        self,
+        binding: BRegImmediateActionBinding,
+        inputs: dict[str, JsonValue],
+        idempotency_key: str,
+        conditions: BRegActionTargetConditions | None = None,
+    ) -> BRegPreparedAction: ...
+    def recover_action(
+        self,
+        binding: BRegImmediateActionBinding,
+        prepared: BRegPreparedAction,
+        inputs: dict[str, JsonValue],
+        idempotency_key: str,
+    ) -> BRegRecoveredAction: ...
+    def execute_recovered_action(
+        self,
+        binding: BRegImmediateActionBinding,
+        recovered: BRegRecoveredAction,
     ) -> dict[str, Any]: ...
     def tombstone_record(
         self,

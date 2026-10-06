@@ -9,7 +9,11 @@ from bootstrap import ensure_built
 
 ensure_built()
 
-from registry_breg_client import BaseRegistryClient, BaseRegistryClientError  # noqa: E402
+from registry_breg_client import (  # noqa: E402
+    BRegPreparedAction,
+    BaseRegistryClient,
+    BaseRegistryClientError,
+)
 
 RECORD_ID = "00000000-0000-4000-8000-000000000001"
 APPLICATION_ID = "00000000-0000-4000-8000-000000000002"
@@ -344,6 +348,8 @@ class MutationParityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.requests = []
         requests = self.requests
+        self.lose_next_invocation = {"value": False}
+        lose_next_invocation = self.lose_next_invocation
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
@@ -359,6 +365,12 @@ class MutationParityTests(unittest.TestCase):
                         mutation=True,
                     )
                 elif self.path.startswith("/v1/actions/rename-company"):
+                    if lose_next_invocation["value"]:
+                        # The engine received the invocation, but its answer
+                        # never arrives.
+                        lose_next_invocation["value"] = False
+                        self.close_connection = True
+                        return
                     self.respond(
                         {
                             "action": "rename-company",
@@ -535,6 +547,84 @@ class MutationParityTests(unittest.TestCase):
                 "preconditions": {"targetId": {"ifMatch": ETAG}},
             },
         )
+
+    def test_immediate_action_recovers_after_a_lost_response(self) -> None:
+        binding = self.contract.select_immediate_action(
+            "rename-company", "company-writer"
+        )
+        conditions = self.client.action_target_conditions(binding, {"targetId": RECORD_ID})
+        inputs = {"targetId": RECORD_ID, "legalName": "Renamed Ltd"}
+        before_prepare = len(self.requests)
+        prepared = self.client.prepare_action(binding, inputs, "rename-lost", conditions)
+        self.assertEqual(len(self.requests), before_prepare)
+        evidence = prepared.to_bytes()
+        self.assertIsInstance(evidence, bytes)
+        self.assertEqual(repr(prepared), "BRegPreparedAction(<redacted>)")
+        for secret in ("Renamed Ltd", "rename-lost", ETAG):
+            self.assertNotIn(secret, repr(prepared))
+
+        self.lose_next_invocation["value"] = True
+        with self.assertRaises(BaseRegistryClientError) as lost_response:
+            self.client.invoke_action(binding, inputs, "rename-lost", conditions)
+        self.assertEqual(lost_response.exception.kind, "transport")
+        lost = self.requests[-1]
+        self.assertEqual(lost[2]["idempotency-key"], "rename-lost")
+
+        restarted = BaseRegistryClient(f"http://127.0.0.1:{self.server.server_port}")
+        restarted_binding = restarted.registry_contract(
+            "company-writer"
+        ).select_immediate_action("rename-company", "company-writer")
+        restored = BRegPreparedAction.from_bytes(evidence)
+        self.assertEqual(restored.to_bytes(), evidence)
+        before_recovery = len(self.requests)
+        for invalid in (b"{}", b"!" + evidence[1:]):
+            with self.assertRaises(BaseRegistryClientError) as refused:
+                BRegPreparedAction.from_bytes(invalid)
+            self.assertEqual(refused.exception.kind, "invalid_request")
+        for changed_inputs, key in (
+            (inputs, "another-key"),
+            ({"targetId": RECORD_ID, "legalName": "Changed Ltd"}, "rename-lost"),
+        ):
+            with self.assertRaises(BaseRegistryClientError) as mismatch:
+                restarted.recover_action(restarted_binding, restored, changed_inputs, key)
+            self.assertEqual(mismatch.exception.kind, "invalid_request")
+        foreign = BaseRegistryClient("https://other.example.invalid")
+        with self.assertRaises(BaseRegistryClientError) as foreign_recovery:
+            foreign.recover_action(restarted_binding, restored, inputs, "rename-lost")
+        self.assertEqual(foreign_recovery.exception.kind, "invalid_request")
+        recovered = restarted.recover_action(
+            restarted_binding, restored, inputs, "rename-lost"
+        )
+        self.assertEqual(repr(recovered), "BRegRecoveredAction(<redacted>)")
+        with self.assertRaises(BaseRegistryClientError) as foreign_execution:
+            foreign.execute_recovered_action(restarted_binding, recovered)
+        self.assertEqual(foreign_execution.exception.kind, "invalid_request")
+        self.assertEqual(len(self.requests), before_recovery)
+
+        receipt = restarted.execute_recovered_action(restarted_binding, recovered)
+        self.assertEqual(receipt["value"]["applicationId"], APPLICATION_ID)
+        replay = self.requests[-1]
+        self.assertEqual(replay[1], lost[1])
+        self.assertTrue(replay[1].startswith("/v1/actions/rename-company?"))
+        self.assertEqual(replay[2]["idempotency-key"], "rename-lost")
+        self.assertEqual(replay[3], lost[3])
+        self.assertEqual(
+            json.loads(replay[3]),
+            {
+                "input": {"legalName": "Renamed Ltd", "targetId": RECORD_ID},
+                "preconditions": {"targetId": {"ifMatch": ETAG}},
+            },
+        )
+        invocations = [
+            request
+            for request in self.requests
+            if request[1].startswith("/v1/actions/rename-company?")
+        ]
+        self.assertEqual(len(invocations), 2)
+        condition_requests = [
+            request for request in self.requests if "/target-conditions" in request[1]
+        ]
+        self.assertEqual(len(condition_requests), 1)
 
     def test_tombstone_and_batch_use_exact_conditions_and_context(self) -> None:
         tombstone = self.contract.select_tombstone("company", "company-writer")

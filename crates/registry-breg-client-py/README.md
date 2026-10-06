@@ -120,6 +120,30 @@ Prepared evidence contains the exact validated request, idempotency key, and
 format, but never serializes metadata authority. Prepared and recovered values
 have redacted representations.
 
+Immediate actions follow the same pattern. Call `prepare_action` with the same
+binding, inputs, idempotency key, and target conditions you pass to
+`invoke_action`, and persist its `to_bytes()` value before invoking. After a
+lost response, restore it with `BRegPreparedAction.from_bytes`, select the
+action again from fresh metadata, and call `recover_action` with the original
+inputs and idempotency key:
+
+```python
+prepared = client.prepare_action(binding, inputs, "rename-company-1", conditions)
+saved = prepared.to_bytes()
+
+fresh = client.registry_contract(profile)
+binding = fresh.select_immediate_action("rename-company", profile)
+restored = BRegPreparedAction.from_bytes(saved)
+recovered = client.recover_action(binding, restored, inputs, "rename-company-1")
+result = client.execute_recovered_action(binding, recovered)
+```
+
+Recovery refuses a different key, different inputs, or another selected
+action, reuses the saved target conditions exactly, and never fetches new
+ones. `execute_recovered_action` is the explicit send under the original key.
+The saved bytes contain input values and must be treated as private
+application state.
+
 Use `action.with_reason(text)` on a promoted `apply_request` action to add an
 optional application explanation. It returns a copy and
 validates before network effects. The original action omits the reason. Text

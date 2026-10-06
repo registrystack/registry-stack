@@ -427,6 +427,21 @@
       ]
     },
     {
+      "id": "action-recovery",
+      "rust": [
+        "prepare_action",
+        "recover_action"
+      ],
+      "node": [
+        "prepareAction",
+        "recoverAction"
+      ],
+      "python": [
+        "prepare_action",
+        "recover_action"
+      ]
+    },
+    {
       "id": "statistical-datasets",
       "rust": [
         "statistics_live",

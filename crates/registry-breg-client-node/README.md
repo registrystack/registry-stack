@@ -169,6 +169,17 @@ bytes contain the original request values and idempotency key, but no token or
 metadata authority, and their diagnostic representation is redacted. The
 `...Json` variants preserve values outside the JavaScript safe-integer range.
 
+Immediate actions follow the same pattern. Call `prepareAction` with the same
+binding, inputs, idempotency key, and target conditions you pass to
+`invokeAction`, and persist its `toBytes()` value before invoking. After a lost
+response, restore it with `BRegPreparedAction.fromBytes`, select the action
+again from fresh metadata, and call `recoverAction` with the original inputs
+and idempotency key. Recovery refuses a different key, different inputs, or
+another selected action, reuses the saved target conditions exactly, and never
+fetches new ones. `executeRecoveredAction` is the explicit send under the
+original key. The saved bytes contain input values and must be treated as
+private application state.
+
 Use `action.withReason(text)` on a promoted `apply_request` action to add an
 optional application explanation. It returns a copy and validates before network effects. The
 original action omits the reason. Text

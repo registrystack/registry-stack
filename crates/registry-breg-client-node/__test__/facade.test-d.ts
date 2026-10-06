@@ -13,8 +13,10 @@ import {
   BRegLifecycleAuthority,
   BRegMetadata,
   BRegPatchBinding,
+  BRegPreparedAction,
   BRegPreparedCreate,
   BRegPreparedLifecycle,
+  BRegRecoveredAction,
   BRegRecoveredCreate,
   BRegRecoveredLifecycle,
   BRegRetainedRequestHistoryPage,
@@ -42,8 +44,10 @@ declare const record: RecordEnvelope
 declare const continuation: ListContinuation
 declare const slot: BRegAttachmentSlot
 declare const upload: BRegAttachmentUpload
+declare const preparedAction: BRegPreparedAction
 declare const preparedCreate: BRegPreparedCreate
 declare const preparedLifecycle: BRegPreparedLifecycle
+declare const recoveredAction: BRegRecoveredAction
 declare const recoveredCreate: BRegRecoveredCreate
 declare const recoveredLifecycle: BRegRecoveredLifecycle
 declare const immediateAction: BRegImmediateActionBinding
@@ -121,6 +125,15 @@ client.actionTargetConditions(immediateAction, { targetId: '9f6973f9-10b3-4c58-b
 client.actionTargetConditionsJson(immediateAction, '{"targetId":"9f6973f9-10b3-4c58-b41b-494cba26796f"}')
 client.invokeAction(immediateAction, { targetId: '9f6973f9-10b3-4c58-b41b-494cba26796f' }, 'invoke-1', conditions)
 client.invokeActionJson(immediateAction, '{"targetId":"9f6973f9-10b3-4c58-b41b-494cba26796f"}', 'invoke-2', conditions)
+const actionBytes: Buffer = client.prepareAction(immediateAction, { targetId: '9f6973f9-10b3-4c58-b41b-494cba26796f' }, 'invoke-3', conditions).toBytes()
+client.prepareActionJson(immediateAction, '{"targetId":"9f6973f9-10b3-4c58-b41b-494cba26796f"}', 'invoke-4', conditions).toBytes()
+BRegPreparedAction.fromBytes(actionBytes)
+client.recoverAction(immediateAction, preparedAction, { targetId: '9f6973f9-10b3-4c58-b41b-494cba26796f' }, 'invoke-3')
+client.recoverActionJson(immediateAction, preparedAction, '{"targetId":"9f6973f9-10b3-4c58-b41b-494cba26796f"}', 'invoke-4')
+client.executeRecoveredAction(immediateAction, recoveredAction).then(outcome => outcome.value.applicationId)
+client.executeRecoveredActionJson(immediateAction, recoveredAction).then(outcome => outcome.valueJson)
+// @ts-expect-error Recovery needs the original idempotency key, never a fresh one.
+client.recoverAction(immediateAction, preparedAction, { targetId: '9f6973f9-10b3-4c58-b41b-494cba26796f' })
 client.batchRecords(batch, { items: [{ operation: 'create', data: { name: 'Ada' } }], changeContext: { kind: 'correction', reasonCode: 'source-fix' } }, 'batch-1')
 client.batchRecordsJson(batch, '{"items":[{"operation":"create","data":{"name":"Ada"}}]}', 'batch-2')
 client.tombstoneRecord(tombstone, '9f6973f9-10b3-4c58-b41b-494cba26796f', '"breg-1"', 'remove-1')

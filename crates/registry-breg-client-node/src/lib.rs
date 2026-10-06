@@ -24,10 +24,11 @@ use registry_breg_client::{
     BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecyclePromotionError,
     BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata, BRegMetadataSelectionError,
     BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding, BRegPatchRequest,
-    BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
-    BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
-    BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegReleaseSelection, BRegReleaseStatus, BRegRequestMetadata,
+    BRegPreparedAction as CorePreparedAction, BRegPreparedCreate as CorePreparedCreate,
+    BRegPreparedLifecycle as CorePreparedLifecycle, BRegProblemCode, BRegProtocolFailure,
+    BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
+    BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
+    BRegReleaseStatus, BRegRequestMetadata,
     BRegRequestResultReference as CoreRequestResultReference, BRegRequestState,
     BRegRetainedRequestHistoryPage as CoreRetainedRequestHistoryPage,
     BRegRetainedRequestProposal as CoreRetainedRequestProposal, BRegSnapshotContinuation,
@@ -401,6 +402,31 @@ impl PreparedLifecycle {
     #[napi(factory)]
     pub fn from_bytes(bytes: Buffer) -> Result<Self> {
         CorePreparedLifecycle::from_slice(bytes.as_ref())
+            .map(|inner| Self { inner })
+            .map_err(client_error)
+    }
+
+    /// Copy the exact evidence bytes for owner-protected persistence.
+    #[napi]
+    pub fn to_bytes(&self) -> Buffer {
+        self.inner.as_bytes().to_vec().into()
+    }
+}
+
+/// Inert original immediate-action invocation evidence. The bytes carry the
+/// inputs, saved target conditions, and idempotency key, but no token or
+/// executable metadata authority.
+#[napi(js_name = "BRegPreparedAction")]
+pub struct PreparedAction {
+    inner: CorePreparedAction,
+}
+
+#[napi]
+impl PreparedAction {
+    /// Restore bounded inert evidence previously returned by `toBytes`.
+    #[napi(factory)]
+    pub fn from_bytes(bytes: Buffer) -> Result<Self> {
+        CorePreparedAction::from_slice(bytes.as_ref())
             .map(|inner| Self { inner })
             .map_err(client_error)
     }
@@ -1638,6 +1664,49 @@ fn patch_request(value: Value) -> Result<BRegPatchRequest> {
         .map_err(|error| binding_error("invalid_request", error.to_string()))
 }
 
+fn action_invocation(
+    binding: &ImmediateActionBinding,
+    inputs: Map<String, Value>,
+    conditions: Option<&ActionTargetConditions>,
+) -> Result<BRegActionInvocationRequest> {
+    BRegActionInvocationRequest::new(&binding.inner, inputs, conditions.map(|value| &value.inner))
+        .map_err(|error| binding_error("invalid_request", error.to_string()))
+}
+
+fn idempotency_key(value: String) -> Result<registry_breg_client::BRegIdempotencyKey> {
+    registry_breg_client::BRegIdempotencyKey::parse(value)
+        .map_err(|error| binding_error("invalid_request", error.to_string()))
+}
+
+fn prepare_action_evidence(
+    client: &CoreClient,
+    binding: &ImmediateActionBinding,
+    inputs: Map<String, Value>,
+    idempotency_key_value: String,
+    conditions: Option<&ActionTargetConditions>,
+) -> Result<PreparedAction> {
+    let request = action_invocation(binding, inputs, conditions)?;
+    let key = idempotency_key(idempotency_key_value)?;
+    client
+        .prepare_action(&binding.inner, &request, &key)
+        .map(|inner| PreparedAction { inner })
+        .map_err(client_error)
+}
+
+fn recover_action_evidence(
+    client: &CoreClient,
+    binding: &ImmediateActionBinding,
+    prepared: &PreparedAction,
+    original_inputs: &Map<String, Value>,
+    original_idempotency_key: String,
+) -> Result<RecoveredAction> {
+    let key = idempotency_key(original_idempotency_key)?;
+    let request = client
+        .recover_action(&binding.inner, &prepared.inner, original_inputs, &key)
+        .map_err(client_error)?;
+    Ok(RecoveredAction { request, key })
+}
+
 fn input_object(value: Value, message: &'static str) -> Result<Map<String, Value>> {
     value
         .as_object()
@@ -2457,6 +2526,15 @@ pub struct RecoveredCreate {
 #[napi(js_name = "BRegRecoveredLifecycle")]
 pub struct RecoveredLifecycle {
     action: CoreLifecycleAction,
+    key: registry_breg_client::BRegIdempotencyKey,
+}
+
+/// A recovered immediate-action invocation and key. This remains inert until
+/// `executeRecoveredAction` is explicitly called with freshly selected
+/// authority.
+#[napi(js_name = "BRegRecoveredAction")]
+pub struct RecoveredAction {
+    request: BRegActionInvocationRequest,
     key: registry_breg_client::BRegIdempotencyKey,
 }
 
@@ -3293,6 +3371,61 @@ impl BaseRegistryClient {
         complete_value(value, metadata)
     }
 
+    /// Prepare inert invocation evidence before any token acquisition or I/O.
+    /// Persist `toBytes` before invoking so a lost response can be recovered.
+    #[napi]
+    pub fn prepare_action(
+        &self,
+        binding: &ImmediateActionBinding,
+        inputs: Value,
+        idempotency_key: String,
+        conditions: Option<&ActionTargetConditions>,
+    ) -> Result<PreparedAction> {
+        prepare_action_evidence(
+            &self.inner,
+            binding,
+            input_object(inputs, "action inputs must be an object")?,
+            idempotency_key,
+            conditions,
+        )
+    }
+
+    /// Revalidate saved invocation evidence against freshly selected authority
+    /// and the caller's original inputs and key. The saved target conditions
+    /// are reused exactly; this never fetches conditions or sends a request.
+    #[napi]
+    pub fn recover_action(
+        &self,
+        binding: &ImmediateActionBinding,
+        prepared: &PreparedAction,
+        inputs: Value,
+        idempotency_key: String,
+    ) -> Result<RecoveredAction> {
+        recover_action_evidence(
+            &self.inner,
+            binding,
+            prepared,
+            &input_object(inputs, "action inputs must be an object")?,
+            idempotency_key,
+        )
+    }
+
+    /// Explicitly send a recovered invocation under its original key, without
+    /// automatic retry.
+    #[napi]
+    pub async fn execute_recovered_action(
+        &self,
+        binding: &ImmediateActionBinding,
+        recovered: &RecoveredAction,
+    ) -> Result<CompleteOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .invoke_action(&binding.inner, &recovered.request, &recovered.key)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
     #[napi]
     pub async fn create_record(
         &self,
@@ -4065,6 +4198,63 @@ impl BaseRegistryClient {
         let BRegComplete { value, metadata } = self
             .inner
             .invoke_action(&binding.inner, &request, &key)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
+    }
+
+    /// Prepare inert invocation evidence from exact action-input JSON.
+    #[napi]
+    pub fn prepare_action_json(
+        &self,
+        binding: &ImmediateActionBinding,
+        inputs_json: String,
+        idempotency_key: String,
+        conditions: Option<&ActionTargetConditions>,
+    ) -> Result<PreparedAction> {
+        prepare_action_evidence(
+            &self.inner,
+            binding,
+            input_object(
+                exact_input(&inputs_json)?,
+                "action inputs must be an object",
+            )?,
+            idempotency_key,
+            conditions,
+        )
+    }
+
+    /// Revalidate saved invocation evidence against exact original input JSON.
+    #[napi]
+    pub fn recover_action_json(
+        &self,
+        binding: &ImmediateActionBinding,
+        prepared: &PreparedAction,
+        inputs_json: String,
+        idempotency_key: String,
+    ) -> Result<RecoveredAction> {
+        recover_action_evidence(
+            &self.inner,
+            binding,
+            prepared,
+            &input_object(
+                exact_input(&inputs_json)?,
+                "action inputs must be an object",
+            )?,
+            idempotency_key,
+        )
+    }
+
+    /// Explicitly send a recovered invocation and preserve exact receipt values.
+    #[napi]
+    pub async fn execute_recovered_action_json(
+        &self,
+        binding: &ImmediateActionBinding,
+        recovered: &RecoveredAction,
+    ) -> Result<JsonOutcome> {
+        let BRegComplete { value, metadata } = self
+            .inner
+            .invoke_action(&binding.inner, &recovered.request, &recovered.key)
             .await
             .map_err(client_error)?;
         complete_json_value(value, metadata)
