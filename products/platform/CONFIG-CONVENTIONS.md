@@ -294,6 +294,9 @@ digits,** in a member named `digest` or ending in `Digest`.
 **CFG-VAL-7 (MUST). URLs are absolute.** Whether a position accepts `http`
 is the owning product's decision, stated in the schema's `description`, and
 the schema and the reader apply the same rule through one shared URL type.
+A member holding a URL is named `url`, `uri`, or `issuer`, or ends in `Url`,
+`Origin`, or `Issuer`. An identifier that is URI-shaped (an Evidence URN, a
+`conceptUri`) is not a URL and keeps its own type.
 
 **CFG-VAL-8 (MUST). Relative paths resolve against the directory of the file
 that contains them,** and use `/`. In an authored file a path is normalized
@@ -332,7 +335,8 @@ wire contract is spelled as the member is (`anchor: stageEnteredAt`), and its
 schema marks the enum with `x-registry-member-names: true`. A value
 the product's API also returns has one spelling in both: renaming a
 configuration value renames the API value and regenerates the OpenAPI document
-in the same change.
+in the same change. A value that names a command is written as the command
+is typed (`source add`).
 Protocol constants are written exactly as their specification writes them
 (`ES256`, `EdDSA`, `at+jwt`, `private_key_jwt`, `GET`, `application/json`,
 `fr-SN`); each is recorded in the exceptions register under
@@ -437,7 +441,9 @@ variant's members. Externally tagged: a mapping with exactly one key, the
 variant's name (a key, so camelCase), whose value holds the variant
 (`after: {workingDays: 5}`). Every variant, including one with no members,
 refuses unknown keys, and a refusal of the variant names the accepted
-variants. Untagged unions follow CFG-SCHEMA-8.
+variants. Untagged unions follow CFG-SCHEMA-8. The shared command report
+envelope (`ok: true` with `result`, `ok: false` with `error`) is tagged by
+`ok` and needs no `type` member.
 
 **CFG-ID-8 (SHOULD). A check warns when two identifiers in one namespace
 differ only by `-` versus `_`.**
@@ -677,7 +683,8 @@ words the common type errors this way, taking `<unit>` from the key
 audience, owning product, stability (promised, experimental, unpromised),
 schema path and `$id`, reader, check command, minimal valid example, the
 member it offers for each typed conformance case (CFG-CHECK-3), and its
-security-relevant members (CFG-EMPTY-3).
+security-relevant members (CFG-EMPTY-3). For an output format, the minimal
+valid example is a committed output of the command that writes it.
 
 **CFG-SCHEMA-2 (MUST). Every authored and operator format ships a JSON
 Schema generated from the Rust types** (schemars under a `schema` feature,
@@ -827,6 +834,11 @@ unrecorded deviation and on a recorded one that no longer deviates.
 | `exchange-model` | A published data model whose member names its specification fixes. | Permanent for that specification version. |
 | `stable-move` | A respelling of something a correct file in a promised format already writes (header, key, enum value, identifier grammar, unit, discriminator), applied in the release that moves promised formats to stable. | That release. |
 | `decision` | A deviation waiting on a named, dated decision. | The decision; the entry names it. |
+| `pending` | A deviation in work the configuration conventions program has not reached yet; the entry's `wp` names the work package that removes it. | That work package. `--strict` refuses every `pending` entry; the program is done when `--strict` passes. |
+
+A whole format whose grammar another project owns, or that a published
+exchange model fixes, carries `exceptionClass` in `config-formats.yaml`
+instead of one entry per finding.
 
 ## Enforcement summary
 
@@ -835,11 +847,11 @@ Each MUST rule appears once; SHOULD rules are in the last row.
 | Rules | Gate |
 |---|---|
 | CFG-ENV-1, 4; CFG-YAML-2 to 8; CFG-VAL-1 to 3; CFG-EMPTY-1; CFG-SEC-2, 3; CFG-DIAG-1, 2, 5; CFG-CHANGE-2 | reader unit tests named with the rule ID; the conformance corpus; for CFG-ENV-1 also the convention lint (`const` envelope) |
-| CFG-YAML-1 | `disallowed-methods` in every `clippy.toml` in the repository, with the proof script; the conformance corpus |
+| CFG-YAML-1 | `disallowed-methods` in every `clippy.toml` in the repository, with the proof script; the conformance corpus; the convention lint's source scan (a reader that bypasses `registry-platform-yaml`) |
 | CFG-ENV-2, 3, 6; CFG-NAME-1 to 5; CFG-ID-1, 6, 7; CFG-QTY-1 to 4; CFG-VAL-6, 7; CFG-EMPTY-2, 4; CFG-SEC-1; CFG-EMBED-2; CFG-SCHEMA-1, 3 to 6 | `check-config-conventions.py` over the registry and every schema, with the exceptions register as ratchet; for CFG-EMPTY-2 the lint checks the sentinel shape and review classifies each member as granting or restricting; for CFG-SEC-1 also the `SecretReference` parser tests; for CFG-ID-6 also the source lint (set types) and a corpus case; for CFG-QTY-4 also the corpus boundary sweep |
 | CFG-SCHEMA-8; CFG-CHANGE-1 | source lint over the reader-type closure (`flatten`, `untagged`, `tag`, `alias`, set types); the corpus unknown-key sweep |
-| CFG-SCHEMA-2 | each product's schema drift check, in a job that runs on every pull request touching the product |
-| CFG-CHECK-1 to 3; CFG-DIAG-3, 4, 6; CFG-ID-4, 5; CFG-VAL-8, 9; CFG-SCHEMA-7 | product CLI tests and the corpus runner (dangling reference, duplicate id, escaping path, mistyped operand, the modeline `init` writes) |
+| CFG-SCHEMA-2 | each product's schema drift check, in a job that runs on every pull request touching the product; the convention lint (a format with no generated schema) |
+| CFG-CHECK-1 to 3; CFG-DIAG-3, 4, 6; CFG-ID-4, 5; CFG-VAL-8, 9; CFG-SCHEMA-7 | product CLI tests and the corpus runner; for CFG-CHECK-1 also the convention lint (the registry's `check` field) (dangling reference, duplicate id, escaping path, mistyped operand, the modeline `init` writes) |
 | CFG-CHANGE-5 | the convention lint compares the exceptions register with the base branch; an added entry outside the growth classes fails |
 | CFG-ID-2, 3; CFG-VAL-4, 5; CFG-NAME-7; CFG-EMPTY-3, 6; CFG-EMBED-1; CFG-CHANGE-3, 4 | review citing the rule; CFG-EMPTY-3 also needs a security review note (AGENTS.md) |
 | CFG-ENV-5; CFG-VAL-10; CFG-NAME-6, 8; CFG-ID-8; CFG-EMPTY-5; CFG-SCHEMA-9; CFG-CHECK-4 (SHOULD) | review |
