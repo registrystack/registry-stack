@@ -1363,6 +1363,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          # The conventions lint compares the exceptions register with the
+          # event baseline (CFG-CHANGE-5), so the history has to be present.
+          fetch-depth: 0
           persist-credentials: false
           submodules: false
 
@@ -1378,6 +1381,39 @@ jobs:
 
       - name: Check runtime configuration conformance
         run: products/platform/scripts/check-config-conformance.py --check-generated
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.16"
+
+      - name: Test configuration conventions lint
+        run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_check_config_conventions.py
+
+      - name: Check configuration conventions
+        env:
+          # The event baseline the changes job resolved; the archive check
+          # compares against the same commit.
+          CONVENTIONS_BASE_REF: ${{ needs.changes.outputs.archive_base_ref }}
+          CONVENTIONS_COMPARISON_REQUIRED: ${{ needs.changes.outputs.archive_comparison_required }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          lint=(uv run --no-project --with PyYAML==6.0.2 python products/platform/scripts/check-config-conventions.py)
+          if [[ "${CONVENTIONS_COMPARISON_REQUIRED}" == "true" ]]; then
+            if [[ -z "${CONVENTIONS_BASE_REF}" ]]; then
+              echo "Cannot check CFG-CHANGE-5: the event baseline is unavailable." >&2
+              exit 1
+            fi
+            "${lint[@]}" --base "${CONVENTIONS_BASE_REF}"
+          elif [[ "${CONVENTIONS_COMPARISON_REQUIRED}" == "false" ]]; then
+            # A scheduled sweep has no change baseline; the lint compares the
+            # register with its merge base with origin/main.
+            "${lint[@]}"
+          else
+            echo "The event comparison policy is unavailable." >&2
+            exit 1
+          fi
 
   rust-result:
     name: Rust workspace

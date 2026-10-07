@@ -39,6 +39,7 @@ from ci_changes import (
     LockChange,
     Workspace,
     classify,
+    config_format_inputs,
     lock_change,
     repo_docs_sources,
 )
@@ -627,6 +628,68 @@ class CiChangesTest(unittest.TestCase):
                 "config_conformance"
             ]
         )
+
+    def test_config_conventions_inputs_select_the_conformance_gate(self) -> None:
+        for path in (
+            "products/platform/config-formats.yaml",
+            "products/platform/config-conventions-exceptions.yaml",
+            "products/platform/CONFIG-CONVENTIONS.md",
+            "products/platform/scripts/check-config-conventions.py",
+            "products/platform/scripts/test_check_config_conventions.py",
+            "editors/configure.py",
+            # A schema nobody registered yet must reach the lint, which
+            # refuses it until it is registered or declared out of scope.
+            "products/render/generated/bundle/bundle.schema.json",
+            "products/casework/contracts/cli/NewReport.schema.json",
+            "products/evidence/contracts/new.schema.yaml",
+            "products/discovery/schemas/new.schema.json",
+            "crates/registry-render/schemas/new.schema.json",
+            # Reader crates outside the runtime conformance rows.
+            "crates/registry-bregctl/src/lib.rs",
+            "crates/registry-manifest-cli/src/main.rs",
+            "crates/registry-thunderid-tooling/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
+
+    def test_every_registered_configuration_format_input_is_routed(self) -> None:
+        """config-formats.yaml names the files and reader crates the
+        conventions lint reads; a change to any of them runs the lint. The
+        classifier reads them by line, so this holds the result equal to a
+        full YAML parse."""
+        root = Path(__file__).resolve().parents[2]
+        registry = yaml.safe_load(
+            (root / "products/platform/config-formats.yaml").read_text(encoding="utf-8")
+        )
+        keys = {"path", "file", "example", "driftCheck", "differentialTest"}
+        paths: set[str] = set()
+        crates: set[str] = set()
+
+        def collect(node: Any, key: str | None = None) -> None:
+            if isinstance(node, dict):
+                for name, value in node.items():
+                    collect(value, name)
+            elif isinstance(node, list):
+                for value in node:
+                    collect(value, key)
+            elif isinstance(node, str) and key in keys and node != "none":
+                paths.add(node)
+            elif isinstance(node, str) and key == "crate":
+                crates.add(node)
+
+        collect(registry)
+        self.assertIn("products/breg/acceptance/asset-site-placement/registry.yaml", paths)
+        self.assertIn("registry-bregctl", crates)
+        self.assertEqual(config_format_inputs(root), (frozenset(paths), frozenset(crates)))
+        self.assertLessEqual(crates, set(self.workspace.package_names))
+        for path in sorted(paths):
+            with self.subTest(path=path):
+                self.assertTrue((root / path).is_file())
+                self.assertTrue(
+                    classify(self.workspace, (path,))["config_conformance"]
+                )
 
     def test_every_config_conformance_row_is_routed(self) -> None:
         script = Path("products/platform/scripts/check-config-conformance.py")

@@ -140,6 +140,24 @@ CONFIG_CONFORMANCE_INPUTS = (
     "products/messaging/generated/runtime/*",
 )
 
+# The configuration conventions lint runs in the same job. Beyond the files
+# below it reads every file and reader crate config-formats.yaml names (see
+# config_format_inputs), and it refuses a schema under these globs that
+# nobody registered, so a new one has to reach it.
+CONFIG_CONVENTIONS_INPUTS = (
+    "products/platform/config-formats.yaml",
+    "products/platform/config-conventions-exceptions.yaml",
+    "products/platform/CONFIG-CONVENTIONS.md",
+    "products/platform/scripts/*config-conventions*",
+    "editors/configure.py",
+    "products/*/generated/*.schema.json",
+    "products/*/contracts/*.schema.json",
+    "products/*/contracts/*.schema.yaml",
+    "products/*/schemas/*.schema.json",
+    "products/*/profile/schema/*.schema.json",
+    "crates/*/schemas/*.schema.json",
+)
+
 # These are Registry Record commitments implemented by Base Registry Engine.
 REGISTRY_RECORD_CROSS_PRODUCT_INPUTS = (
     "products/registry-record/schema/**",
@@ -911,6 +929,34 @@ def repo_docs_sources(root: Path = REPO_ROOT) -> frozenset[str]:
     )
 
 
+CONFIG_FORMATS = "products/platform/config-formats.yaml"
+CONFIG_FORMAT_PATH = re.compile(
+    r"^\s*(?:-\s+)?(?:path|file|example|driftCheck|differentialTest):\s*(\S+)\s*$",
+    re.MULTILINE,
+)
+CONFIG_FORMAT_CRATE = re.compile(r"^\s*(?:-\s+)?crate:\s*(\S+)\s*$", re.MULTILINE)
+
+
+def config_format_inputs(
+    root: Path = REPO_ROOT,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return the repository files and reader crates config-formats.yaml names.
+
+    The classifier runs without PyYAML, so this reads the path-valued and
+    ``crate:`` keys by line; test_ci_changes.py holds the result equal to a
+    full YAML parse of the registry.
+    """
+
+    text = (root / CONFIG_FORMATS).read_text(encoding="utf-8")
+    paths = {
+        match.group(1).strip("'\"") for match in CONFIG_FORMAT_PATH.finditer(text)
+    }
+    crates = {
+        match.group(1).strip("'\"") for match in CONFIG_FORMAT_CRATE.finditer(text)
+    }
+    return frozenset(paths - {"none"}), frozenset(crates)
+
+
 def is_root_workflow(path: str) -> bool:
     """Return whether path is an executable GitHub workflow at the root."""
 
@@ -1072,10 +1118,15 @@ def classify(
         bool(affected & EVIDENCE_PACKAGES)
         or "evidence_assurance" in security_workflow_gates
     ) and (full_sweep or not pull_request)
+    format_paths, format_crates = config_format_inputs()
     config_conformance = (
         complete
-        or any(matches(path, *CONFIG_CONFORMANCE_INPUTS) for path in paths)
-        or bool(affected & CONFIG_CONFORMANCE_PACKAGES)
+        or any(
+            path in format_paths
+            or matches(path, *CONFIG_CONFORMANCE_INPUTS, *CONFIG_CONVENTIONS_INPUTS)
+            for path in paths
+        )
+        or bool(affected & (CONFIG_CONFORMANCE_PACKAGES | format_crates))
     )
     release_tool = (
         complete
