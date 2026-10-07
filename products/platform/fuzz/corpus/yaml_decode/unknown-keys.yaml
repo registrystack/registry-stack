@@ -1,0 +1,10 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+id: example
+version: "1"
+titel: typo
+listener:
+  bind: a
+  port: 1
+  extra: 1
+x-extension: 1

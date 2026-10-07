@@ -1,0 +1,319 @@
+# registry-platform-yaml
+
+The shared Registry Stack configuration reader. Every configuration file a
+person or an agent writes, YAML or JSON, is read here: one YAML subset, one
+scalar table, one envelope check, and typed decoding whose diagnostics name
+the file, the line and column, the JSON pointer, what is wrong, and the fix.
+The rules it enforces are `products/platform/CONFIG-CONVENTIONS.md`; the rule
+IDs below (`CFG-...`) refer to that document.
+
+## Trust boundary
+
+The reader treats its input as untrusted text and its diagnostics as output
+that may reach a terminal, a CI log, or an agent's context:
+
+- the input is bounded before parsing: 1 MiB (`yaml.too-large`) and 128
+  levels of nesting (`yaml.too-deep`), with no stack growth proportional to
+  the input;
+- anchors, aliases, merge keys, tags, several documents, and non-string keys
+  are refused, so a document is a plain tree and an alias cannot expand it;
+- a diagnostic never repeats a scalar value from the file or the
+  environment (CFG-SEC-3). Messages name keys, paths, accepted values,
+  bounds, and the expected envelope. A message a type's own `Deserialize`
+  code writes is never passed through, and keys and file names are escaped
+  of control characters in human output.
+
+The reader does not open files, read the environment, or resolve secrets.
+The caller passes bytes and the file name diagnostics should carry. Runtime
+`${NAME}` substitution is a [`ScalarHook`](#hooks) that
+`registry-platform-config` supplies; authored formats refuse substitution
+through the same hook.
+
+## Use
+
+```rust
+use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader};
+
+const FORMAT: FormatSpec = FormatSpec {
+    kind: "ExampleRuntime",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current("example.registrystack.org/v1")],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+let decoded = Reader::new("runtime.yaml").decode::<Runtime>(bytes, &Expect::one(&FORMAT))?;
+```
+
+The public surface:
+
+| Item | Purpose |
+|---|---|
+| `Reader::new(file)`, `.with_hook(&mut hook)` | One read of one file. `file` is reported as given. |
+| `Reader::scan(bytes) -> Result<Option<Node>, Report>` | The YAML subset only, no envelope. `None` for an empty or comment-only stream. |
+| `Reader::read(bytes, &Expect) -> Result<Document, Report>` | The tree, the matched envelope, and no removed key. |
+| `Reader::decode::<T>(bytes, &Expect) -> Result<Decoded<T>, Report>` | `read`, then typed decoding. |
+| `read_document`, `decode_document` | The same, without a hook. |
+| `Document::decode::<T>()`, `decode_at::<T>(pointer)` | Decode the whole document or one member, with paths from the root. |
+| `Document::span_of(pointer)`, `key_span_of(pointer)` | Positions for a product's own semantic checks. |
+| `Document::diagnostic_at_value(..)`, `diagnostic_at_key(..)` | A product diagnostic placed by pointer. |
+| `Document::to_json_value()` | The checked tree as JSON, for pointer-based checks and digests. |
+| `FormatSpec`, `EnvelopeRule`, `ApiVersion`, `RetiredApiVersion`, `RemovedKey`, `Expect` | What a read accepts. `Expect::new` takes several formats for a command that dispatches on `kind`. |
+| `Diagnostic`, `Report`, `Severity`, `Source`, `Related` | The one diagnostic shape (CFG-DIAG-1), JSON and human rendering. |
+| `CODES` | Every reader code and its meaning. |
+| `ScalarHook`, `ScalarSite`, `Refusal` | Inspect or replace scalars while the tree is built. |
+| `Invalid` | What a checking type returns: the expectation and the fix, never the value. |
+| `LocalId`, `ExternalId`, `Digest`, `Url`, `ProjectIdentity`, `DataLiteral` | Shared value types (CFG-ID, CFG-VAL). |
+| `BoundedU32<MIN, MAX>`, `BoundedU64<MIN, MAX>` | Integers with both bounds in the type and the schema (CFG-QTY-4). |
+| `UniqueList<T>`, `UniqueIdList<T>` with `Identified` | A set (`config.duplicate-item`) and a list of named items (`config.duplicate-id`) (CFG-ID-5, CFG-ID-6). |
+| `tagged_union!`, `shape_union!`, `SHARED_BLOCK_PREFIX` | The serde recipes below. |
+| `MAXIMUM_DOCUMENT_BYTES`, `MAXIMUM_DEPTH`, `MAXIMUM_EXTERNAL_ID_CHARS`, `MAXIMUM_URL_CHARS` | The bounds. |
+
+The `schema` feature derives `JsonSchema` for the shared types, with the
+same bounds, patterns, and closedness the reader enforces.
+
+There is no path type: a file name is text the caller chose, and a pointer
+is a `&str` in RFC 6901 form. There is no directory helper: a command that
+reads a directory lists `.yaml` and `.yml` files itself and reads each one.
+
+## Diagnostics
+
+A `Report` holds every diagnostic of one read, sorted by position.
+`Report::to_json_value()` gives the JSON array a ctl puts in its report
+envelope:
+
+```json
+{"severity": "error", "code": "config.expected-integer", "artifact": "MessagingRuntimeConfig",
+ "path": "/audit/retentionDays", "message": "expected a whole number of days from 1 to 36500; quoted values are text",
+ "suggestedAction": "Remove the quotes.", "source": {"file": "runtime.yaml", "line": 6, "column": 18}}
+```
+
+`Report::render_human()` gives the form a terminal shows: the position first,
+the message, the fix, a `note:` line per related place, and a summary line.
+
+```text
+error[yaml.duplicate-key] runtime.yaml:7:1 /listener
+  the key is already defined in this mapping
+  next: Keep one definition of the key.
+  note: runtime.yaml:3:1 /listener the first definition
+1 error, 0 warnings in 1 file
+```
+
+Severities are `error` and `warning`. A deprecated `apiVersion` is the only
+warning the reader emits.
+
+Positions (CFG-DIAG-1): a key problem points at the key; a value problem at
+the value's first character; a missing member at the key of the mapping that
+lacks it (1:1 for the top level); an empty value at its key, or at the `-`
+of its list item.
+
+What a read reports together (CFG-DIAG-5): every structural problem (YAML
+subset, duplicate keys, ambiguous numbers, hook refusals) and every envelope
+problem, without decoding. When the structure is sound, decoding reports
+every removed key, every unknown key it reaches, and the first other error,
+then checks the rest of the mapping it stopped in for unknown keys. A size,
+encoding, or syntax error stops the read alone.
+
+### Codes
+
+Reader codes have two segments; product codes have three.
+
+| Code | Meaning |
+|---|---|
+| `yaml.too-large` | the document is larger than 1 MiB |
+| `yaml.not-utf8` | the document is not UTF-8 |
+| `yaml.syntax` | the YAML is not well formed and no narrower code applies |
+| `yaml.tab-indentation` | a tab is used for indentation |
+| `yaml.unclosed-quote` | a quoted value is not closed, or its continuation is not indented |
+| `yaml.colon-in-plain-value` | a `: ` inside an unquoted value starts a mapping |
+| `yaml.unexpected-end` | the document ends inside an unfinished construct |
+| `yaml.duplicate-key` | a mapping holds the same key twice |
+| `yaml.anchor` | an anchor (`&name`) is used |
+| `yaml.alias` | an alias (`*name`) is used |
+| `yaml.merge-key` | a merge key (`<<`) is used |
+| `yaml.tag` | an explicit tag (`!!str`, `!custom`) is used |
+| `yaml.non-string-key` | a mapping key is not a string |
+| `yaml.multiple-documents` | the file holds more than one document |
+| `yaml.ambiguous-number` | an unquoted value looks like a number but is not a plain decimal |
+| `yaml.too-deep` | the document nests deeper than 128 levels |
+| `config.missing-envelope` | the document is empty, or its top-level mapping lacks apiVersion or kind |
+| `config.wrong-kind` | kind is not one the reader accepts |
+| `config.unsupported-api-version` | apiVersion is not one the reader accepts for this kind |
+| `config.retired-api-version` | apiVersion is retired |
+| `config.deprecated-api-version` | apiVersion is deprecated (warning) |
+| `config.removed-key` | a key was removed or renamed |
+| `config.unknown-key` | a key is not a member of its mapping |
+| `config.missing-key` | a required member is absent |
+| `config.unknown-variant` | a value is not one of the accepted names |
+| `config.invalid-type` | a value has the wrong shape, or a union holds a form it does not accept |
+| `config.invalid-value` | a value has the right shape but is not valid |
+| `config.invalid-length` | a list has the wrong number of items |
+| `config.duplicate-key` | a member is given twice, under two spellings the type accepts |
+| `config.duplicate-item` | a list that is a set repeats an item |
+| `config.duplicate-id` | a list of named items repeats an id |
+| `config.null-value` | a member is null |
+| `config.expected-string` | a text member holds something other than text |
+| `config.expected-integer` | an integer member holds something other than an integer |
+| `config.expected-number` | a number member holds something other than a number |
+| `config.expected-boolean` | a boolean member holds something other than true or false |
+| `config.out-of-range` | a number is outside its bounds |
+| `config.substitution` | a `${NAME}` substitution cannot be filled (reported by a substitution hook) |
+| `config.substitution-not-allowed` | a `${...}` expression is written where substitution is not allowed, or an envelope member was substituted |
+
+A test fails when a code in the source is missing from this table or the
+table holds a code with other than two kebab-case segments.
+
+## The subset and the scalar table
+
+The reader accepts YAML 1.2 block and flow content, so JSON is read by the
+same code (CFG-YAML-1). A leading byte order mark is ignored; LF and CRLF are
+read with the same positions; a leading `---` and a final `...` are accepted.
+An empty or comment-only file is `config.missing-envelope`.
+
+Plain scalars resolve through one table (CFG-VAL-1), documented in
+`src/scalar.rs`:
+
+- `true` and `false` (also `True`, `TRUE`, `False`, `FALSE`) are booleans;
+  `yes`, `no`, `on`, and `off` are text;
+- a decimal integer is an integer, and with a fraction or an exponent
+  (`1.5`, `1e3`) a number; `-0` reads as 0;
+- `~`, `null` (in three casings), and an empty value are null, which only
+  `DataLiteral` accepts (CFG-EMPTY-1); an optional member is written by
+  leaving the key out;
+- a leading zero (`0123`), a bare point (`.5`, `5.`), a base prefix
+  (`0x1F`, `0o17`, `0b101`), and `.inf` or `.nan` are refused as
+  `yaml.ambiguous-number`;
+- everything else, including `1_000` and `09:00`, is text.
+
+Quoted and block scalars are always text. Text in an integer, number, or
+boolean position is refused, and the message says why (CFG-DIAG-6): a
+quoted number gets "Remove the quotes.", a unit suffix (`5s`) gets "Write
+the number of seconds as digits." with the member's own unit, `1_000` and
+`1e6` in an integer position get "Write digits only.", and `yes` in a
+boolean position says that `yes`, `no`, `on`, and `off` are text.
+
+Every struct refuses unknown keys, whatever its serde attributes say; the
+action lists the accepted keys and suggests the closest one when one is
+within two edits (one for keys of four characters or fewer). A top-level `x-`
+key is unknown, with the fix "extension fields are not supported; use a
+comment".
+
+## Serde recipes
+
+The decoder is its own `serde::Deserializer` over the checked tree. Most
+derives work unchanged; three serde features buffer a mapping through
+serde's private content type and lose positions and closedness, so the crate
+ships a replacement for each (CFG-SCHEMA-8).
+
+- **Shared blocks instead of `#[serde(flatten)]`.** Mark the field with
+  `#[serde(rename(deserialize = "registry-platform-yaml/shared-block/<name>"))]`
+  (and `#[schemars(flatten)]` for the schema). The block's members sit
+  beside the host's, keep their positions, and an unknown key names every
+  accepted key. `#[serde(flatten)]` still decodes, but serde places every
+  error inside the block at the host mapping, reports only its first
+  unknown key, and reports none at all unless the host has
+  `deny_unknown_fields`: an unknown key under a flattened host without it is
+  silently dropped, where the reader cannot see it.
+- **`tagged_union!` instead of `#[serde(tag = "...")]`.** An internally
+  tagged enum chooses its variant by a member (`type` by default, or one the
+  macro names). Derive with `#[serde(remote = "Self")]` and call
+  `tagged_union!(Enum)` or `tagged_union!(Enum, tag = "op")`. Positions are
+  kept inside the variant, and an unknown or missing tag names the
+  variants. An externally tagged enum (one key names the variant) needs no
+  macro.
+- **`shape_union!` instead of `#[serde(untagged)]`.** A union chooses by
+  node kind only (scalar, list, mapping): `shape_union!(Scopes { scalar =>
+  One, list => Many })`. For the schema, derive `JsonSchema` with
+  `#[schemars(untagged)]`; serde never reads that attribute.
+
+In every union, every variant is a struct variant, `Variant {}` when it has
+no members, so a variant refuses unknown keys like any struct.
+
+A member given under two spellings the type accepts (an `alias`) is
+`config.duplicate-key` at the second key.
+
+## Hooks
+
+`ScalarHook` sees every mapping key and every value that resolves to text,
+with its pointer, the keys on the way from the root, its style, and its span,
+before the envelope check. It may return a replacement, which is stored as
+substituted text and never resolved again (a substituted `8080` in an
+integer position is refused with "substitution fills text values only"), or
+a `Refusal`, which is reported with the structural problems. A substituted
+`apiVersion` or `kind` is refused (`config.substitution-not-allowed`).
+
+## Parser choice
+
+The reader parses with [`saphyr-parser`](https://crates.io/crates/saphyr-parser)
+`=0.1.0`, pinned exactly in the workspace `Cargo.toml`. It was chosen over
+`unsafe-libyaml-norway` 0.2.15 (the libyaml translation `serde_norway`
+already pulls in) on these criteria:
+
+| Criterion | `saphyr-parser` 0.1.0 | `unsafe-libyaml-norway` 0.2.15 |
+|---|---|---|
+| Unsafe code | none in the crate (5,352 lines). Its one dependency with unsafe code, `arraydeque` 0.5.1, backs `BufferedInput` only; the reader parses through `Parser::new_from_str`, which does not use it. | a C-to-Rust translation: 241 `unsafe` mentions in 11,871 lines; the workspace forbids `unsafe_code`, so the reader would need its own lint table and a module of `SAFETY` comments |
+| Events against the suite | matches the vendored yaml-test-suite cases (below) | not run: excluded on the unsafe criterion |
+| Marks | char-accurate line and column on every event, correct across CRLF | line, column, and byte index on every event |
+| Refusal hooks | anchor ids, alias events, tags, collection events in key position, document starts, and scalar styles are all exposed | the same, through raw pointers |
+| License | MIT OR Apache-2.0; `arraydeque` MIT/Apache-2.0 | MIT |
+| `cargo deny check` | passes | already in the lock |
+
+The vetting evidence lives in `tests/yaml_test_suite.rs`, which reads 54
+cases vendored from yaml-test-suite (branch `data-2022-01-17`, MIT, license
+in `tests/yaml-test-suite/LICENSE`). It renders saphyr's events in the
+suite's `test.event` notation and compares them for every case, requires
+every error case to fail, and then runs the reader over the same cases:
+well-formed subset cases are read, and anchor, alias, tag, complex-key,
+several-document, and malformed cases are refused with their code and a
+position.
+
+What the reader adds on top of the parser, and why:
+
+- **Byte order mark and encoding.** saphyr does not strip a BOM; the reader
+  strips one leading BOM and refuses bytes that are not UTF-8 at the first
+  bad byte before parsing.
+- **Duplicate keys and merge keys.** saphyr reports neither; the reader
+  detects both while building the tree. A quoted `"<<"` is an ordinary key.
+- **Anchor and tag positions.** saphyr's node events carry the content
+  position, not the position of a preceding `&anchor` or `!tag`; the reader
+  recovers that position by scanning the text between the previous event
+  and the content, skipping comments.
+- **Empty values.** saphyr places an empty value at its `:` or after its
+  `-`; the reader places it at its key or at the `-`.
+- **Depth.** The reader stops at 128 levels on the event stream. saphyr's
+  scanner keeps its flow level in a `u8` and stops deep flow nesting with
+  "recursion limit exceeded" before the reader's bound can apply; the
+  reader reports that as `yaml.too-deep`. A test reads 1 MiB of `[` without
+  overflowing the stack, and the `yaml_reader` fuzz target covers the same
+  input.
+- **Syntax messages.** The reader classifies parser errors into the closed
+  syntax codes and appends saphyr's text as a note only when it is one of
+  the parser's fixed strings. In 0.1.0 the only error text built from input
+  is "unexpected character" (`scanner.rs`), which the reader drops. **On
+  any version bump, re-audit every `ScanError::new` call site for text
+  built from input**, rerun the suite comparison, and re-check the depth and
+  empty-value behavior above.
+
+## Tests
+
+Test names start with the rule they prove (`cfg_yaml_2_...`,
+`cfg_diag_5_...`), so a rule's coverage is one search away.
+
+```bash
+cargo test --locked -p registry-platform-yaml --all-features
+```
+
+- `tests/reader_subset.rs`: the YAML subset, scalar table, bounds, and
+  syntax codes;
+- `tests/reader_envelope.rs`: envelope, retired and deprecated versions,
+  removed keys;
+- `tests/reader_decode.rs`: typed decoding, positions, redaction, shared
+  types, unions, and shared blocks;
+- `tests/reader_schema.rs` (`schema` feature): the schemas the shared types
+  and the recipes emit;
+- `tests/yaml_test_suite.rs`: the parser vetting above.
+
+The `yaml_reader` fuzz target in `products/platform/fuzz` feeds arbitrary
+bytes to the reader, with and without a substituting hook, and decodes the
+result into a type that uses every shared type and recipe.

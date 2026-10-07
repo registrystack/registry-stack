@@ -1,0 +1,4 @@
+listener:
+  port: 1
+kind: FuzzRuntimeConfig
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1

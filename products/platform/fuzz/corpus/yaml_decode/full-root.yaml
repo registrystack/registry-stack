@@ -1,0 +1,36 @@
+apiVersion: id.registrystack.org/formats/fuzz/runtime/v1
+kind: FuzzRuntimeConfig
+id: example
+version: "1.0"
+title: Example
+port: 8080
+offset: -3
+ratio: 0.5
+enabled: true
+retentionDays: 30
+maximumBytes: 1048576
+issuerId: urn:example:issuer
+digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+endpoint: https://example.org/api
+value: null
+values: [1, 2.5, true, null, text]
+scopes: [read, write]
+steps:
+  - id: first
+    title: First
+  - id: second
+labels:
+  team: core
+source:
+  type: http
+  baseUrl: https://example.org
+  timeoutSeconds: 10
+auth:
+  bearer:
+    tokenRef: secret:env/TOKEN
+audience: [a, b]
+mode: strict
+pair: [1, one]
+listener:
+  bind: 127.0.0.1:8443
+  port: 8443

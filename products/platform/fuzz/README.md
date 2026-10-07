@@ -15,6 +15,13 @@ crates. These live outside the main workspace (see the root `Cargo.toml`
 - `sdjwt_issuance` — SD-JWT issuance input parsing (`registry-platform-sdjwt`).
 - `sqlite_statement` — bounded reviewed-statement parsing and offline
   authorization (`registry-platform-sqlite`).
+- `yaml_reader`: the shared configuration reader over arbitrary bytes: the
+  YAML subset, the envelope, and substitution, checking that every code is
+  registered, every position is 1-based, and no substituted value reaches a
+  diagnostic (`registry-platform-yaml`).
+- `yaml_decode`: typed decoding through the same reader, into a document
+  type that uses every shared value type and union recipe
+  (`registry-platform-yaml`).
 
 Each target fuzzes the crate's real exported deserializer or entry point
 directly, never a locally re-declared mirror struct that could drift from the

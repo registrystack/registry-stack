@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `registry-platform-yaml` is the shared configuration reader: one YAML
+  subset (no anchors, aliases, merge keys, tags, or several documents), one
+  scalar table, the `apiVersion` and `kind` envelope check, and a serde
+  decoder that refuses unknown keys and null and reports every problem with
+  a two-segment code, a JSON pointer, a line and column, and the fix, never
+  a value from the file. Input is bounded at 1 MiB and 128 levels. It parses
+  with `saphyr-parser` 0.1.0, which has no unsafe code.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,

@@ -1,0 +1,602 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The YAML subset: duplicate keys, anchors, tags, keys, bounds, encoding,
+//! documents, and the closed syntax codes (CFG-YAML-2 to 8, CFG-ENV-4,
+//! CFG-VAL-1 refusals, CFG-DIAG-5).
+
+mod common;
+
+use common::*;
+use registry_platform_yaml::{NodeValue, Reader, Severity, MAXIMUM_DEPTH, MAXIMUM_DOCUMENT_BYTES};
+
+fn scan_ok(text: &str) -> NodeValue {
+    Reader::new(FILE)
+        .scan(text.as_bytes())
+        .unwrap_or_else(|report| panic!("{report}"))
+        .expect("the document has a root")
+        .value
+}
+
+// ----- CFG-YAML-2 -----
+
+#[test]
+fn cfg_yaml_2_duplicate_key_names_both_lines() {
+    let report = scan_refusal("listener:\n  bind: a\naudit: {}\nlistener:\n  bind: b\n");
+    let diagnostic = only(&report);
+    assert_diagnostic(
+        diagnostic,
+        "yaml.duplicate-key",
+        "/listener",
+        (4, 1),
+        "the key is already defined in this mapping",
+        "Keep one definition of the key.",
+    );
+    assert_eq!(diagnostic.related.len(), 1);
+    let related = &diagnostic.related[0];
+    assert_eq!(related.path, "/listener");
+    assert_eq!((related.line, related.column), (Some(1), Some(1)));
+    assert_eq!(related.message, "the first definition");
+}
+
+#[test]
+fn cfg_yaml_2_duplicate_key_is_refused_in_nested_and_flow_mappings() {
+    let report = scan_refusal("outer:\n  inner: 1\n  inner: 2\nflow: {a: 1, a: 2}\n");
+    let found: Vec<(&str, &str, (usize, usize))> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str(), at(d)))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("yaml.duplicate-key", "/outer/inner", (3, 3)),
+            ("yaml.duplicate-key", "/flow/a", (4, 14)),
+        ]
+    );
+}
+
+#[test]
+fn cfg_yaml_2_keys_that_differ_only_in_quoting_are_duplicates() {
+    let report = scan_refusal("name: a\n\"name\": b\n");
+    assert_eq!(codes(&report), ["yaml.duplicate-key"]);
+}
+
+// ----- CFG-YAML-3 -----
+
+#[test]
+fn cfg_yaml_3_anchor_is_refused_with_the_write_in_full_fix() {
+    let report = scan_refusal("base: &shared\n  a: 1\n");
+    assert_diagnostic(
+        only(&report),
+        "yaml.anchor",
+        "/base",
+        (1, 7),
+        "an anchor (`&name`) is not supported",
+        "Remove the anchor and write the value in full where it is used.",
+    );
+}
+
+#[test]
+fn cfg_yaml_3_alias_is_refused_with_the_write_in_full_fix() {
+    let report = scan_refusal("base: &shared 1\nother: *shared\n");
+    assert_eq!(codes(&report), ["yaml.anchor", "yaml.alias"]);
+    let alias = &report.diagnostics()[1];
+    assert_diagnostic(
+        alias,
+        "yaml.alias",
+        "/other",
+        (2, 8),
+        "an alias (`*name`) is not supported; a lone `*` is not a wildcard",
+        "Write the value in full where it is used, or quote it if it is text such as `*`.",
+    );
+}
+
+#[test]
+fn cfg_yaml_3_alias_to_an_unknown_anchor_is_an_alias() {
+    let report = scan_refusal("other: *nowhere\n");
+    assert_eq!(codes(&report), ["yaml.alias"]);
+    assert_eq!(at(&report.diagnostics()[0]), (1, 8));
+}
+
+#[test]
+fn cfg_yaml_3_lone_star_is_an_alias_and_the_fix_says_to_quote_it() {
+    for text in ["scope: *\n", "scopes: [*]\n", "scopes:\n  - *\n"] {
+        let report = scan_refusal(text);
+        let diagnostic = only(&report);
+        assert_eq!(diagnostic.code, "yaml.alias", "{text}");
+        assert!(diagnostic.message.contains("a lone `*` is not a wildcard"));
+        assert!(diagnostic.suggested_action.contains("quote it"));
+    }
+    // Quoted, it is text.
+    let value = scan_ok("scope: \"*\"\n");
+    let NodeValue::Mapping(entries) = value else {
+        panic!("a mapping");
+    };
+    assert!(matches!(&entries[0].value.value, NodeValue::String(text) if text.text == "*"));
+}
+
+#[test]
+fn cfg_yaml_3_merge_key_is_named_as_such() {
+    let report = scan_refusal("defaults: {a: 1}\nprofile:\n  <<: {a: 1}\n  b: 2\n");
+    assert_diagnostic(
+        only(&report),
+        "yaml.merge-key",
+        "/profile/<<",
+        (3, 3),
+        "a merge key (`<<`) is not supported",
+        "Write the value in full where it is used.",
+    );
+}
+
+/// Only a plain `<<` merges in the YAML versions that have merge keys; a
+/// quoted one is an ordinary key, which a format then refuses as unknown.
+#[test]
+fn cfg_yaml_3_a_quoted_merge_key_is_an_ordinary_key() {
+    let value = scan_ok("profile:\n  \"<<\": {a: 1}\n");
+    let NodeValue::Mapping(entries) = value else {
+        panic!("a mapping");
+    };
+    let NodeValue::Mapping(profile) = &entries[0].value.value else {
+        panic!("a mapping");
+    };
+    assert_eq!(profile[0].key, "<<");
+}
+
+// ----- CFG-YAML-4 -----
+
+#[test]
+fn cfg_yaml_4_explicit_tags_are_refused() {
+    let report = scan_refusal("a: !!str 1\nb: !custom x\nc: !!map {}\n");
+    let found: Vec<(&str, (usize, usize))> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), at(d)))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("yaml.tag", (1, 4)),
+            ("yaml.tag", (2, 4)),
+            ("yaml.tag", (3, 4))
+        ]
+    );
+    assert_eq!(
+        report.diagnostics()[0].suggested_action,
+        "Remove the tag; quote the value if it is text."
+    );
+}
+
+// ----- CFG-YAML-5 -----
+
+#[test]
+fn cfg_yaml_5_plain_keys_that_resolve_to_other_types_are_refused() {
+    let report = scan_refusal("1: a\ntrue: b\n~: c\n1.5: d\n");
+    let found: Vec<(&str, (usize, usize), &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), at(d), d.suggested_action.as_str()))
+        .collect();
+    let fix = "Quote the key to make it text.";
+    assert_eq!(
+        found,
+        [
+            ("yaml.non-string-key", (1, 1), fix),
+            ("yaml.non-string-key", (2, 1), fix),
+            ("yaml.non-string-key", (3, 1), fix),
+            ("yaml.non-string-key", (4, 1), fix),
+        ]
+    );
+}
+
+#[test]
+fn cfg_yaml_5_quoted_keys_are_text() {
+    let NodeValue::Mapping(entries) = scan_ok("\"1\": a\n'true': b\n") else {
+        panic!("a mapping");
+    };
+    let keys: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
+    assert_eq!(keys, ["1", "true"]);
+}
+
+#[test]
+fn cfg_yaml_5_complex_keys_are_refused() {
+    let report = scan_refusal("? [a, b]\n: c\n");
+    assert_eq!(codes(&report), ["yaml.non-string-key"]);
+    assert_eq!(at(&report.diagnostics()[0]), (1, 3));
+}
+
+// ----- CFG-YAML-6 -----
+
+/// A document of exactly `size` bytes.
+fn document_of(size: usize) -> String {
+    let head = format!("{ENVELOPE}padding: \"");
+    let tail = "\"\n";
+    let fill = size - head.len() - tail.len();
+    format!("{head}{}{tail}", "x".repeat(fill))
+}
+
+#[test]
+fn cfg_yaml_6_a_document_of_exactly_the_bound_is_read() {
+    let text = document_of(MAXIMUM_DOCUMENT_BYTES);
+    assert_eq!(text.len(), 1024 * 1024);
+    let document = Reader::new(FILE)
+        .read(text.as_bytes(), &EXPECT)
+        .unwrap_or_else(|report| panic!("{report}"));
+    assert!(document.root().get("padding").is_some());
+}
+
+#[test]
+fn cfg_yaml_6_one_byte_over_the_bound_is_refused_before_parsing() {
+    // Over the bound, even bytes that are not YAML are never parsed.
+    let mut bytes = document_of(MAXIMUM_DOCUMENT_BYTES + 1).into_bytes();
+    bytes[0] = 0xff;
+    let report = Reader::new(FILE).read(&bytes, &EXPECT).unwrap_err();
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.too-large");
+    assert_eq!(diagnostic.path, "");
+    let source = diagnostic.source.as_ref().unwrap();
+    assert_eq!((source.line, source.column), (None, None));
+    assert_eq!(source.file, FILE);
+    assert!(
+        diagnostic.message.contains("1048576-byte (1 MiB) bound"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+fn nested_lists(depth: usize) -> String {
+    format!("{}{}\n", "[".repeat(depth), "]".repeat(depth))
+}
+
+#[test]
+fn cfg_yaml_6_nesting_to_the_bound_is_read() {
+    assert_eq!(MAXIMUM_DEPTH, 128);
+    let text = nested_lists(MAXIMUM_DEPTH);
+    assert!(Reader::new(FILE).scan(text.as_bytes()).is_ok());
+}
+
+#[test]
+fn cfg_yaml_6_nesting_past_the_bound_is_refused_naming_it() {
+    let report = scan_refusal(&nested_lists(MAXIMUM_DEPTH + 1));
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.too-deep");
+    assert_eq!(at(diagnostic), (1, 129));
+    assert_eq!(
+        diagnostic.message,
+        "the document nests deeper than 128 levels"
+    );
+    assert_eq!(diagnostic.suggested_action, "Flatten the structure.");
+}
+
+#[test]
+fn cfg_yaml_6_block_nesting_past_the_bound_is_refused() {
+    let mut text = String::new();
+    for level in 0..=MAXIMUM_DEPTH {
+        text.push_str(&" ".repeat(level * 2));
+        text.push_str("k:\n");
+    }
+    text.push_str(&" ".repeat((MAXIMUM_DEPTH + 1) * 2));
+    text.push_str("k: v\n");
+    let report = scan_refusal(&text);
+    assert_eq!(codes(&report), ["yaml.too-deep"]);
+}
+
+/// A megabyte of open brackets is refused without exhausting a small stack.
+#[test]
+fn cfg_yaml_6_a_megabyte_of_open_brackets_does_not_overflow_the_stack() {
+    let worker = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut outcomes = Vec::new();
+            for opener in ["[", "{", "- "] {
+                let text = opener.repeat(MAXIMUM_DOCUMENT_BYTES / opener.len());
+                let report = Reader::new(FILE).scan(text.as_bytes()).unwrap_err();
+                outcomes.push(codes(&report).join(","));
+            }
+            outcomes
+        })
+        .expect("spawn the reader thread");
+    let outcomes = worker.join().expect("the reader thread does not overflow");
+    assert_eq!(
+        outcomes,
+        ["yaml.too-deep", "yaml.too-deep", "yaml.too-deep"]
+    );
+}
+
+#[test]
+fn cfg_yaml_6_a_leading_byte_order_mark_is_ignored() {
+    let text = format!("\u{feff}{ENVELOPE}name: a\n");
+    let document = Reader::new(FILE)
+        .read(text.as_bytes(), &EXPECT)
+        .unwrap_or_else(|report| panic!("{report}"));
+    let entry = document.root().get("apiVersion").unwrap();
+    assert_eq!(
+        (entry.key_span.start.line, entry.key_span.start.column),
+        (1, 1)
+    );
+}
+
+#[test]
+fn cfg_yaml_6_crlf_line_endings_are_read_with_the_same_positions() {
+    let text = format!("{ENVELOPE}a: 1\nb: [1, &x 2]\n").replace('\n', "\r\n");
+    let report = Reader::new(FILE)
+        .read(text.as_bytes(), &EXPECT)
+        .unwrap_err();
+    assert_eq!(codes(&report), ["yaml.anchor"]);
+    assert_eq!(at(&report.diagnostics()[0]), (4, 8));
+    let text = format!("{ENVELOPE}a: \"one\n  two\"\n").replace('\n', "\r\n");
+    let document = Reader::new(FILE).read(text.as_bytes(), &EXPECT).unwrap();
+    let value = &document.root().get("a").unwrap().value.value;
+    assert!(matches!(value, NodeValue::String(text) if text.text == "one two"));
+}
+
+#[test]
+fn cfg_yaml_6_input_that_is_not_utf8_is_refused_at_the_first_bad_byte() {
+    let mut bytes = with_envelope("name: ab").into_bytes();
+    bytes.push(0xff);
+    bytes.extend_from_slice(b"\n");
+    let report = Reader::new(FILE).read(&bytes, &EXPECT).unwrap_err();
+    assert_diagnostic(
+        only(&report),
+        "yaml.not-utf8",
+        "",
+        (3, 9),
+        "the document is not valid UTF-8 from this position",
+        "Save the file as UTF-8.",
+    );
+}
+
+// ----- CFG-YAML-7 -----
+
+#[test]
+fn cfg_yaml_7_comments_carry_no_meaning() {
+    let as_json = |text: &str| {
+        Reader::new(FILE)
+            .scan(text.as_bytes())
+            .unwrap_or_else(|report| panic!("{report}"))
+            .expect("the document has a root")
+            .to_json_value()
+    };
+    let plain = as_json("a: 1\nb:\n  - x\n  - y\nc: {d: e}\n");
+    let commented = as_json(
+        "# leading\na: 1 # after a value\nb: # after a key\n  # between items\n  - x\n  - y # last\nc: {d: e} # flow\n# trailing\n",
+    );
+    assert_eq!(plain, commented);
+}
+
+// ----- CFG-YAML-8 -----
+
+#[test]
+fn cfg_yaml_8_tab_indentation() {
+    let report = scan_refusal("a:\n\tb: 1\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.tab-indentation");
+    assert_eq!(at(diagnostic), (2, 1));
+    assert_eq!(diagnostic.suggested_action, "Indent with spaces.");
+}
+
+#[test]
+fn cfg_yaml_8_unclosed_quote() {
+    let report = scan_refusal("a: 1\nb: \"never closed\nc: 2\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.unclosed-quote");
+    assert_eq!(at(diagnostic), (2, 4));
+    assert_eq!(diagnostic.suggested_action, "Close the quote.");
+}
+
+#[test]
+fn cfg_yaml_8_colon_in_plain_value() {
+    let report = scan_refusal("reason:\n  because: Overdue: move it\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.colon-in-plain-value");
+    assert_eq!(at(diagnostic).0, 2);
+    assert_eq!(diagnostic.suggested_action, "Quote the value.");
+}
+
+#[test]
+fn cfg_yaml_8_unexpected_end() {
+    let report = scan_refusal("a: 1\nb: [1, 2\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.unexpected-end");
+    assert!(at(diagnostic).0 >= 2);
+    assert_eq!(
+        diagnostic.message,
+        "the document ends inside the list or mapping opened with `[` on line 2, which needs a closing `]`"
+    );
+    assert_eq!(
+        diagnostic.suggested_action,
+        "Complete or remove the unfinished item."
+    );
+}
+
+#[test]
+fn cfg_yaml_8_other_syntax_errors() {
+    let report = scan_refusal("a: 1\n- b\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.syntax");
+    // The parser stops after the `- ` indicator it did not expect.
+    assert_eq!(at(diagnostic), (2, 3));
+    assert_eq!(
+        diagnostic.suggested_action,
+        "Check the indentation and punctuation at this position."
+    );
+}
+
+#[test]
+fn cfg_yaml_8_syntax_codes_are_the_closed_list() {
+    let closed = [
+        "yaml.tab-indentation",
+        "yaml.unclosed-quote",
+        "yaml.colon-in-plain-value",
+        "yaml.unexpected-end",
+        "yaml.syntax",
+    ];
+    for text in [
+        "a:\n\tb: 1\n",
+        "a: 'x\n",
+        "a: b: c\n",
+        "a: {b: 1\n",
+        "a: 1\n- b\n",
+        "]\n",
+        "a: b\n c: d\n",
+        "key: [a, b]]\n",
+        "- a\nb: c\n",
+        "a: \"\\q\"\n",
+    ] {
+        let report = scan_refusal(text);
+        let diagnostic = only(&report);
+        assert!(
+            closed.contains(&diagnostic.code.as_str()),
+            "{text:?}: {report}"
+        );
+        let source = diagnostic.source.as_ref().unwrap();
+        assert!(source.line.is_some() && source.column.is_some(), "{text:?}");
+        assert_eq!(diagnostic.severity, Severity::Error);
+    }
+}
+
+// ----- CFG-ENV-4 -----
+
+#[test]
+fn cfg_env_4_a_leading_start_marker_and_a_final_end_marker_are_accepted() {
+    let text = format!("---\n{ENVELOPE}name: a\n...\n");
+    assert!(Reader::new(FILE).read(text.as_bytes(), &EXPECT).is_ok());
+    let text = format!("# comment\n---\n{ENVELOPE}...\n# trailing comment\n");
+    assert!(Reader::new(FILE).read(text.as_bytes(), &EXPECT).is_ok());
+}
+
+#[test]
+fn cfg_env_4_a_second_document_is_refused() {
+    let text = format!("{ENVELOPE}---\n{ENVELOPE}");
+    let report = read_refusal(&text);
+    assert_diagnostic(
+        only(&report),
+        "yaml.multiple-documents",
+        "",
+        (3, 1),
+        "a second YAML document starts here; a file holds one document",
+        "Remove the `---` line and what follows it, or move the second document to its own file.",
+    );
+}
+
+#[test]
+fn cfg_env_4_a_document_after_an_end_marker_is_refused() {
+    let text = format!("{ENVELOPE}...\n{ENVELOPE}");
+    assert_eq!(codes(&read_refusal(&text)), ["yaml.multiple-documents"]);
+}
+
+#[test]
+fn cfg_env_4_empty_and_comment_only_files_are_a_missing_envelope() {
+    for text in [
+        "",
+        "\n\n",
+        "# only a comment\n# and another\n",
+        "---\n",
+        "---\n...\n",
+    ] {
+        let report = read_refusal(text);
+        assert_diagnostic(
+            only(&report),
+            "config.missing-envelope",
+            "",
+            (1, 1),
+            "the document is empty; a configuration file starts with apiVersion and kind",
+            "Start the file with `apiVersion: id.registrystack.org/formats/example/runtime/v1alpha1` and `kind: ExampleRuntimeConfig`.",
+        );
+    }
+}
+
+// ----- CFG-VAL-1 refusals -----
+
+#[test]
+fn cfg_val_1_ambiguous_numbers_are_refused_together() {
+    let report = scan_refusal("a: 0x1F\nb: 0123\nc: .inf\nd: .5\ne: -.NaN\nf: 0o17\ng: 5.\n");
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .collect();
+    let code = "yaml.ambiguous-number";
+    assert_eq!(
+        found,
+        [
+            (code, "/a"),
+            (code, "/b"),
+            (code, "/c"),
+            (code, "/d"),
+            (code, "/e"),
+            (code, "/f"),
+            (code, "/g"),
+        ]
+    );
+    assert_eq!(
+        report.diagnostics()[0].suggested_action,
+        "Write a decimal number, or quote it as text."
+    );
+}
+
+#[test]
+fn cfg_val_1_quoted_lookalikes_are_text() {
+    let NodeValue::Mapping(entries) = scan_ok("a: \"0x1F\"\nb: '0123'\nc: |\n  .inf\n") else {
+        panic!("a mapping");
+    };
+    assert!(entries
+        .iter()
+        .all(|entry| matches!(entry.value.value, NodeValue::String(_))));
+}
+
+#[test]
+fn cfg_val_1_integer_literals_outside_the_representable_range_are_refused() {
+    let report = scan_refusal("a: 18446744073709551616\nb: -9223372036854775809\nc: 1e999\n");
+    assert_eq!(
+        codes(&report),
+        [
+            "config.out-of-range",
+            "config.out-of-range",
+            "config.out-of-range"
+        ]
+    );
+    assert_no_marker(&report);
+}
+
+// ----- CFG-DIAG-5 -----
+
+#[test]
+fn cfg_diag_5_every_structural_problem_is_reported_in_one_run() {
+    let text = format!(
+        "{ENVELOPE}base: &a 1\nname: !!str x\nname: y\nport: 0x10\n<<: {{}}\nflag: *a\n1: x\n"
+    );
+    let report = read_refusal(&text);
+    assert_eq!(
+        codes(&report),
+        [
+            "yaml.anchor",
+            "yaml.tag",
+            "yaml.duplicate-key",
+            "yaml.ambiguous-number",
+            "yaml.merge-key",
+            "yaml.alias",
+            "yaml.non-string-key",
+        ]
+    );
+    let lines: Vec<usize> = report.diagnostics().iter().map(|d| at(d).0).collect();
+    assert_eq!(lines, [3, 4, 5, 6, 7, 8, 9]);
+}
+
+#[test]
+fn cfg_diag_5_structural_and_envelope_problems_are_reported_together() {
+    let report = read_refusal("kind: SomethingElse\nname: a\nname: b\n");
+    assert_eq!(
+        codes(&report),
+        [
+            "config.missing-envelope",
+            "config.wrong-kind",
+            "yaml.duplicate-key"
+        ]
+    );
+}
+
+#[test]
+fn cfg_diag_5_a_syntax_error_stops_the_read_alone() {
+    // Past a syntax error the parser cannot say where anything is.
+    let report = read_refusal("kind: x\nname: &a b\nc: \"open\n");
+    assert_eq!(codes(&report), ["yaml.anchor", "yaml.unclosed-quote"]);
+}
