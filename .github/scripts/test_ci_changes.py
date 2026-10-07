@@ -1234,6 +1234,27 @@ class CiChangesTest(unittest.TestCase):
             step["env"]["ACTIVATION_TEST_DATABASE_URL"],
         )
 
+    def test_nightly_platform_coverage_has_the_pull_request_database(self) -> None:
+        # The nightly platform shard runs the same --all-features build as
+        # platform-coverage, whose PostgreSQL tests fail rather than skip
+        # without their database, so it needs the same service and URLs.
+        pull_request = self.workflow_jobs["platform-coverage"]
+        nightly = yaml.safe_load(
+            Path(".github/workflows/nightly-rust-coverage.yml").read_text()
+        )["jobs"]["rust"]
+        self.assertEqual(nightly.get("services"), pull_request["services"])
+
+        def database_urls(job: dict[str, Any], step_name: str) -> dict[str, str]:
+            step = next(step for step in job["steps"] if step.get("name") == step_name)
+            return {
+                name: value for name, value in step.get("env", {}).items()
+                if name.endswith("_DATABASE_URL")
+            }
+
+        expected = database_urls(pull_request, "Enforce platform line coverage")
+        self.assertTrue(expected)
+        self.assertEqual(database_urls(nightly, "Run shard with coverage"), expected)
+
     def test_source_client_tutorial_includes_messaging_before_release_admission(self) -> None:
         script = next(
             step["run"] for step in self.workflow_jobs["evidence-tutorials"]["steps"]

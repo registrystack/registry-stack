@@ -53,6 +53,25 @@ jobs:
       COVERAGE_ALL_FEATURES: ${{ matrix.all_features }}
       COVERAGE_FEATURES: ${{ matrix.features }}
       COVERAGE_PACKAGES: ${{ matrix.packages }}
+    # The platform shard's --all-features build enables the dispatch and
+    # activation PostgreSQL tests, which fail rather than skip without their
+    # disposable database. The other shards start the service and leave it
+    # unused, so this definition stays identical to platform-coverage in
+    # ci.yml, which .github/scripts/test_ci_changes.py holds.
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: dispatch
+          POSTGRES_USER: dispatch
+          POSTGRES_PASSWORD: dispatch_test
+        options: >-
+          --health-cmd "pg_isready -U dispatch -d dispatch"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -75,6 +94,9 @@ jobs:
 
       - name: Run shard with coverage
         shell: bash
+        env:
+          DISPATCH_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
+          ACTIVATION_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
         run: |
           set -euo pipefail
 
