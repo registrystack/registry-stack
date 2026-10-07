@@ -4027,34 +4027,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: casework/project
-  location: crates/registry-casework-core/src/policy.rs#ClockPolicy
-  class: pending
-  wp: WP3
-  reason: ClockPolicy derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: casework/project
-  location: crates/registry-casework-core/src/routing.rs#RoutingPredicate
-  class: pending
-  wp: WP3
-  reason: RoutingPredicate derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-SCHEMA-8
-  format: casework/project
-  location: crates/registry-casework-core/src/task_grant.rs#TaskGrantBounds
-  class: pending
-  wp: WP3
-  reason: TaskGrantBounds derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-YAML-1
-  format: casework/project
-  location: crates/registry-casework-core/src/config.rs#load()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: casework/retention-erase-report
   location: products/casework/contracts/cli/RetentionEraseReport.schema.json#/properties

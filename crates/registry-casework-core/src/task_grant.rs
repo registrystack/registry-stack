@@ -1,13 +1,11 @@
 //! Governed task delegation policy and immutable source-bound authorization.
+use crate::finding::{ConfigFinding, Findings};
 use crate::{
     CaseworkProject, CaseworkRole, IssuerPrincipal, OccurrenceState, SourceBinding, SubjectRef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+use std::{collections::BTreeMap, fmt};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -73,8 +71,18 @@ impl fmt::Debug for TaskTemplate {
     }
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+/// The product-specific authority a task grant carries, chosen by its `type`
+/// member. The shared reader's union helper decodes it so every error inside
+/// a variant keeps its position (CFG-SCHEMA-8); the wire form is unchanged.
+#[derive(Clone, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum TaskGrantBounds {
     Evidence {
         requirement: String,
@@ -85,6 +93,34 @@ pub enum TaskGrantBounds {
     Scheduling {
         permissions: Vec<SchedulingTaskPermission>,
     },
+}
+registry_platform_yaml::tagged_union!(TaskGrantBounds);
+
+/// The serialized form of [`TaskGrantBounds`], kept byte-identical to the
+/// stored and published shape.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TaskGrantBoundsWire<'a> {
+    Evidence {
+        requirement: &'a str,
+    },
+    Breg {
+        permissions: &'a [TaskPermission],
+    },
+    Scheduling {
+        permissions: &'a [SchedulingTaskPermission],
+    },
+}
+
+impl Serialize for TaskGrantBounds {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Evidence { requirement } => TaskGrantBoundsWire::Evidence { requirement },
+            Self::Breg { permissions } => TaskGrantBoundsWire::Breg { permissions },
+            Self::Scheduling { permissions } => TaskGrantBoundsWire::Scheduling { permissions },
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -109,143 +145,460 @@ pub struct SchedulingTaskPermission {
 
 impl TaskGrantBounds {
     pub fn check(&self) -> Result<(), TaskGrantError> {
-        match self {
-            Self::Evidence { requirement } if bounded_grant_identifier(requirement, 512) => Ok(()),
-            Self::Breg { permissions } if !permissions.is_empty() && permissions.len() <= 64 => {
-                let mut collections = BTreeSet::new();
-                for permission in permissions {
-                    if !bounded_grant_identifier(&permission.collection, 512)
-                        || !collections.insert(&permission.collection)
-                        || !unique(&permission.operations, 32)
-                        || permission
-                            .operations
-                            .iter()
-                            .any(|op| !op.bytes().all(|c| c.is_ascii_lowercase() || c == b'_'))
-                    {
-                        return Err(TaskGrantError::Policy);
-                    }
-                }
-                Ok(())
-            }
-            Self::Scheduling { permissions }
-                if !permissions.is_empty() && permissions.len() <= 64 =>
-            {
-                let mut offerings = BTreeSet::new();
-                for permission in permissions {
-                    if !bounded_grant_identifier(&permission.service, 512)
-                        || !bounded_grant_identifier(&permission.location, 512)
-                        || !offerings.insert((&permission.service, &permission.location))
-                        || !unique(&permission.actions, 32)
-                        || permission
-                            .actions
-                            .iter()
-                            .any(|action| !valid_operation(action))
-                    {
-                        return Err(TaskGrantError::Policy);
-                    }
-                }
-                Ok(())
-            }
-            _ => Err(TaskGrantError::Policy),
+        if self.findings().is_empty() {
+            Ok(())
+        } else {
+            Err(TaskGrantError::Policy)
         }
     }
+
+    /// Every problem in these bounds, located by pointers relative to the
+    /// `bounds` member.
+    #[must_use]
+    pub fn findings(&self) -> Vec<ConfigFinding> {
+        let mut findings = Findings::default();
+        match self {
+            Self::Evidence { requirement } => {
+                if !bounded_grant_identifier(requirement, 512) {
+                    findings.push(
+                        "casework.task-template.invalid-bounds",
+                        "/requirement",
+                        GRANT_IDENTIFIER_MESSAGE,
+                        "Write the Evidence requirement identifier.",
+                    );
+                }
+            }
+            Self::Breg { permissions } => {
+                permission_count_findings(&mut findings, permissions.len());
+                findings.repeated(
+                    permissions.iter().enumerate().map(|(index, permission)| {
+                        (
+                            format!("/permissions/{index}/collection"),
+                            permission.collection.as_str(),
+                        )
+                    }),
+                    "casework.task-template.duplicate-permission",
+                    "this collection already has a permission",
+                    "Merge the operations into one permission per collection.",
+                );
+                for (index, permission) in permissions.iter().enumerate() {
+                    let at = format!("/permissions/{index}");
+                    if !bounded_grant_identifier(&permission.collection, 512) {
+                        findings.push(
+                            "casework.task-template.invalid-bounds",
+                            format!("{at}/collection"),
+                            GRANT_IDENTIFIER_MESSAGE,
+                            "Write the registry collection identifier.",
+                        );
+                    }
+                    list_findings(
+                        &mut findings,
+                        &format!("{at}/operations"),
+                        &permission.operations,
+                        32,
+                    );
+                    for (operation_index, operation) in permission.operations.iter().enumerate() {
+                        if !operation
+                            .bytes()
+                            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                        {
+                            findings.push(
+                                "casework.task-template.invalid-operation",
+                                format!("{at}/operations/{operation_index}"),
+                                "expected lowercase letters and '_'",
+                                "Write a registry operation, such as read or update_status.",
+                            );
+                        }
+                    }
+                }
+            }
+            Self::Scheduling { permissions } => {
+                permission_count_findings(&mut findings, permissions.len());
+                findings.repeated(
+                    permissions.iter().enumerate().map(|(index, permission)| {
+                        (
+                            format!("/permissions/{index}"),
+                            (permission.service.as_str(), permission.location.as_str()),
+                        )
+                    }),
+                    "casework.task-template.duplicate-permission",
+                    "this service and location already have a permission",
+                    "Merge the actions into one permission per service and location.",
+                );
+                for (index, permission) in permissions.iter().enumerate() {
+                    let at = format!("/permissions/{index}");
+                    for (member, value) in [
+                        ("service", &permission.service),
+                        ("location", &permission.location),
+                    ] {
+                        if !bounded_grant_identifier(value, 512) {
+                            findings.push(
+                                "casework.task-template.invalid-bounds",
+                                format!("{at}/{member}"),
+                                GRANT_IDENTIFIER_MESSAGE,
+                                "Write the Scheduling identifier.",
+                            );
+                        }
+                    }
+                    list_findings(
+                        &mut findings,
+                        &format!("{at}/actions"),
+                        &permission.actions,
+                        32,
+                    );
+                    for (action_index, action) in permission.actions.iter().enumerate() {
+                        if !valid_operation(action) {
+                            findings.push(
+                                "casework.task-template.invalid-operation",
+                                format!("{at}/actions/{action_index}"),
+                                "expected 1 to 128 characters: a lowercase letter, then lowercase letters, digits, '.', '_', ':', or '-'",
+                                "Write a Scheduling action, such as appointment.book.",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        findings.into_vec()
+    }
+}
+
+const GRANT_IDENTIFIER_MESSAGE: &str =
+    "expected 1 to 512 bytes with no whitespace, control characters, or '*'";
+
+fn permission_count_findings(findings: &mut Findings, count: usize) {
+    if count == 0 || count > 64 {
+        findings.push(
+            "casework.task-template.permissions-out-of-range",
+            "/permissions",
+            "expected 1 to 64 permissions",
+            "List at least one permission and no more than 64.",
+        );
+    }
+}
+
+/// The findings `unique` stands for: a non-empty, bounded list of distinct
+/// bounded values, at `pointer`.
+fn list_findings(findings: &mut Findings, pointer: &str, values: &[String], maximum: usize) {
+    if values.is_empty() {
+        findings.push(
+            "casework.task-template.empty-list",
+            pointer,
+            "expected at least one entry",
+            "List at least one entry.",
+        );
+    }
+    if values.len() > maximum {
+        findings.push(
+            "casework.task-template.too-many-entries",
+            pointer,
+            format!("at most {maximum} entries may be listed"),
+            "Remove entries until no more than the bound remain.",
+        );
+    }
+    for (index, value) in values.iter().enumerate() {
+        if !bounded(value, 512) {
+            findings.push(
+                "casework.task-template.invalid-entry",
+                format!("{pointer}/{index}"),
+                "expected 1 to 512 bytes with no control characters or '*'",
+                "Write the entry without control characters or '*'.",
+            );
+        }
+    }
+    findings.repeated(
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (format!("{pointer}/{index}"), value.as_str())),
+        "casework.task-template.duplicate-entry",
+        "this entry is already listed",
+        "List each entry once.",
+    );
 }
 
 impl TaskTemplate {
     pub fn check(&self, project: &CaseworkProject) -> Result<(), TaskGrantError> {
+        if self.findings(project).is_empty() {
+            Ok(())
+        } else {
+            Err(TaskGrantError::Policy)
+        }
+    }
+
+    /// Every problem in this template, located by pointers relative to the
+    /// template.
+    #[must_use]
+    pub fn findings(&self, project: &CaseworkProject) -> Vec<ConfigFinding> {
+        let mut findings = Findings::default();
         let source = project
             .sources
             .iter()
-            .find(|source| source.id == self.source)
-            .ok_or(TaskGrantError::Policy)?;
+            .find(|source| source.id == self.source);
+        if source.is_none() {
+            findings.push(
+                "casework.task-template.unknown-source",
+                "/source",
+                "no source in sources has this id",
+                "Name a source declared under sources.",
+            );
+        }
         let work_item_mode = !self.item_kinds.is_empty() || !self.item_states.is_empty();
         let review_mode = !self.review_kinds.is_empty();
-        if work_item_mode == review_mode
-            || !crate::valid_directory_identifier(&self.id)
-            || !bounded(&self.version, 128)
-            || !bounded(&self.label, 160)
-            || !unique(&self.eligible_teams, 32)
-            || self
-                .eligible_teams
-                .iter()
-                .any(|team| !crate::valid_directory_identifier(team))
-            || !unique(&self.eligible_profiles, 32)
-            || self.eligible_profiles.iter().any(|id| {
-                !project.access_profiles.iter().any(|profile| {
-                    profile.id == *id
-                        && matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
-                })
-            })
-            || (work_item_mode && !unique(&self.item_kinds, 32))
-            || (work_item_mode
-                && self.item_kinds.iter().any(|kind| {
-                    !source
+        if work_item_mode && review_mode {
+            findings.push(
+                "casework.task-template.mixed-eligibility",
+                "/reviewKinds",
+                "a template is eligible either on source work items (itemKinds and itemStates) or on review kinds (reviewKinds), not both",
+                "Remove reviewKinds, or remove itemKinds and itemStates.",
+            );
+        } else if !work_item_mode && !review_mode {
+            findings.push(
+                "casework.task-template.no-eligibility",
+                "",
+                "a template names neither source work items (itemKinds and itemStates) nor review kinds (reviewKinds)",
+                "Add itemKinds and itemStates, or add reviewKinds.",
+            );
+        }
+        if !crate::valid_directory_identifier(&self.id) {
+            findings.push(
+                "casework.task-template.invalid-id",
+                "/id",
+                crate::finding::DIRECTORY_IDENTIFIER_MESSAGE,
+                crate::finding::DIRECTORY_IDENTIFIER_ACTION,
+            );
+        }
+        for (member, value, maximum) in
+            [("version", &self.version, 128), ("label", &self.label, 160)]
+        {
+            if !bounded(value, maximum) {
+                findings.push(
+                    "casework.task-template.invalid-text",
+                    format!("/{member}"),
+                    format!("expected 1 to {maximum} bytes with no control characters or '*'"),
+                    "Write the value without control characters or '*'.",
+                );
+            }
+        }
+        list_findings(&mut findings, "/eligibleTeams", &self.eligible_teams, 32);
+        for (index, team) in self.eligible_teams.iter().enumerate() {
+            if bounded(team, 512) && !crate::valid_directory_identifier(team) {
+                findings.push(
+                    "casework.task-template.invalid-team",
+                    format!("/eligibleTeams/{index}"),
+                    crate::finding::DIRECTORY_IDENTIFIER_MESSAGE,
+                    crate::finding::DIRECTORY_IDENTIFIER_ACTION,
+                );
+            }
+        }
+        list_findings(
+            &mut findings,
+            "/eligibleProfiles",
+            &self.eligible_profiles,
+            32,
+        );
+        for (index, id) in self.eligible_profiles.iter().enumerate() {
+            let eligible = project.access_profiles.iter().any(|profile| {
+                profile.id == *id
+                    && matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
+            });
+            if !eligible {
+                findings.push(
+                    "casework.task-template.ineligible-profile",
+                    format!("/eligibleProfiles/{index}"),
+                    "no staff or supervisor access profile has this id",
+                    "Name an access profile with role staff or supervisor.",
+                );
+            }
+        }
+        if work_item_mode {
+            list_findings(&mut findings, "/itemKinds", &self.item_kinds, 32);
+            if let Some(source) = source {
+                for (index, kind) in self.item_kinds.iter().enumerate() {
+                    if !source
                         .requests
                         .iter()
                         .any(|request| request.entity == *kind)
-                }))
-            || (work_item_mode && self.item_states.is_empty())
-            || self.item_states.len() > 4
-            || (work_item_mode
-                && self.item_states.iter().any(|state| {
-                    !matches!(
-                        state,
-                        OccurrenceState::Claimed
-                            | OccurrenceState::WaitingApplicant
-                            | OccurrenceState::WaitingApplication
-                    )
-                }))
-            || self
-                .item_states
+                    {
+                        findings.push(
+                            "casework.task-template.unknown-item-kind",
+                            format!("/itemKinds/{index}"),
+                            "the template's source has no request with this entity",
+                            "Name an entity listed under the source's requests.",
+                        );
+                    }
+                }
+            }
+            if self.item_states.is_empty() {
+                findings.push(
+                    "casework.task-template.empty-list",
+                    "/itemStates",
+                    "expected at least one entry",
+                    "List claimed, waiting_applicant, or waiting_application.",
+                );
+            }
+            for (index, state) in self.item_states.iter().enumerate() {
+                if !matches!(
+                    state,
+                    OccurrenceState::Claimed
+                        | OccurrenceState::WaitingApplicant
+                        | OccurrenceState::WaitingApplication
+                ) {
+                    findings.push(
+                        "casework.task-template.unsupported-item-state",
+                        format!("/itemStates/{index}"),
+                        "a task grant is issued only on a claimed or waiting item",
+                        "Write claimed, waiting_applicant, or waiting_application.",
+                    );
+                }
+            }
+        }
+        if self.item_states.len() > 4 {
+            findings.push(
+                "casework.task-template.too-many-entries",
+                "/itemStates",
+                "at most 4 entries may be listed",
+                "Remove entries until no more than the bound remain.",
+            );
+        }
+        findings.repeated(
+            self.item_states
                 .iter()
                 .enumerate()
-                .any(|(index, state)| self.item_states[..index].contains(state))
-            || (review_mode && !unique(&self.review_kinds, 32))
-            || self.review_kinds.iter().any(|kind| {
-                !project.review_kinds.iter().any(|candidate| {
-                    candidate.id == *kind
-                        && candidate.stages.iter().any(|stage| {
-                            stage
-                                .deciding_profiles
-                                .iter()
-                                .any(|profile| self.eligible_profiles.contains(profile))
-                        })
-                })
-            })
-            || !bounded(&self.agent.issuer, 512)
-            || !bounded(&self.agent.subject, 512)
-            || !bounded(&self.client, 512)
-            || !bounded(&self.resource, 512)
-            || !unique(&self.scopes, 32)
-            || self.scopes.iter().any(|scope| {
-                scope.len() > 128
-                    || !scope
-                        .bytes()
-                        .all(|byte| matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
-            })
-            || !bounded(&self.purpose, 128)
+                .map(|(index, state)| (format!("/itemStates/{index}"), format!("{state:?}"))),
+            "casework.task-template.duplicate-entry",
+            "this entry is already listed",
+            "List each entry once.",
+        );
+        if review_mode {
+            list_findings(&mut findings, "/reviewKinds", &self.review_kinds, 32);
+        }
+        for (index, kind) in self.review_kinds.iter().enumerate() {
+            let decidable = project.review_kinds.iter().any(|candidate| {
+                candidate.id == *kind
+                    && candidate.stages.iter().any(|stage| {
+                        stage
+                            .deciding_profiles
+                            .iter()
+                            .any(|profile| self.eligible_profiles.contains(profile))
+                    })
+            });
+            if !decidable {
+                findings.push(
+                    "casework.task-template.unknown-review-kind",
+                    format!("/reviewKinds/{index}"),
+                    "no review kind with this id has a stage decided by one of the template's eligibleProfiles",
+                    "Name a review kind declared under reviewKinds whose stage lists an eligible profile in decidingProfiles.",
+                );
+            }
+        }
+        for (pointer, value) in [
+            ("/agent/issuer", &self.agent.issuer),
+            ("/agent/subject", &self.agent.subject),
+            ("/client", &self.client),
+            ("/resource", &self.resource),
+        ] {
+            if !bounded(value, 512) {
+                findings.push(
+                    "casework.task-template.invalid-text",
+                    pointer,
+                    "expected 1 to 512 bytes with no control characters or '*'",
+                    "Write the value without control characters or '*'.",
+                );
+            }
+        }
+        list_findings(&mut findings, "/scopes", &self.scopes, 32);
+        for (index, scope) in self.scopes.iter().enumerate() {
+            if scope.len() > 128
+                || !scope
+                    .bytes()
+                    .all(|byte| matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
+            {
+                findings.push(
+                    "casework.task-template.invalid-scope",
+                    format!("/scopes/{index}"),
+                    "expected an OAuth scope token of at most 128 printable ASCII characters, without spaces, '\"', or '\\'",
+                    "Write one OAuth scope per entry.",
+                );
+            }
+        }
+        if !bounded(&self.purpose, 128)
             || !matches!(self.purpose.as_bytes().first(), Some(b'a'..=b'z'))
             || self.purpose.bytes().any(|byte| {
                 !(byte.is_ascii_lowercase()
                     || byte.is_ascii_digit()
                     || matches!(byte, b'-' | b'_' | b':' | b'.'))
             })
-            || self.subjects.is_empty()
-            || self.subjects.len() > 32
-            || self.subjects.iter().any(|(claim, field)| {
-                !crate::valid_directory_identifier(claim) || !bounded(field, 128)
-            })
-            || self.lifetime_seconds == 0
-            || self.lifetime_seconds > TASK_GRANT_LIFETIME_SECONDS
         {
-            return Err(TaskGrantError::Policy);
+            findings.push(
+                "casework.task-template.invalid-purpose",
+                "/purpose",
+                "expected 1 to 128 characters: a lowercase letter, then lowercase letters, digits, '-', '_', ':', or '.'",
+                "Write a purpose, such as eligibility.review.",
+            );
         }
-        self.bounds.check()?;
+        if self.subjects.is_empty() || self.subjects.len() > 32 {
+            findings.push(
+                "casework.task-template.subjects-out-of-range",
+                "/subjects",
+                "expected 1 to 32 subject claims",
+                "Map at least one token claim, and no more than 32, to a source field.",
+            );
+        }
+        for (claim, field) in &self.subjects {
+            let at = format!(
+                "/subjects/{}",
+                registry_platform_yaml::escape_pointer_segment(claim)
+            );
+            if !crate::valid_directory_identifier(claim) {
+                findings.push(
+                    "casework.task-template.invalid-subject-claim",
+                    at.as_str(),
+                    crate::finding::DIRECTORY_IDENTIFIER_MESSAGE,
+                    crate::finding::DIRECTORY_IDENTIFIER_ACTION,
+                );
+            }
+            if !bounded(field, 128) {
+                findings.push(
+                    "casework.task-template.invalid-subject-field",
+                    at,
+                    "expected a source field name of 1 to 128 bytes with no control characters or '*'",
+                    "Write the governed source field the claim takes its value from.",
+                );
+            }
+        }
+        if self.lifetime_seconds == 0 || self.lifetime_seconds > TASK_GRANT_LIFETIME_SECONDS {
+            findings.push(
+                "casework.task-template.lifetime-out-of-range",
+                "/lifetimeSeconds",
+                format!(
+                    "expected a whole number of seconds from 1 to {TASK_GRANT_LIFETIME_SECONDS}"
+                ),
+                "Write a lifetime within the bound.",
+            );
+        }
+        findings.extend_under("/bounds", self.bounds.findings());
         match (&self.bounds, &self.evidence_context) {
-            (TaskGrantBounds::Evidence { .. }, Some(context)) => context.check(),
-            (TaskGrantBounds::Breg { .. } | TaskGrantBounds::Scheduling { .. }, None) => Ok(()),
-            _ => Err(TaskGrantError::Policy),
+            (TaskGrantBounds::Evidence { .. }, Some(context)) => {
+                findings.extend_under("/evidenceContext", context.findings());
+            }
+            (TaskGrantBounds::Evidence { .. }, None) => findings.push(
+                "casework.task-template.missing-evidence-context",
+                "/bounds",
+                "an Evidence grant carries an evidenceContext",
+                "Add evidenceContext with requesterTags and audience.",
+            ),
+            (TaskGrantBounds::Breg { .. } | TaskGrantBounds::Scheduling { .. }, Some(_)) => {
+                findings.push(
+                    "casework.task-template.unexpected-evidence-context",
+                    "/evidenceContext",
+                    "evidenceContext applies only to bounds of type evidence",
+                    "Remove evidenceContext.",
+                );
+            }
+            (TaskGrantBounds::Breg { .. } | TaskGrantBounds::Scheduling { .. }, None) => {}
         }
+        findings.into_vec()
     }
 
     pub fn disclosed_subjects(
@@ -270,17 +623,28 @@ impl TaskTemplate {
 }
 
 impl EvidenceRequesterContext {
-    fn check(&self) -> Result<(), TaskGrantError> {
-        if !unique(&self.requester_tags, 32)
-            || self
-                .requester_tags
-                .iter()
-                .any(|tag| !valid_evidence_tag(tag))
-            || !registry_platform_httputil::valid_resource_uri(&self.audience)
-        {
-            return Err(TaskGrantError::Policy);
+    fn findings(&self) -> Vec<ConfigFinding> {
+        let mut findings = Findings::default();
+        list_findings(&mut findings, "/requesterTags", &self.requester_tags, 32);
+        for (index, tag) in self.requester_tags.iter().enumerate() {
+            if !valid_evidence_tag(tag) {
+                findings.push(
+                    "casework.task-template.invalid-requester-tag",
+                    format!("/requesterTags/{index}"),
+                    "expected 1 to 128 characters: a lowercase letter, then lowercase letters, digits, '.', '_', or '-'",
+                    "Write a requester tag the Evidence deployment admits.",
+                );
+            }
         }
-        Ok(())
+        if !registry_platform_httputil::valid_resource_uri(&self.audience) {
+            findings.push(
+                "casework.task-template.invalid-audience",
+                "/audience",
+                "expected an absolute resource URI with no fragment and no user information",
+                "Write the relying-party audience as an absolute URI, such as https://evidence.example.org.",
+            );
+        }
+        findings.into_vec()
     }
 }
 
@@ -414,12 +778,6 @@ fn valid_operation(value: &str) -> bool {
                 || byte.is_ascii_digit()
                 || matches!(byte, b'.' | b'_' | b':' | b'-')
         })
-}
-fn unique(values: &[String], maximum: usize) -> bool {
-    !values.is_empty()
-        && values.len() <= maximum
-        && values.iter().all(|value| bounded(value, 512))
-        && values.iter().collect::<BTreeSet<_>>().len() == values.len()
 }
 
 #[cfg(test)]

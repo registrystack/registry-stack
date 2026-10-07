@@ -41,11 +41,54 @@ pub struct RoutingCondition {
     pub fields: BTreeMap<String, RoutingPredicate>,
 }
 
+/// One field predicate, written as a mapping with exactly one key that names
+/// it: `{equals: value}` or `{oneOf: [values]}` (CFG-ID-7).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(untagged)]
+#[serde(from = "RoutingPredicateDocument", into = "RoutingPredicateDocument")]
 pub enum RoutingPredicate {
     Equals(EqualsPredicate),
     OneOf(OneOfPredicate),
+}
+
+/// The written form of [`RoutingPredicate`], an externally tagged union the
+/// shared reader decodes with positions.
+#[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+enum RoutingPredicateDocument {
+    /// The projected field equals this value.
+    Equals(Value),
+    /// The projected field equals one of these values.
+    OneOf(Vec<Value>),
+}
+
+impl From<RoutingPredicateDocument> for RoutingPredicate {
+    fn from(document: RoutingPredicateDocument) -> Self {
+        match document {
+            RoutingPredicateDocument::Equals(equals) => Self::Equals(EqualsPredicate { equals }),
+            RoutingPredicateDocument::OneOf(one_of) => Self::OneOf(OneOfPredicate { one_of }),
+        }
+    }
+}
+
+impl From<RoutingPredicate> for RoutingPredicateDocument {
+    fn from(predicate: RoutingPredicate) -> Self {
+        match predicate {
+            RoutingPredicate::Equals(predicate) => Self::Equals(predicate.equals),
+            RoutingPredicate::OneOf(predicate) => Self::OneOf(predicate.one_of),
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RoutingPredicate {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RoutingPredicate".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        RoutingPredicateDocument::json_schema(generator)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -91,13 +134,19 @@ pub fn validate_source_field_value(
         .compile(&descriptor.schema)
         .map_err(|_| {
             RoutingDiagnostic::new(
-                format!("source.fields.{}", descriptor.field),
+                format!(
+                    "/source/fields/{}",
+                    registry_platform_yaml::escape_pointer_segment(&descriptor.field)
+                ),
                 RoutingDiagnosticReason::UnknownField,
             )
         })?;
     schema.validate(value).map_err(|_| {
         RoutingDiagnostic::new(
-            format!("source.fields.{}", descriptor.field),
+            format!(
+                "/source/fields/{}",
+                registry_platform_yaml::escape_pointer_segment(&descriptor.field)
+            ),
             RoutingDiagnosticReason::InvalidSourceValue,
         )
     })
@@ -142,13 +191,20 @@ pub struct RoutingDecision {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingDiagnosticReason {
-    Bounds,
+    TooManyRules,
+    TooManyProjectionFields,
+    DuplicateProjectionField,
+    InvalidSourceMetadata,
     InvalidIdentifier,
+    DuplicateRuleId,
     InvalidReason,
     UnknownQueue,
     UnknownStage,
     UnknownField,
     FieldNotProjected,
+    TooManyPredicates,
+    PredicateValueCount,
+    DuplicatePredicateValue,
     InvalidPredicateValue,
     EmptyCondition,
     StageWithoutReview,
@@ -157,6 +213,107 @@ pub enum RoutingDiagnosticReason {
     UnexpectedSourceState,
 }
 
+impl RoutingDiagnosticReason {
+    /// The stable diagnostic code (CFG-DIAG-3).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::TooManyRules => "casework.routing.too-many-rules",
+            Self::TooManyProjectionFields => "casework.routing.too-many-projection-fields",
+            Self::DuplicateProjectionField => "casework.routing.duplicate-projection-field",
+            Self::InvalidSourceMetadata => "casework.routing.invalid-source-description",
+            Self::InvalidIdentifier => "casework.routing.invalid-rule-id",
+            Self::DuplicateRuleId => "casework.routing.duplicate-rule-id",
+            Self::InvalidReason => "casework.routing.invalid-because",
+            Self::UnknownQueue => "casework.routing.unknown-queue",
+            Self::UnknownStage => "casework.routing.unknown-stage",
+            Self::UnknownField => "casework.routing.unknown-field",
+            Self::FieldNotProjected => "casework.routing.field-not-projected",
+            Self::TooManyPredicates => "casework.routing.too-many-predicates",
+            Self::PredicateValueCount => "casework.routing.predicate-value-count",
+            Self::DuplicatePredicateValue => "casework.routing.duplicate-predicate-value",
+            Self::InvalidPredicateValue => "casework.routing.invalid-predicate-value",
+            Self::EmptyCondition => "casework.routing.empty-condition",
+            Self::StageWithoutReview => "casework.routing.stage-without-review",
+            Self::UnreachableRule => "casework.routing.unreachable-rule",
+            Self::InvalidSourceValue => "casework.routing.invalid-source-value",
+            Self::UnexpectedSourceState => "casework.routing.unexpected-source-state",
+        }
+    }
+
+    /// What is wrong, without repeating a value (CFG-SEC-3).
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::TooManyRules => "a request declares more than 64 routing rules",
+            Self::TooManyProjectionFields => "a request projects more than 32 fields",
+            Self::DuplicateProjectionField => "this field is already projected",
+            Self::InvalidSourceMetadata => {
+                "the source description's stages or fields are repeated, malformed, or over their bounds"
+            }
+            Self::InvalidIdentifier => {
+                "a rule id is 1 to 64 lowercase letters, digits, or hyphens, starting with a letter"
+            }
+            Self::DuplicateRuleId => "another rule of this request already uses this id",
+            Self::InvalidReason => "`because` is empty or longer than 256 bytes",
+            Self::UnknownQueue => "the queue is not declared under `queues`",
+            Self::UnknownStage => "the stage is not one the source description declares",
+            Self::UnknownField => "the field is not one the source description declares",
+            Self::FieldNotProjected => "the field is not listed in the request's `projection`",
+            Self::TooManyPredicates => "a rule tests more than 16 fields",
+            Self::PredicateValueCount => "a predicate names 1 to 32 values",
+            Self::DuplicatePredicateValue => "a predicate names the same value twice",
+            Self::InvalidPredicateValue => {
+                "a predicate value does not match the field's schema in the source description"
+            }
+            Self::EmptyCondition => "`when` names no activity, stage, or field",
+            Self::StageWithoutReview => "a stage is tested only by a review rule",
+            Self::UnreachableRule => "an earlier rule matches every input this rule matches",
+            Self::InvalidSourceValue => "the source returned a value its description does not allow",
+            Self::UnexpectedSourceState => {
+                "the source returned a stage the activity does not allow"
+            }
+        }
+    }
+
+    /// The edit that fixes it (CFG-DIAG-6).
+    #[must_use]
+    pub const fn suggested_action(self) -> &'static str {
+        match self {
+            Self::TooManyRules => "Merge rules, or route fewer cases explicitly and let the request's queue take the rest.",
+            Self::TooManyProjectionFields => "Project only the fields routing tests.",
+            Self::DuplicateProjectionField => "Remove the repeated entry.",
+            Self::InvalidSourceMetadata => {
+                "Regenerate the source description with the source's own tool and import it again."
+            }
+            Self::InvalidIdentifier => "Rename the rule with a valid id.",
+            Self::DuplicateRuleId => "Give each rule of the request its own id.",
+            Self::InvalidReason => "Write one sentence of at most 256 bytes saying why the rule routes here.",
+            Self::UnknownQueue => "Declare the queue under `queues`, or route to a declared queue.",
+            Self::UnknownStage => {
+                "Use a stage the source description lists, or import a description that declares it."
+            }
+            Self::UnknownField => {
+                "Use a field the source description lists, or import a description that declares it."
+            }
+            Self::FieldNotProjected => "Add the field to the request's `projection`, or stop testing it.",
+            Self::TooManyPredicates => "Test at most 16 fields in one rule.",
+            Self::PredicateValueCount => "Write `equals` with one value, or `oneOf` with 1 to 32 values.",
+            Self::DuplicatePredicateValue => "Remove the repeated value.",
+            Self::InvalidPredicateValue => "Write values the field's schema allows.",
+            Self::EmptyCondition => "Name the activity, stage, or fields the rule matches.",
+            Self::StageWithoutReview => "Set `activity: review`, or remove `stage`.",
+            Self::UnreachableRule => "Move the rule above the broader rule, or remove it.",
+            Self::InvalidSourceValue | Self::UnexpectedSourceState => {
+                "Correct the record in the source, or import the source's current description."
+            }
+        }
+    }
+}
+
+/// One routing finding. `path` is an RFC 6901 pointer relative to the source
+/// request that declares the rule (`/routing/0/when/stage`), or, for a live
+/// source value, to the observed subject (`/source/fields/region`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RoutingDiagnostic {
     pub path: String,
@@ -174,15 +331,20 @@ impl RoutingDiagnostic {
 
 impl fmt::Display for RoutingDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "routing policy refused at {}", self.path)
+        write!(
+            formatter,
+            "routing policy refused at {}: {}",
+            self.path,
+            self.reason.message()
+        )
     }
 }
 
 impl std::error::Error for RoutingDiagnostic {}
 
-/// Check queue references and rule order. Passing source metadata also checks
-/// source stages and validates authored predicate values against the source's
-/// generated field schemas.
+/// Check queue references and rule order, returning the first finding.
+/// Passing source metadata also checks source stages and validates authored
+/// predicate values against the source's generated field schemas.
 pub fn check_routing_policy(
     default_queue: &str,
     projection: &[String],
@@ -190,19 +352,32 @@ pub fn check_routing_policy(
     queues: &BTreeSet<String>,
     source: Option<&RoutingSourceMetadata>,
 ) -> Result<(), RoutingDiagnostic> {
-    if rules.len() > MAXIMUM_ROUTING_RULES
-        || projection.len() > MAXIMUM_ROUTING_PROJECTION_FIELDS
-        || projection.iter().collect::<BTreeSet<_>>().len() != projection.len()
-    {
-        return Err(RoutingDiagnostic::new(
-            "routing",
-            RoutingDiagnosticReason::Bounds,
+    routing_policy_findings(default_queue, projection, rules, queues, source)
+        .into_iter()
+        .next()
+        .map_or(Ok(()), Err)
+}
+
+/// Every finding [`check_routing_policy`] would report, in document order,
+/// so a check command reports them all in one run (CFG-DIAG-5).
+pub fn routing_policy_findings(
+    default_queue: &str,
+    projection: &[String],
+    rules: &[RoutingRule],
+    queues: &BTreeSet<String>,
+    source: Option<&RoutingSourceMetadata>,
+) -> Vec<RoutingDiagnostic> {
+    let mut findings = Vec::new();
+    if !queues.contains(default_queue) {
+        findings.push(RoutingDiagnostic::new(
+            "/queue",
+            RoutingDiagnosticReason::UnknownQueue,
         ));
     }
-    if !queues.contains(default_queue) {
-        return Err(RoutingDiagnostic::new(
-            "queue",
-            RoutingDiagnosticReason::UnknownQueue,
+    if projection.len() > MAXIMUM_ROUTING_PROJECTION_FIELDS {
+        findings.push(RoutingDiagnostic::new(
+            "/projection",
+            RoutingDiagnosticReason::TooManyProjectionFields,
         ));
     }
 
@@ -213,6 +388,7 @@ pub fn check_routing_policy(
             .map(|field| (field.field.as_str(), field))
             .collect::<BTreeMap<_, _>>()
     });
+    let mut source_usable = true;
     if let Some(metadata) = source {
         if metadata.stages.len() > MAXIMUM_ROUTING_SOURCE_STAGES
             || metadata.stages.iter().collect::<BTreeSet<_>>().len() != metadata.stages.len()
@@ -227,55 +403,77 @@ pub fn check_routing_policy(
                     || field.api_name.len() > 128
             })
         {
-            return Err(RoutingDiagnostic::new(
-                "source",
-                RoutingDiagnosticReason::Bounds,
+            source_usable = false;
+            findings.push(RoutingDiagnostic::new(
+                "",
+                RoutingDiagnosticReason::InvalidSourceMetadata,
             ));
         }
     }
-    if let Some(fields) = &source_fields {
-        for (index, field) in projection.iter().enumerate() {
-            if !fields.contains_key(field.as_str()) {
-                return Err(RoutingDiagnostic::new(
-                    format!("projection[{index}]"),
-                    RoutingDiagnosticReason::UnknownField,
-                ));
-            }
+    let source = source.filter(|_| source_usable);
+    let source_fields = source_fields.filter(|_| source_usable);
+
+    let mut projected = BTreeSet::new();
+    for (index, field) in projection.iter().enumerate() {
+        if !projected.insert(field.as_str()) {
+            findings.push(RoutingDiagnostic::new(
+                format!("/projection/{index}"),
+                RoutingDiagnosticReason::DuplicateProjectionField,
+            ));
+        } else if source_fields
+            .as_ref()
+            .is_some_and(|fields| !fields.contains_key(field.as_str()))
+        {
+            findings.push(RoutingDiagnostic::new(
+                format!("/projection/{index}"),
+                RoutingDiagnosticReason::UnknownField,
+            ));
         }
     }
 
+    if rules.len() > MAXIMUM_ROUTING_RULES {
+        findings.push(RoutingDiagnostic::new(
+            "/routing",
+            RoutingDiagnosticReason::TooManyRules,
+        ));
+    }
     let mut ids = BTreeSet::new();
     for (index, rule) in rules.iter().enumerate() {
-        let base = format!("routing[{index}]");
-        if !valid_identifier(&rule.id) || !ids.insert(rule.id.as_str()) {
-            return Err(RoutingDiagnostic::new(
-                format!("{base}.id"),
+        let base = format!("/routing/{index}");
+        if !valid_identifier(&rule.id) {
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/id"),
                 RoutingDiagnosticReason::InvalidIdentifier,
+            ));
+        } else if !ids.insert(rule.id.as_str()) {
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/id"),
+                RoutingDiagnosticReason::DuplicateRuleId,
             ));
         }
         if rule.because.trim().is_empty() || rule.because.len() > 256 {
-            return Err(RoutingDiagnostic::new(
-                format!("{base}.because"),
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/because"),
                 RoutingDiagnosticReason::InvalidReason,
             ));
         }
         if !queues.contains(&rule.queue) {
-            return Err(RoutingDiagnostic::new(
-                format!("{base}.queue"),
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/queue"),
                 RoutingDiagnosticReason::UnknownQueue,
             ));
         }
         if rule.when.activity.is_none() && rule.when.stage.is_none() && rule.when.fields.is_empty()
         {
-            return Err(RoutingDiagnostic::new(
-                format!("{base}.when"),
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/when"),
                 RoutingDiagnosticReason::EmptyCondition,
             ));
         }
         if rule.when.fields.len() > MAXIMUM_ROUTING_PREDICATES {
-            return Err(RoutingDiagnostic::new(
-                format!("{base}.when.fields"),
-                RoutingDiagnosticReason::Bounds,
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/when/fields"),
+                RoutingDiagnosticReason::TooManyPredicates,
             ));
         }
         if rule.when.stage.is_some()
@@ -284,50 +482,60 @@ pub fn check_routing_policy(
                 .activity
                 .is_some_and(|activity| activity != RoutingActivity::Review)
         {
-            return Err(RoutingDiagnostic::new(
-                format!("{base}.when.stage"),
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/when/stage"),
                 RoutingDiagnosticReason::StageWithoutReview,
             ));
-        }
-        if let (Some(stage), Some(metadata)) = (&rule.when.stage, source) {
+        } else if let (Some(stage), Some(metadata)) = (&rule.when.stage, source) {
             if !metadata.stages.contains(stage) {
-                return Err(RoutingDiagnostic::new(
-                    format!("{base}.when.stage"),
+                findings.push(RoutingDiagnostic::new(
+                    format!("{base}/when/stage"),
                     RoutingDiagnosticReason::UnknownStage,
                 ));
             }
         }
         for (field, predicate) in &rule.when.fields {
-            let path = format!("{base}.when.fields.{field}");
+            let path = format!(
+                "{base}/when/fields/{}",
+                registry_platform_yaml::escape_pointer_segment(field)
+            );
             if !projection.contains(field) {
-                return Err(RoutingDiagnostic::new(
+                findings.push(RoutingDiagnostic::new(
                     path,
                     RoutingDiagnosticReason::FieldNotProjected,
                 ));
+                continue;
             }
             let values = predicate_values(predicate);
-            if values.is_empty() || values.len() > MAXIMUM_ROUTING_VALUES || has_duplicates(values)
-            {
-                return Err(RoutingDiagnostic::new(
+            if values.is_empty() || values.len() > MAXIMUM_ROUTING_VALUES {
+                findings.push(RoutingDiagnostic::new(
                     path,
-                    RoutingDiagnosticReason::Bounds,
+                    RoutingDiagnosticReason::PredicateValueCount,
                 ));
+                continue;
+            }
+            if has_duplicates(values) {
+                findings.push(RoutingDiagnostic::new(
+                    path,
+                    RoutingDiagnosticReason::DuplicatePredicateValue,
+                ));
+                continue;
             }
             if let Some(fields) = &source_fields {
-                let Some(descriptor) = fields.get(field.as_str()) else {
-                    return Err(RoutingDiagnostic::new(
+                let Some(schema) = fields.get(field.as_str()).and_then(|descriptor| {
+                    JSONSchema::options()
+                        .with_draft(Draft::Draft202012)
+                        .compile(&descriptor.schema)
+                        .ok()
+                }) else {
+                    findings.push(RoutingDiagnostic::new(
                         path,
                         RoutingDiagnosticReason::UnknownField,
                     ));
+                    continue;
                 };
-                let schema = JSONSchema::options()
-                    .with_draft(Draft::Draft202012)
-                    .compile(&descriptor.schema)
-                    .map_err(|_| {
-                        RoutingDiagnostic::new(&path, RoutingDiagnosticReason::UnknownField)
-                    })?;
                 if values.iter().any(|value| schema.validate(value).is_err()) {
-                    return Err(RoutingDiagnostic::new(
+                    findings.push(RoutingDiagnostic::new(
                         path,
                         RoutingDiagnosticReason::InvalidPredicateValue,
                     ));
@@ -338,13 +546,13 @@ pub fn check_routing_policy(
             .iter()
             .any(|earlier| condition_subsumes(&earlier.when, &rule.when))
         {
-            return Err(RoutingDiagnostic::new(
+            findings.push(RoutingDiagnostic::new(
                 base,
                 RoutingDiagnosticReason::UnreachableRule,
             ));
         }
     }
-    Ok(())
+    findings
 }
 
 /// Evaluate the same first-match routing policy used by runtime reads and
@@ -367,20 +575,20 @@ pub fn evaluate_routing(
         RoutingActivity::Review => {
             let Some(stage) = context.stage.as_ref() else {
                 return Err(RoutingDiagnostic::new(
-                    "source.stage",
+                    "/source/stage",
                     RoutingDiagnosticReason::UnexpectedSourceState,
                 ));
             };
             if stage.is_empty() || stage.len() > 64 {
                 return Err(RoutingDiagnostic::new(
-                    "source.stage",
+                    "/source/stage",
                     RoutingDiagnosticReason::UnexpectedSourceState,
                 ));
             }
         }
         RoutingActivity::Apply if context.stage.is_some() => {
             return Err(RoutingDiagnostic::new(
-                "source.stage",
+                "/source/stage",
                 RoutingDiagnosticReason::UnexpectedSourceState,
             ));
         }
@@ -396,7 +604,10 @@ pub fn evaluate_routing(
         if let Some(value) = context.fields.get(field) {
             let descriptor = descriptors.get(field.as_str()).ok_or_else(|| {
                 RoutingDiagnostic::new(
-                    format!("source.fields.{field}"),
+                    format!(
+                        "/source/fields/{}",
+                        registry_platform_yaml::escape_pointer_segment(field)
+                    ),
                     RoutingDiagnosticReason::UnknownField,
                 )
             })?;
@@ -405,13 +616,19 @@ pub fn evaluate_routing(
                 .compile(&descriptor.schema)
                 .map_err(|_| {
                     RoutingDiagnostic::new(
-                        format!("source.fields.{field}"),
+                        format!(
+                            "/source/fields/{}",
+                            registry_platform_yaml::escape_pointer_segment(field)
+                        ),
                         RoutingDiagnosticReason::UnknownField,
                     )
                 })?;
             if schema.validate(value).is_err() {
                 return Err(RoutingDiagnostic::new(
-                    format!("source.fields.{field}"),
+                    format!(
+                        "/source/fields/{}",
+                        registry_platform_yaml::escape_pointer_segment(field)
+                    ),
                     RoutingDiagnosticReason::InvalidSourceValue,
                 ));
             }
@@ -589,7 +806,7 @@ mod tests {
         assert_eq!(
             check_routing_policy("triage", &[], &rules, &queues, Some(&metadata())),
             Err(RoutingDiagnostic::new(
-                "routing[0].when.stage",
+                "/routing/0/when/stage",
                 RoutingDiagnosticReason::UnknownStage,
             ))
         );
@@ -608,9 +825,53 @@ mod tests {
                 Some(&metadata()),
             ),
             Err(RoutingDiagnostic::new(
-                "routing[0].when.fields.region",
+                "/routing/0/when/fields/region",
                 RoutingDiagnosticReason::InvalidPredicateValue,
             ))
+        );
+    }
+
+    #[test]
+    fn every_routing_finding_is_reported_in_document_order() {
+        let rules = vec![
+            rule(
+                "review",
+                RoutingCondition {
+                    activity: Some(RoutingActivity::Review),
+                    stage: Some("invented".to_owned()),
+                    ..RoutingCondition::default()
+                },
+                "missing",
+            ),
+            rule("review", RoutingCondition::default(), "triage"),
+        ];
+        let queues = BTreeSet::from(["triage".to_owned()]);
+        let findings: Vec<_> =
+            routing_policy_findings("absent", &[], &rules, &queues, Some(&metadata()))
+                .into_iter()
+                .map(|finding| (finding.path, finding.reason.code()))
+                .collect();
+        assert_eq!(
+            findings,
+            [
+                ("/queue".to_owned(), "casework.routing.unknown-queue"),
+                (
+                    "/routing/0/queue".to_owned(),
+                    "casework.routing.unknown-queue"
+                ),
+                (
+                    "/routing/0/when/stage".to_owned(),
+                    "casework.routing.unknown-stage"
+                ),
+                (
+                    "/routing/1/id".to_owned(),
+                    "casework.routing.duplicate-rule-id"
+                ),
+                (
+                    "/routing/1/when".to_owned(),
+                    "casework.routing.empty-condition"
+                ),
+            ]
         );
     }
 
@@ -655,7 +916,7 @@ mod tests {
         assert_eq!(
             check_routing_policy("triage", &[], &[stage_rule], &queues, Some(&metadata)),
             Err(RoutingDiagnostic::new(
-                "routing[0].when.stage",
+                "/routing/0/when/stage",
                 RoutingDiagnosticReason::UnknownStage,
             ))
         );
@@ -690,7 +951,7 @@ mod tests {
                 Some(&metadata()),
             ),
             Err(RoutingDiagnostic::new(
-                "routing[1]",
+                "/routing/1",
                 RoutingDiagnosticReason::UnreachableRule,
             ))
         );
@@ -725,7 +986,7 @@ mod tests {
         assert_eq!(
             result,
             Err(RoutingDiagnostic::new(
-                "source.fields.region",
+                "/source/fields/region",
                 RoutingDiagnosticReason::InvalidSourceValue,
             ))
         );

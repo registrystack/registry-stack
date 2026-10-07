@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: `caseworkctl` and the `casework` runtime read `casework.yaml`
+  through the shared configuration reader. Every problem is reported at its
+  line and column with its own code, `casework.project.invalid` is retired,
+  and `null`, anchors, aliases, tags, and numbers or booleans written where
+  text is expected are refused. Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

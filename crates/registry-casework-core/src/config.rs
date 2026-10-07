@@ -1,12 +1,22 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use registry_platform_yaml::{
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Reader, Refusal, Report, ScalarHook,
+    ScalarSite,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::finding::{
+    findings_report, ConfigFinding, Findings, DIRECTORY_IDENTIFIER_ACTION,
+    DIRECTORY_IDENTIFIER_MESSAGE, ELAPSED_ACTION, ELAPSED_MESSAGE,
+};
 use crate::CaseworkRole;
 use crate::ReviewKindPolicy;
-use crate::{check_clock_policies, check_routing_policy, CalendarPolicy, ClockPolicy, RoutingRule};
+use crate::{
+    clock_policy_findings, routing_policy_findings, CalendarPolicy, ClockPolicy, RoutingRule,
+};
 
 pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
@@ -81,124 +91,377 @@ pub struct CaseworkProject {
     pub task_templates: Vec<crate::TaskTemplate>,
 }
 
+/// The format a `casework.yaml` file declares (CFG-ENV-1).
+pub const CASEWORK_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: CASEWORK_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(CASEWORK_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// The name a project read from bytes carries in its diagnostics.
+pub const CASEWORK_PROJECT_FILE: &str = "casework.yaml";
+
+const PROFILE_IDENTIFIER_MESSAGE: &str =
+    "expected 1 to 128 ASCII letters, digits, '-', '_', '.', or ':'";
+const PROFILE_IDENTIFIER_ACTION: &str = "Write an access profile identifier, such as caseworker.";
+const REVIEW_NAME_MESSAGE: &str = "expected 1 to 128 ASCII letters, digits, '-', '_', '.', or ':'";
+const UNKNOWN_QUEUE_MESSAGE: &str = "no queue in queues has this id";
+const UNKNOWN_QUEUE_ACTION: &str = "Name a queue declared under queues.";
+const UNKNOWN_CLOCK_MESSAGE: &str = "no clock in clocks has this id";
+const UNKNOWN_CLOCK_ACTION: &str = "Name a clock declared under clocks.";
+
+/// Refuses every `${...}` expression in `casework.yaml`: substitution applies
+/// to `runtime.yaml` only (CFG-SEC-2). The action names where the deployment
+/// binds a value instead.
+struct AuthoredSubstitution;
+
+impl AuthoredSubstitution {
+    fn check(site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        if !contains_environment_expression(site.text) {
+            return Ok(());
+        }
+        let issuer = matches!(
+            site.keys.last(),
+            Some(&("issuer" | "trustedInitiatorIssuer"))
+        );
+        let suggested_action = if issuer {
+            "Write the issuer in casework.yaml directly; runtime.yaml binds no issuer of an authored principal, so a deployment that trusts a different issuer builds its own package."
+        } else {
+            "Write the value in casework.yaml directly; substitution applies to runtime.yaml only, where sources.<id> binds a source endpoint and its credentials and reviewCompletionDestinations.<id> binds a completion destination."
+        };
+        Err(Refusal {
+            code: "config.substitution-not-allowed".to_owned(),
+            message: "a `${...}` expression is written in casework.yaml; substitution applies to runtime.yaml only".to_owned(),
+            suggested_action: suggested_action.to_owned(),
+        })
+    }
+}
+
+impl ScalarHook for AuthoredSubstitution {
+    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        Self::check(site)
+    }
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        Self::check(site).map(|()| None)
+    }
+}
+
+/// Whether `text` holds a `${NAME}`, `${NAME:-default}`, or `${NAME:?message}`
+/// expression, the forms runtime substitution reads.
+fn contains_environment_expression(text: &str) -> bool {
+    let mut rest = text;
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        let name_end = after
+            .find(|character: char| character != '_' && !character.is_ascii_alphanumeric())
+            .unwrap_or(after.len());
+        let name = &after[..name_end];
+        let tail = &after[name_end..];
+        let mut characters = name.chars();
+        let valid_name =
+            matches!(characters.next(), Some(first) if first == '_' || first.is_ascii_alphabetic());
+        if valid_name && (tail.starts_with('}') || tail.starts_with(":-") || tail.starts_with(":?"))
+        {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
 impl CaseworkProject {
+    /// Read and check one `casework.yaml` file through the shared reader.
+    /// `file` is the name diagnostics carry. A refusal is the report a check
+    /// command prints unchanged: every structural problem, or every finding
+    /// of the semantic checks, each at its position.
+    pub fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
+        let mut hook = AuthoredSubstitution;
+        let decoded = Reader::new(file)
+            .with_hook(&mut hook)
+            .decode::<Self>(bytes, &Expect::one(&CASEWORK_PROJECT_FORMAT))?;
+        let findings = decoded.value.findings();
+        if findings.is_empty() {
+            Ok(decoded)
+        } else {
+            Err(findings_report(&decoded.document, &findings))
+        }
+    }
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigLoadError> {
+        let path = path.as_ref();
         let bytes = std::fs::read(path).map_err(ConfigLoadError::Read)?;
-        Self::from_slice(&bytes)
+        Self::read(&path.display().to_string(), &bytes)
+            .map(|decoded| decoded.value)
+            .map_err(ConfigLoadError::Refused)
     }
 
     /// Decode and validate one captured Casework project document.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, ConfigLoadError> {
-        let deserializer = serde_norway::Deserializer::from_slice(bytes);
-        let project: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
-            let path = error.path().to_string();
-            ConfigLoadError::Parse {
-                path: if path.is_empty() {
-                    "/".to_owned()
-                } else {
-                    path
-                },
-                source: error.into_inner(),
-            }
-        })?;
-        project.check().map_err(ConfigLoadError::Check)?;
-        Ok(project)
+        Self::read(CASEWORK_PROJECT_FILE, bytes)
+            .map(|decoded| decoded.value)
+            .map_err(ConfigLoadError::Refused)
     }
 
     pub fn check(&self) -> Result<(), ConfigError> {
-        if self.api_version != CASEWORK_API_VERSION || self.kind != CASEWORK_KIND {
-            return Err(ConfigError::Envelope);
+        let findings = self.findings();
+        if findings.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigError { findings })
         }
-        if self.casework.id.is_empty() || self.casework.version.is_empty() {
-            return Err(ConfigError::Identifier);
+    }
+
+    /// Every problem the semantic checks find, each located by an RFC 6901
+    /// pointer into the project (CFG-DIAG-5).
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
+    pub fn findings(&self) -> Vec<ConfigFinding> {
+        let mut findings = Findings::default();
+        if self.api_version != CASEWORK_API_VERSION {
+            findings.push(
+                "casework.project.wrong-api-version",
+                "/apiVersion",
+                "this is not the Casework project apiVersion",
+                format!("Write apiVersion: {CASEWORK_API_VERSION}."),
+            );
         }
-        if self.task_templates.len() > 64
-            || self
-                .task_templates
-                .iter()
-                .map(|template| &template.id)
-                .collect::<BTreeSet<_>>()
-                .len()
-                != self.task_templates.len()
-            || self
-                .task_templates
-                .iter()
-                .any(|template| template.check(self).is_err())
-        {
-            return Err(ConfigError::TaskTemplate);
+        if self.kind != CASEWORK_KIND {
+            findings.push(
+                "casework.project.wrong-kind",
+                "/kind",
+                "this is not the Casework project kind",
+                format!("Write kind: {CASEWORK_KIND}."),
+            );
         }
+        if self.casework.id.is_empty() {
+            findings.push(
+                "casework.project.empty-id",
+                "/casework/id",
+                "the project id is empty",
+                "Write the project id, such as benefits-casework.",
+            );
+        }
+        if self.casework.version.is_empty() {
+            findings.push(
+                "casework.project.empty-version",
+                "/casework/version",
+                "the project version is empty",
+                "Write the project version, such as 1.",
+            );
+        }
+        self.task_template_findings(&mut findings);
         let queues: BTreeSet<_> = self.queues.iter().map(|queue| queue.id.clone()).collect();
-        if queues.len() != self.queues.len()
-            || queues.is_empty()
-            || self.queues.iter().any(|queue| {
-                !valid_directory_identifier(&queue.id)
-                    || queue.label.trim().is_empty()
-                    || queue.label.len() > 160
-            })
-        {
-            return Err(ConfigError::DefaultQueue);
+        self.queue_findings(&mut findings);
+        self.access_profile_findings(&mut findings);
+        self.review_kind_findings(&mut findings, &queues);
+        self.review_producer_findings(&mut findings);
+        if self.sources.is_empty() && self.review_kinds.is_empty() {
+            findings.push(
+                "casework.project.no-work",
+                "",
+                "the project declares neither sources nor reviewKinds, so it has no work to coordinate",
+                "Declare a source under sources or a review kind under reviewKinds.",
+            );
         }
-        if self
-            .access_profiles
-            .iter()
-            .any(|profile| !valid_profile_identifier(&profile.id))
-        {
-            return Err(ConfigError::Identifier);
+        for finding in clock_policy_findings(&self.calendars, &self.clocks, &queues) {
+            findings.add(finding);
         }
-        let profiles: BTreeSet<_> = self.access_profiles.iter().map(|p| &p.id).collect();
-        if profiles.len() != self.access_profiles.len()
-            || self.access_profiles.iter().any(|profile| {
-                profile.principal_claim.is_empty()
-                    || profile.required_scopes.is_empty()
-                    || profile
-                        .required_scopes
-                        .iter()
-                        .any(|scope| !valid_required_scope(scope))
-            })
-            || !self
+        self.source_findings(&mut findings, &queues);
+        self.inbox.findings(&mut findings);
+        findings.into_vec()
+    }
+
+    fn task_template_findings(&self, findings: &mut Findings) {
+        if self.task_templates.len() > 64 {
+            findings.push(
+                "casework.task-template.too-many",
+                "/taskTemplates",
+                "at most 64 task templates may be declared",
+                "Remove task templates until no more than the bound remain.",
+            );
+        }
+        findings.repeated(
+            self.task_templates
+                .iter()
+                .enumerate()
+                .map(|(index, template)| {
+                    (format!("/taskTemplates/{index}/id"), template.id.as_str())
+                }),
+            "casework.task-template.duplicate-id",
+            "this task template id is already declared",
+            "Give every task template a unique id.",
+        );
+        for (index, template) in self.task_templates.iter().enumerate() {
+            findings.extend_under(&format!("/taskTemplates/{index}"), template.findings(self));
+        }
+    }
+
+    fn queue_findings(&self, findings: &mut Findings) {
+        if self.queues.is_empty() {
+            findings.push(
+                "casework.queue.none",
+                "/queues",
+                "a project declares at least one queue",
+                "Declare a queue under queues.",
+            );
+        }
+        findings.repeated(
+            self.queues
+                .iter()
+                .enumerate()
+                .map(|(index, queue)| (format!("/queues/{index}/id"), queue.id.as_str())),
+            "casework.queue.duplicate-id",
+            "this queue id is already declared",
+            "Give every queue a unique id.",
+        );
+        for (index, queue) in self.queues.iter().enumerate() {
+            if !valid_directory_identifier(&queue.id) {
+                findings.push(
+                    "casework.queue.invalid-id",
+                    format!("/queues/{index}/id"),
+                    DIRECTORY_IDENTIFIER_MESSAGE,
+                    DIRECTORY_IDENTIFIER_ACTION,
+                );
+            }
+            if queue.label.trim().is_empty() || queue.label.len() > 160 {
+                findings.push(
+                    "casework.queue.invalid-label",
+                    format!("/queues/{index}/label"),
+                    "expected a label of 1 to 160 bytes that is not only spaces",
+                    "Write a short label for the queue.",
+                );
+            }
+        }
+    }
+
+    fn access_profile_findings(&self, findings: &mut Findings) {
+        for (index, profile) in self.access_profiles.iter().enumerate() {
+            if !valid_profile_identifier(&profile.id) {
+                findings.push(
+                    "casework.access-profile.invalid-id",
+                    format!("/accessProfiles/{index}/id"),
+                    PROFILE_IDENTIFIER_MESSAGE,
+                    PROFILE_IDENTIFIER_ACTION,
+                );
+            }
+        }
+        findings.repeated(
+            self.access_profiles
+                .iter()
+                .enumerate()
+                .map(|(index, profile)| {
+                    (format!("/accessProfiles/{index}/id"), profile.id.as_str())
+                }),
+            "casework.access-profile.duplicate-id",
+            "this access profile id is already declared",
+            "Give every access profile a unique id.",
+        );
+        for (index, profile) in self.access_profiles.iter().enumerate() {
+            let at = format!("/accessProfiles/{index}");
+            if profile.principal_claim.is_empty() {
+                findings.push(
+                    "casework.access-profile.empty-principal-claim",
+                    format!("{at}/principalClaim"),
+                    "the principal claim is empty",
+                    "Name the token claim that carries the caller's principal, such as registry_principal.",
+                );
+            }
+            if profile.required_scopes.is_empty() {
+                findings.push(
+                    "casework.access-profile.no-required-scope",
+                    format!("{at}/requiredScopes"),
+                    "an access profile requires at least one scope",
+                    "List the OAuth scope a caller holds to select this profile.",
+                );
+            }
+            for (scope_index, scope) in profile.required_scopes.iter().enumerate() {
+                if !valid_required_scope(scope) {
+                    findings.push(
+                        "casework.access-profile.invalid-scope",
+                        format!("{at}/requiredScopes/{scope_index}"),
+                        format!(
+                            "expected an OAuth scope token of 1 to {MAXIMUM_REQUIRED_SCOPE_BYTES} printable ASCII characters, without spaces, '\"', or '\\'"
+                        ),
+                        "Write one OAuth scope per entry.",
+                    );
+                }
+            }
+        }
+        for (role, name) in [
+            (CaseworkRole::Staff, "staff"),
+            (CaseworkRole::Supervisor, "supervisor"),
+            (CaseworkRole::Administrator, "administrator"),
+        ] {
+            if !self
                 .access_profiles
                 .iter()
-                .any(|p| p.role == CaseworkRole::Staff)
-            || !self
-                .access_profiles
+                .any(|profile| profile.role == role)
+            {
+                findings.push(
+                    "casework.access-profile.missing-role",
+                    "/accessProfiles",
+                    format!("no access profile has role {name}"),
+                    format!("Declare an access profile with role: {name}."),
+                );
+            }
+        }
+        for index in profiles_without_a_separate_scope(&self.access_profiles) {
+            findings.push(
+                "casework.access-profile.shared-scopes",
+                format!("/accessProfiles/{index}/requiredScopes"),
+                "every scope this profile requires is also required by another profile at the same or a lower role, so their credentials could select this profile",
+                "Require a scope that no other profile at the same or a lower role requires.",
+            );
+        }
+    }
+
+    fn review_kind_findings(&self, findings: &mut Findings, queues: &BTreeSet<String>) {
+        if self.review_kinds.len() > crate::MAXIMUM_REVIEW_KINDS {
+            findings.push(
+                "casework.review-kind.too-many",
+                "/reviewKinds",
+                format!(
+                    "at most {} review kinds may be declared",
+                    crate::MAXIMUM_REVIEW_KINDS
+                ),
+                "Remove review kinds until no more than the bound remain.",
+            );
+        }
+        findings.repeated(
+            self.review_kinds
                 .iter()
-                .any(|p| p.role == CaseworkRole::Supervisor)
-            || !self
-                .access_profiles
-                .iter()
-                .any(|p| p.role == CaseworkRole::Administrator)
-        {
-            return Err(ConfigError::AccessProfiles);
-        }
-        if !access_roles_are_separately_scoped(&self.access_profiles) {
-            return Err(ConfigError::AccessProfileScopes);
-        }
-        let review_kinds = self
-            .review_kinds
-            .iter()
-            .map(|kind| kind.id.as_str())
-            .collect::<BTreeSet<_>>();
-        if self.review_kinds.len() > crate::MAXIMUM_REVIEW_KINDS
-            || review_kinds.len() != self.review_kinds.len()
-            || self.review_kinds.iter().any(|kind| kind.check().is_err())
-        {
-            return Err(ConfigError::ReviewKinds);
-        }
+                .enumerate()
+                .map(|(index, kind)| (format!("/reviewKinds/{index}/id"), kind.id.as_str())),
+            "casework.review-kind.duplicate-id",
+            "this review kind id is already declared",
+            "Give every review kind a unique id.",
+        );
         for (kind_index, kind) in self.review_kinds.iter().enumerate() {
+            let at = format!("/reviewKinds/{kind_index}");
+            findings.extend_under(&at, kind.findings());
             for (clock_index, clock_id) in kind.clocks.iter().enumerate() {
                 if !self.clocks.iter().any(|clock| clock.id() == clock_id) {
-                    return Err(ConfigError::Reference {
-                        path: format!("reviewKinds[{kind_index}].clocks[{clock_index}]"),
-                        target: "clock",
-                    });
+                    findings.push(
+                        "casework.review-kind.unknown-clock",
+                        format!("{at}/clocks/{clock_index}"),
+                        UNKNOWN_CLOCK_MESSAGE,
+                        UNKNOWN_CLOCK_ACTION,
+                    );
                 }
             }
             for (stage_index, stage) in kind.stages.iter().enumerate() {
+                let stage_at = format!("{at}/stages/{stage_index}");
                 if !queues.contains(&stage.queue) {
-                    return Err(ConfigError::Reference {
-                        path: format!("reviewKinds[{kind_index}].stages[{stage_index}].queue"),
-                        target: "queue",
-                    });
+                    findings.push(
+                        "casework.review-kind.unknown-queue",
+                        format!("{stage_at}/queue"),
+                        UNKNOWN_QUEUE_MESSAGE,
+                        UNKNOWN_QUEUE_ACTION,
+                    );
                 }
                 for (profile_index, profile_id) in stage.deciding_profiles.iter().enumerate() {
                     if self
@@ -209,48 +472,87 @@ impl CaseworkProject {
                             !matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
                         })
                     {
-                        return Err(ConfigError::Reference {
-                            path: format!(
-                                "reviewKinds[{kind_index}].stages[{stage_index}].decidingProfiles[{profile_index}]"
-                            ),
-                            target: "staff or supervisor access profile",
-                        });
+                        findings.push(
+                            "casework.review-kind.ineligible-deciding-profile",
+                            format!("{stage_at}/decidingProfiles/{profile_index}"),
+                            "no staff or supervisor access profile has this id",
+                            "Name an access profile with role staff or supervisor.",
+                        );
                     }
                 }
             }
         }
-        let producer_ids = self
-            .review_producers
-            .iter()
-            .map(|producer| producer.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let producer_principals = self
-            .review_producers
-            .iter()
-            .map(|producer| {
-                (
-                    producer.profile.as_str(),
-                    producer.issuer.as_str(),
-                    producer.subject.as_str(),
-                )
-            })
-            .collect::<BTreeSet<_>>();
-        if self.review_producers.len() > 64
-            || producer_ids.len() != self.review_producers.len()
-            || producer_principals.len() != self.review_producers.len()
-            || self.review_kinds.is_empty() != self.review_producers.is_empty()
-        {
-            return Err(ConfigError::ReviewProducers);
+    }
+
+    fn review_producer_findings(&self, findings: &mut Findings) {
+        if self.review_producers.len() > 64 {
+            findings.push(
+                "casework.review-producer.too-many",
+                "/reviewProducers",
+                "at most 64 review producers may be declared",
+                "Remove review producers until no more than the bound remain.",
+            );
+        }
+        findings.repeated(
+            self.review_producers
+                .iter()
+                .enumerate()
+                .map(|(index, producer)| {
+                    (format!("/reviewProducers/{index}/id"), producer.id.as_str())
+                }),
+            "casework.review-producer.duplicate-id",
+            "this review producer id is already declared",
+            "Give every review producer a unique id.",
+        );
+        findings.repeated(
+            self.review_producers
+                .iter()
+                .enumerate()
+                .map(|(index, producer)| {
+                    (
+                        format!("/reviewProducers/{index}"),
+                        (
+                            producer.profile.as_str(),
+                            producer.issuer.as_str(),
+                            producer.subject.as_str(),
+                        ),
+                    )
+                }),
+            "casework.review-producer.duplicate-principal",
+            "another review producer already has this profile, issuer, and subject",
+            "Give each review producer its own principal.",
+        );
+        if !self.review_kinds.is_empty() && self.review_producers.is_empty() {
+            findings.push(
+                "casework.review-producer.none",
+                "/reviewProducers",
+                "review kinds are declared but no review producer may submit them",
+                "Declare a review producer under reviewProducers, or remove reviewKinds.",
+            );
+        }
+        if self.review_kinds.is_empty() && !self.review_producers.is_empty() {
+            findings.push(
+                "casework.review-producer.without-review-kinds",
+                "/reviewProducers",
+                "review producers are declared but no review kind exists",
+                "Declare the review kinds they submit under reviewKinds, or remove reviewProducers.",
+            );
         }
         for (producer_index, producer) in self.review_producers.iter().enumerate() {
-            if !producer.check()
-                || self
-                    .access_profiles
-                    .iter()
-                    .find(|profile| profile.id == producer.profile)
-                    .is_none_or(|profile| profile.role != CaseworkRole::Requester)
+            let at = format!("/reviewProducers/{producer_index}");
+            producer.findings(findings, &at);
+            if self
+                .access_profiles
+                .iter()
+                .find(|profile| profile.id == producer.profile)
+                .is_none_or(|profile| profile.role != CaseworkRole::Requester)
             {
-                return Err(ConfigError::ReviewProducers);
+                findings.push(
+                    "casework.review-producer.not-a-requester-profile",
+                    format!("{at}/profile"),
+                    "no requester access profile has this id",
+                    "Name an access profile with role requester.",
+                );
             }
             if let Some(initiator_profile) = &producer.initiator_profile {
                 let requester_profile = self.access_profiles.iter().any(|profile| {
@@ -261,165 +563,189 @@ impl CaseworkProject {
                     .iter()
                     .any(|other| other.profile == *initiator_profile);
                 if !requester_profile || producer_profile {
-                    return Err(ConfigError::Reference {
-                        path: format!("reviewProducers[{producer_index}].initiatorProfile"),
-                        target: "requester access profile no review producer uses",
-                    });
+                    findings.push(
+                        "casework.review-producer.ineligible-initiator-profile",
+                        format!("{at}/initiatorProfile"),
+                        "the initiator profile must be a requester access profile that no review producer uses",
+                        "Name a requester access profile reserved for initiators.",
+                    );
                 }
                 if producer.trusted_initiator_issuer.is_none() {
-                    return Err(ConfigError::Semantic {
-                        path: format!("reviewProducers[{producer_index}].trustedInitiatorIssuer"),
-                        member: "trusted initiator issuer required by an initiator profile",
-                    });
+                    findings.add(
+                        ConfigFinding::new(
+                            "casework.review-producer.missing-trusted-initiator-issuer",
+                            format!("{at}/trustedInitiatorIssuer"),
+                            "initiatorProfile needs trustedInitiatorIssuer",
+                            "Add trustedInitiatorIssuer naming the issuer that authenticates initiators.",
+                        )
+                        .with_related(format!("{at}/initiatorProfile"), "initiatorProfile is written here"),
+                    );
                 }
             }
+            let mut exclusion_reported = producer.trusted_initiator_issuer.is_some();
             for (kind_index, kind_id) in producer.kinds.iter().enumerate() {
-                let kind = self.review_kinds.iter().find(|kind| kind.id == *kind_id);
-                if kind.is_none() {
-                    return Err(ConfigError::Reference {
-                        path: format!("reviewProducers[{producer_index}].kinds[{kind_index}]"),
-                        target: "review kind",
-                    });
+                let Some((declared_index, kind)) = self
+                    .review_kinds
+                    .iter()
+                    .enumerate()
+                    .find(|(_, kind)| kind.id == *kind_id)
+                else {
+                    findings.push(
+                        "casework.review-producer.unknown-review-kind",
+                        format!("{at}/kinds/{kind_index}"),
+                        "no review kind in reviewKinds has this id",
+                        "Name a review kind declared under reviewKinds.",
+                    );
+                    continue;
+                };
+                if kind.retention.terminal_days < producer.recovery_days {
+                    findings.add(
+                        ConfigFinding::new(
+                            "casework.review-producer.recovery-exceeds-retention",
+                            format!("{at}/recoveryDays"),
+                            "recoveryDays is longer than the result retention of a review kind this producer submits",
+                            "Make recoveryDays no longer than that review kind's retention.terminalDays.",
+                        )
+                        .with_related(
+                            format!("/reviewKinds/{declared_index}/retention/terminalDays"),
+                            "terminalDays is written here",
+                        ),
+                    );
                 }
-                if kind.is_some_and(|kind| kind.retention.terminal_days < producer.recovery_days) {
-                    return Err(ConfigError::Semantic {
-                        path: format!("reviewProducers[{producer_index}].recoveryDays"),
-                        member: "recovery window no longer than result retention",
-                    });
-                }
-                if kind.is_some_and(|kind| {
-                    kind.stages.iter().any(|stage| stage.exclude_initiator)
-                        && producer.trusted_initiator_issuer.is_none()
-                }) {
-                    return Err(ConfigError::Semantic {
-                        path: format!("reviewProducers[{producer_index}].trustedInitiatorIssuer"),
-                        member: "trusted initiator issuer required by an exclusion stage",
-                    });
-                }
-            }
-        }
-        if self.sources.is_empty() && self.review_kinds.is_empty() {
-            return Err(ConfigError::NoConfiguredWork);
-        }
-        let calendar_ids = self
-            .calendars
-            .iter()
-            .map(|calendar| calendar.id.as_str())
-            .collect::<BTreeSet<_>>();
-        for (clock_index, clock) in self.clocks.iter().enumerate() {
-            if let ClockPolicy::Activity {
-                calendar, steps, ..
-            } = clock
-            {
-                if !calendar_ids.contains(calendar.as_str()) {
-                    return Err(ConfigError::Reference {
-                        path: format!("clocks[{clock_index}].calendar"),
-                        target: "calendar",
-                    });
-                }
-                for (step_index, step) in steps.iter().enumerate() {
-                    if !queues.contains(&step.action.reassign.queue) {
-                        return Err(ConfigError::Reference {
-                            path: format!(
-                                "clocks[{clock_index}].steps[{step_index}].action.reassign.queue"
+                if !exclusion_reported {
+                    if let Some(stage_index) =
+                        kind.stages.iter().position(|stage| stage.exclude_initiator)
+                    {
+                        exclusion_reported = true;
+                        findings.add(
+                            ConfigFinding::new(
+                                "casework.review-producer.missing-trusted-initiator-issuer",
+                                format!("{at}/trustedInitiatorIssuer"),
+                                "a review kind this producer submits excludes the initiator from deciding, which needs trustedInitiatorIssuer",
+                                "Add trustedInitiatorIssuer naming the issuer that authenticates initiators.",
+                            )
+                            .with_related(
+                                format!(
+                                    "/reviewKinds/{declared_index}/stages/{stage_index}/excludeInitiator"
+                                ),
+                                "excludeInitiator is set here",
                             ),
-                            target: "queue",
-                        });
+                        );
                     }
                 }
             }
         }
-        check_clock_policies(&self.calendars, &self.clocks, &queues)
-            .map_err(|_| ConfigError::Clocks)?;
+    }
+
+    fn source_findings(&self, findings: &mut Findings, queues: &BTreeSet<String>) {
         let clock_ids = self
             .clocks
             .iter()
             .map(ClockPolicy::id)
             .collect::<BTreeSet<_>>();
-        let source_ids: BTreeSet<_> = self.sources.iter().map(|source| &source.id).collect();
-        if source_ids.len() != self.sources.len() {
-            return Err(ConfigError::Identifier);
-        }
+        findings.repeated(
+            self.sources
+                .iter()
+                .enumerate()
+                .map(|(index, source)| (format!("/sources/{index}/id"), source.id.as_str())),
+            "casework.source.duplicate-id",
+            "this source id is already declared",
+            "Give every source a unique id.",
+        );
         for (source_index, source) in self.sources.iter().enumerate() {
-            if source.id.is_empty()
-                || source.adapter.is_empty()
-                || source.description.is_empty()
-                || source.requests.is_empty()
-                || source
-                    .requests
-                    .iter()
-                    .map(|request| &request.entity)
-                    .collect::<BTreeSet<_>>()
-                    .len()
-                    != source.requests.len()
-            {
-                return Err(ConfigError::Identifier);
+            let at = format!("/sources/{source_index}");
+            for (member, empty, action) in [
+                (
+                    "id",
+                    source.id.is_empty(),
+                    "Write the source id, such as civil-registry.",
+                ),
+                (
+                    "adapter",
+                    source.adapter.is_empty(),
+                    "Write the adapter, such as breg.",
+                ),
+                (
+                    "description",
+                    source.description.is_empty(),
+                    "Write the path of the source description file, relative to casework.yaml.",
+                ),
+            ] {
+                if empty {
+                    findings.push(
+                        match member {
+                            "id" => "casework.source.empty-id",
+                            "adapter" => "casework.source.empty-adapter",
+                            _ => "casework.source.empty-description",
+                        },
+                        format!("{at}/{member}"),
+                        format!("{member} is empty"),
+                        action,
+                    );
+                }
             }
+            if source.requests.is_empty() {
+                findings.push(
+                    "casework.source.no-requests",
+                    format!("{at}/requests"),
+                    "a source declares at least one request",
+                    "Declare a request under requests.",
+                );
+            }
+            findings.repeated(
+                source.requests.iter().enumerate().map(|(index, request)| {
+                    (
+                        format!("{at}/requests/{index}/entity"),
+                        request.entity.as_str(),
+                    )
+                }),
+                "casework.request.duplicate-entity",
+                "another request of this source already names this entity",
+                "Declare one request per entity.",
+            );
             for (request_index, request) in source.requests.iter().enumerate() {
-                let request_path = format!("sources[{source_index}].requests[{request_index}]");
-                if !queues.contains(&request.queue) {
-                    return Err(ConfigError::Reference {
-                        path: format!("{request_path}.queue"),
-                        target: "queue",
-                    });
-                }
-                if request.entity.is_empty()
-                    || request.display_reference.as_ref().is_some_and(|reference| {
-                        reference.field.is_empty()
-                            || reference.field.len() > 512
-                            || reference.field.chars().any(char::is_control)
-                    })
-                    || request.target.as_ref().is_some_and(|target| {
-                        target.id.is_empty()
-                            || parse_elapsed_seconds(&target.after.elapsed).is_none()
-                    })
-                    || request.context_projection.len() > 32
-                    || request
-                        .context_projection
-                        .iter()
-                        .collect::<BTreeSet<_>>()
-                        .len()
-                        != request.context_projection.len()
-                    || request.context_projection.iter().any(|field| {
-                        field.is_empty() || field.len() > 128 || field.chars().any(char::is_control)
-                    })
-                {
-                    return Err(ConfigError::Identifier);
-                }
-                check_routing_policy(
+                let request_at = format!("{at}/requests/{request_index}");
+                request.findings(findings, &request_at);
+                for routing in routing_policy_findings(
                     &request.queue,
                     &request.projection,
                     &request.routing,
-                    &queues,
+                    queues,
                     None,
-                )
-                .map_err(|error| ConfigError::Semantic {
-                    path: format!("{request_path}.{}", error.path),
-                    member: "routing policy",
-                })?;
+                ) {
+                    findings.push(
+                        routing.reason.code(),
+                        format!("{request_at}{}", routing.path),
+                        routing.reason.message(),
+                        routing.reason.suggested_action(),
+                    );
+                }
                 if request
                     .clock
                     .as_deref()
                     .is_some_and(|clock| !clock_ids.contains(clock))
                 {
-                    return Err(ConfigError::Reference {
-                        path: format!("{request_path}.clock"),
-                        target: "clock",
-                    });
+                    findings.push(
+                        "casework.request.unknown-clock",
+                        format!("{request_at}/clock"),
+                        UNKNOWN_CLOCK_MESSAGE,
+                        UNKNOWN_CLOCK_ACTION,
+                    );
                 }
             }
         }
-        self.inbox.check()
     }
 }
 
-/// The selected profile carries the caller's identity and role, so every
-/// profile must require a scope absent from the combined scopes of all other
-/// profiles at the same or a lower role. Otherwise credentials assembled from
-/// those grants could select authority belonging to this profile, including
-/// authority retained under an earlier review policy. A higher-role
-/// credential may still explicitly carry the scopes required by a lower role.
-fn access_roles_are_separately_scoped(profiles: &[AccessProfile]) -> bool {
+/// The indices of the profiles that do not require a scope absent from the
+/// combined scopes of every other profile at the same or a lower role. The
+/// selected profile carries the caller's identity and role, so credentials
+/// assembled from those other grants could select authority belonging to such
+/// a profile, including authority retained under an earlier review policy. A
+/// higher-role credential may still explicitly carry the scopes required by a
+/// lower role. A profile that requires no scope is reported as such and not
+/// here.
+fn profiles_without_a_separate_scope(profiles: &[AccessProfile]) -> Vec<usize> {
     fn role_rank(role: CaseworkRole) -> u8 {
         match role {
             CaseworkRole::Requester => 0,
@@ -428,21 +754,27 @@ fn access_roles_are_separately_scoped(profiles: &[AccessProfile]) -> bool {
             CaseworkRole::Administrator => 3,
         }
     }
-    profiles.iter().enumerate().all(|(target_index, target)| {
-        let target_rank = role_rank(target.role);
-        let other_same_or_lower_scopes: BTreeSet<&String> = profiles
-            .iter()
-            .enumerate()
-            .filter(|(index, profile)| {
-                *index != target_index && role_rank(profile.role) <= target_rank
-            })
-            .flat_map(|(_, profile)| profile.required_scopes.iter())
-            .collect();
-        target
-            .required_scopes
-            .iter()
-            .any(|scope| !other_same_or_lower_scopes.contains(scope))
-    })
+    profiles
+        .iter()
+        .enumerate()
+        .filter(|(target_index, target)| {
+            let target_rank = role_rank(target.role);
+            let other_same_or_lower_scopes: BTreeSet<&String> = profiles
+                .iter()
+                .enumerate()
+                .filter(|(index, profile)| {
+                    index != target_index && role_rank(profile.role) <= target_rank
+                })
+                .flat_map(|(_, profile)| profile.required_scopes.iter())
+                .collect();
+            !target.required_scopes.is_empty()
+                && target
+                    .required_scopes
+                    .iter()
+                    .all(|scope| other_same_or_lower_scopes.contains(scope))
+        })
+        .map(|(index, _)| index)
+        .collect()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -483,37 +815,152 @@ pub struct ReviewProducerPolicy {
 }
 
 impl ReviewProducerPolicy {
-    fn check(&self) -> bool {
-        valid_review_name(&self.id)
-            && valid_profile_identifier(&self.profile)
-            && bounded_config_text(&self.issuer, 512)
-            && bounded_config_text(&self.subject, 256)
-            && self
-                .trusted_initiator_issuer
-                .as_ref()
-                .is_none_or(|issuer| bounded_config_text(issuer, 256))
-            && self
-                .initiator_profile
-                .as_ref()
-                .is_none_or(|profile| valid_profile_identifier(profile))
-            && (1..=crate::MAXIMUM_REVIEW_RETENTION_DAYS).contains(&self.recovery_days)
-            && !self.source_namespaces.is_empty()
-            && self.source_namespaces.len() <= 64
-            && self
-                .source_namespaces
-                .iter()
-                .all(|value| valid_review_name(value))
-            && self.source_namespaces.iter().collect::<BTreeSet<_>>().len()
-                == self.source_namespaces.len()
-            && !self.kinds.is_empty()
-            && self.kinds.len() <= crate::MAXIMUM_REVIEW_KINDS
-            && self.kinds.iter().all(|value| valid_review_name(value))
-            && self.kinds.iter().collect::<BTreeSet<_>>().len() == self.kinds.len()
-            && self
-                .completion
-                .as_ref()
-                .is_none_or(ReviewCompletionDestinationPolicy::check)
+    /// The findings in the producer's own members, at `at`.
+    fn findings(&self, findings: &mut Findings, at: &str) {
+        if !valid_review_name(&self.id) {
+            findings.push(
+                "casework.review-producer.invalid-id",
+                format!("{at}/id"),
+                REVIEW_NAME_MESSAGE,
+                "Write a review producer identifier, such as benefits-portal.",
+            );
+        }
+        if !valid_profile_identifier(&self.profile) {
+            findings.push(
+                "casework.review-producer.invalid-profile",
+                format!("{at}/profile"),
+                PROFILE_IDENTIFIER_MESSAGE,
+                PROFILE_IDENTIFIER_ACTION,
+            );
+        }
+        for (member, value, maximum, code) in [
+            (
+                "issuer",
+                Some(&self.issuer),
+                512,
+                "casework.review-producer.invalid-issuer",
+            ),
+            (
+                "subject",
+                Some(&self.subject),
+                256,
+                "casework.review-producer.invalid-subject",
+            ),
+            (
+                "trustedInitiatorIssuer",
+                self.trusted_initiator_issuer.as_ref(),
+                256,
+                "casework.review-producer.invalid-trusted-initiator-issuer",
+            ),
+        ] {
+            if value.is_some_and(|value| !bounded_config_text(value, maximum)) {
+                findings.push(
+                    code,
+                    format!("{at}/{member}"),
+                    format!(
+                        "expected 1 to {maximum} bytes that are not only spaces and have no control characters"
+                    ),
+                    format!("Write {member} as the token issuer or subject sends it."),
+                );
+            }
+        }
+        if self
+            .initiator_profile
+            .as_ref()
+            .is_some_and(|profile| !valid_profile_identifier(profile))
+        {
+            findings.push(
+                "casework.review-producer.invalid-initiator-profile",
+                format!("{at}/initiatorProfile"),
+                PROFILE_IDENTIFIER_MESSAGE,
+                PROFILE_IDENTIFIER_ACTION,
+            );
+        }
+        if !(1..=crate::MAXIMUM_REVIEW_RETENTION_DAYS).contains(&self.recovery_days) {
+            findings.push(
+                "casework.review-producer.recovery-days-out-of-range",
+                format!("{at}/recoveryDays"),
+                format!(
+                    "expected a whole number of days from 1 to {}",
+                    crate::MAXIMUM_REVIEW_RETENTION_DAYS
+                ),
+                "Write a number of days within the bound.",
+            );
+        }
+        name_list_findings(
+            findings,
+            &format!("{at}/sourceNamespaces"),
+            &self.source_namespaces,
+            64,
+            [
+                "casework.review-producer.no-source-namespaces",
+                "casework.review-producer.too-many-source-namespaces",
+                "casework.review-producer.invalid-source-namespace",
+                "casework.review-producer.duplicate-source-namespace",
+            ],
+        );
+        name_list_findings(
+            findings,
+            &format!("{at}/kinds"),
+            &self.kinds,
+            crate::MAXIMUM_REVIEW_KINDS,
+            [
+                "casework.review-producer.no-kinds",
+                "casework.review-producer.too-many-kinds",
+                "casework.review-producer.invalid-kind",
+                "casework.review-producer.duplicate-kind",
+            ],
+        );
+        if let Some(completion) = &self.completion {
+            completion.findings(findings, &format!("{at}/completion"));
+        }
     }
+}
+
+/// The findings of a non-empty, bounded list of distinct review names at
+/// `pointer`: `codes` are the empty, too-many, invalid, and duplicate codes.
+fn name_list_findings(
+    findings: &mut Findings,
+    pointer: &str,
+    values: &[String],
+    maximum: usize,
+    [empty, too_many, invalid, duplicate]: [&'static str; 4],
+) {
+    if values.is_empty() {
+        findings.push(
+            empty,
+            pointer,
+            "expected at least one entry",
+            "List at least one entry.",
+        );
+    }
+    if values.len() > maximum {
+        findings.push(
+            too_many,
+            pointer,
+            format!("at most {maximum} entries may be listed"),
+            "Remove entries until no more than the bound remain.",
+        );
+    }
+    for (index, value) in values.iter().enumerate() {
+        if !valid_review_name(value) {
+            findings.push(
+                invalid,
+                format!("{pointer}/{index}"),
+                REVIEW_NAME_MESSAGE,
+                "Write a name of letters, digits, '-', '_', '.', or ':'.",
+            );
+        }
+    }
+    findings.repeated(
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (format!("{pointer}/{index}"), value.as_str())),
+        duplicate,
+        "this entry is already listed",
+        "List each entry once.",
+    );
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -524,14 +971,29 @@ pub struct ReviewCompletionDestinationPolicy {
 }
 
 impl ReviewCompletionDestinationPolicy {
-    fn check(&self) -> bool {
-        valid_review_name(&self.destination_id)
-            && !self.recipient_binding.is_empty()
-            && self.recipient_binding.len() <= 256
-            && self
+    fn findings(&self, findings: &mut Findings, at: &str) {
+        if !valid_review_name(&self.destination_id) {
+            findings.push(
+                "casework.review-producer.invalid-completion-destination",
+                format!("{at}/destinationId"),
+                REVIEW_NAME_MESSAGE,
+                "Name the completion destination runtime.yaml binds under reviewCompletionDestinations.",
+            );
+        }
+        if self.recipient_binding.is_empty()
+            || self.recipient_binding.len() > 256
+            || !self
                 .recipient_binding
                 .bytes()
                 .all(|byte| matches!(byte, 0x21..=0x7e))
+        {
+            findings.push(
+                "casework.review-producer.invalid-recipient-binding",
+                format!("{at}/recipientBinding"),
+                "expected 1 to 256 printable ASCII characters without spaces",
+                "Write the recipient binding the completion destination expects.",
+            );
+        }
     }
 }
 
@@ -587,6 +1049,77 @@ pub struct SourceRequestPolicy {
     pub clock: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<PassiveTargetPolicy>,
+}
+
+impl SourceRequestPolicy {
+    /// The findings in the request's own members, at `at`.
+    fn findings(&self, findings: &mut Findings, at: &str) {
+        if self.entity.is_empty() {
+            findings.push(
+                "casework.request.empty-entity",
+                format!("{at}/entity"),
+                "entity is empty",
+                "Write the source entity this request routes, such as birth-registration.",
+            );
+        }
+        if self.display_reference.as_ref().is_some_and(|reference| {
+            reference.field.is_empty()
+                || reference.field.len() > 512
+                || reference.field.chars().any(char::is_control)
+        }) {
+            findings.push(
+                "casework.request.invalid-display-reference",
+                format!("{at}/displayReference/field"),
+                "expected a field name of 1 to 512 bytes with no control characters",
+                "Write the source field Casework retains for exact lookup.",
+            );
+        }
+        if let Some(target) = &self.target {
+            if target.id.is_empty() {
+                findings.push(
+                    "casework.request.empty-target-id",
+                    format!("{at}/target/id"),
+                    "the target id is empty",
+                    "Write the target id, such as first-decision.",
+                );
+            }
+            if parse_elapsed_seconds(&target.after.elapsed).is_none() {
+                findings.push(
+                    "casework.request.invalid-target-elapsed",
+                    format!("{at}/target/after/elapsed"),
+                    ELAPSED_MESSAGE,
+                    ELAPSED_ACTION,
+                );
+            }
+        }
+        if self.context_projection.len() > 32 {
+            findings.push(
+                "casework.request.too-many-context-fields",
+                format!("{at}/contextProjection"),
+                "at most 32 context fields may be listed",
+                "Remove context fields until no more than the bound remain.",
+            );
+        }
+        findings.repeated(
+            self.context_projection
+                .iter()
+                .enumerate()
+                .map(|(index, field)| (format!("{at}/contextProjection/{index}"), field.as_str())),
+            "casework.request.duplicate-context-field",
+            "this context field is already listed",
+            "List each context field once.",
+        );
+        for (index, field) in self.context_projection.iter().enumerate() {
+            if field.is_empty() || field.len() > 128 || field.chars().any(char::is_control) {
+                findings.push(
+                    "casework.request.invalid-context-field",
+                    format!("{at}/contextProjection/{index}"),
+                    "expected a field name of 1 to 128 bytes with no control characters",
+                    "Write the source field a reviewer may read.",
+                );
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -654,90 +1187,115 @@ impl Default for InboxPolicy {
 }
 
 impl InboxPolicy {
-    fn check(&self) -> Result<(), ConfigError> {
-        if self.default_page_size == 0
-            || self.default_page_size > 100
-            || self.maximum_candidate_scan < self.default_page_size
-            || self.maximum_candidate_scan > 10_000
-            || self.maximum_source_reads == 0
-            || self.maximum_source_reads > self.maximum_candidate_scan
-            || self.maximum_concurrent_source_reads == 0
-            || self.maximum_concurrent_source_reads > 32
-            || !(100..=30_000).contains(&self.page_deadline_milliseconds)
-        {
-            return Err(ConfigError::InboxBounds);
+    fn findings(&self, findings: &mut Findings) {
+        let mut out_of_range = |member: &str, bound: &str| {
+            findings.push(
+                "casework.inbox.out-of-range",
+                format!("/inbox/{member}"),
+                format!("expected {bound}"),
+                "Write a value within the bound.",
+            );
+        };
+        if self.default_page_size == 0 || self.default_page_size > 100 {
+            out_of_range("defaultPageSize", "a whole number from 1 to 100");
         }
-        Ok(())
+        if self.maximum_candidate_scan > 10_000 {
+            out_of_range("maximumCandidateScan", "a whole number of at most 10000");
+        }
+        if self.maximum_source_reads == 0 {
+            out_of_range("maximumSourceReads", "a whole number of at least 1");
+        }
+        if self.maximum_concurrent_source_reads == 0 || self.maximum_concurrent_source_reads > 32 {
+            out_of_range(
+                "maximumConcurrentSourceReads",
+                "a whole number from 1 to 32",
+            );
+        }
+        if !(100..=30_000).contains(&self.page_deadline_milliseconds) {
+            out_of_range(
+                "pageDeadlineMilliseconds",
+                "a whole number of milliseconds from 100 to 30000",
+            );
+        }
+        if self.maximum_candidate_scan < self.default_page_size {
+            findings.add(
+                ConfigFinding::new(
+                    "casework.inbox.inconsistent-bounds",
+                    "/inbox/maximumCandidateScan",
+                    "maximumCandidateScan is smaller than defaultPageSize",
+                    "Make maximumCandidateScan at least defaultPageSize.",
+                )
+                .with_related("/inbox/defaultPageSize", "defaultPageSize is set here"),
+            );
+        }
+        if self.maximum_source_reads > self.maximum_candidate_scan {
+            findings.add(
+                ConfigFinding::new(
+                    "casework.inbox.inconsistent-bounds",
+                    "/inbox/maximumSourceReads",
+                    "maximumSourceReads is larger than maximumCandidateScan",
+                    "Make maximumSourceReads no larger than maximumCandidateScan.",
+                )
+                .with_related(
+                    "/inbox/maximumCandidateScan",
+                    "maximumCandidateScan is set here",
+                ),
+            );
+        }
     }
 }
 
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum ConfigError {
-    #[error("the governed task template is invalid or repeated")]
-    TaskTemplate,
-    #[error("the Casework project envelope is invalid")]
-    Envelope,
-    #[error("a Casework identifier is invalid")]
-    Identifier,
-    #[error("the Casework queues are invalid")]
-    DefaultQueue,
-    #[error("staff, supervisor, and administrator access profiles are required")]
-    AccessProfiles,
-    #[error(
-        "every access profile must require a scope absent from the combined scopes of every other profile at the same or a lower role"
-    )]
-    AccessProfileScopes,
-    #[error("the unified review kind policy or its stage grants are invalid")]
-    ReviewKinds,
-    #[error("the unified review producer admission policy is invalid")]
-    ReviewProducers,
-    #[error("the Casework project configures no source or unified review work")]
-    NoConfiguredWork,
-    #[error("a source routing policy is invalid")]
-    Routing,
-    #[error("a clock or calendar policy is invalid")]
-    Clocks,
-    #[error("the inbox work and response bounds are invalid")]
-    InboxBounds,
-    #[error("{path} references an unknown or ineligible {target}")]
-    Reference { path: String, target: &'static str },
-    #[error("{member} is invalid at {path}")]
-    Semantic { path: String, member: &'static str },
+/// Every problem [`CaseworkProject::check`] found, in the order it found
+/// them. Never empty.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfigError {
+    findings: Vec<ConfigFinding>,
 }
 
 impl ConfigError {
     #[must_use]
+    pub fn findings(&self) -> &[ConfigFinding] {
+        &self.findings
+    }
+
+    #[must_use]
+    pub fn into_findings(self) -> Vec<ConfigFinding> {
+        self.findings
+    }
+
+    /// The pointer of the first finding.
+    #[must_use]
     pub fn path(&self) -> &str {
-        match self {
-            Self::Reference { path, .. } | Self::Semantic { path, .. } => path,
-            _ => "/",
+        &self.findings[0].pointer
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let first = &self.findings[0];
+        let at = if first.pointer.is_empty() {
+            "the project root"
+        } else {
+            first.pointer.as_str()
+        };
+        write!(formatter, "{} at {at}: {}", first.code, first.message)?;
+        match self.findings.len() {
+            1 => Ok(()),
+            2 => formatter.write_str(" (and 1 more problem)"),
+            count => write!(formatter, " (and {} more problems)", count - 1),
         }
     }
 }
+
+impl std::error::Error for ConfigError {}
 
 #[derive(Debug, Error)]
 pub enum ConfigLoadError {
     #[error("the Casework project could not be read")]
     Read(#[source] std::io::Error),
-    #[error("the Casework project is not valid YAML at {path}")]
-    Parse {
-        path: String,
-        #[source]
-        source: serde_norway::Error,
-    },
+    /// The reader's or the semantic checks' report, printed unchanged.
     #[error(transparent)]
-    Check(#[from] ConfigError),
-}
-
-impl ConfigLoadError {
-    #[must_use]
-    pub fn path(&self) -> &str {
-        match self {
-            Self::Check(error) => error.path(),
-            Self::Read(_) => "/",
-            Self::Parse { path, .. } => path,
-        }
-    }
+    Refused(Report),
 }
 
 #[cfg(test)]
@@ -857,6 +1415,59 @@ mod tests {
         candidate
     }
 
+    /// The code and pointer of every finding, in the order the check reports
+    /// them.
+    fn refusals(project: &CaseworkProject) -> Vec<(&'static str, String)> {
+        project
+            .findings()
+            .into_iter()
+            .map(|finding| (finding.code, finding.pointer))
+            .collect()
+    }
+
+    fn read(yaml: &str) -> Result<CaseworkProject, Report> {
+        CaseworkProject::read(CASEWORK_PROJECT_FILE, yaml.as_bytes()).map(|decoded| decoded.value)
+    }
+
+    /// The code, pointer, and line of every diagnostic of a refused read.
+    fn diagnostics(yaml: &str) -> Vec<(String, String, Option<usize>)> {
+        read(yaml)
+            .expect_err("the project is refused")
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.clone(),
+                    diagnostic.path.clone(),
+                    diagnostic.source.as_ref().and_then(|source| source.line),
+                )
+            })
+            .collect()
+    }
+
+    const MINIMAL: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+kind: CaseworkProject
+casework: {id: regional-review, version: "1"}
+accessProfiles:
+  - {id: staff, principalClaim: sub, requiredScopes: [casework:staff], role: staff}
+  - {id: supervisor, principalClaim: sub, requiredScopes: [casework:supervisor], role: supervisor}
+  - {id: administrator, principalClaim: sub, requiredScopes: [casework:admin], role: administrator}
+queues:
+  - {id: triage, label: Triage}
+sources:
+  - id: register
+    adapter: breg
+    description: sources/register.json
+    requests:
+      - entity: correction
+        queue: triage
+"#;
+
+    #[track_caller]
+    fn refused(project: &CaseworkProject, code: &'static str, pointer: &str) {
+        assert_eq!(refusals(project), [(code, pointer.to_owned())]);
+    }
+
     #[test]
     fn standalone_work_requires_an_explicit_review_kind() {
         let mut project = project();
@@ -865,7 +1476,7 @@ mod tests {
         project.review_kinds.clear();
         project.review_producers.clear();
         project.access_profiles.pop();
-        assert_eq!(project.check(), Err(ConfigError::NoConfiguredWork));
+        refused(&project, "casework.project.no-work", "");
     }
 
     #[test]
@@ -877,24 +1488,27 @@ mod tests {
         let mut duplicate = changed_identity.review_producers[0].clone();
         duplicate.id = "registry-alias".to_owned();
         changed_identity.review_producers.push(duplicate);
-        assert_eq!(changed_identity.check(), Err(ConfigError::ReviewProducers));
+        refused(
+            &changed_identity,
+            "casework.review-producer.duplicate-principal",
+            "/reviewProducers/1",
+        );
 
         let mut excessive_recovery = candidate.clone();
         excessive_recovery.review_producers[0].recovery_days = 91;
-        assert!(matches!(
-            excessive_recovery.check(),
-            Err(ConfigError::Semantic {
-                member: "recovery window no longer than result retention",
-                ..
-            })
-        ));
+        refused(
+            &excessive_recovery,
+            "casework.review-producer.recovery-exceeds-retention",
+            "/reviewProducers/0/recoveryDays",
+        );
 
         let mut oversized_initiator_issuer = candidate.clone();
         oversized_initiator_issuer.review_producers[0].trusted_initiator_issuer =
             Some("i".repeat(257));
-        assert_eq!(
-            oversized_initiator_issuer.check(),
-            Err(ConfigError::ReviewProducers)
+        refused(
+            &oversized_initiator_issuer,
+            "casework.review-producer.invalid-trusted-initiator-issuer",
+            "/reviewProducers/0/trustedInitiatorIssuer",
         );
 
         let mut invalid_recipient_header = candidate.clone();
@@ -903,23 +1517,26 @@ mod tests {
             .as_mut()
             .expect("completion policy")
             .recipient_binding = "récepteur".to_owned();
-        assert_eq!(
-            invalid_recipient_header.check(),
-            Err(ConfigError::ReviewProducers)
+        refused(
+            &invalid_recipient_header,
+            "casework.review-producer.invalid-recipient-binding",
+            "/reviewProducers/0/completion/recipientBinding",
         );
 
         let mut unknown_clock = candidate.clone();
         unknown_clock.review_kinds[0].clocks = vec!["missing-clock".to_owned()];
-        assert_eq!(
-            unknown_clock.check().unwrap_err().path(),
-            "reviewKinds[0].clocks[0]"
+        refused(
+            &unknown_clock,
+            "casework.review-kind.unknown-clock",
+            "/reviewKinds/0/clocks/0",
         );
 
         let mut undeclared_namespace = candidate;
         undeclared_namespace.review_producers[0].source_namespaces = vec!["registry/path".into()];
-        assert_eq!(
-            undeclared_namespace.check(),
-            Err(ConfigError::ReviewProducers)
+        refused(
+            &undeclared_namespace,
+            "casework.review-producer.invalid-source-namespace",
+            "/reviewProducers/0/sourceNamespaces/0",
         );
     }
 
@@ -934,37 +1551,38 @@ mod tests {
 
         let mut undeclared = candidate.clone();
         undeclared.review_producers[0].initiator_profile = Some("missing".to_owned());
-        assert_eq!(
-            undeclared.check().unwrap_err().path(),
-            "reviewProducers[0].initiatorProfile"
+        refused(
+            &undeclared,
+            "casework.review-producer.ineligible-initiator-profile",
+            "/reviewProducers/0/initiatorProfile",
         );
 
         let mut reviewer_profile = candidate.clone();
         reviewer_profile.review_producers[0].initiator_profile = Some("staff".to_owned());
-        assert_eq!(
-            reviewer_profile.check().unwrap_err().path(),
-            "reviewProducers[0].initiatorProfile"
+        refused(
+            &reviewer_profile,
+            "casework.review-producer.ineligible-initiator-profile",
+            "/reviewProducers/0/initiatorProfile",
         );
 
         // A producer's own profile authenticates the service, not the people
         // it names, so it can never double as an initiator profile.
         let mut producer_profile = candidate.clone();
         producer_profile.review_producers[0].initiator_profile = Some("requester".to_owned());
-        assert_eq!(
-            producer_profile.check().unwrap_err().path(),
-            "reviewProducers[0].initiatorProfile"
+        refused(
+            &producer_profile,
+            "casework.review-producer.ineligible-initiator-profile",
+            "/reviewProducers/0/initiatorProfile",
         );
 
         let mut untrusted = candidate;
         untrusted.review_kinds[0].stages[0].exclude_initiator = false;
         untrusted.review_producers[0].trusted_initiator_issuer = None;
-        assert!(matches!(
-            untrusted.check(),
-            Err(ConfigError::Semantic {
-                member: "trusted initiator issuer required by an initiator profile",
-                ..
-            })
-        ));
+        refused(
+            &untrusted,
+            "casework.review-producer.missing-trusted-initiator-issuer",
+            "/reviewProducers/0/trustedInitiatorIssuer",
+        );
     }
 
     #[test]
@@ -973,7 +1591,19 @@ mod tests {
         let mut appeal_requester = profile("appeal-requester", CaseworkRole::Requester);
         appeal_requester.required_scopes = candidate.access_profiles[3].required_scopes.clone();
         candidate.access_profiles.push(appeal_requester);
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        assert_eq!(
+            refusals(&candidate),
+            [
+                (
+                    "casework.access-profile.shared-scopes",
+                    "/accessProfiles/3/requiredScopes".to_owned()
+                ),
+                (
+                    "casework.access-profile.shared-scopes",
+                    "/accessProfiles/4/requiredScopes".to_owned()
+                ),
+            ]
+        );
 
         let mut candidate = project();
         // Current equality cannot prove that retained items pinned the same
@@ -984,7 +1614,19 @@ mod tests {
         candidate.review_kinds[0].stages[0]
             .deciding_profiles
             .push("retained-staff".to_owned());
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        assert_eq!(
+            refusals(&candidate),
+            [
+                (
+                    "casework.access-profile.shared-scopes",
+                    "/accessProfiles/0/requiredScopes".to_owned()
+                ),
+                (
+                    "casework.access-profile.shared-scopes",
+                    "/accessProfiles/4/requiredScopes".to_owned()
+                ),
+            ]
+        );
 
         let mut combined = project();
         combined.access_profiles[0].required_scopes = vec!["casework:a".to_owned()];
@@ -997,7 +1639,18 @@ mod tests {
         combined.review_kinds[0].stages[0]
             .deciding_profiles
             .push("appeal-staff".to_owned());
-        assert_eq!(combined.check(), Err(ConfigError::AccessProfileScopes));
+        assert_eq!(
+            refusals(&combined),
+            [
+                "/accessProfiles/0",
+                "/accessProfiles/4",
+                "/accessProfiles/5"
+            ]
+            .map(|at| (
+                "casework.access-profile.shared-scopes",
+                format!("{at}/requiredScopes")
+            ))
+        );
 
         let mut remapped = project();
         let mut alternate = profile("staff-by-sub", CaseworkRole::Staff);
@@ -1007,7 +1660,13 @@ mod tests {
         remapped.review_kinds[0].stages[0]
             .deciding_profiles
             .push("staff-by-sub".to_owned());
-        assert_eq!(remapped.check(), Err(ConfigError::AccessProfileScopes));
+        assert_eq!(
+            refusals(&remapped),
+            ["/accessProfiles/0", "/accessProfiles/4"].map(|at| (
+                "casework.access-profile.shared-scopes",
+                format!("{at}/requiredScopes")
+            ))
+        );
     }
 
     #[test]
@@ -1020,7 +1679,19 @@ mod tests {
         peer.required_scopes = vec!["casework:b".to_owned()];
         candidate.access_profiles.push(peer);
 
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        assert_eq!(
+            refusals(&candidate),
+            [
+                (
+                    "casework.access-profile.shared-scopes",
+                    "/accessProfiles/0/requiredScopes".to_owned()
+                ),
+                (
+                    "casework.access-profile.shared-scopes",
+                    "/accessProfiles/4/requiredScopes".to_owned()
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -1066,7 +1737,11 @@ mod tests {
         ] {
             let mut candidate = project();
             candidate.access_profiles[0].required_scopes = vec![invalid];
-            assert_eq!(candidate.check(), Err(ConfigError::AccessProfiles));
+            refused(
+                &candidate,
+                "casework.access-profile.invalid-scope",
+                "/accessProfiles/0/requiredScopes/0",
+            );
         }
     }
 
@@ -1077,7 +1752,7 @@ mod tests {
         duplicate.adapter = "other-adapter".to_owned();
         duplicate.description = "other-description.json".to_owned();
         candidate.sources.push(duplicate);
-        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+        refused(&candidate, "casework.source.duplicate-id", "/sources/1/id");
     }
 
     #[test]
@@ -1085,7 +1760,11 @@ mod tests {
         let mut candidate = project_with_source_queue("decisions");
         let duplicate = candidate.sources[0].requests[0].clone();
         candidate.sources[0].requests.push(duplicate);
-        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+        refused(
+            &candidate,
+            "casework.request.duplicate-entity",
+            "/sources/0/requests/1/entity",
+        );
     }
 
     #[test]
@@ -1098,10 +1777,18 @@ mod tests {
         candidate.sources[0].requests[0]
             .context_projection
             .push("summary".to_owned());
-        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+        refused(
+            &candidate,
+            "casework.request.duplicate-context-field",
+            "/sources/0/requests/0/contextProjection/2",
+        );
 
         candidate.sources[0].requests[0].context_projection = vec!["x".repeat(129)];
-        assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+        refused(
+            &candidate,
+            "casework.request.invalid-context-field",
+            "/sources/0/requests/0/contextProjection/0",
+        );
     }
 
     #[test]
@@ -1110,7 +1797,11 @@ mod tests {
         candidate.access_profiles[0].required_scopes =
             vec!["casework:review".to_owned(), "casework:manage".to_owned()];
         candidate.access_profiles[1].required_scopes = vec!["casework:manage".to_owned()];
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        refused(
+            &candidate,
+            "casework.access-profile.shared-scopes",
+            "/accessProfiles/1/requiredScopes",
+        );
 
         let mut candidate = project();
         candidate.access_profiles[1].required_scopes = vec![
@@ -1118,7 +1809,11 @@ mod tests {
             "casework:administer".to_owned(),
         ];
         candidate.access_profiles[2].required_scopes = vec!["casework:administer".to_owned()];
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        refused(
+            &candidate,
+            "casework.access-profile.shared-scopes",
+            "/accessProfiles/2/requiredScopes",
+        );
 
         let mut candidate = project();
         candidate.access_profiles[0].required_scopes = vec!["casework:a".to_owned()];
@@ -1130,12 +1825,20 @@ mod tests {
             required_scopes: vec!["casework:b".to_owned()],
             role: CaseworkRole::Staff,
         });
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        refused(
+            &candidate,
+            "casework.access-profile.shared-scopes",
+            "/accessProfiles/1/requiredScopes",
+        );
 
         let mut candidate = project();
         candidate.access_profiles[3].required_scopes =
             candidate.access_profiles[1].required_scopes.clone();
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        refused(
+            &candidate,
+            "casework.access-profile.shared-scopes",
+            "/accessProfiles/1/requiredScopes",
+        );
     }
 
     #[test]
@@ -1145,12 +1848,20 @@ mod tests {
         candidate.access_profiles[1].required_scopes = vec!["casework:manage".to_owned()];
         candidate.access_profiles[2].required_scopes =
             vec!["casework:review".to_owned(), "casework:manage".to_owned()];
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        refused(
+            &candidate,
+            "casework.access-profile.shared-scopes",
+            "/accessProfiles/2/requiredScopes",
+        );
 
         let mut candidate = project();
         candidate.access_profiles[2].required_scopes =
             candidate.access_profiles[3].required_scopes.clone();
-        assert_eq!(candidate.check(), Err(ConfigError::AccessProfileScopes));
+        refused(
+            &candidate,
+            "casework.access-profile.shared-scopes",
+            "/accessProfiles/2/requiredScopes",
+        );
     }
 
     #[test]
@@ -1170,7 +1881,11 @@ mod tests {
         ] {
             let mut candidate = project();
             candidate.access_profiles[2].id = invalid;
-            assert_eq!(candidate.check(), Err(ConfigError::Identifier));
+            refused(
+                &candidate,
+                "casework.access-profile.invalid-id",
+                "/accessProfiles/2/id",
+            );
         }
     }
 
@@ -1190,7 +1905,7 @@ mod tests {
             "review:queue".to_owned(),
         ] {
             let candidate = project_with_source_queue(&invalid);
-            assert_eq!(candidate.check(), Err(ConfigError::DefaultQueue));
+            refused(&candidate, "casework.queue.invalid-id", "/queues/0/id");
         }
     }
 
@@ -1252,15 +1967,16 @@ mod tests {
     fn administrator_is_not_a_review_deciding_profile() {
         let mut project = project();
         project.review_kinds[0].stages[0].deciding_profiles = vec!["administrator".to_owned()];
-        assert_eq!(
-            project.check().unwrap_err().path(),
-            "reviewKinds[0].stages[0].decidingProfiles[0]"
+        refused(
+            &project,
+            "casework.review-kind.ineligible-deciding-profile",
+            "/reviewKinds/0/stages/0/decidingProfiles/0",
         );
     }
 
     #[test]
     fn multi_queue_routing_and_named_clocks_use_the_documented_authoring_shape() {
-        let project: CaseworkProject = serde_norway::from_str(
+        let project = read(
             r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework: {id: regional-review, version: "1"}
@@ -1312,7 +2028,7 @@ clocks:
         action: {reassign: {queue: overdue-review}}
 "#,
         )
-        .expect("documented policy parses");
+        .expect("documented policy reads");
         assert_eq!(project.check(), Ok(()));
         assert_eq!(project.queues.len(), 4);
         assert_eq!(project.sources[0].requests[0].routing.len(), 2);
@@ -1320,15 +2036,21 @@ clocks:
         let mut invalid = project.clone();
         invalid.sources[0].requests[0].routing[1].queue = "missing".to_owned();
         assert_eq!(
-            invalid.check().unwrap_err().path(),
-            "sources[0].requests[0].routing[1].queue"
+            refusals(&invalid),
+            [(
+                "casework.routing.unknown-queue",
+                "/sources/0/requests/0/routing/1/queue".to_owned()
+            )]
         );
 
         let mut invalid = project.clone();
         invalid.sources[0].requests[0].clock = Some("missing".to_owned());
         assert_eq!(
-            invalid.check().unwrap_err().path(),
-            "sources[0].requests[0].clock"
+            refusals(&invalid),
+            [(
+                "casework.request.unknown-clock",
+                "/sources/0/requests/0/clock".to_owned()
+            )]
         );
 
         let mut invalid = project.clone();
@@ -1336,6 +2058,121 @@ clocks:
             panic!("fixture has an activity clock")
         };
         *calendar = "missing".to_owned();
-        assert_eq!(invalid.check().unwrap_err().path(), "clocks[0].calendar");
+        refused(
+            &invalid,
+            "casework.clock.unknown-calendar",
+            "/clocks/0/calendar",
+        );
+    }
+
+    #[test]
+    fn a_read_reports_every_semantic_finding_at_its_line() {
+        assert_eq!(read(MINIMAL).map(|_| ()), Ok(()));
+        let yaml = MINIMAL
+            .replace("  - {id: triage, label: Triage}\n", "  - {id: triage, label: Triage}\n  - {id: triage, label: Again}\n")
+            .replace("        queue: triage\n", "        queue: triage\n        clock: missing\n        contextProjection: [summary, summary]\n");
+        assert_eq!(
+            diagnostics(&yaml),
+            [
+                (
+                    "casework.queue.duplicate-id".to_owned(),
+                    "/queues/1/id".to_owned(),
+                    Some(10)
+                ),
+                (
+                    "casework.request.duplicate-context-field".to_owned(),
+                    "/sources/0/requests/0/contextProjection/1".to_owned(),
+                    Some(19)
+                ),
+                (
+                    "casework.request.unknown-clock".to_owned(),
+                    "/sources/0/requests/0/clock".to_owned(),
+                    Some(18)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_read_reports_every_unknown_key_with_its_position() {
+        let yaml = MINIMAL
+            .replace(
+                "kind: CaseworkProject\n",
+                "kind: CaseworkProject\nqueue: triage\n",
+            )
+            .replace(
+                "        queue: triage\n",
+                "        queue: triage\n        clocks: [deadline]\n",
+            );
+        let report = read(&yaml).expect_err("unknown keys are refused");
+        let unknown: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let source = diagnostic.source.as_ref().expect("a position");
+                (
+                    diagnostic.code.as_str(),
+                    diagnostic.path.as_str(),
+                    source.line,
+                    source.column,
+                )
+            })
+            .collect();
+        assert_eq!(
+            unknown,
+            [
+                ("config.unknown-key", "/queue", Some(3), Some(1)),
+                (
+                    "config.unknown-key",
+                    "/sources/0/requests/0/clocks",
+                    Some(18),
+                    Some(9)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn substitution_is_refused_with_where_the_deployment_binds_the_value() {
+        let issuer = MINIMAL.replace("sources:\n", "reviewProducers: []\nsources:\n");
+        assert_eq!(read(&issuer).map(|_| ()), Ok(()));
+
+        let report = read(&MINIMAL.replace("adapter: breg", "adapter: ${ADAPTER}"))
+            .expect_err("substitution is refused");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.substitution-not-allowed");
+        assert_eq!(diagnostic.path, "/sources/0/adapter");
+        assert!(diagnostic
+            .suggested_action
+            .contains("sources.<id> binds a source endpoint"));
+        assert!(!report.render_human().contains("ADAPTER"));
+
+        let producer = MINIMAL.replace(
+            "sources:\n",
+            "reviewProducers:\n  - {id: registry, profile: staff, issuer: \"${ISSUER}\"}\nsources:\n",
+        );
+        let report = read(&producer).expect_err("substitution is refused");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.substitution-not-allowed");
+        assert_eq!(diagnostic.path, "/reviewProducers/0/issuer");
+        assert!(diagnostic
+            .suggested_action
+            .contains("runtime.yaml binds no issuer of an authored principal"));
+    }
+
+    #[test]
+    fn a_null_predicate_value_is_refused_at_its_position() {
+        let yaml = MINIMAL.replace(
+            "        queue: triage\n",
+            "        queue: triage\n        projection: [region]\n        routing:\n          - id: unset-region\n            because: The region is unset.\n            when: {fields: {region: {equals: null}}}\n            queue: triage\n",
+        );
+        assert_eq!(
+            diagnostics(&yaml),
+            [(
+                "config.null-value".to_owned(),
+                "/sources/0/requests/0/routing/0/when/fields/region/equals".to_owned(),
+                Some(21)
+            )]
+        );
     }
 }

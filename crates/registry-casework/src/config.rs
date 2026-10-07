@@ -4,15 +4,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use jsonwebtoken::Algorithm;
-use registry_casework_core::{check_routing_policy, CaseworkProject};
+use registry_casework_core::{check_routing_policy, CaseworkProject, ConfigLoadError};
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    is_sha256_label, reject_environment_expressions_in_authored_yaml, sha256_uri, ConfigBlockError,
-    PackageConfig, PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits,
-    RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretResolver,
-    VerifiedPackage, REMOVED_OIDC_JWKS_URI,
+    is_sha256_label, sha256_uri, ConfigBlockError, PackageConfig, PackageDigestMismatch,
+    PackageError, PackageErrorKind, PackageLimits, RemovedKey, RuntimeConfigLoader,
+    RuntimeEnvelope, SecretResolver, VerifiedPackage, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -783,17 +782,12 @@ impl RuntimeConfig {
         after_verification();
 
         let policy_bytes = capture_verified_file(&self.package.root, &verified, POLICY_FILE)?;
-        // Preserve the typed project diagnostic when malformed YAML also
-        // resembles an environment expression. Both checks use the same
-        // bytes captured from the verified package.
-        if let Err(error) = reject_authored_environment_expressions_bytes(&policy_bytes) {
-            if matches!(error, RuntimeConfigError::Load(_)) {
-                CaseworkProject::from_slice(&policy_bytes).map_err(RuntimeConfigError::Project)?;
-            }
-            return Err(error);
-        }
-        let project =
-            CaseworkProject::from_slice(&policy_bytes).map_err(RuntimeConfigError::Project)?;
+        let project = CaseworkProject::read(
+            &self.package.root.join(POLICY_FILE).display().to_string(),
+            &policy_bytes,
+        )
+        .map(|decoded| decoded.value)
+        .map_err(|report| RuntimeConfigError::Project(ConfigLoadError::Refused(report)))?;
         verify_casework_contents(&project, &verified)?;
 
         let mut source_descriptions = BTreeMap::new();
@@ -1098,19 +1092,6 @@ fn validate_project_source_description_bytes(
     Ok(())
 }
 
-fn reject_authored_environment_expressions_bytes(bytes: &[u8]) -> Result<(), RuntimeConfigError> {
-    let text = String::from_utf8_lossy(bytes);
-    reject_environment_expressions_in_authored_yaml(&text).map_err(|error| {
-        if error.kind() == RuntimeConfigErrorKind::AuthoredSyntax {
-            RuntimeConfigError::Load(error)
-        } else {
-            RuntimeConfigError::PolicyEnvironmentExpression {
-                field: error.field().to_owned(),
-            }
-        }
-    })
-}
-
 fn is_unique_local(address: Ipv6Addr) -> bool {
     address.octets()[0] & 0xfe == 0xfc
 }
@@ -1118,6 +1099,7 @@ fn is_unique_local(address: Ipv6Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::RuntimeConfigErrorKind;
     use registry_platform_config::{
         MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
         MAX_ASSERTION_ISSUER_CLIENT_BYTES, SUM_FILE,
@@ -1522,16 +1504,28 @@ reviewProducers:
             &operator_value(&package, "development-loopback"),
         );
         let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert!(
-            matches!(
-                &error,
-                RuntimeConfigError::PolicyEnvironmentExpression { field }
-                    if field == "queues.0.label"
-            ),
+        let diagnostics = project_refusal(&error);
+        assert_eq!(
+            diagnostics,
+            [(
+                "config.substitution-not-allowed".to_owned(),
+                "/queues/0/label".to_owned()
+            )],
             "{error}"
         );
         assert_eq!(error.path(), "package.root/casework.yaml");
-        assert!(error.to_string().contains("runtime.yaml only"), "{error}");
+    }
+
+    /// The `code` and `path` of every diagnostic of a refused project.
+    fn project_refusal(error: &RuntimeConfigError) -> Vec<(String, String)> {
+        let RuntimeConfigError::Project(ConfigLoadError::Refused(report)) = error else {
+            panic!("expected a refused project, got {error}");
+        };
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect()
     }
 
     /// A typed field holding an expression would otherwise fail the typed
@@ -1550,15 +1544,18 @@ reviewProducers:
             &operator_value(&package, "development-loopback"),
         );
         let error = RuntimeConfig::load(&operator).unwrap_err();
-        assert!(
-            matches!(
-                &error,
-                RuntimeConfigError::PolicyEnvironmentExpression { field }
-                    if field == "reviewProducers.0.recoveryDays"
-            ),
+        assert_eq!(
+            project_refusal(&error),
+            [(
+                "config.substitution-not-allowed".to_owned(),
+                "/reviewProducers/0/recoveryDays".to_owned()
+            )],
             "{error}"
         );
-        assert!(!error.to_string().contains("RECOVERY_DAYS"), "{error}");
+        let RuntimeConfigError::Project(project) = &error else {
+            unreachable!()
+        };
+        assert!(!project.to_string().contains("RECOVERY_DAYS"), "{project}");
     }
 
     #[test]
@@ -2936,10 +2933,6 @@ pub enum RuntimeConfigError {
     #[error("the Casework project is invalid")]
     Project(#[source] registry_casework_core::ConfigLoadError),
     #[error(
-        "{field} in the authored Casework project holds an environment expression; ${{...}} substitution applies to runtime.yaml only, so write the value in casework.yaml directly"
-    )]
-    PolicyEnvironmentExpression { field: String },
-    #[error(
         "package.root/casework.yaml must be a regular file of at most one MiB; rebuild the package with `caseworkctl package`"
     )]
     PolicyUnreadable,
@@ -3044,9 +3037,7 @@ impl RuntimeConfigError {
                 _ => "audit",
             },
             Self::InvalidSourceBindings | Self::SourceDescription => "sources",
-            Self::InactiveReviewSourceNamespace | Self::PolicyEnvironmentExpression { .. } => {
-                "package.root/casework.yaml"
-            }
+            Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
             Self::Project(_) => "package.root/casework.yaml",
             Self::PolicyUnreadable => "package.root/casework.yaml",
             Self::Package(_)

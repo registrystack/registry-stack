@@ -1540,3 +1540,19 @@ pub enum RuntimeError {
     #[error("a Casework background worker stopped")]
     WorkerStopped,
 }
+
+impl RuntimeError {
+    /// The reader's report when startup refused the Casework project, so
+    /// `casework` prints its CFG-DIAG-2 lines unchanged after its own
+    /// one-sentence refusal.
+    #[must_use]
+    pub fn configuration_report(&self) -> Option<&registry_platform_yaml::Report> {
+        match self {
+            Self::Project(registry_casework_core::ConfigLoadError::Refused(report))
+            | Self::Config(crate::RuntimeConfigError::Project(
+                registry_casework_core::ConfigLoadError::Refused(report),
+            )) => Some(report),
+            _ => None,
+        }
+    }
+}

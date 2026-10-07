@@ -539,8 +539,6 @@ pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     let policy_path = project.join("casework.yaml");
     let policy =
         CaseworkProject::load(&policy_path).context("loading and checking casework.yaml")?;
-    let authored = fs::read_to_string(&policy_path).context("reading casework.yaml")?;
-    registry_platform_config::reject_environment_expressions_in_authored_yaml(&authored)?;
     if policy.sources.is_empty() {
         if policy.review_kinds.is_empty() || policy.review_producers.is_empty() {
             bail!("declare a review kind and producer or connect a source before checking the project");
@@ -1832,7 +1830,7 @@ mod tests {
 
     #[test]
     fn template_has_only_checkpoint_capabilities() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         policy.check().unwrap();
         assert_eq!(policy.sources.len(), 1);
         assert_eq!(policy.queues.len(), 1);
@@ -1840,7 +1838,7 @@ mod tests {
 
     #[test]
     fn starter_display_schema_admits_every_projected_source_field() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         let description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
         let authored = &policy.sources[0].requests[0].context_projection;
         let kind = policy
@@ -1886,7 +1884,7 @@ mod tests {
 
     #[test]
     fn starter_producer_subject_matches_its_dev_client_principal() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         let clients: Value = serde_norway::from_str(PROFESSIONAL_REVIEW_DEV_CLIENTS).unwrap();
         for producer in &policy.review_producers {
             let profile = &policy
@@ -1915,7 +1913,7 @@ mod tests {
 
     #[test]
     fn starter_review_excludes_the_person_who_submitted_the_request() {
-        let policy: CaseworkProject = serde_norway::from_str(CASEWORK_YAML).unwrap();
+        let policy = CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap();
         policy.check().unwrap();
         for kind in &policy.review_kinds {
             for stage in &kind.stages {
@@ -2220,7 +2218,7 @@ mod tests {
         validate_fixture(
             &fixture,
             &effective,
-            &serde_norway::from_str(CASEWORK_YAML).unwrap(),
+            &CaseworkProject::from_slice(CASEWORK_YAML.as_bytes()).unwrap(),
         )
         .unwrap();
     }
@@ -3630,10 +3628,19 @@ mod tests {
             "    subject: professional-review-breg\n    initiatorProfile: staff\n",
         );
         let (_root, project) = write_offline_project(&staff_initiator, BREG_SOURCE_DESCRIPTION);
-        let refused = format!("{:#}", check(&project, false, false).unwrap_err());
-        assert!(
-            refused.contains("reviewProducers[0].initiatorProfile"),
-            "{refused}"
+        let refused = check(&project, false, false).unwrap_err();
+        let report = crate::configuration_report(&refused).expect("a positioned report");
+        let diagnostics = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            diagnostics,
+            [(
+                "casework.review-producer.ineligible-initiator-profile",
+                "/reviewProducers/0/initiatorProfile"
+            )]
         );
     }
 

@@ -604,19 +604,24 @@ REPORTS = {
 }
 
 
+# A position lies inside a document the shared reader accepted, which is at
+# most MAXIMUM_DOCUMENT_BYTES (1 MiB) long, so neither its line nor its
+# column passes one more than that.
+POSITION = {"type": "integer", "minimum": 1, "maximum": 1024 * 1024 + 1}
 DIAGNOSTIC_DEFS = {
     "diagnostics": {
         "type": "array",
         "minItems": 1,
         "items": {"$ref": "#/$defs/diagnostic"},
     },
+    # The one diagnostic shape every checking command reports (CFG-DIAG-1),
+    # carried unchanged from the shared configuration reader.
     "diagnostic": {
         "type": "object",
         "additionalProperties": False,
         "required": [
             "severity",
             "code",
-            "artifact",
             "path",
             "message",
             "suggestedAction",
@@ -628,6 +633,31 @@ DIAGNOSTIC_DEFS = {
             "path": STRING,
             "message": STRING,
             "suggestedAction": STRING,
+            "source": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["file"],
+                "properties": {
+                    "file": STRING,
+                    "line": POSITION,
+                    "column": POSITION,
+                },
+            },
+            "related": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["file", "path", "message"],
+                    "properties": {
+                        "file": STRING,
+                        "line": POSITION,
+                        "column": POSITION,
+                        "path": STRING,
+                        "message": STRING,
+                    },
+                },
+            },
         },
     },
     "findings": {

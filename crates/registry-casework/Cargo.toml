@@ -47,6 +47,7 @@ registry-platform-config.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-oidc.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
 reqwest.workspace = true
 registry-breg = { workspace = true, optional = true }
 rustls.workspace = true

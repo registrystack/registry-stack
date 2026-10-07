@@ -20,6 +20,9 @@ async fn main() {
     let matches = registry_casework::command().get_matches();
     if let Err(error) = registry_casework::run(&matches).await {
         eprintln!("casework: {error}");
+        if let Some(report) = error.configuration_report() {
+            eprint!("{}", report.render_human());
+        }
         let code = match error {
             registry_casework::RuntimeError::RemovedCommand(_) => 2,
             _ => 1,

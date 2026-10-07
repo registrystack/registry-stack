@@ -435,7 +435,7 @@ expect:
 "#,
         )
         .unwrap();
-        let policy: CaseworkProject = serde_norway::from_str(
+        let policy = CaseworkProject::from_slice(
             r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework: {id: regional-review, version: "1"}
@@ -480,7 +480,8 @@ clocks:
         because: The review deadline passed while the review remained active.
         at: due
         action: {reassign: {queue: overdue-review}}
-"#,
+"#
+            .as_bytes(),
         )
         .unwrap();
         policy.check().unwrap();
@@ -528,7 +529,7 @@ expect:
 "#,
         )
         .unwrap();
-        let policy: CaseworkProject = serde_norway::from_str(
+        let policy = CaseworkProject::from_slice(
             r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework: {id: response-budget, version: "1"}
@@ -550,7 +551,8 @@ clocks:
     completeOn: reviewCompleted
     after: {elapsed: PT48H}
     pauseWhile: [awaitingApplicant]
-"#,
+"#
+            .as_bytes(),
         )
         .unwrap();
         policy.check().unwrap();

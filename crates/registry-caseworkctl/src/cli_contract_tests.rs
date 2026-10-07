@@ -281,6 +281,35 @@ fn every_public_json_report_matches_its_schema() {
         reports.push((label, kind, report));
     }
 
+    // A refused project carries the reader's diagnostics unchanged, with
+    // their positions and the places they relate to.
+    let refused = root.path().join("refused");
+    let (exit, _) = invoke(vec![
+        OsString::from("init"),
+        refused.as_os_str().to_owned(),
+        OsString::from("--template"),
+        OsString::from("standalone-decision"),
+    ]);
+    assert_eq!(exit, ExitCode::SUCCESS);
+    let policy = refused.join("casework.yaml");
+    let text = std::fs::read_to_string(&policy).unwrap();
+    std::fs::write(
+        &policy,
+        text.replace("    recoveryDays: 30\n", "    recoveryDays: 91\n"),
+    )
+    .unwrap();
+    let (exit, check) = invoke(project_arguments("check", &refused));
+    assert_eq!(exit, ExitCode::from(1), "{check:#?}");
+    assert!(
+        check["diagnostics"][0]["source"]["line"].is_u64(),
+        "{check:#?}"
+    );
+    assert!(
+        check["diagnostics"][0]["related"][0]["line"].is_u64(),
+        "{check:#?}"
+    );
+    reports.push(("refused check", "CheckReport", check));
+
     let (exit, usage) = invoke(arguments(&["--not-a-real-argument"]));
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("usage", "UsageReport", usage));
@@ -289,7 +318,7 @@ fn every_public_json_report_matches_its_schema() {
     assert_eq!(exit, ExitCode::from(2));
     reports.push(("removed command", "UsageReport", removed));
 
-    assert_eq!(reports.len(), 22);
+    assert_eq!(reports.len(), 23);
     for (label, kind, report) in reports {
         assert_matches_contract(label, kind, &report);
     }

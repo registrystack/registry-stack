@@ -90,7 +90,6 @@
       "required": [
         "severity",
         "code",
-        "artifact",
         "path",
         "message",
         "suggestedAction"
@@ -113,6 +112,61 @@
         },
         "suggestedAction": {
           "type": "string"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048577
+            }
+          }
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "path",
+              "message"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048577
+              },
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
         }
       }
     },
