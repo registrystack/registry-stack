@@ -13,20 +13,15 @@ use std::time::Duration;
 
 use axum::Router;
 use registry_platform_config::package::is_envelope_file;
-use registry_platform_config::{
-    sha256_uri, ListenerConfig, PackageConfig, PackageError, PackageLimits, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, VerifiedPackage,
-};
-use serde::Deserialize;
+use registry_platform_config::{sha256_uri, PackageError, PackageLimits, VerifiedPackage};
+use registry_platform_yaml::Diagnostic;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::model::{
-    parse_index, DiscoveryIndex, IndexError, MAXIMUM_HTTP_BODY_BYTES, MAXIMUM_INDEX_BYTES,
-    MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS, MINIMUM_HTTP_RESPONSE_BYTES,
-};
+use crate::model::{parse_index, DiscoveryIndex, IndexError, MAXIMUM_INDEX_BYTES};
 use crate::query::Directory;
+use crate::runtime_config::{load_runtime_config, RuntimeConfig};
 use crate::server::{router, DiscoveryService};
 use crate::{
     INDEX_FILE, MAXIMUM_PACKAGE_BYTES, MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES,
@@ -35,69 +30,13 @@ use crate::{
 
 pub use registry_platform_config::MAX_LISTENER_BIND_CHARACTERS as MAXIMUM_LISTENER_BIND_CHARACTERS;
 
-pub const RUNTIME_API_VERSION: &str = "registry.registrystack.org/discovery-runtime/v1alpha1";
-pub const RUNTIME_KIND: &str = "DiscoveryRuntimeConfig";
-
-const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
-    api_version: RUNTIME_API_VERSION,
-    kind: RUNTIME_KIND,
-};
-
-const REMOVED_RUNTIME_KEYS: &[RemovedKey] = &[
-    RemovedKey {
-        path: "schemaVersion",
-        replacement: "declare apiVersion registry.registrystack.org/discovery-runtime/v1alpha1 \
-                      and kind DiscoveryRuntimeConfig instead",
-    },
-    RemovedKey {
-        path: "listener.address",
-        replacement: "declare listener.bind instead",
-    },
-    RemovedKey {
-        path: "indexPath",
-        replacement: "declare package.root instead and build it with `discoveryctl package`",
-    },
-];
-
-const MAXIMUM_REQUEST_TIMEOUT_SECONDS: u64 = 300;
-const MAXIMUM_SHUTDOWN_TIMEOUT_SECONDS: u64 = 300;
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RuntimeLimits {
-    pub maximum_request_bytes: usize,
-    pub maximum_response_bytes: usize,
-    pub maximum_result_records: usize,
-    pub maximum_result_alternatives: usize,
-    pub request_timeout_seconds: u64,
-    pub shutdown_timeout_seconds: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RuntimeConfig {
-    pub api_version: String,
-    pub kind: String,
-    pub listener: ListenerConfig,
-    pub package: PackageConfig,
-    pub limits: RuntimeLimits,
-    pub log_level: LogLevel,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Error,
-    Warn,
-    Info,
-}
-
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StartupError {
-    /// The shared loader refused the runtime file; the message names the
-    /// file and the field and never carries a configured value.
-    #[error("the Discovery runtime configuration was refused: {0}")]
+    /// The shared loader refused the runtime file; the message is the
+    /// reader's human diagnostics, which name the file, the position, and
+    /// the fix and never carry a configured value.
+    #[error("the Discovery runtime configuration was refused:\n{0}")]
     RuntimeRefused(String),
     #[error("the Discovery runtime configuration is invalid")]
     RuntimeInvalid,
@@ -164,24 +103,24 @@ pub fn prepare(runtime_path: &Path) -> Result<PreparedDiscovery, StartupError> {
     );
     let directory = Directory::new(
         index,
-        runtime.limits.maximum_result_records,
-        runtime.limits.maximum_result_alternatives,
+        runtime.limits.result_records(),
+        runtime.limits.result_alternatives(),
     )
     .map_err(|_| StartupError::RuntimeInvalid)?;
     let service = Arc::new(
-        DiscoveryService::new(directory, runtime.limits.maximum_response_bytes)
+        DiscoveryService::new(directory, runtime.limits.response_bytes())
             .map_err(|_| StartupError::RuntimeInvalid)?,
     );
     let app = router(
         service,
-        runtime.limits.maximum_request_bytes,
-        Duration::from_secs(runtime.limits.request_timeout_seconds),
+        runtime.limits.request_bytes(),
+        Duration::from_secs(runtime.limits.request_timeout_seconds.get()),
     )
     .map_err(|_| StartupError::RuntimeInvalid)?;
     Ok(PreparedDiscovery {
         bind: runtime.listener.bind.socket_addr(),
         app,
-        shutdown_timeout: Duration::from_secs(runtime.limits.shutdown_timeout_seconds),
+        shutdown_timeout: Duration::from_secs(runtime.limits.shutdown_timeout_seconds.get()),
     })
 }
 
@@ -262,12 +201,11 @@ fn map_server_result(
 /// Load the runtime file through the shared runtime configuration loader.
 /// Returns the directory holding the file and the validated configuration.
 pub fn load_runtime(path: &Path) -> Result<(PathBuf, RuntimeConfig), StartupError> {
-    let runtime = RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
-        .removed_keys(REMOVED_RUNTIME_KEYS)
-        .load::<RuntimeConfig>(path)
-        .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?
-        .config;
-    validate_runtime(&runtime)?;
+    let runtime = load_runtime_config(path).map_err(|diagnostics| {
+        let mut rendered: String = diagnostics.iter().map(Diagnostic::render_human).collect();
+        rendered.truncate(rendered.trim_end().len());
+        StartupError::RuntimeRefused(rendered)
+    })?;
     let root = path
         .parent()
         .ok_or(StartupError::RuntimeInvalid)?
@@ -400,35 +338,13 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
-fn validate_runtime(runtime: &RuntimeConfig) -> Result<(), StartupError> {
-    runtime
-        .package
-        .check()
-        .map_err(|error| StartupError::RuntimeRefused(error.to_string()))?;
-    if runtime.limits.maximum_request_bytes == 0
-        || runtime.limits.maximum_request_bytes > MAXIMUM_HTTP_BODY_BYTES
-        || runtime.limits.maximum_response_bytes < MINIMUM_HTTP_RESPONSE_BYTES
-        || runtime.limits.maximum_response_bytes > MAXIMUM_HTTP_BODY_BYTES
-        || runtime.limits.maximum_result_records == 0
-        || runtime.limits.maximum_result_records > MAXIMUM_RESULT_RECORDS
-        || runtime.limits.maximum_result_alternatives == 0
-        || runtime.limits.maximum_result_alternatives > MAXIMUM_RESULT_ALTERNATIVES
-        || runtime.limits.request_timeout_seconds == 0
-        || runtime.limits.request_timeout_seconds > MAXIMUM_REQUEST_TIMEOUT_SECONDS
-        || runtime.limits.shutdown_timeout_seconds == 0
-        || runtime.limits.shutdown_timeout_seconds > MAXIMUM_SHUTDOWN_TIMEOUT_SECONDS
-    {
-        return Err(StartupError::RuntimeInvalid);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
     use crate::model::{canonical_index_bytes, tests::example_index};
+    use crate::{RUNTIME_API_VERSION, RUNTIME_KIND};
     use registry_platform_config::write_package;
 
     #[test]
@@ -532,8 +448,8 @@ logLevel: info
 
     #[test]
     fn removed_runtime_keys_name_their_replacements() {
-        // The envelope is checked first, so a file that replaced it with
-        // schemaVersion is told which envelope to write.
+        // A file that replaced the envelope with schemaVersion is told which
+        // envelope to write, and that schemaVersion is no longer read.
         let message = refusal(&RUNTIME.replace(
             "apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1\nkind: DiscoveryRuntimeConfig",
             "schemaVersion: registry-discovery/runtime/v1alpha1",
@@ -544,6 +460,10 @@ logLevel: info
                  registry.registrystack.org/discovery-runtime/v1alpha1` and `kind: \
                  DiscoveryRuntimeConfig`."
             ),
+            "{message}"
+        );
+        assert!(
+            message.contains("`schemaVersion` is no longer accepted\n  next: declare apiVersion"),
             "{message}"
         );
         let message = refusal(&RUNTIME.replace(

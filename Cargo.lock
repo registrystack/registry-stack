@@ -5324,6 +5324,8 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httpsec",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",

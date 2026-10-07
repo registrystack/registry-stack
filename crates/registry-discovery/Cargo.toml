@@ -19,16 +19,25 @@ workspace = true
 [features]
 default = ["server"]
 server = [
+  "runtime-config",
   "dep:axum",
   "dep:clap",
   "dep:http",
   "dep:registry-platform-buildinfo",
-  "dep:registry-platform-config",
   "dep:registry-platform-httpsec",
   "dep:tokio",
   "dep:tower-http",
   "dep:tracing",
   "dep:tracing-subscriber",
+]
+# The runtime configuration types and their offline check, without the
+# service.
+runtime-config = ["dep:registry-platform-config", "dep:registry-platform-yaml"]
+schema = [
+  "runtime-config",
+  "dep:schemars",
+  "registry-platform-config/schema",
+  "registry-platform-yaml/schema",
 ]
 
 [dependencies]
@@ -40,6 +49,8 @@ registry-platform-buildinfo = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
 registry-platform-config = { workspace = true, optional = true }
 registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
+registry-platform-yaml = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
