@@ -1,0 +1,414 @@
+---
+title: Configuration files
+description: How Registry Stack configuration files are written and read, how to read a configuration diagnostic, and which command checks each file before you deploy it.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+wide: true
+---
+
+import ConfigurationFormatsTable from '../../../components/ConfigurationFormatsTable.astro';
+import formats from '../../../data/generated/configuration-formats.json';
+
+Every Registry Stack product reads YAML configuration files. A project author writes authored
+files, such as a registry project or a Casework policy, and an operator writes a runtime file for
+each deployment. This reference covers how a file starts, how a runtime reads its configuration
+file, how to read a diagnostic, and which command checks each file before you deploy it.
+[Formats by product](#formats-by-product) lists every file a product reads and links to the
+reference for its keys.
+
+## Where the shared rules apply
+
+One shared reader reads the runtime configuration file of each of these programs:
+
+- Base Registry Engine (BReg), `BRegRuntimeConfig`
+- Evidence Gateway, `EvidenceRuntimeConfig`
+- Registry Casework, `CaseworkRuntimeConfig`
+- Registry Scheduling, `SchedulingRuntimeConfig`
+- Registry Render, `RenderRuntimeConfig`
+- Registry Discovery, `DiscoveryRuntimeConfig`
+
+<DocsetProduct product="registry-breg-services">
+
+The BReg citizen gateway, `breg-mcp`, reads `BRegMcpRuntimeConfig` through the same reader, and
+the citizen review page, `breg-review`, reads `BRegReviewRuntimeConfig`.
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-messaging">
+
+Registry Messaging reads `MessagingRuntimeConfig` through the same reader.
+
+</DocsetProduct>
+
+The YAML rules, value rules, substitution, and diagnostics on this page are that reader's, so they
+apply to runtime files today. Each product still reads its authored files with its own YAML parser,
+whose rules and error text differ by product. The reference linked for each format describes its
+keys.
+
+{/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader;
+    crates/registry-breg/src/runtime_config.rs, RuntimeConfigLoader;
+    crates/registry-evidence/src/config.rs, RuntimeConfigLoader;
+    crates/registry-casework/src/config.rs, RuntimeConfigLoader;
+    crates/registry-scheduling/src/config.rs, RuntimeConfigLoader;
+    crates/registry-render/src/runtime.rs, RuntimeConfigLoader;
+    crates/registry-discovery/src/startup.rs, RuntimeConfigLoader;
+    crates/registry-caseworkctl/src/project.rs, serde_norway;
+    crates/registry-render/src/manifest.rs, serde_norway. */}
+
+## How a file starts
+
+A file whose format carries a header starts with `apiVersion` and `kind`, two plain strings at the
+top level:
+
+```yaml
+apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+kind: DiscoveryRuntimeConfig
+```
+
+`apiVersion` names the format and its version; `kind` names the document. A runtime checks both
+before it decodes the rest of the file, and refuses a pair it does not read. Write both in the file
+as plain text: neither can come from an environment variable. The Header column under
+[formats by product](#formats-by-product) gives each format's pair. A format marked No apiVersion
+or No kind does not carry that member.
+
+## How a runtime reads its file
+
+A runtime reads its configuration file only from an absolute path with no `.` or `..` segment and
+no symbolic link anywhere along it, and only when that path names a regular file of at most 1 MiB
+(64 KiB for the BReg runtime file).
+The file is one YAML document in a strict subset of YAML 1.2, in UTF-8, nested at most 128 levels
+deep. Write block mappings and lists, indent with spaces, and add comments wherever they help. The
+reader refuses these constructs, each with its own code:
+
+| Written | Refused with |
+| --- | --- |
+| A tab in indentation | `yaml.tab-indentation` |
+| The same key twice in one mapping | `yaml.duplicate-key` |
+| An anchor (`&name`) or an alias (`*name`) | `yaml.anchor`, `yaml.alias` |
+| A merge key (`<<`) | `yaml.merge-key` |
+| An explicit tag, such as `!!str` or `!custom` | `yaml.tag` |
+| A mapping key that is not a string | `yaml.non-string-key` |
+| A second document after `---` | `yaml.multiple-documents` |
+
+A runtime file cannot reuse a block it already wrote: repeat the values instead. A key that starts
+with `x-` is not an extension point. The reader refuses it as an unknown key and asks you to write
+the note as a comment.
+
+{/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader and
+    DEFAULT_MAX_RUNTIME_CONFIG_BYTES;
+    crates/registry-breg/src/runtime_config.rs, MAX_RUNTIME_CONFIG_BYTES;
+    crates/registry-platform-yaml/src/document.rs, MAXIMUM_DOCUMENT_BYTES;
+    crates/registry-platform-yaml/src/structure.rs, MAXIMUM_DEPTH;
+    crates/registry-platform-yaml/src/messages.rs, CODES and extension_key(). */}
+
+### How an unquoted value is read
+
+The reader resolves an unquoted value by one table, the same in every runtime:
+
+| Unquoted value | Read as |
+| --- | --- |
+| `null`, `Null`, `NULL`, `~`, or nothing after the colon | Null |
+| `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
+| Digits with an optional sign and no leading zero: `0`, `42`, `-7` | Integer |
+| The same with a fraction or an exponent: `1.5`, `-0.25`, `1e3` | Number |
+| `0123`, `01.5`, `.5`, `5.`, `0x1F`, `0o17`, `0b101`, `.inf`, `.nan` | Refused with `yaml.ambiguous-number` |
+| Anything else, including `yes`, `no`, `on`, `off`, `1_000`, `1:30`, and `09:00` | Text |
+
+A quoted value and a block value (`|` or `>`) are always text. So `yes` and `on` never mean true,
+and a value such as `09:00` stays the text you wrote.
+
+A member keeps the type its format gives it. An integer member refuses `1_000` and refuses a quoted
+`"100"`, and a text member refuses an unquoted number or boolean until you quote it. With
+`maximumResultRecords: "100"` in a Discovery runtime file, the reader reports:
+
+```text
+error[config.expected-integer] runtime.yaml:10:25 /limits/maximumResultRecords
+  expected a whole number from 0 to 18446744073709551615; quoted values are text
+  next: Remove the quotes.
+```
+
+{/* Evidence: crates/registry-platform-yaml/src/scalar.rs, resolve_plain();
+    crates/registry-platform-yaml/src/messages.rs, CODES. */}
+
+### Absent and null
+
+Leaving a key out and writing it with no value are different. An optional key you leave out takes
+its default. A key with nothing after the colon, or with `null` or `~`, is null, and no member
+accepts null. With `logLevel:` on a line of its own, the reader reports:
+
+```text
+error[config.null-value] runtime.yaml:14:1 /logLevel
+  null is never a value; an empty value after a key is null too
+  next: Remove the key to use the default, or give a value.
+```
+
+## Values from the environment
+
+A runtime file can take part of a text value from the runtime's environment while it is read:
+
+| Expression | Result |
+| --- | --- |
+| `${NAME}` | The value of `NAME`; refused when `NAME` is unset or empty |
+| `${NAME:-fallback}` | The value of `NAME`, or `fallback` when `NAME` is unset or empty |
+| `${NAME:?message}` | The value of `NAME`; refused when `NAME` is unset or empty, without repeating the message |
+
+`NAME` starts with a letter or `_` and continues with letters, digits, or `_`. An expression can
+sit inside a longer value, such as `${PACKAGE_ROOT}/current`.
+
+- A substituted value is text. It fills a text member and never an integer or boolean member; write
+  numbers and booleans in the file.
+- Substitution is refused in keys, in `apiVersion` and `kind`, in every member whose key ends in
+  `Ref` or `Refs` and everything nested in it, and everywhere under `secretProviders`.
+- There is no escape syntax. `${` followed by a letter, a digit, `_`, or `}` starts an expression,
+  and any other `${` is text. Substitution is a single pass, so a value that needs a literal
+  expression can come from an environment variable that holds it.
+- A diagnostic about a substituted value points at the expression as you wrote it, and names the
+  variable but never its value.
+
+With `DISCOVERY_PACKAGE_ROOT` unset, `root: ${DISCOVERY_PACKAGE_ROOT}` is refused:
+
+```text
+error[config.substitution] runtime.yaml:6:9 /package/root
+  the environment variable DISCOVERY_PACKAGE_ROOT is unset or empty
+  next: Set DISCOVERY_PACKAGE_ROOT in the runtime's environment, or write a fallback as ${DISCOVERY_PACKAGE_ROOT:-fallback}.
+```
+
+Substitution is for ordinary settings. A secret goes in a reference member, a key ending in `Ref`,
+as `secret:env/<NAME>` or `secret:file/<name>`, and the runtime resolves it through the providers
+its file declares under `secretProviders`. The
+[secret reference grammar](../environment-variables/#secret-references) gives the accepted names.
+
+An authored file is never substituted. Depending on the product, a `${...}` expression in an
+authored file is refused or read as literal text, so write the value itself.
+
+{/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader and
+    reject_environment_expressions_in_authored_yaml();
+    crates/registry-platform-config/src/lib.rs, resolve_config_env_expression() and valid_env_key();
+    crates/registry-platform-config/src/secrets.rs, SecretReference;
+    crates/registry-breg/src/contract.rs, reject_environment_expressions_in_authored_yaml;
+    crates/registry-caseworkctl/src/project.rs, reject_environment_expressions_in_authored_yaml;
+    crates/registry-render/src/manifest.rs, reject_environment_expressions_in_authored_yaml. */}
+
+## Read a diagnostic
+
+A runtime that refuses its file reports diagnostics, one per problem. Take a Discovery runtime file
+whose last line misspells `logLevel`:
+
+```yaml
+apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+kind: DiscoveryRuntimeConfig
+listener:
+  bind: 127.0.0.1:38080
+package:
+  root: ${DISCOVERY_PACKAGE_ROOT}
+limits:
+  maximumRequestBytes: 65536
+  maximumResponseBytes: 1048576
+  maximumResultRecords: 100
+  maximumResultAlternatives: 100
+  requestTimeoutSeconds: 10
+  shutdownTimeoutSeconds: 10
+logLevl: info
+```
+
+The reader reports two problems:
+
+```text
+error[config.missing-key] runtime.yaml:1:1
+  the required member `logLevel` is missing
+  next: Add `logLevel`.
+error[config.unknown-key] runtime.yaml:14:1 /logLevl
+  `logLevl` is not a member of this mapping
+  next: Rename `logLevl` to `logLevel`, or remove it.
+```
+
+Each diagnostic has the same parts:
+
+| Part | Example | Meaning |
+| --- | --- | --- |
+| Severity | `error` | `error` refuses the file; `warning` reports a problem the runtime still accepts |
+| Code | `config.unknown-key` | The problem, by a stable name |
+| Position | `runtime.yaml:14:1` | File, line, and column, counted from 1 |
+| Pointer | `/logLevl` | Where the key sits in the document, as an RFC 6901 JSON Pointer; absent when the problem is at the root |
+| Message | `` `logLevl` is not a member of this mapping `` | What is wrong |
+| `next:` | ``Rename `logLevl` to `logLevel`, or remove it.`` | The fix to make |
+| `note:` | `runtime.yaml:3:1 /listener the first definition` | A second place that explains the problem, when there is one |
+
+The examples on this page name the file `runtime.yaml`. A runtime names the file by the path you
+gave it. A message names keys, accepted values, and bounds, and never repeats a value read from
+the file or the environment.
+
+A duplicate key shows a `note:` line that points at the first definition:
+
+```text
+error[yaml.duplicate-key] runtime.yaml:15:1 /listener
+  the key is already defined in this mapping
+  next: Keep one definition of the key.
+  note: runtime.yaml:3:1 /listener the first definition
+```
+
+The reader reports every unknown and removed key it finds, and stops decoding at the first other
+problem. After you fix what it reports, run the check again: a later problem can surface.
+
+{/* Evidence: crates/registry-platform-yaml/src/diagnostic.rs, Diagnostic, Severity, and
+    render_human();
+    crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader;
+    crates/registry-discovery/src/startup.rs, RUNTIME_KIND. */}
+
+### Codes
+
+A reader code has two parts. `yaml.` codes concern the YAML subset, and `config.` codes concern
+the header, keys, and values. A code with three parts, such as `platform.runtime-config.path`,
+comes from the runtime loader or the product rather than the reader. These are the reader codes a
+runtime file most often meets:
+
+| Code | Meaning |
+| --- | --- |
+| `config.missing-envelope` | The document is empty, or its top-level mapping lacks `apiVersion` or `kind` |
+| `config.wrong-kind` | `kind` is not one the reader accepts |
+| `config.unsupported-api-version` | `apiVersion` is not one the reader accepts for this kind |
+| `config.unknown-key` | A key is not a member of its mapping |
+| `config.removed-key` | A key was removed or renamed; `next:` names what to write instead |
+| `config.missing-key` | A required member is absent |
+| `config.unknown-variant` | A value is not one of the accepted names; the message lists them |
+| `config.null-value` | A member is null |
+| `config.expected-integer` | An integer member holds something other than an integer |
+| `config.expected-string` | A text member holds something other than text |
+| `config.substitution` | A `${...}` expression cannot be filled |
+| `config.substitution-not-allowed` | A `${...}` expression is written where substitution is refused |
+| `yaml.duplicate-key` | A mapping holds the same key twice |
+| `yaml.ambiguous-number` | An unquoted value looks like a number but is not a plain decimal |
+
+`CODES` in `crates/registry-platform-yaml/src/messages.rs` lists every reader code with its meaning.
+The one warning, `config.deprecated-api-version`, reports an `apiVersion` the runtime still reads
+and names the version to change to.
+
+For an unknown key, `next:` proposes the closest accepted key when one differs only in letter
+case, or by at most two edits (one edit for an accepted key of four characters or fewer, counting
+a swap of two neighbouring characters as one edit). Otherwise it lists the accepted keys.
+
+A few blocks are exceptions, such as `audit` in the Casework and Scheduling runtime files. In
+those blocks the reader reports only the first unknown key, and `next:` asks you to remove it
+without proposing or listing accepted keys.
+
+The code names the problem. The message wording is human-readable output, which
+[API stability](../api-stability/#exempt-surfaces) exempts from its promise.
+
+{/* Evidence: crates/registry-platform-yaml/src/messages.rs, CODES, unknown_key(), closest(), and
+    deprecated_api_version();
+    crates/registry-platform-yaml/src/de.rs, serde_unknown_field();
+    crates/registry-casework/src/config.rs, AuditConfig;
+    crates/registry-scheduling/src/config.rs, AuditConfig;
+    crates/registry-platform-config/src/loader.rs, RuntimeConfigErrorKind. */}
+
+### How a product prints them
+
+A runtime prints the diagnostics inside its own startup error, and the surrounding words differ by
+product. Some runtimes print the lines as shown on this page, some restate a refusal in their own
+words, and Registry Discovery writes the lines inside a JSON log record.
+
+The BReg runtime differs most. It reads the YAML, the header, and substitution through the reader,
+then checks the keys and values itself. It reports one problem per run, on one line, without the
+reader's code, line, or column.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, load();
+    crates/registry-breg/src/runtime_config.rs, parse_runtime_config_with_env(),
+    runtime_config_from_substituted(), and runtime_config_error_from_loader();
+    crates/registry-platform-config/src/loader.rs, message();
+    crates/registry-evidence/src/config.rs, runtime_fault();
+    crates/registry-discovery/src/startup.rs, RuntimeConfigLoader. */}
+
+## Check a file before you deploy it
+
+The Check command column under [formats by product](#formats-by-product) names the command that
+checks each format without starting the service. Run it in your pipeline before you deploy, against
+the project directory or runtime file it names. A format marked None has no check command of its
+own; the program that reads it refuses it when it starts.
+
+The BReg runtime file is one of these. `bregctl doctor --runtime-config <absolute-file>` reads it,
+and also connects to the database and the other dependencies the file names, so it is a deployment
+preflight rather than an offline check.
+
+{/* Evidence: products/platform/config-formats.yaml;
+    crates/registry-bregctl/src/lib.rs, DoctorArgs;
+    crates/registry-bregctl/src/doctor.rs, run(). */}
+
+### Check as you type
+
+A format with a Schema `$id` has a JSON Schema your editor can apply. The `$id` identifies the
+schema; it is not an address the project serves. Copy the schema file from its Source copy path,
+at the release you deploy, into your project, then map it to your files. The
+[Base Registry Engine projects](../evidencectl/#base-registry-engine-projects) section of the
+`evidencectl` reference shows the mapping in `.vscode/settings.json`. An editor that uses
+`yaml-language-server` also reads a schema named in a comment at the top of a file:
+
+```yaml
+# yaml-language-server: $schema=./schemas/runtime.schema.json
+apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+kind: BRegRuntimeConfig
+```
+
+The reader treats that line as a comment. For an Evidence Gateway authoring project,
+`evidencectl tooling editor <project>` writes the mappings for you, as
+[editor support](../evidencectl/#editor-support) describes. A schema catches shape errors as you
+type. It does not replace the check command, which also applies rules a schema cannot state, such
+as references between files.
+
+{/* Evidence: products/breg/generated/runtime/runtime.schema.json;
+    crates/registry-evidencectl/src/tooling_editor.rs, EDITOR_SCHEMA_CATALOG. */}
+
+## Stability
+
+The Stability column gives each format's label in the format registry:
+
+- **Promised**: the format is meant to be covered by
+  [API stability and versioning](../api-stability/). The
+  [covered surfaces](../api-stability/#covered-surfaces) table there names the configuration
+  formats the promise covers today; where the two differ, that table holds.
+- **Experimental**: shipped, and may change in a minor release, announced with a `BREAKING:` note.
+- **Unpromised**: no compatibility promise, for files such as fixtures, test journeys,
+  development clients, and the Evidence Gateway authoring files.
+
+Before `v1.0.0`, the [pre-1.0 rule](../api-stability/#versioning-scheme) applies to every format:
+a minor release may change one, with a `BREAKING:` entry and migration steps in the release note.
+
+{/* Evidence: products/platform/CONFIG-CONVENTIONS.md, Stability;
+    products/platform/config-formats.yaml. */}
+
+## Formats by product
+
+Each product lists the files it reads, with the pages that explain their keys:
+
+- **Audience**: Authored for a file a project author writes, Operator for a file an operator writes
+  for one deployment.
+- **Header**: the `apiVersion` and `kind` the file carries. External format marks a file whose
+  grammar another project owns, such as a JSON Schema or an OpenAPI description. Exchange model
+  marks a published data model whose member names its specification fixes. Neither carries a
+  Registry Stack header.
+- **Schema `$id`**: the identifier of the format's JSON Schema, with the repository path of its
+  source copy.
+- **Check command** and **Stability**: as described in the two previous sections.
+
+Generated files, which no one writes by hand, are left out.
+
+{/* Generated from src/data/generated/configuration-formats.json by
+    docs/site/scripts/generate-configuration-formats.mjs, from products/platform/config-formats.yaml.
+    Run npm run generate from docs/site. */}
+
+<ConfigurationFormatsTable products={formats.products} />
+
+## Next
+
+- [Base Registry Engine configuration reference](../breg-configuration/) for every BReg key.
+- [Evidence Gateway configuration reference](../evidence-configuration/) for every Evidence Gateway
+  key.
+- [Environment variable reference](../environment-variables/) for fixed variables and secret
+  references.
+- [API stability and versioning](../api-stability/) for what a release may change.

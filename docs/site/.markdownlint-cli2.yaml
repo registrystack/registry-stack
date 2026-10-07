@@ -35,6 +35,7 @@ config:
       - ProjectWorkspaceJourneys
       - AuthoringConfigurationReference
       - ConfigurationReference
+      - ConfigurationFormatsTable
       - EventReferenceTable
       - DiagnosticReference
       - DocsetProduct

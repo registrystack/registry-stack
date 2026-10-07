@@ -26,6 +26,7 @@ import {
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
 import { treeDigest } from './archive-bundle.mjs';
 import { CONTRACTS as bregContracts } from './generate-breg-configuration.mjs';
+import { SOURCE as configurationFormatsSource } from './generate-configuration-formats.mjs';
 import { CONTRACTS as evidenceContracts } from './generate-evidence-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -167,6 +168,7 @@ test('archive generation excludes current-source generators', async () => {
   for (const script of [
     'generate-evidence-configuration.mjs',
     'generate-breg-configuration.mjs',
+    'generate-configuration-formats.mjs',
     'generate-cli-reference.mjs',
   ]) {
     assert.doesNotMatch(
@@ -188,6 +190,7 @@ test('archive generation excludes current-source generators', async () => {
     'docs/site/src/data/generated/cli-reference.json',
     'docs/site/src/data/generated/evidence-configuration.json',
     'docs/site/src/data/generated/breg-configuration.json',
+    'docs/site/src/data/generated/configuration-formats.json',
   ]);
 });
 
@@ -329,6 +332,7 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   const cliPath = resolve(siteRoot, 'src/content/docs/reference/cli/index.mdx');
   const evidencePath = resolve(siteRoot, 'src/data/generated/evidence-configuration.json');
   const bregPath = resolve(siteRoot, 'src/data/generated/breg-configuration.json');
+  const formatsPath = resolve(siteRoot, 'src/data/generated/configuration-formats.json');
   const legacyCli = 'exact committed legacy CLI bytes\n';
   await mkdir(dirname(cliPath), { recursive: true });
   await mkdir(dirname(evidencePath), { recursive: true });
@@ -346,28 +350,35 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
     products: { 'registry-stack': { ref: stdout.trim() } },
   };
   await rm(resolve(siteRoot, 'src'), { recursive: true });
-  for (const contract of [...bregContracts, ...evidenceContracts]) {
-    const destination = resolve(repoRoot, contract.file);
+  for (const file of [
+    ...[...bregContracts, ...evidenceContracts].map((contract) => contract.file),
+    configurationFormatsSource,
+  ]) {
+    const destination = resolve(repoRoot, file);
     await mkdir(dirname(destination), { recursive: true });
-    await copyFile(resolve(docsRoot, '../..', contract.file), destination);
+    await copyFile(resolve(docsRoot, '../..', file), destination);
   }
 
   const restore = await stagePinnedGeneratedArtifacts(docset, { docsRoot: siteRoot });
   assert.equal(await readFile(cliPath, 'utf8'), legacyCli);
   const currentEvidence = await readFile(evidencePath, 'utf8');
   const currentBreg = await readFile(bregPath, 'utf8');
+  const currentFormats = await readFile(formatsPath, 'utf8');
   assert.equal(JSON.parse(currentEvidence).contracts.length, evidenceContracts.length);
   assert.equal(JSON.parse(currentBreg).contracts.length, bregContracts.length);
+  assert.ok(JSON.parse(currentFormats).products.length > 0);
   await restore();
   await assert.rejects(readFile(cliPath), { code: 'ENOENT' });
   assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);
   assert.equal(await readFile(bregPath, 'utf8'), currentBreg);
+  assert.equal(await readFile(formatsPath, 'utf8'), currentFormats);
 
   // Existing current tables are renderer inputs, not historical staged bytes.
   const restoreAgain = await stagePinnedGeneratedArtifacts(docset, { docsRoot: siteRoot });
   assert.equal(await readFile(cliPath, 'utf8'), legacyCli);
   assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);
   assert.equal(await readFile(bregPath, 'utf8'), currentBreg);
+  assert.equal(await readFile(formatsPath, 'utf8'), currentFormats);
   await restoreAgain();
 });
 

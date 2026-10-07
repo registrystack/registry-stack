@@ -32,6 +32,8 @@ deployment steps. A schema-valid document still needs the compiler and runtime c
 `bregctl check <project>` validates the combined model;
 `bregctl doctor --runtime-config <absolute-file>` checks deployment configuration.
 Cross-field rules and references to other files cannot all be expressed by these tables.
+[Configuration files](../configuration-files/) describes the YAML rules and environment
+substitution that apply when the runtime reads `runtime.yaml`.
 
 {/* Evidence: crates/registry-breg/src/schema.rs, documents() and runtime_documents();
     crates/registry-breg/src/contract.rs, RegistryProject and RegistryModule;

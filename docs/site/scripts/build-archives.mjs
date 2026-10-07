@@ -21,6 +21,7 @@ import {
 } from './archive-bundle.mjs';
 import { isCandidateSourceProduct, loadDocsets } from './docsets.mjs';
 import { generateBRegConfiguration } from './generate-breg-configuration.mjs';
+import { generateConfigurationFormats } from './generate-configuration-formats.mjs';
 import { generateEvidenceConfiguration } from './generate-evidence-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -55,6 +56,7 @@ const archiveExecutionEnvironmentKeys = Object.freeze([
 const configurationGenerators = new Map([
   ['docs/site/src/data/generated/evidence-configuration.json', generateEvidenceConfiguration],
   ['docs/site/src/data/generated/breg-configuration.json', generateBRegConfiguration],
+  ['docs/site/src/data/generated/configuration-formats.json', generateConfigurationFormats],
 ]);
 // New archives generate these artifacts from their pinned source. Legacy refs
 // stage only their original CLI and starter inventory; configuration JSON was
