@@ -785,6 +785,21 @@ class NameTests(ConventionsTestCase):
         self.queue()["jwksPath"] = {"const": "/.well-known/evidence/jwks.json"}
         self.assertNoFinding(self.repo.run(), "CFG-NAME-2")
 
+    def test_cfg_name_2_accepts_a_command_written_as_typed(self) -> None:
+        self.queue()["command"] = {"const": "attempt mark-uncertain"}
+        self.assertNoFinding(self.repo.run(), "CFG-NAME-2")
+
+    def test_cfg_name_2_reads_a_command_word_by_word_and_only_under_command(self) -> None:
+        self.queue()["command"] = {"enum": ["source add", "source_add now"]}
+        self.queue()["action"] = {"const": "source add"}
+        report = self.repo.run()
+        self.assertFinding(
+            report, "CFG-NAME-2", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/command/enum/source_add now")
+        )
+        self.assertFinding(report, "CFG-NAME-2", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/action/const/source add"))
+        names = {key[2] for key in keys(report.findings) if key[0] == "CFG-NAME-2"}
+        self.assertEqual(len(names), 2, names)
+
     def test_cfg_name_2_skips_member_name_enums_and_envelope_constants(self) -> None:
         self.queue()["select"] = {
             "type": "string",
@@ -917,6 +932,18 @@ class IdentifierTests(ConventionsTestCase):
 
     def test_cfg_id_7_reports_a_union_tagged_by_another_member(self) -> None:
         self.union([self.variant("kind", "file", "path"), self.variant("kind", "inline", "text")])
+        self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/source"))
+
+    def test_cfg_id_7_accepts_the_command_report_envelope_tagged_by_ok(self) -> None:
+        self.union([self.variant("ok", True, "result"), self.variant("ok", False, "error")])
+        self.assertNoFinding(self.repo.run(), "CFG-ID-7")
+
+    def test_cfg_id_7_reports_an_ok_member_that_is_not_the_boolean_envelope(self) -> None:
+        self.union([self.variant("ok", "yes", "result"), self.variant("ok", "no", "error")])
+        self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/source"))
+
+    def test_cfg_id_7_reports_a_boolean_tag_with_another_name(self) -> None:
+        self.union([self.variant("done", True, "result"), self.variant("done", False, "error")])
         self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/source"))
 
     def test_cfg_id_7_accepts_single_key_mappings(self) -> None:

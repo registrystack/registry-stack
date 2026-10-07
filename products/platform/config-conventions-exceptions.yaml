@@ -2988,12 +2988,6 @@ exceptions:
   class: stable-move
   reason: kind is ApplyReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkApplyReport'
-- rule: CFG-ID-7
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-QTY-4
   format: casework/apply-report
   location: products/casework/contracts/cli/ApplyReport.schema.json#/$defs/activation/properties/applyOrder
@@ -3083,24 +3077,6 @@ exceptions:
   class: stable-move
   reason: kind is AttemptSettlementReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkAttemptSettlementReport'
-- rule: CFG-ID-7
-  format: casework/attempt-settlement-report
-  location: products/casework/contracts/cli/AttemptSettlementReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/attempt-settlement-report
-  location: products/casework/contracts/cli/AttemptSettlementReport.schema.json#/oneOf/0/properties/command/const/attempt settle
-  class: stable-move
-  reason: value attempt settle is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/attempt-settlement-report
-  location: products/casework/contracts/cli/AttemptSettlementReport.schema.json#/oneOf/1/properties/command/const/attempt settle
-  class: stable-move
-  reason: value attempt settle is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/attempt-settlement-report
   location: products/platform/config-formats.yaml#/example
@@ -3141,24 +3117,6 @@ exceptions:
   class: stable-move
   reason: kind is AttemptUncertainMarkingReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkAttemptUncertainMarkingReport'
-- rule: CFG-ID-7
-  format: casework/attempt-uncertain-marking-report
-  location: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/attempt-uncertain-marking-report
-  location: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json#/oneOf/0/properties/command/const/attempt mark-uncertain
-  class: stable-move
-  reason: value attempt mark-uncertain is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/attempt-uncertain-marking-report
-  location: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json#/oneOf/1/properties/command/const/attempt mark-uncertain
-  class: stable-move
-  reason: value attempt mark-uncertain is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/attempt-uncertain-marking-report
   location: products/platform/config-formats.yaml#/example
@@ -3225,12 +3183,6 @@ exceptions:
   class: stable-move
   reason: kind is CheckReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkCheckReport'
-- rule: CFG-ID-7
-  format: casework/check-report
-  location: products/casework/contracts/cli/CheckReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/check-report
   location: products/platform/config-formats.yaml#/example
@@ -3327,24 +3279,6 @@ exceptions:
   class: stable-move
   reason: kind is DevEventsReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevEventsReport'
-- rule: CFG-ID-7
-  format: casework/dev-events-report
-  location: products/casework/contracts/cli/DevEventsReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-events-report
-  location: products/casework/contracts/cli/DevEventsReport.schema.json#/oneOf/0/properties/command/const/dev events
-  class: stable-move
-  reason: value dev events is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-events-report
-  location: products/casework/contracts/cli/DevEventsReport.schema.json#/oneOf/1/properties/command/const/dev events
-  class: stable-move
-  reason: value dev events is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/dev-events-report
   location: products/platform/config-formats.yaml#/example
@@ -3378,24 +3312,6 @@ exceptions:
   class: stable-move
   reason: kind is DevGrantReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevGrantReport'
-- rule: CFG-ID-7
-  format: casework/dev-grant-report
-  location: products/casework/contracts/cli/DevGrantReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-grant-report
-  location: products/casework/contracts/cli/DevGrantReport.schema.json#/oneOf/0/properties/command/const/dev grant
-  class: stable-move
-  reason: value dev grant is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-grant-report
-  location: products/casework/contracts/cli/DevGrantReport.schema.json#/oneOf/1/properties/command/const/dev grant
-  class: stable-move
-  reason: value dev grant is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/dev-grant-report
   location: products/platform/config-formats.yaml#/example
@@ -3429,24 +3345,6 @@ exceptions:
   class: stable-move
   reason: kind is DevIdentityReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevIdentityReport'
-- rule: CFG-ID-7
-  format: casework/dev-identity-report
-  location: products/casework/contracts/cli/DevIdentityReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-identity-report
-  location: products/casework/contracts/cli/DevIdentityReport.schema.json#/oneOf/0/properties/command/const/dev identity
-  class: stable-move
-  reason: value dev identity is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-identity-report
-  location: products/casework/contracts/cli/DevIdentityReport.schema.json#/oneOf/1/properties/command/const/dev identity
-  class: stable-move
-  reason: value dev identity is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/dev-identity-report
   location: products/platform/config-formats.yaml#/example
@@ -3480,12 +3378,6 @@ exceptions:
   class: stable-move
   reason: kind is DevReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevReport'
-- rule: CFG-ID-7
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-QTY-4
   format: casework/dev-report
   location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/directory/properties/revision
@@ -3603,24 +3495,6 @@ exceptions:
   class: stable-move
   reason: kind is DevTokenReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevTokenReport'
-- rule: CFG-ID-7
-  format: casework/dev-token-report
-  location: products/casework/contracts/cli/DevTokenReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-token-report
-  location: products/casework/contracts/cli/DevTokenReport.schema.json#/oneOf/0/properties/command/const/dev token
-  class: stable-move
-  reason: value dev token is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/dev-token-report
-  location: products/casework/contracts/cli/DevTokenReport.schema.json#/oneOf/1/properties/command/const/dev token
-  class: stable-move
-  reason: value dev token is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/dev-token-report
   location: products/platform/config-formats.yaml#/example
@@ -3654,12 +3528,6 @@ exceptions:
   class: stable-move
   reason: kind is DoctorReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDoctorReport'
-- rule: CFG-ID-7
-  format: casework/doctor-report
-  location: products/casework/contracts/cli/DoctorReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/doctor-report
   location: products/platform/config-formats.yaml#/example
@@ -3721,12 +3589,6 @@ exceptions:
   class: stable-move
   reason: kind is ExplainReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkExplainReport'
-- rule: CFG-ID-7
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/explain-report
   location: products/platform/config-formats.yaml#/example
@@ -3865,12 +3727,6 @@ exceptions:
   class: stable-move
   reason: kind is InitReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkInitReport'
-- rule: CFG-ID-7
-  format: casework/init-report
-  location: products/casework/contracts/cli/InitReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/init-report
   location: products/platform/config-formats.yaml#/example
@@ -3922,12 +3778,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-7
-  format: casework/lifecycle-report
-  location: products/casework/contracts/cli/LifecycleReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-NAME-2
   format: casework/lifecycle-report
   location: products/casework/contracts/cli/LifecycleReport.schema.json#/$defs/lifecycle/properties/id/enum/review_request
@@ -3981,12 +3831,6 @@ exceptions:
   class: stable-move
   reason: kind is PackageReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkPackageReport'
-- rule: CFG-ID-7
-  format: casework/package-report
-  location: products/casework/contracts/cli/PackageReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/package-report
   location: products/platform/config-formats.yaml#/example
@@ -4230,24 +4074,6 @@ exceptions:
   class: stable-move
   reason: kind is RetentionEraseReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkRetentionEraseReport'
-- rule: CFG-ID-7
-  format: casework/retention-erase-report
-  location: products/casework/contracts/cli/RetentionEraseReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/retention-erase-report
-  location: products/casework/contracts/cli/RetentionEraseReport.schema.json#/oneOf/0/properties/command/const/retention erase
-  class: stable-move
-  reason: value retention erase is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/retention-erase-report
-  location: products/casework/contracts/cli/RetentionEraseReport.schema.json#/oneOf/1/properties/command/const/retention erase
-  class: stable-move
-  reason: value retention erase is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/retention-erase-report
   location: products/platform/config-formats.yaml#/example
@@ -4544,12 +4370,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-7
-  format: casework/simulation-report
-  location: products/casework/contracts/cli/SimulationReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/simulation-report
   location: products/platform/config-formats.yaml#/example
@@ -4590,30 +4410,12 @@ exceptions:
   class: stable-move
   reason: kind is SourceAddReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkSourceAddReport'
-- rule: CFG-ID-7
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-NAME-2
   format: casework/source-add-report
   location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/0/properties/activation/const/not_performed
   class: stable-move
   reason: value not_performed is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-NAME-2
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/0/properties/command/const/source add
-  class: stable-move
-  reason: value source add is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
-- rule: CFG-NAME-2
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/1/properties/command/const/source add
-  class: stable-move
-  reason: value source add is not lowercase kebab-case
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the command value in kebab-case, or carve CLI command paths out of CFG-NAME-2 in the convention (a carve-out removes this entry)'
 - rule: CFG-SCHEMA-1
   format: casework/source-add-report
   location: products/platform/config-formats.yaml#/example
@@ -4668,12 +4470,6 @@ exceptions:
   class: stable-move
   reason: kind is StatusReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkStatusReport'
-- rule: CFG-ID-7
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-QTY-4
   format: casework/status-report
   location: products/casework/contracts/cli/StatusReport.schema.json#/$defs/activation/properties/applyOrder
@@ -4742,12 +4538,6 @@ exceptions:
   class: stable-move
   reason: kind is TestReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkTestReport'
-- rule: CFG-ID-7
-  format: casework/test-report
-  location: products/casework/contracts/cli/TestReport.schema.json#
-  class: stable-move
-  reason: a union tagged by ok, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the ctl report envelope by type, or carve the shared ok/error ctl envelope out of CFG-ID-7 in the convention (a carve-out removes this entry)'
 - rule: CFG-NAME-2
   format: casework/test-report
   location: products/casework/contracts/cli/TestReport.schema.json#/oneOf/0/properties/proofBoundary/const/offline_synthetic

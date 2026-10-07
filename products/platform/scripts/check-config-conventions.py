@@ -1659,6 +1659,7 @@ class Lint:
                         find("CFG-NAME-1", visit, f"key {value} is not camelCase ASCII", "Spell the key in camelCase", ("propertyNames", "enum", value))
             marked = node.get(MEMBER_NAMES) is True or (visit.parent is not None and visit.parent.get(MEMBER_NAMES) is True and visit.tokens[-1:] == ("items",))
             header = bool(visit.names) and visit.names[-1] in HEADER_MEMBERS
+            command = bool(visit.names) and visit.names[-1] == "command"
             if not marked and not header:
                 values = [("enum", value) for value in node.get("enum", []) or []]
                 if "const" in node:
@@ -1666,6 +1667,9 @@ class Lint:
                 for keyword, value in values:
                     # A sentence is prose for people, not a code (three words or more).
                     if not isinstance(value, str) or len(value.split()) >= 3:
+                        continue
+                    # A value that names a command is written as the command is typed (`source add`).
+                    if command and all(KEBAB_SEGMENT.match(word) for word in value.split(" ")):
                         continue
                     if not all(KEBAB_SEGMENT.match(segment) for segment in re.split(r"[./]", value) if segment):
                         find("CFG-NAME-2", visit, f"value {value} is not lowercase kebab-case", "Spell the value in kebab-case, or mark a member-name enum", (keyword, value))
@@ -1744,7 +1748,7 @@ class Lint:
             tags = discriminators(root, objects)
             single = bool(objects) and all(single_key(root, parts[0]) for parts in objects)
             if objects and tags:
-                if "type" not in tags:
+                if "type" not in tags and not ok_envelope(root, objects, tags):
                     return f"a union tagged by {', '.join(sorted(tags))}, not type"
             sentinel_units = [parts for parts in units if unit_values(parts) == {"unrestricted"}]
             if units and objects and (tags or single) and len(sentinel_units) < len(units):
@@ -2162,6 +2166,19 @@ def discriminators(root: dict, objects: list[list[dict]]) -> set[str]:
         name for name, values in seen.items()
         if len(values) == len(objects) and len(set(values)) == len(values)
     }
+
+
+def ok_envelope(root: dict, objects: list[list[dict]], tags: set[str]) -> bool:
+    """The shared command report envelope, two variants told apart by `ok: true` and `ok: false`."""
+
+    if "ok" not in tags or len(objects) != 2:
+        return False
+    values = []
+    for parts in objects:
+        properties, _ = object_view(root, parts[0])
+        sub = properties["ok"]
+        values.append(sub["const"] if "const" in sub else sub["enum"][0])
+    return sorted(values) == [False, True] and all(isinstance(value, bool) for value in values)
 
 
 def single_key(root: dict, node: dict) -> bool:
