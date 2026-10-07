@@ -3,17 +3,9 @@
 set -euo pipefail
 cp -R /input/. /workspace
 apt-get update -qq
-# Nothing below compiles Rust at this revision: the CLI reference renders the
-# committed command catalog. The Rust toolchain and its native build
-# dependencies, such as CMake, Go, and Perl for aws-lc-fips-sys, remain
-# installed until a separate change removes them.
-apt-get install -y -qq ca-certificates curl git python3 python3-yaml xz-utils \
-  build-essential cmake golang-go perl pkg-config libssl-dev libclang-dev \
-  protobuf-compiler
-curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh
-sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain none
-export PATH="/root/.cargo/bin:${PATH}"
-rustup show active-toolchain
+# The steps below need git, Python with PyYAML, and the tools that fetch Node.
+# None compiles Rust: the CLI reference renders the committed command catalog.
+apt-get install -y -qq ca-certificates curl git python3 python3-yaml xz-utils
 cd /tmp
 curl -fsSLO https://nodejs.org/dist/v22.12.0/node-v22.12.0-linux-x64.tar.xz
 curl -fsSLO https://nodejs.org/dist/v22.12.0/SHASUMS256.txt

@@ -427,8 +427,8 @@ Conflicting existing candidate metadata
 or changes to a frozen archive stop preparation.
 
 The command builds a committed-source clone in Ubuntu 24.04 on Linux AMD64,
-with Node 22.12.0 and `npm ci`. It also installs the repository's Rust
-toolchain, although no preparation step compiles Rust. It excludes
+with Node 22.12.0 and `npm ci` but no Rust toolchain: the CLI reference
+renders the committed command catalog, so no step compiles Rust. It excludes
 local dependencies, uncommitted files, and ignored generated assets. It runs
 `npm test`, draft-link checks, and evidence-anchor checks before building the
 archive, adds a missing lock entry or verifies an existing one, then runs
@@ -469,13 +469,12 @@ their published tag and must reproduce their recorded digest.
 
 If a build or check fails, inspect the retained report and log, fix the owning
 source, and commit the correction before retrying in a new output directory.
-For conflicting metadata
-or an archive digest mismatch, inspect the selected source and existing frozen
-record; do not rewrite historical metadata or locks to make the check pass.
-If your source revision or any tracked input changed during the build,
-`--apply` refuses the patch. Retain it for inspection and rerun from the
-intended committed source. A failed preparation does not apply its generated
-patch.
+For conflicting metadata or an archive digest mismatch, inspect the selected
+source and existing frozen record; do not rewrite historical metadata or locks
+to make the check pass. If your source revision or any tracked input changed
+during the build, `--apply` refuses the patch. Retain it for inspection and
+rerun from the intended committed source. A failed preparation does not apply
+its generated patch.
 
 A prepared documentation lock for the current workspace release may be
 regenerated after its source changes only while the release remains untagged.
