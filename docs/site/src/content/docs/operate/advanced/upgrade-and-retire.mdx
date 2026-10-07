@@ -40,7 +40,7 @@ Before 1.0, a release reads only the state its immediate predecessor wrote, and 
 reverse path. If you run an older release, upgrade one release at a time, and finish this runbook
 for each release before you start the next. v0.40.0 is the exception: it does not upgrade state
 v0.39.0 wrote in place, and its release notes have you apply it to new databases. See
-[Compatibility direction](../../../reference/api-stability/#compatibility-direction).
+[Upgrades and state](../../../reference/api-stability/#upgrades-and-state).
 
 {/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
     crates/registry-casework-breg/src/lib.rs, same_release() and PeerVersionMismatch;
