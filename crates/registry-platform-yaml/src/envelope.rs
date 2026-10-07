@@ -188,6 +188,15 @@ pub(crate) fn check(
     };
     if let [only] = expect.formats {
         if matches!(only.envelope, EnvelopeRule::Exempt { .. }) {
+            if root.is_none() {
+                outcome.problems.push(Problem::error(
+                    "config.invalid-type",
+                    "",
+                    Some(Position::START),
+                    messages::empty_exempt_document(only.kind),
+                ));
+                return outcome;
+            }
             outcome.matched = Some((
                 0,
                 Envelope {

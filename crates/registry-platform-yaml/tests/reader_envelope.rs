@@ -290,6 +290,25 @@ fn cfg_env_1_an_exempt_format_is_read_without_an_envelope() {
         .read(b"a: &x 1\n", &Expect::one(&EXEMPT))
         .unwrap_err();
     assert_eq!(codes(&report), ["yaml.anchor"]);
+    // An empty file is refused with a diagnostic, never an empty report.
+    for empty in [&b""[..], b"# only a comment\n"] {
+        let report = Reader::new("openapi.yaml")
+            .read(empty, &Expect::one(&EXEMPT))
+            .unwrap_err();
+        let diagnostic = only(&report);
+        assert_diagnostic(
+            diagnostic,
+            "config.invalid-type",
+            "",
+            (1, 1),
+            "the document is empty; it must hold a `ExampleForeignDocument` document",
+            "Write the document's content; an empty file is never read as one.",
+        );
+        assert_eq!(
+            diagnostic.artifact.as_deref(),
+            Some("ExampleForeignDocument")
+        );
+    }
 }
 
 // ----- CFG-CHANGE-2 -----

@@ -413,6 +413,13 @@ pub(crate) fn missing_envelope(start: &str) -> Text {
     )
 }
 
+pub(crate) fn empty_exempt_document(kind: &str) -> Text {
+    text(
+        format!("the document is empty; it must hold a `{kind}` document"),
+        "Write the document's content; an empty file is never read as one.",
+    )
+}
+
 pub(crate) fn root_not_mapping(kind: &str, start: &str) -> Text {
     text(
         format!("the document is {kind}; it must be a mapping that holds apiVersion and kind"),
