@@ -26,13 +26,13 @@ pub mod startup;
 
 pub use model::*;
 pub use query::{parse_service_filters, Directory, QueryError};
-#[cfg(feature = "server")]
-pub use server::{router, DiscoveryService, ServiceConfigError};
 #[cfg(feature = "runtime-config")]
 pub use runtime_config::{
     check_runtime, LogLevel, RuntimeCheck, RuntimeConfig, RuntimeLimits, RUNTIME_API_VERSION,
     RUNTIME_KIND,
 };
+#[cfg(feature = "server")]
+pub use server::{router, DiscoveryService, ServiceConfigError};
 #[cfg(feature = "server")]
 pub use startup::{
     load_index, load_runtime, load_verified_index, package_limits, prepare, serve,

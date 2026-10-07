@@ -9,8 +9,7 @@ use std::path::Path;
 
 use registry_platform_config::{
     contains_environment_expression, ConfigBlockError, ConfigBlockErrorKind, ListenerConfig,
-    PackageConfig, RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader,
-    RuntimeEnvelope,
+    PackageConfig, RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, BoundedU64, Diagnostic, Node, NodeValue, Reader, Source,
@@ -160,9 +159,8 @@ pub fn check_runtime(path: &Path, substitute: bool) -> RuntimeCheck {
     let loaded = if substitute {
         runtime_loader().load::<RuntimeConfig>(path)
     } else {
-        runtime_loader().load_with::<RuntimeConfig>(path, |name| {
-            Some(deferred.stand_in(name).to_owned())
-        })
+        runtime_loader()
+            .load_with::<RuntimeConfig>(path, |name| Some(deferred.stand_in(name).to_owned()))
     };
     match loaded {
         Ok(loaded) => {
@@ -280,7 +278,10 @@ impl Deferred {
     }
 
     fn stand_in(&self, name: &str) -> &'static str {
-        self.stand_ins.get(name).copied().unwrap_or(DEFAULT_STAND_IN)
+        self.stand_ins
+            .get(name)
+            .copied()
+            .unwrap_or(DEFAULT_STAND_IN)
     }
 
     fn covers(&self, path: &str) -> bool {
@@ -397,8 +398,7 @@ logLevel: info
 ";
 
     fn check(text: &str, substitute: bool) -> RuntimeCheck {
-        let temporary =
-            tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let path = temporary.path().join("runtime.yaml");
         fs::write(&path, text).unwrap();
         check_runtime(&path, substitute)
@@ -480,8 +480,7 @@ logLevel: info
 
     #[test]
     fn cfg_check_1_an_unreadable_file_is_an_operational_failure() {
-        let temporary =
-            tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let check = check_runtime(&temporary.path().join("missing.yaml"), false);
         assert!(check.unavailable);
         assert_eq!(check.diagnostics.len(), 1);
