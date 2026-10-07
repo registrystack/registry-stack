@@ -16,7 +16,6 @@ use reqwest::header::{ACCEPT, CONTENT_ENCODING, CONTENT_TYPE};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use url::Url;
 
 use crate::project::{check_project, AuthoredEvidenceMapping, CheckedProject, ProjectError};
 
@@ -35,7 +34,7 @@ fn package_limits() -> PackageLimits {
 
 #[derive(Debug, Error)]
 pub enum BuildError {
-    #[error("the Discovery authoring project is invalid")]
+    #[error("{0}")]
     Project(#[from] ProjectError),
     #[error("an approved Discovery origin could not be fetched safely")]
     Fetch,
@@ -171,7 +170,7 @@ async fn fetch_origins(
     let mut record_ids = BTreeSet::new();
 
     for approved in project.origins.iter().filter(|origin| origin.enabled) {
-        let url = Url::parse(&approved.catalog_url).map_err(|_| BuildError::Fetch)?;
+        let url = approved.catalog_url.to_url();
         let validated = policy
             .validate_dns_pinned_for_immediate_fetch_with_timeout(&url, dns_timeout)
             .await
@@ -215,7 +214,7 @@ async fn fetch_origins(
         let content_digest = sha256_digest(&bytes);
         origins.push(OriginSummary {
             origin_id: approved.origin_id.clone(),
-            catalog_url: approved.catalog_url.clone(),
+            catalog_url: approved.catalog_url.to_string(),
             content_digest: content_digest.clone(),
             fetched_at: fetched_at.clone(),
         });
@@ -244,7 +243,7 @@ async fn fetch_origins(
                 semantic_class_ids: advertised.semantic_class_ids().to_vec(),
                 operation_family_ids: advertised.operation_family_ids().to_vec(),
                 origin_id: approved.origin_id.clone(),
-                origin_url: approved.catalog_url.clone(),
+                origin_url: approved.catalog_url.to_string(),
                 origin_content_digest: content_digest.clone(),
                 origin_fetched_at: fetched_at.clone(),
             });
@@ -275,7 +274,7 @@ fn compile_mappings(mappings: Vec<AuthoredEvidenceMapping>) -> Vec<CompiledEvide
                 .into_iter()
                 .map(|alternative| EvidenceTypeAlternative {
                     evidence_type_list_id: alternative.evidence_type_list_id,
-                    evidence_type_ids: alternative.evidence_type_ids,
+                    evidence_type_ids: alternative.evidence_type_ids.into_vec(),
                 })
                 .collect(),
         })

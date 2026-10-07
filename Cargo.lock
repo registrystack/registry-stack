@@ -5421,16 +5421,16 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
+ "schemars",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "time",
  "tokio",
- "url",
 ]
 
 [[package]]

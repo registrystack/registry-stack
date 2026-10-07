@@ -8024,13 +8024,6 @@ exceptions:
   wp: WP6
   reason: $id is https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json
   resolution: Set $id to https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json
-- rule: CFG-YAML-1
-  format: discovery/evidence-mapping
-  location: crates/registry-discoveryctl/src/project.rs#check_project()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: discovery/index
   location: products/platform/config-formats.yaml#/check
@@ -8113,20 +8106,6 @@ exceptions:
   wp: WP3
   reason: catalogUrl is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-YAML-1
-  format: discovery/origins
-  location: crates/registry-discoveryctl/src/project.rs#check_project()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
-- rule: CFG-CHECK-1
-  format: discovery/runtime
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-ENV-2
   format: discovery/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion

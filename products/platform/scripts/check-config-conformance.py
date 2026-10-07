@@ -151,9 +151,9 @@ ROWS: tuple[Row, ...] = (
         runtime_schema=Exemption("Discovery publishes no generated runtime schema"),
         shared_blocks=(),
         reference_refusal=Exemption("the Discovery runtime has no *Ref field"),
-        authored_refusal=Exemption(
-            "the Discovery runtime serves a built index and reads no authored "
-            "project file"
+        authored_refusal=TestRef(
+            "crates/registry-discoveryctl/src/project.rs",
+            "cfg_sec_2_authored_files_refuse_substitution_at_its_position",
         ),
         digest_mismatch=TestRef(
             "crates/registry-discovery/src/startup.rs",
@@ -161,10 +161,16 @@ ROWS: tuple[Row, ...] = (
         ),
         rust_blocks=(
             RustBlock(
-                "crates/registry-discovery/src/startup.rs",
+                "crates/registry-discovery/src/runtime_config.rs",
                 "RuntimeConfig",
                 "listener",
                 "ListenerConfig",
+            ),
+            RustBlock(
+                "crates/registry-discovery/src/runtime_config.rs",
+                "RuntimeConfig",
+                "package",
+                "PackageConfig",
             ),
         ),
         hand_schemas=(

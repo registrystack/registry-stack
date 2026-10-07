@@ -116,7 +116,8 @@ alternatives:
       - urn:example:evidence-type:adult-status
 ```
 
-Check both files. Nothing serves the provider URL yet, and the check does not need it to.
+Check the project: both files, and the `runtime.yaml` beside them that you use later. Nothing serves
+the provider URL yet, and the check does not need it to.
 `--allow-loopback` accepts the `http://127.0.0.1` URLs; without it, `discoveryctl` accepts only
 HTTPS origins, which is what a real deployment uses.
 
@@ -126,9 +127,11 @@ discoveryctl check --project discovery-project --allow-loopback
 
 ```text test-expect
 valid origins=1 mappings=1
+0 errors, 0 warnings in 3 files
 ```
 
-`discoveryctl check` validates the files without contacting the provider URL. The package step in the
+`discoveryctl check` validates the files without contacting the provider URL. When it refuses a
+file, it prints each finding with the file, line, and column it is about, and the edit that fixes it. The package step in the
 next section is the only step that fetches the descriptions.
 
 {/* Evidence: `crates/registry-discoveryctl/src/project.rs`, test

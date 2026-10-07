@@ -136,17 +136,27 @@ Run the offline check before packaging.
 discoveryctl check --project "<discovery-project>"
 ```
 
-Expected output reports the validated origin and mapping counts:
+Expected output reports the validated origin and mapping counts, then the files it read:
 
 ```text
 valid origins=1 mappings=1
+0 errors, 0 warnings in 2 files
 ```
 
-The check reads the two authoring inputs but does not contact the provider URL.
+The check reads `origins.yaml`, every mapping, and every runtime file beside them, and does not
+contact the provider URL. Each finding names its file, line, column, and the edit that fixes it.
+`--format json` prints one report instead, with every finding in the same shape the other Registry
+Stack checks use. The command exits 0 when nothing was refused, 1 when something was (or a warning
+was reported under `--deny-warnings`), 2 when the command line is wrong, and 3 when a file could not
+be read.
 
-{/* Evidence: `crates/registry-discoveryctl/src/lib.rs`, `Command::Check`, prints this output.
-    `crates/registry-discoveryctl/src/project.rs`, test
-    `check_is_offline_and_accepts_an_unreachable_https_origin`, proves that validation is offline. */}
+{/* Evidence: `crates/registry-discoveryctl/src/lib.rs`, `check()`, prints this output, and its
+    tests `cfg_diag_2_a_clean_check_prints_the_counts_and_the_summary`,
+    `cfg_diag_1_a_clean_check_reports_json_in_the_ctl_envelope`, and the `cfg_diag_4_` tests cover
+    the report and exit codes. `crates/registry-discoveryctl/src/project.rs`, tests
+    `check_is_offline_and_accepts_an_unreachable_https_origin` and
+    `cfg_check_2_the_project_check_reads_every_yaml_file_beside_the_origins`, prove that the check
+    is offline and reads every file. */}
 
 ## Package one bounded index
 
@@ -203,6 +213,10 @@ limits:
   shutdownTimeoutSeconds: 10
 logLevel: info
 ```
+
+Check the file before you start the service. `discoveryctl check --runtime-config <file>` reads it
+as the runtime does, without the package, the network, or the environment; add `--environment` to
+fill its `${NAME}` expressions from the current environment and check the values they produce.
 
 Start the new revision after deploying the complete package directory.
 
@@ -292,7 +306,7 @@ No credential, evidence request, or assertion passes through Discovery.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `discoveryctl check` fails | An origin or mapping does not match the closed authoring schema. | Correct the reported field and rerun the offline check. |
+| `discoveryctl check` fails | An origin, mapping, or runtime file does not match its closed format. | Make the edit each finding names at its line and column, then rerun the offline check. |
 | Packaging cannot fetch an origin | The approved description is unavailable or violates the fetch policy. | Restore the exact approved publication and package into a new directory. |
 | Startup reports a digest mismatch | The package is incomplete, changed, or different from `expectedDigest`. | Redeploy the complete reviewed package. |
 | Search returns no items | No Evidence advertisement matches every supplied filter. | Review the indexed descriptions and requested identifiers. |

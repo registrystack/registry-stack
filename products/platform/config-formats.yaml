@@ -2461,7 +2461,7 @@ formats:
       file: crates/registry-discovery/src/runtime_config.rs
       function: load_runtime_config
       type: RuntimeConfig
-    check: none
+    check: discoveryctl check --runtime-config {file}
     example: products/discovery/fixtures/project/runtime.yaml
     conformance:
       requiredText: /logLevel
