@@ -42,6 +42,7 @@ SHARDS = {
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
         "registry-platform-testing",
+        "registry-platform-yaml",
     ),
     "manifest": (
         "registry-manifest-cli",

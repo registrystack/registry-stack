@@ -716,6 +716,8 @@ REQUIRED_NIGHTLY_FUZZ_TARGETS: dict[str, tuple[str, ...]] = {
         "sdjwt_holder_proof",
         "sdjwt_issuance",
         "sqlite_statement",
+        "yaml_decode",
+        "yaml_reader",
     ),
     "manifest-fuzz": (
         "metadata_manifest_yaml",

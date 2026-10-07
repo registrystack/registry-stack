@@ -363,6 +363,9 @@ jobs:
           - group: sd-jwt
             target_a: sdjwt_holder_proof
             target_b: sdjwt_issuance
+          - group: yaml
+            target_a: yaml_reader
+            target_b: yaml_decode
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

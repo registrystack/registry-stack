@@ -1610,6 +1610,30 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["platform"])
                 self.assertTrue(outputs["platform_hygiene"])
 
+    def test_shared_reader_changes_select_the_jobs_that_test_it(self) -> None:
+        outputs = classify(
+            self.workspace, ("crates/registry-platform-yaml/src/structure.rs",)
+        )
+        platform_shard = next(
+            entry
+            for entry in outputs["rust_matrix"]["include"]
+            if entry["name"] == "platform"
+        )
+        self.assertIn("registry-platform-yaml", platform_shard["packages"])
+        self.assertIn("registry-platform-config", outputs["rust_packages"])
+        self.assertTrue(outputs["platform"])
+        self.assertTrue(outputs["platform_assurance"])
+        self.assertTrue(outputs["config_conformance"])
+        for path in (
+            "products/platform/fuzz/fuzz_targets/yaml_decode.rs",
+            "products/platform/fuzz/fuzz_targets/yaml_reader.rs",
+            "products/platform/fuzz/fuzz_targets/yaml_support.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["platform"])
+                self.assertTrue(outputs["platform_assurance"])
+
     def test_dispatch_changes_select_the_job_running_its_postgres_suite(self) -> None:
         # The dispatch core's PostgreSQL suite runs in the Scheduling
         # PostgreSQL job, whose service database it borrows. A dispatch
