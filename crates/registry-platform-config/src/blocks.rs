@@ -679,10 +679,10 @@ impl<'de> Deserialize<'de> for ListenerBind {
             .then(|| value.parse().ok())
             .flatten()
             .ok_or_else(|| {
-                serde::de::Error::custom(
-                    "listener.bind must be host:port with an IP address host, such as \
-                 127.0.0.1:8080 or [::1]:8080",
-                )
+                serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
+                    "host:port with an IP address host, such as 127.0.0.1:8080 or [::1]:8080",
+                    "Write the address as host:port with an IP address host.",
+                ))
             })
     }
 }

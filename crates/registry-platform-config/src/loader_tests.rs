@@ -296,6 +296,59 @@ fn cfg_diag_5_the_envelope_is_checked_before_removed_keys() {
 }
 
 #[test]
+fn a_listener_address_or_secret_reference_refusal_keeps_its_own_wording() {
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct Shared {
+        api_version: String,
+        kind: String,
+        listener: crate::ListenerConfig,
+        key_ref: crate::SecretReference,
+    }
+    let document = |bind: &str, reference: &str| {
+        format!(
+            "{}listener:\n  bind: {bind}\nkeyRef: {reference}\n",
+            header()
+        )
+    };
+    loader()
+        .parse_str::<Shared>(&document("127.0.0.1:8080", "secret:file/key"), env(&[]))
+        .expect("a valid address and reference load");
+
+    let error = loader()
+        .parse_str::<Shared>(
+            &document("canary-host.internal:8080", "secret:file/key"),
+            env(&[]),
+        )
+        .expect_err("a host name is not an IP address");
+    let deciding = error.deciding_diagnostic();
+    assert_eq!(deciding.code, "config.invalid-value");
+    assert_eq!(deciding.path, "/listener/bind");
+    assert!(
+        deciding
+            .message
+            .contains("host:port with an IP address host"),
+        "{deciding:?}"
+    );
+    assert!(!error.to_string().contains("canary-host"), "{error}");
+
+    let error = loader()
+        .parse_str::<Shared>(&document("127.0.0.1:8080", "canary-literal"), env(&[]))
+        .expect_err("a literal is not a reference");
+    let deciding = error.deciding_diagnostic();
+    assert_eq!(deciding.code, "config.invalid-value");
+    assert_eq!(deciding.path, "/keyRef");
+    assert!(
+        deciding
+            .message
+            .contains("secret:env/NAME or secret:file/name"),
+        "{deciding:?}"
+    );
+    assert!(!error.to_string().contains("canary-literal"), "{error}");
+}
+
+#[test]
 fn the_deciding_diagnostic_is_the_one_the_kind_and_field_come_from() {
     // An unknown key and a removed key: the removed key decides, so a
     // consumer can classify the refusal by the code of that one diagnostic.

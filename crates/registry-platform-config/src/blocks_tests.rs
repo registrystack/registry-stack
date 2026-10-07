@@ -176,7 +176,7 @@ fn listener_bind_is_an_ip_socket_address() {
             .expect_err("refused bind");
         assert!(error
             .to_string()
-            .contains("listener.bind must be host:port"));
+            .contains("expected host:port with an IP address host"));
     }
     assert!(serde_norway::from_str::<ListenerConfig>("address: 127.0.0.1:1").is_err());
 
@@ -189,7 +189,7 @@ fn listener_bind_is_an_ip_socket_address() {
     let error = serde_norway::from_str::<ListenerConfig>(&overlong).expect_err("overlong bind");
     assert!(error
         .to_string()
-        .contains("listener.bind must be host:port"));
+        .contains("expected host:port with an IP address host"));
 }
 
 #[test]
