@@ -487,10 +487,10 @@ fn reject_bundle_environment_expressions(text: &str) -> Result<(), ConfigError> 
 
 /// Reduce a shared-loader refusal of the runtime file to a value-free fault.
 ///
-/// The loader's message is read only for its fixed leading text and then
-/// discarded, like a decoder message: the cause is static, the path is kept
-/// only when it matches the structural path grammar, and a removed key or a
-/// wrong envelope carries the fixed sentence naming what to write instead.
+/// The loader's message is never read: the cause is static and chosen by the
+/// code of the diagnostic that decided the refusal, the path is kept only
+/// when it matches the structural path grammar, and a removed key or a wrong
+/// envelope carries the fixed sentence naming what to write instead.
 fn runtime_fault(error: &RuntimeConfigError) -> SchemaFault {
     let field = error.field();
     let fault = match error.kind() {
@@ -507,22 +507,9 @@ fn runtime_fault(error: &RuntimeConfigError) -> SchemaFault {
             SchemaFault::because("document does not declare the Evidence runtime envelope")
                 .with_remedy(EVIDENCE_RUNTIME_ENVELOPE_REMEDY)
         }
-        RuntimeConfigErrorKind::Syntax => {
-            let message = error.message();
-            let cause = match message.split_once("is not valid YAML: ") {
-                Some((_, decoder)) => {
-                    classify_decode_cause(decoder, "document is not well-formed YAML")
-                }
-                None if message.ends_with("must be a YAML mapping") => {
-                    "document is not a YAML mapping"
-                }
-                None if message.contains("key that is not a string") => {
-                    "mapping key is not a string"
-                }
-                None if message.contains("YAML tag") => "document carries a YAML tag",
-                None => "document is not well-formed YAML",
-            };
-            SchemaFault::because(cause)
+        RuntimeConfigErrorKind::Syntax | RuntimeConfigErrorKind::InvalidValue => {
+            let deciding = error.deciding_diagnostic();
+            SchemaFault::because(runtime_cause(&deciding.code, &deciding.path))
         }
         RuntimeConfigErrorKind::Substitution => {
             SchemaFault::because("environment expression cannot be substituted")
@@ -530,20 +517,6 @@ fn runtime_fault(error: &RuntimeConfigError) -> SchemaFault {
         RuntimeConfigErrorKind::SubstitutionInReference => SchemaFault::because(
             "environment expressions are not accepted in secret references or secretProviders",
         ),
-        RuntimeConfigErrorKind::InvalidValue => {
-            let reason = error
-                .message()
-                .split_once(" is invalid: ")
-                .map_or("", |(_, reason)| reason);
-            let cause = RUNTIME_VALUE_CAUSES
-                .iter()
-                .find(|(prefix, _)| reason.starts_with(prefix))
-                .map_or_else(
-                    || classify_decode_cause(reason, "document does not match the closed schema"),
-                    |(_, cause)| cause,
-                );
-            SchemaFault::because(cause)
-        }
         RuntimeConfigErrorKind::Bounds => {
             SchemaFault::because("document exceeds the Version 1 size limit")
         }
@@ -560,6 +533,49 @@ fn runtime_fault(error: &RuntimeConfigError) -> SchemaFault {
         fault
     } else {
         fault.at_path(field)
+    }
+}
+
+/// The value-free cause of a shared-reader diagnostic, chosen by its code
+/// and, for an invalid value, by the member it sits at.
+///
+/// In the runtime document a member named `bind` is a listener address and a
+/// member ending in `Ref` is a secret reference, so an invalid value there
+/// names the grammar that member follows.
+fn runtime_cause(code: &str, pointer: &str) -> &'static str {
+    let member = pointer.rsplit('/').next().unwrap_or_default();
+    match code {
+        "yaml.duplicate-key" | "config.duplicate-key" => "duplicate mapping key",
+        "yaml.multiple-documents" => "document contains more than one YAML document",
+        "yaml.too-deep" => "document nests too deeply",
+        "yaml.tag" => "document carries a YAML tag",
+        "yaml.non-string-key" => "mapping key is not a string",
+        "yaml.anchor" | "yaml.alias" | "yaml.merge-key" => {
+            "document uses a YAML anchor, alias, or merge key"
+        }
+        "config.invalid-type" if pointer.is_empty() => "document is not a YAML mapping",
+        "config.unknown-key" => "unknown field",
+        "config.missing-key" => "required field is missing",
+        "config.invalid-type"
+        | "config.expected-string"
+        | "config.expected-integer"
+        | "config.expected-number"
+        | "config.expected-boolean" => "field has the wrong type",
+        "config.null-value" => "field has no value",
+        "config.unknown-variant" => "field value is not one of the accepted variants",
+        "config.invalid-length" => "field has the wrong length",
+        "config.duplicate-item" | "config.duplicate-id" => "list repeats an entry",
+        "config.invalid-value" if member == "bind" => {
+            "listener bind must be host:port with an IP address host"
+        }
+        "config.invalid-value" if member.ends_with("Ref") => {
+            "secret reference does not use an exact permitted grammar"
+        }
+        "config.invalid-value" | "config.out-of-range" | "yaml.ambiguous-number" => {
+            "field value is not accepted"
+        }
+        code if code.starts_with("yaml.") => "document is not well-formed YAML",
+        _ => "document does not match the closed schema",
     }
 }
 
@@ -1637,19 +1653,6 @@ pub const EVIDENCE_RUNTIME_REMOVED_KEYS: &[RemovedKey] = &[
         path: "metricsListener.port",
         replacement: "declare metricsListener.bind as host:port, such as 127.0.0.1:9090",
     },
-];
-
-/// Runtime refusals the shared loader reports in its own words, each mapped to
-/// one value-free cause. Only the fixed leading text is read.
-const RUNTIME_VALUE_CAUSES: [(&str, &str); 2] = [
-    (
-        "listener.bind must be host:port",
-        "listener bind must be host:port with an IP address host",
-    ),
-    (
-        "expected an exact secret:env/NAME or secret:file/name reference",
-        "secret reference does not use an exact permitted grammar",
-    ),
 ];
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -10408,6 +10411,175 @@ outboundTls:
     fn a_duplicated_runtime_key_is_refused() {
         let duplicated = format!("{LOADER_RUNTIME_DOCUMENT}kind: EvidenceRuntimeConfig\n");
         assert!(RuntimeConfig::parse_yaml(duplicated.as_bytes()).is_err());
+    }
+
+    /// Every class of runtime refusal is worded by the shared reader's code
+    /// and path, never by its message text, and no cause, path, or rendering
+    /// repeats the value that was refused.
+    #[test]
+    fn every_runtime_refusal_is_classified_by_the_reader_code() {
+        const CANARY: &str = "canary-runtime-value-7731";
+        let replaced = |from: &str, to: &str| {
+            let text = LOADER_RUNTIME_DOCUMENT.replace(from, to);
+            assert_ne!(text, LOADER_RUNTIME_DOCUMENT, "{from} is in the document");
+            text
+        };
+        let appended = |member: &str| format!("{LOADER_RUNTIME_DOCUMENT}{member}");
+        let nested = format!("{}{CANARY}{}", "[".repeat(200), "]".repeat(200));
+        let cases: Vec<(&str, String, &str, Option<&str>)> = vec![
+            (
+                "unknown key",
+                appended(&format!("bogusField: {CANARY}\n")),
+                "unknown field",
+                Some("bogusField"),
+            ),
+            (
+                "missing key",
+                replaced(
+                    "audit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n",
+                    "",
+                ),
+                "required field is missing",
+                None,
+            ),
+            (
+                "wrong type",
+                replaced(
+                    "maximumRequestBytes: 65536",
+                    &format!("maximumRequestBytes: {CANARY}"),
+                ),
+                "field has the wrong type",
+                Some("listener.maximumRequestBytes"),
+            ),
+            (
+                "null member",
+                replaced(
+                    "path: /var/lib/registry-evidence/audit/evidence.jsonl",
+                    "path: ~",
+                ),
+                "field has no value",
+                Some("audit.path"),
+            ),
+            (
+                "unknown variant",
+                replaced(
+                    "tlsTermination: operator-controlled-upstream",
+                    &format!("tlsTermination: {CANARY}"),
+                ),
+                "field value is not one of the accepted variants",
+                Some("listener.tlsTermination"),
+            ),
+            (
+                "out of range",
+                replaced(
+                    "maximumConcurrentRequests: 64",
+                    "maximumConcurrentRequests: 99999999999",
+                ),
+                "field value is not accepted",
+                Some("listener.maximumConcurrentRequests"),
+            ),
+            (
+                "listener bind",
+                replaced(
+                    "bind: 127.0.0.1:8080",
+                    &format!("bind: {CANARY}.internal:8080"),
+                ),
+                "listener bind must be host:port with an IP address host",
+                Some("listener.bind"),
+            ),
+            // The signer is an internally tagged union, which serde buffers
+            // before decoding a variant, so the reader can place a refusal
+            // inside it only at the union itself.
+            (
+                "secret reference inside the signer",
+                replaced(
+                    "privateKeyRef: secret:file/signing-key",
+                    &format!("privateKeyRef: {CANARY}"),
+                ),
+                "field value is not accepted",
+                Some("signer"),
+            ),
+            (
+                "duplicate key",
+                appended(&format!("audit: {CANARY}\n")),
+                "duplicate mapping key",
+                Some("audit"),
+            ),
+            (
+                "more than one document",
+                appended(&format!("---\nbogusField: {CANARY}\n")),
+                "document contains more than one YAML document",
+                None,
+            ),
+            (
+                "nesting",
+                appended(&format!("bogusField: {nested}\n")),
+                "document nests too deeply",
+                None,
+            ),
+            (
+                "tag",
+                replaced(
+                    "maximumRequestBytes: 65536",
+                    "maximumRequestBytes: !!int 65536",
+                ),
+                "document carries a YAML tag",
+                Some("listener.maximumRequestBytes"),
+            ),
+            (
+                "key that is not a string",
+                appended(&format!("7: {CANARY}\n")),
+                "mapping key is not a string",
+                Some("7"),
+            ),
+            (
+                "anchor",
+                replaced(
+                    "privateKeyRef: secret:file/signing-key",
+                    "privateKeyRef: &key secret:file/signing-key",
+                ),
+                "document uses a YAML anchor, alias, or merge key",
+                Some("signer.privateKeyRef"),
+            ),
+            (
+                "not a mapping",
+                format!("- {CANARY}\n"),
+                "document is not a YAML mapping",
+                None,
+            ),
+            (
+                "not well-formed",
+                appended(&format!("bogusField: [{CANARY}\n")),
+                "document is not well-formed YAML",
+                Some("bogusField.1"),
+            ),
+        ];
+        for (label, document, cause, path) in cases {
+            let fault = runtime_refusal(&document);
+            assert_eq!(fault.cause(), cause, "{label}");
+            assert_eq!(fault.path(), path, "{label}");
+            assert!(
+                !fault.to_string().contains(CANARY),
+                "{label}: the fault repeats the refused value"
+            );
+        }
+        assert_eq!(
+            runtime_cause("config.invalid-value", "/signer/privateKeyRef"),
+            "secret reference does not use an exact permitted grammar",
+            "a secret reference the reader can place names its grammar"
+        );
+        assert_eq!(
+            runtime_cause("config.invalid-value", "/metricsListener/bind"),
+            "listener bind must be host:port with an IP address host"
+        );
+        assert_eq!(
+            runtime_cause("config.duplicate-item", "/acquisitionCapabilities/1"),
+            "list repeats an entry"
+        );
+        assert_eq!(
+            runtime_cause("yaml.tab-indentation", "/listener"),
+            "document is not well-formed YAML"
+        );
     }
 
     /// Substitution fills operator values from the environment. It never

@@ -191,6 +191,8 @@ struct RefusalDetail {
     field: String,
     message: String,
     diagnostics: Vec<Diagnostic>,
+    /// The index of the diagnostic the kind, field, and message come from.
+    deciding: usize,
 }
 
 impl RuntimeConfigError {
@@ -221,13 +223,16 @@ impl RuntimeConfigError {
         };
         let deciding = diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.severity == Severity::Error)
-            .min_by_key(|diagnostic| rank(classify(diagnostic)))
-            .or_else(|| diagnostics.first())
+            .enumerate()
+            .filter(|(_, diagnostic)| diagnostic.severity == Severity::Error)
+            .min_by_key(|(_, diagnostic)| rank(classify(diagnostic)))
+            .map_or(0, |(index, _)| index);
+        let decided = diagnostics
+            .get(deciding)
             .expect("a refusal carries at least one diagnostic");
-        let kind = classify(deciding);
-        let field = dotted(&deciding.path);
-        let message = one_line(&field, deciding);
+        let kind = classify(decided);
+        let field = dotted(&decided.path);
+        let message = one_line(&field, decided);
         Self {
             kind,
             detail: Box::new(RefusalDetail {
@@ -235,6 +240,7 @@ impl RuntimeConfigError {
                 field,
                 message,
                 diagnostics,
+                deciding,
             }),
         }
     }
@@ -322,6 +328,17 @@ impl RuntimeConfigError {
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.detail.diagnostics
+    }
+
+    /// The diagnostic the kind, field, and message come from: the first
+    /// error of the earliest kind. A consumer that words the refusal itself
+    /// classifies it by this diagnostic's code and path.
+    #[must_use]
+    pub fn deciding_diagnostic(&self) -> &Diagnostic {
+        self.detail
+            .diagnostics
+            .get(self.detail.deciding)
+            .expect("the deciding index is within the diagnostics")
     }
 
     fn render(&self) -> String {

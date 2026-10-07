@@ -296,6 +296,33 @@ fn cfg_diag_5_the_envelope_is_checked_before_removed_keys() {
 }
 
 #[test]
+fn the_deciding_diagnostic_is_the_one_the_kind_and_field_come_from() {
+    // An unknown key and a removed key: the removed key decides, so a
+    // consumer can classify the refusal by the code of that one diagnostic.
+    let error = loader()
+        .parse_str::<Example>(
+            &format!("{}bogus: x\nserver:\n  bind: x\n", header()),
+            env(&[]),
+        )
+        .expect_err("removed key");
+    assert_eq!(error.kind(), RuntimeConfigErrorKind::RemovedKey);
+    assert!(error
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "config.unknown-key"));
+    let deciding = error.deciding_diagnostic();
+    assert_eq!(deciding.code, "config.removed-key");
+    assert_eq!(deciding.path, "/server/bind");
+    assert_eq!(error.field(), "server.bind");
+
+    let error = loader()
+        .parse_str::<Example>(&format!("{}count: many\n", header()), env(&[]))
+        .expect_err("wrong type");
+    assert_eq!(error.deciding_diagnostic().code, "config.expected-integer");
+    assert_eq!(error.deciding_diagnostic().path, "/count");
+}
+
+#[test]
 fn the_envelope_must_be_literal() {
     for text in [
         "kind: ExampleRuntimeConfig\n".to_owned(),
