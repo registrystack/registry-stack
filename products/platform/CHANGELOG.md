@@ -9,6 +9,20 @@
   a two-segment code, a JSON pointer, a line and column, and the fix, never
   a value from the file. Input is bounded at 1 MiB and 128 levels. It parses
   with `saphyr-parser` 0.1.0, which has no unsafe code.
+- BREAKING: `registry-platform-config` `RuntimeConfigLoader` reads
+  `runtime.yaml` through `registry-platform-yaml`. It now refuses anchors,
+  aliases, null members, and keys the product's type does not declare, and
+  it checks the envelope before removed keys. Substitution runs on string
+  scalars while the document is read, so a diagnostic about a substituted
+  value points at the expression; a substituted value never fills a number or
+  boolean, and an expression in a key, `apiVersion`, or `kind` is refused.
+  `RuntimeConfigError` keeps `kind()`, `code()`, `file()`, and `field()`,
+  adds `diagnostics()`, and its `Display` renders every diagnostic as
+  `error[code] file:line:col /pointer`, then the message and `next:` with the
+  fix. `message()` is the deciding diagnostic on one line; its text is no
+  longer the `serde` decoder's. `reject_environment_expressions_in_authored_yaml`
+  reads authored files with the same reader, so it also refuses YAML outside
+  the shared subset.
 - `registry-platform-httputil` adds the bounded same-key resend the BReg,
   Casework, Messaging, and Scheduling clients share:
   `client::retry_keyed_mutation`,

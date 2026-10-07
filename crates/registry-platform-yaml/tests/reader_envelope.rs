@@ -189,7 +189,6 @@ fn cfg_env_1_a_reader_of_several_formats_dispatches_on_kind() {
         "apiVersion: id.registrystack.org/formats/example/project/v1alpha1\nkind: ExampleProject\n";
     let document = Reader::new(FILE).read(text.as_bytes(), &BOTH).unwrap();
     assert_eq!(document.envelope().kind, "ExampleProject");
-    assert_eq!(document.format().kind, "ExampleProject");
 
     let report = Reader::new(FILE)
         .read(b"apiVersion: x\nkind: Other\n", &BOTH)

@@ -158,7 +158,7 @@ Reader codes have two segments; product codes have three.
 | `config.expected-number` | a number member holds something other than a number |
 | `config.expected-boolean` | a boolean member holds something other than true or false |
 | `config.out-of-range` | a number is outside its bounds |
-| `config.substitution` | a `${NAME}` substitution cannot be filled (reported by a substitution hook) |
+| `config.substitution` | a `${...}` expression cannot be filled: it is not well formed, its variable is unset or empty, `${NAME:?message}` refused, or the value holds a NUL byte (reported by a substitution hook) |
 | `config.substitution-not-allowed` | a `${...}` expression is written where substitution is not allowed, or an envelope member was substituted |
 
 A test fails when a code in the source is missing from this table or the

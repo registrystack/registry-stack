@@ -345,9 +345,9 @@ mod tests {
         )
         .expect_err("the retired envelope is refused");
         assert!(
-            error.detail.contains(
-                "apiVersion must be exactly registry.registrystack.org/render-runtime/v1alpha1"
-            ),
+            error
+                .detail
+                .contains("it reads `registry.registrystack.org/render-runtime/v1alpha1`"),
             "{}",
             error.detail
         );
@@ -396,10 +396,12 @@ mod tests {
             ),
         ] {
             let error = load_text(&home, &text).expect_err(key);
+            let pointer = key.replace('.', "/");
+            let member = key.rsplit('.').next().unwrap_or(key);
             assert!(
                 error
                     .detail
-                    .contains(&format!("{key} is no longer accepted"))
+                    .contains(&format!("/{pointer}\n  `{member}` is no longer accepted"))
                     && error.detail.contains(replacement),
                 "{key}: {}",
                 error.detail
@@ -480,7 +482,7 @@ mod tests {
             "apiKeyRef: ${RENDER_API_KEY_REF:-secret:file/api.key}",
         );
         let error = load_text(&home, &text).expect_err("an expression in a *Ref field is refused");
-        assert!(error.detail.contains("auth.apiKeyRef"), "{}", error.detail);
+        assert!(error.detail.contains("/auth/apiKeyRef"), "{}", error.detail);
     }
 
     #[test]

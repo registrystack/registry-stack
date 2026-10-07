@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 
 use crate::de::{Ctx, NodeDe, Place};
 use crate::diagnostic::{Diagnostic, Report, Severity};
-use crate::envelope::{self, Envelope, Expect, FormatSpec, RemovedKey};
+use crate::envelope::{self, Envelope, Expect, RemovedKey};
 use crate::messages::{self, Problem};
 use crate::node::{escape_pointer_segment, unescape_segment, Node, NodeValue, Position, Span};
 use crate::structure::{self, ScalarHook};
@@ -75,7 +75,7 @@ impl<'h> Reader<'h> {
         if removed.is_empty() {
             return Ok(document);
         }
-        let artifact = Some(document.envelope.kind);
+        let artifact = Some(document.envelope.kind.as_str());
         Err(report(&file, artifact, removed, document.warnings))
     }
 
@@ -109,31 +109,29 @@ impl<'h> Reader<'h> {
             ));
         }
         let outcome = envelope::check(root.as_ref(), expect);
-        let artifact = outcome
+        let artifact: Option<String> = outcome
             .matched
             .as_ref()
-            .map(|(_, envelope)| envelope.kind)
-            .or_else(|| expect.default_artifact());
+            .map(|(_, envelope)| envelope.kind.clone())
+            .or_else(|| expect.default_artifact().map(str::to_owned));
         let warnings: Vec<Diagnostic> = outcome
             .warnings
             .into_iter()
-            .map(|warning| warning.into_diagnostic(&file, artifact))
+            .map(|warning| warning.into_diagnostic(&file, artifact.as_deref()))
             .collect();
         // Structural and envelope problems are reported together.
         problems.extend(outcome.problems);
         let (Some(root), Some((index, envelope)), true) =
             (root, outcome.matched, problems.is_empty())
         else {
-            return Err(report(&file, artifact, problems, warnings));
+            return Err(report(&file, artifact.as_deref(), problems, warnings));
         };
-        let format = expect.formats()[index];
-        let removed = removed_keys(&root, format.removed_keys);
+        let removed = removed_keys(&root, expect.formats()[index].removed_keys);
         Ok((
             Document {
                 file,
                 root,
                 envelope,
-                format,
                 warnings,
             },
             removed,
@@ -173,7 +171,6 @@ pub struct Document {
     file: String,
     root: Node,
     envelope: Envelope,
-    format: FormatSpec,
     warnings: Vec<Diagnostic>,
 }
 
@@ -189,10 +186,6 @@ impl Document {
 
     pub fn envelope(&self) -> &Envelope {
         &self.envelope
-    }
-
-    pub fn format(&self) -> &FormatSpec {
-        &self.format
     }
 
     /// Warnings found while reading, such as a deprecated `apiVersion`.
@@ -273,7 +266,7 @@ impl Document {
     fn report(&self, problems: Vec<Problem>) -> Report {
         report(
             &self.file,
-            Some(self.envelope.kind),
+            Some(self.envelope.kind.as_str()),
             problems,
             self.warnings.clone(),
         )
@@ -341,7 +334,7 @@ impl Document {
             },
         );
         problem.severity = severity;
-        problem.into_diagnostic(&self.file, Some(self.envelope.kind))
+        problem.into_diagnostic(&self.file, Some(self.envelope.kind.as_str()))
     }
 }
 
@@ -417,7 +410,7 @@ fn report(
 }
 
 /// Every member the format removed (CFG-CHANGE-2), reported at its key.
-fn removed_keys(root: &Node, removed: &[RemovedKey]) -> Vec<Problem> {
+fn removed_keys(root: &Node, removed: &[RemovedKey<'_>]) -> Vec<Problem> {
     let mut problems = Vec::new();
     for rule in removed {
         let Some(rest) = rule.pointer.strip_prefix('/') else {
@@ -433,7 +426,7 @@ fn find_removed(
     node: &Node,
     segments: &[String],
     path: String,
-    rule: &RemovedKey,
+    rule: &RemovedKey<'_>,
     out: &mut Vec<Problem>,
 ) {
     let Some((segment, rest)) = segments.split_first() else {

@@ -14,20 +14,20 @@ pub enum VersionStatus {
 
 /// One `apiVersion` a format accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ApiVersion {
-    pub name: &'static str,
+pub struct ApiVersion<'a> {
+    pub name: &'a str,
     pub status: VersionStatus,
 }
 
-impl ApiVersion {
-    pub const fn current(name: &'static str) -> ApiVersion {
+impl<'a> ApiVersion<'a> {
+    pub const fn current(name: &'a str) -> ApiVersion<'a> {
         ApiVersion {
             name,
             status: VersionStatus::Current,
         }
     }
 
-    pub const fn deprecated(name: &'static str) -> ApiVersion {
+    pub const fn deprecated(name: &'a str) -> ApiVersion<'a> {
         ApiVersion {
             name,
             status: VersionStatus::Deprecated,
@@ -38,44 +38,45 @@ impl ApiVersion {
 /// An `apiVersion` the format no longer accepts, with the sentence that says
 /// what to do instead (CFG-CHANGE-2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RetiredApiVersion {
-    pub api_version: &'static str,
-    pub replacement: &'static str,
+pub struct RetiredApiVersion<'a> {
+    pub api_version: &'a str,
+    pub replacement: &'a str,
 }
 
 /// A key a format removed or renamed (CFG-CHANGE-2). `pointer` is an RFC 6901
 /// pointer in which a `*` segment matches any key or list index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RemovedKey {
-    pub pointer: &'static str,
+pub struct RemovedKey<'a> {
+    pub pointer: &'a str,
     /// A sentence naming what to write instead.
-    pub replacement: &'static str,
+    pub replacement: &'a str,
 }
 
 /// How a format's documents identify themselves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EnvelopeRule {
+pub enum EnvelopeRule<'a> {
     /// The top-level mapping carries `apiVersion` and `kind` (CFG-ENV-1).
     ApiVersionKind {
-        api_versions: &'static [ApiVersion],
-        retired_api_versions: &'static [RetiredApiVersion],
+        api_versions: &'a [ApiVersion<'a>],
+        retired_api_versions: &'a [RetiredApiVersion<'a>],
     },
     /// The format is registered as an exception to CFG-ENV-1 and carries no
     /// envelope. An exempt format is read alone: it is the only format in
     /// its [`Expect`].
-    Exempt { reason: &'static str },
+    Exempt { reason: &'a str },
 }
 
-/// One format a reader accepts.
+/// One format a reader accepts. A format is usually a `const`; the lifetime
+/// lets a caller that learns its format at run time build one as well.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FormatSpec {
-    pub kind: &'static str,
-    pub envelope: EnvelopeRule,
-    pub removed_keys: &'static [RemovedKey],
+pub struct FormatSpec<'a> {
+    pub kind: &'a str,
+    pub envelope: EnvelopeRule<'a>,
+    pub removed_keys: &'a [RemovedKey<'a>],
 }
 
-impl FormatSpec {
-    fn accepted_versions(&self) -> Vec<&'static str> {
+impl<'a> FormatSpec<'a> {
+    fn accepted_versions(&self) -> Vec<&'a str> {
         match self.envelope {
             EnvelopeRule::ApiVersionKind { api_versions, .. } => {
                 api_versions.iter().map(|version| version.name).collect()
@@ -84,7 +85,7 @@ impl FormatSpec {
         }
     }
 
-    fn current_versions(&self) -> Vec<&'static str> {
+    fn current_versions(&self) -> Vec<&'a str> {
         match self.envelope {
             EnvelopeRule::ApiVersionKind { api_versions, .. } => api_versions
                 .iter()
@@ -100,7 +101,7 @@ impl FormatSpec {
 /// one; a command that dispatches on `kind` passes several.
 #[derive(Clone, Copy, Debug)]
 pub struct Expect<'a> {
-    formats: &'a [FormatSpec],
+    formats: &'a [FormatSpec<'a>],
 }
 
 impl<'a> Expect<'a> {
@@ -109,7 +110,7 @@ impl<'a> Expect<'a> {
     /// # Panics
     ///
     /// When `formats` is empty, or when an exempt format is not alone.
-    pub const fn new(formats: &'a [FormatSpec]) -> Expect<'a> {
+    pub const fn new(formats: &'a [FormatSpec<'a>]) -> Expect<'a> {
         assert!(!formats.is_empty(), "a reader accepts at least one format");
         if formats.len() > 1 {
             let mut index = 0;
@@ -125,20 +126,20 @@ impl<'a> Expect<'a> {
     }
 
     /// Accept exactly `format`.
-    pub const fn one(format: &'a FormatSpec) -> Expect<'a> {
+    pub const fn one(format: &'a FormatSpec<'a>) -> Expect<'a> {
         Expect::new(std::slice::from_ref(format))
     }
 
-    pub fn formats(&self) -> &'a [FormatSpec] {
+    pub fn formats(&self) -> &'a [FormatSpec<'a>] {
         self.formats
     }
 
-    fn kinds(&self) -> Vec<&'static str> {
+    fn kinds(&self) -> Vec<&'a str> {
         self.formats.iter().map(|format| format.kind).collect()
     }
 
     /// The kind diagnostics carry before the document's own is known.
-    pub(crate) fn default_artifact(&self) -> Option<&'static str> {
+    pub(crate) fn default_artifact(&self) -> Option<&'a str> {
         match self.formats {
             [only] => Some(only.kind),
             _ => None,
@@ -163,7 +164,7 @@ impl<'a> Expect<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Envelope {
     /// The kind of the matched format.
-    pub kind: &'static str,
+    pub kind: String,
     /// The document's `apiVersion`, absent for an exempt format.
     pub api_version: Option<String>,
 }
@@ -185,7 +186,7 @@ pub(crate) fn check(root: Option<&Node>, expect: &Expect<'_>) -> EnvelopeOutcome
             outcome.matched = Some((
                 0,
                 Envelope {
-                    kind: only.kind,
+                    kind: only.kind.to_owned(),
                     api_version: None,
                 },
             ));
@@ -295,7 +296,7 @@ pub(crate) fn check(root: Option<&Node>, expect: &Expect<'_>) -> EnvelopeOutcome
             outcome.matched = Some((
                 index,
                 Envelope {
-                    kind: format.kind,
+                    kind: format.kind.to_owned(),
                     api_version: Some(declared.name.to_string()),
                 },
             ));

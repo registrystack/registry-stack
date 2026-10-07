@@ -655,12 +655,12 @@ rateLimits:
             (
                 "privateKeyRef: secret:file/gateway-key",
                 "privateKeyRef: ${BREG_MCP_TEST_KEY:-secret:file/gateway-key}",
-                "exchange.privateKeyRef",
+                "/exchange/privateKeyRef",
             ),
             (
                 "hashKeyRef: secret:file/audit-key",
                 "hashKeyRef: ${BREG_MCP_TEST_AUDIT:-secret:file/audit-key}",
-                "audit.hashKeyRef",
+                "/audit/hashKeyRef",
             ),
         ] {
             let error = load(&document().replace(authored, expression))
@@ -688,7 +688,9 @@ rateLimits:
         let error = load(&old_jwks).expect_err("old JWKS field is refused");
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
         assert!(
-            error.to_string().contains("unknown field `jwks`"),
+            error
+                .to_string()
+                .contains("`jwks` is not a member of this mapping"),
             "{error}"
         );
 
@@ -701,7 +703,7 @@ rateLimits:
         assert!(
             error
                 .to_string()
-                .contains("unknown field `maximumFileBytes`"),
+                .contains("`maximumFileBytes` is not a member of this mapping"),
             "{error}"
         );
     }
@@ -723,7 +725,10 @@ rateLimits:
         let text = document().replace("burst: 10", &format!("burst: {CANARY}"));
         let error = load(&text).expect_err("a string burst is refused");
         let message = error.to_string();
-        assert!(message.contains("rateLimits.perCitizen.burst"), "{message}");
+        assert!(
+            message.contains("/rateLimits/perCitizen/burst"),
+            "{message}"
+        );
         assert!(!message.contains(CANARY), "{message}");
     }
 

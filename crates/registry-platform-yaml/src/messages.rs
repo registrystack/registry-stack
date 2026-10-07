@@ -56,7 +56,7 @@ pub const CODES: &[CodeInfo] = &[
     CodeInfo { code: "config.expected-number", meaning: "a number member holds something other than a number" },
     CodeInfo { code: "config.expected-boolean", meaning: "a boolean member holds something other than true or false" },
     CodeInfo { code: "config.out-of-range", meaning: "a number is outside its bounds" },
-    CodeInfo { code: "config.substitution", meaning: "a `${NAME}` substitution cannot be filled: the variable is unset or empty, or `${NAME:?message}` refused (reported by a substitution hook)" },
+    CodeInfo { code: "config.substitution", meaning: "a `${...}` expression cannot be filled: it is not well formed, its variable is unset or empty, `${NAME:?message}` refused, or the value holds a NUL byte (reported by a substitution hook)" },
     CodeInfo { code: "config.substitution-not-allowed", meaning: "a `${...}` expression is written where substitution is not allowed, or an envelope member was substituted" },
 ];
 

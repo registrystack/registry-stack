@@ -2206,7 +2206,7 @@ reviewProducers:
             .expect_err("the retired key is refused")
             .to_string();
         assert!(
-            message.contains("package.expectedPolicyDigest"),
+            message.contains("/package/expectedPolicyDigest"),
             "{message}"
         );
         assert!(message.contains("package.expectedDigest"), "{message}");
@@ -2365,16 +2365,18 @@ reviewProducers:
             shorthand.review_completion_destinations["receiver"].secret_ref(),
             Some("secret:file/completion-token")
         );
-        // An explicit null reads as absent, as the runtime schema states.
+        // `null` is never a value (CFG-EMPTY-1): absence is spelled by
+        // leaving the key out.
         let null_shorthand = load(serde_json::json!({
             "url": url,
             "bearerTokenRef": null,
             "auth": {"secretRef": "secret:file/completion-key"}
         }))
-        .expect("a null bearerTokenRef is absent");
-        assert_eq!(
-            null_shorthand.review_completion_destinations["receiver"].secret_ref(),
-            Some("secret:file/completion-key")
+        .expect_err("a null bearerTokenRef is refused")
+        .to_string();
+        assert!(
+            null_shorthand.contains("error[config.null-value]"),
+            "{null_shorthand}"
         );
         assert!(load(serde_json::json!({"url": url, "bearerTokenRef": null})).is_err());
 

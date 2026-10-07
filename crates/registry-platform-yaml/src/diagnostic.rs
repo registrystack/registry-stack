@@ -107,6 +107,44 @@ impl Diagnostic {
         }
     }
 
+    /// Human output for this diagnostic alone (CFG-DIAG-2): position first,
+    /// then the message, the fix, and any related notes, each line ending in
+    /// a newline. [`Report::render_human`] adds the summary line.
+    pub fn render_human(&self) -> String {
+        let mut out = String::new();
+        out.push_str(self.severity.as_str());
+        out.push('[');
+        out.push_str(&clean(&self.code));
+        out.push(']');
+        if let Some(source) = &self.source {
+            out.push(' ');
+            out.push_str(&location(&source.file, source.line, source.column));
+        }
+        if !self.path.is_empty() {
+            out.push(' ');
+            out.push_str(&clean(&self.path));
+        }
+        out.push('\n');
+        out.push_str("  ");
+        out.push_str(&clean(&self.message));
+        out.push('\n');
+        out.push_str("  next: ");
+        out.push_str(&clean(&self.suggested_action));
+        out.push('\n');
+        for related in &self.related {
+            out.push_str("  note: ");
+            out.push_str(&location(&related.file, related.line, related.column));
+            if !related.path.is_empty() {
+                out.push(' ');
+                out.push_str(&clean(&related.path));
+            }
+            out.push(' ');
+            out.push_str(&clean(&related.message));
+            out.push('\n');
+        }
+        out
+    }
+
     fn sort_key(&self) -> (usize, usize, usize) {
         match &self.source {
             Some(Source {
@@ -217,36 +255,7 @@ impl Report {
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         for diagnostic in &self.diagnostics {
-            out.push_str(diagnostic.severity.as_str());
-            out.push('[');
-            out.push_str(&clean(&diagnostic.code));
-            out.push(']');
-            if let Some(source) = &diagnostic.source {
-                out.push(' ');
-                out.push_str(&location(&source.file, source.line, source.column));
-            }
-            if !diagnostic.path.is_empty() {
-                out.push(' ');
-                out.push_str(&clean(&diagnostic.path));
-            }
-            out.push('\n');
-            out.push_str("  ");
-            out.push_str(&clean(&diagnostic.message));
-            out.push('\n');
-            out.push_str("  next: ");
-            out.push_str(&clean(&diagnostic.suggested_action));
-            out.push('\n');
-            for related in &diagnostic.related {
-                out.push_str("  note: ");
-                out.push_str(&location(&related.file, related.line, related.column));
-                if !related.path.is_empty() {
-                    out.push(' ');
-                    out.push_str(&clean(&related.path));
-                }
-                out.push(' ');
-                out.push_str(&clean(&related.message));
-                out.push('\n');
-            }
+            out.push_str(&diagnostic.render_human());
         }
         out.push_str(&self.summary());
         out.push('\n');

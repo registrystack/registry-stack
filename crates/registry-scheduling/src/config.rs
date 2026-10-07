@@ -1300,7 +1300,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         // document, and "." names nothing an operator can look up.
         assert_eq!(error.path(), "/");
         assert!(!message.contains(" at ."), "{message}");
-        assert!(message.contains("must be a YAML mapping"), "{message}");
+        assert!(message.contains("it must be a mapping"), "{message}");
         assert!(!message.contains(canary), "{message}");
     }
 
@@ -1468,8 +1468,10 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 
         let error = RuntimeConfig::load(&operator).unwrap_err();
         let message = error.to_string();
-        assert!(message.contains("line 2"), "{message}");
-        assert!(message.contains("column 1"), "{message}");
+        assert!(
+            message.contains(&format!("{}:2:1", operator.display())),
+            "{message}"
+        );
     }
 
     #[test]
@@ -1486,11 +1488,13 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         let message = error.to_string();
         assert_eq!(error.path(), "retention.attemptReceiptDays");
         assert!(
-            message.contains("retention.attemptReceiptDays"),
+            message.contains("/retention/attemptReceiptDays"),
             "{message}"
         );
-        assert!(message.contains("invalid type: string"), "{message}");
-        assert!(message.contains("expected u16"), "{message}");
+        assert!(
+            message.contains("expected a whole number of days from 0 to 65535"),
+            "{message}"
+        );
         assert!(!message.contains(canary), "{message}");
     }
 

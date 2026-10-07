@@ -509,7 +509,7 @@ logLevel: info
 
         let message = refusal(&RUNTIME.replace("kind: DiscoveryRuntimeConfig", "kind: Other"));
         assert!(
-            message.contains("kind must be exactly DiscoveryRuntimeConfig"),
+            message.contains("it reads `DiscoveryRuntimeConfig`"),
             "{message}"
         );
 
@@ -532,18 +532,34 @@ logLevel: info
 
     #[test]
     fn removed_runtime_keys_name_their_replacements() {
+        // The envelope is checked first, so a file that replaced it with
+        // schemaVersion is told which envelope to write.
         let message = refusal(&RUNTIME.replace(
             "apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1\nkind: DiscoveryRuntimeConfig",
             "schemaVersion: registry-discovery/runtime/v1alpha1",
         ));
         assert!(
-            message.contains("schemaVersion is no longer accepted; declare apiVersion"),
+            message.contains(
+                "next: Start the file with `apiVersion: \
+                 registry.registrystack.org/discovery-runtime/v1alpha1` and `kind: \
+                 DiscoveryRuntimeConfig`."
+            ),
+            "{message}"
+        );
+        let message = refusal(&RUNTIME.replace(
+            "kind: DiscoveryRuntimeConfig",
+            "kind: DiscoveryRuntimeConfig\nschemaVersion: registry-discovery/runtime/v1alpha1",
+        ));
+        assert!(
+            message.contains("`schemaVersion` is no longer accepted\n  next: declare apiVersion"),
             "{message}"
         );
         let message = refusal(&RUNTIME.replace("bind:", "address:"));
         assert!(
-            message
-                .contains("listener.address is no longer accepted; declare listener.bind instead"),
+            message.contains(
+                "/listener/address\n  `address` is no longer accepted\n  next: declare \
+                 listener.bind instead."
+            ),
             "{message}"
         );
         let message = refusal(&RUNTIME.replace(
@@ -551,7 +567,9 @@ logLevel: info
             "indexPath: discovery-index.json",
         ));
         assert!(
-            message.contains("indexPath is no longer accepted; declare package.root instead"),
+            message.contains(
+                "`indexPath` is no longer accepted\n  next: declare package.root instead"
+            ),
             "{message}"
         );
     }

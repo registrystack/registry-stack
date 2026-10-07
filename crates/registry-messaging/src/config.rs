@@ -959,7 +959,15 @@ pub(crate) mod tests {
             Some("postgres://user:hunter2@db".to_owned())
         })
         .unwrap_err();
-        assert_eq!(error.path(), "database.runtimeUrlRef", "{error}");
+        // Anchors and aliases are outside the shared YAML subset, so both are
+        // refused before any substitution runs.
+        assert_eq!(error.path(), "x-spliced", "{error}");
+        let message = error.to_string();
+        assert!(
+            message.contains("error[yaml.alias]") && message.contains("/database/runtimeUrlRef"),
+            "{message}"
+        );
+        assert!(!message.contains("hunter2"), "{message}");
     }
 
     #[test]
