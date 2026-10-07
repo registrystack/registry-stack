@@ -62,6 +62,12 @@ pub enum StartupError {
          it with `discoveryctl package`"
     )]
     PackageIndexRetiredService,
+    #[error(
+        "the Discovery package file discovery-index.json was built before the index carried \
+         apiVersion and kind; rebuild the package with `discoveryctl package`, then update \
+         package.expectedDigest if you pin it"
+    )]
+    PackageIndexRetiredHeader,
     #[error("the Discovery index could not be loaded")]
     IndexLoad,
     #[error("the Discovery index is invalid")]
@@ -268,6 +274,7 @@ pub fn load_verified_index(
     }
     parse_index(&bytes).map_err(|error| match error {
         IndexError::RetiredServiceKind => StartupError::PackageIndexRetiredService,
+        IndexError::RetiredHeader => StartupError::PackageIndexRetiredHeader,
         _ => StartupError::PackageIndexInvalid,
     })
 }
@@ -659,6 +666,38 @@ logLevel: info
         assert!(message.contains("retired Relay service"), "{message}");
         assert!(message.contains("remove Relay origins"), "{message}");
         assert!(message.contains("discoveryctl package"), "{message}");
+    }
+
+    #[test]
+    fn startup_refuses_an_index_with_the_retired_header_with_rebuild_guidance() {
+        let temporary = canonical_tempdir();
+        let package_root = temporary.path().join("package");
+        let mut value = serde_json::to_value(example_index()).unwrap();
+        let members = value.as_object_mut().unwrap();
+        members.remove("apiVersion");
+        members.remove("kind");
+        members.insert(
+            "schemaVersion".into(),
+            "registry-discovery/index/v1alpha1".into(),
+        );
+        let index = registry_platform_canonical_json::canonicalize_json(&value).unwrap();
+        write_package(
+            &package_root,
+            &BTreeMap::from([(INDEX_FILE.to_owned(), index)]),
+            None,
+            &package_limits(),
+            PACKAGE_COMMAND,
+        )
+        .unwrap();
+        let runtime_path = write_runtime(temporary.path(), &runtime_for(&package_root, None));
+
+        assert_eq!(
+            prepare_error(&runtime_path),
+            StartupError::PackageIndexRetiredHeader
+        );
+        let message = prepare_error(&runtime_path).to_string();
+        assert!(message.contains("discoveryctl package"), "{message}");
+        assert!(message.contains("package.expectedDigest"), "{message}");
     }
 
     #[test]

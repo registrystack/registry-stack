@@ -169,6 +169,13 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Messaging runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/discovery/schemas/*.schema.json",
+      "owner": "discovery",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema."
     }
   ],
   "records": [

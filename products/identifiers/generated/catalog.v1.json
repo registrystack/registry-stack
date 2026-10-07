@@ -2936,6 +2936,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/discovery/index/index.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Registry Discovery immutable index",
+      "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema.",
+      "source": {
+        "path": "products/discovery/schemas/index.schema.json",
+        "sha256": "97014247dcc83bc148d355a5e56ffaf8ab0a522cd0f462c93a97fda19bcb6ffc"
+      },
+      "artifact": {
+        "path": "products/discovery/schemas/index.schema.json",
+        "sha256": "97014247dcc83bc148d355a5e56ffaf8ab0a522cd0f462c93a97fda19bcb6ffc",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
       "kind": "schema",
       "status": "active",

@@ -104,7 +104,7 @@ def check_product_schemas_and_fixture() -> None:
         "origins": "https://registrystack.org/discovery/schema/origins-v1alpha1.json",
         "evidence-mapping": "https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json",
         "runtime": "https://registrystack.org/discovery/schema/runtime-v1alpha1.json",
-        "index": "https://registrystack.org/discovery/schema/index-v1alpha1.json",
+        "index": "https://id.registrystack.org/schemas/discovery/index/index.v1alpha1.schema.json",
     }
     for name, path in PRODUCT_SCHEMAS.items():
         schema = load(path)

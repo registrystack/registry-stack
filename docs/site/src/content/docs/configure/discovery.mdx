@@ -185,11 +185,20 @@ collection records new `originFetchedAt` and `builtAt` provenance, so its packag
 even when `catalogRevision` and `mappingRevision` stay the same. Build a new directory and deploy it
 as a unit. Do not edit a package in place.
 
+`discoveryctl check --index <package-directory>/discovery-index.json` parses an index offline
+exactly as the runtime parses it, and reports its origin, service, and mapping counts and its two
+revisions. An index packaged before the index carried `apiVersion` and `kind` is refused with
+`discovery.index.retired-header`; package it again and update `package.expectedDigest` if you pin it.
+
 {/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `fetch_origins()`, `write_index_package()`,
     and `packaging_the_same_compiled_index_twice_is_repeatable`;
     `crates/registry-discoveryctl/tests/build.rs`,
     `package_fetches_each_origin_once_and_preserves_semantic_revisions` and
-    `production_package_time_is_captured_after_origin_collection`. */}
+    `production_package_time_is_captured_after_origin_collection`;
+    `crates/registry-discoveryctl/src/index.rs`, `inspect_index_file()` and
+    `cfg_change_2_an_index_with_the_retired_header_names_the_rebuild`;
+    `crates/registry-discoveryctl/src/lib.rs`,
+    `cfg_check_1_the_index_checks_on_its_own_in_both_formats`. */}
 
 ## Deploy and restart the service
 
@@ -309,9 +318,11 @@ No credential, evidence request, or assertion passes through Discovery.
 | `discoveryctl check` fails | An origin, mapping, or runtime file does not match its closed format. | Make the edit each finding names at its line and column, then rerun the offline check. |
 | Packaging cannot fetch an origin | The approved description is unavailable or violates the fetch policy. | Restore the exact approved publication and package into a new directory. |
 | Startup reports a digest mismatch | The package is incomplete, changed, or different from `expectedDigest`. | Redeploy the complete reviewed package. |
+| Startup says the index was built before it carried `apiVersion` and `kind` | The package predates the current index header. | Package it again with `discoveryctl package`, then update `package.expectedDigest` if you pin it. |
 | Search returns no items | No Evidence advertisement matches every supplied filter. | Review the indexed descriptions and requested identifiers. |
 
-{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `BuildError`; `crates/registry-discovery/src/query.rs`,
+{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `BuildError`; `crates/registry-discovery/src/startup.rs`,
+    `startup_refuses_an_index_with_the_retired_header_with_rebuild_guidance`; `crates/registry-discovery/src/query.rs`,
     `service_matches_filters`; `crates/registry-discovery-client/src/selection.rs`, exact selection
     errors and no-native-I/O test. */}
 

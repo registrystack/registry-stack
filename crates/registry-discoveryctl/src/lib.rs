@@ -11,10 +11,12 @@ use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 
 mod build;
+mod index;
 mod project;
 mod report;
 
 pub use build::{package_project, package_project_at, BuildError, PackagedDiscovery};
+pub use index::{inspect_index_file, IndexReport};
 pub use project::{
     check_project, inspect_project, inspect_runtime_file, ApprovedOrigin, AuthoredEvidenceMapping,
     AuthoredEvidenceTypeAlternative, CheckedProject, MappingSchemaVersion, OriginProfile,
@@ -50,12 +52,13 @@ enum OutputFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Check an authoring project or a runtime file without network I/O.
+    /// Check an authoring project, a runtime file, or an index without
+    /// network I/O.
     #[command(group(
         ArgGroup::new("input")
             .required(true)
             .multiple(true)
-            .args(["project", "runtime_config"])
+            .args(["project", "runtime_config", "index"])
     ))]
     Check {
         /// The authoring project directory: origins.yaml, the mappings
@@ -65,6 +68,10 @@ enum Command {
         /// One runtime file, checked on its own.
         #[arg(long, value_name = "FILE")]
         runtime_config: Option<PathBuf>,
+        /// One index file, as `discoveryctl package` wrote it, checked on
+        /// its own exactly as `discovery serve` parses it.
+        #[arg(long, value_name = "FILE")]
+        index: Option<PathBuf>,
         /// Accept an http loopback catalog URL, for development.
         #[arg(long)]
         allow_loopback: bool,
@@ -159,6 +166,7 @@ where
         Command::Check {
             project,
             runtime_config,
+            index,
             allow_loopback,
             environment,
             format,
@@ -167,6 +175,7 @@ where
             &CheckRequest {
                 project,
                 runtime_config,
+                index,
                 options: ProjectOptions {
                     allow_loopback,
                     environment,
@@ -193,6 +202,7 @@ where
 struct CheckRequest {
     project: Option<PathBuf>,
     runtime_config: Option<PathBuf>,
+    index: Option<PathBuf>,
     options: ProjectOptions,
     format: OutputFormat,
     deny_warnings: bool,
@@ -227,6 +237,14 @@ fn check(
         files += checked.files_checked().unwrap_or(0);
         diagnostics.extend(checked.into_diagnostics());
     }
+    let mut index = None;
+    if let Some(path) = &request.index {
+        let checked = inspect_index_file(path);
+        unavailable |= checked.unavailable;
+        files += checked.report.files_checked().unwrap_or(0);
+        index = checked.index;
+        diagnostics.extend(checked.report.into_diagnostics());
+    }
     let mut report = Report::new(diagnostics);
     report.set_files_checked(files);
     let exit = if unavailable {
@@ -248,10 +266,31 @@ fn check(
             body["origins"] = json!(origins);
             body["mappings"] = json!(mappings);
         }
+        if let Some(index) = &index {
+            body["index"] = json!({
+                "origins": index.origins.len(),
+                "services": index.services.len(),
+                "mappings": index.mappings.len(),
+                "catalogRevision": index.catalog_revision,
+                "mappingRevision": index.mapping_revision,
+            });
+        }
         let _ = report::write(&envelope("check", exit, body), stdout);
     } else if exit == 0 {
         if let Some((origins, mappings)) = counts {
             let _ = writeln!(stdout, "valid origins={origins} mappings={mappings}");
+        }
+        if let Some(index) = &index {
+            let _ = writeln!(
+                stdout,
+                "valid index origins={} services={} mappings={} catalogRevision={} \
+                 mappingRevision={}",
+                index.origins.len(),
+                index.services.len(),
+                index.mappings.len(),
+                index.catalog_revision,
+                index.mapping_revision
+            );
         }
         let _ = write!(stdout, "{}", report.render_human());
     } else {
@@ -550,6 +589,58 @@ mod tests {
         ]);
         assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
         assert_eq!(json(&stdout)["filesChecked"], 4);
+    }
+
+    #[test]
+    fn cfg_check_1_the_index_checks_on_its_own_in_both_formats() {
+        let index = Path::new(FIXTURE).join("discovery-index.json");
+        let index = index.to_str().unwrap();
+        let (exit, stdout, stderr) = run_cli(&["check", "--index", index, "--format", "json"]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
+        let report = json(&stdout);
+        assert_eq!(report["filesChecked"], 1);
+        assert_eq!(report["index"]["services"], 1);
+        assert_eq!(report["index"]["mappings"], 1);
+
+        let (exit, stdout, stderr) = run_cli(&["check", "--index", index]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
+        assert!(
+            stdout
+                .starts_with("valid index origins=1 services=1 mappings=1 catalogRevision=sha256:"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.ends_with("0 errors, 0 warnings in 1 file\n"),
+            "{stdout}"
+        );
+    }
+
+    #[test]
+    fn cfg_diag_2_a_refused_index_prints_its_diagnostic_and_exits_one() {
+        let directory = temporary();
+        let path = directory.path().join("discovery-index.json");
+        fs::write(&path, b"{}").unwrap();
+        let path = path.to_str().unwrap();
+        let (exit, stdout, stderr) = run_cli(&["check", "--index", path]);
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(
+            stderr.starts_with(&format!(
+                "discoveryctl check refused the input.\nerror[discovery.index.invalid] {path}"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("next: Rebuild the index with `discoveryctl package`"),
+            "{stderr}"
+        );
+
+        let (exit, stdout, _) = run_cli(&["check", "--index", path, "--format", "json"]);
+        assert_eq!(exit, ExitCode::from(1));
+        let report = json(&stdout);
+        assert_eq!(report["status"], "domain-refusal");
+        assert_eq!(report["diagnostics"][0]["code"], "discovery.index.invalid");
+        assert!(report.get("index").is_none());
     }
 
     #[test]

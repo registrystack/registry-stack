@@ -8024,55 +8024,6 @@ exceptions:
   wp: WP6
   reason: $id is https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json
   resolution: Set $id to https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json
-- rule: CFG-CHECK-1
-  format: discovery/index
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: discovery/index
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/discovery/index/v1alpha1'
-- rule: CFG-ENV-1
-  format: discovery/index
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: DiscoveryIndex'
-- rule: CFG-SCHEMA-1
-  format: discovery/index
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: discovery/index
-  location: products/discovery/schemas/index.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/discovery/schema/index-v1alpha1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/discovery/index/index.v1alpha1.schema.json
-- rule: CFG-VAL-6
-  format: discovery/index
-  location: products/discovery/schemas/index.schema.json#/$defs/origin/properties/contentDigest
-  class: pending
-  wp: WP3
-  reason: contentDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: discovery/index
-  location: products/discovery/schemas/index.schema.json#/$defs/service/properties/originContentDigest
-  class: pending
-  wp: WP3
-  reason: originContentDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
 - rule: CFG-ENV-1
   format: discovery/origins
   location: products/platform/config-formats.yaml#/current/apiVersion

@@ -7,8 +7,8 @@ use std::time::Duration;
 use registry_discovery::{
     canonical_index_bytes, catalog_revision, mapping_revision, validate_index,
     CompiledEvidenceMapping, DiscoveryIndex, EvidenceTypeAlternative, OriginSummary, ServiceRecord,
-    INDEX_FILE, INDEX_SCHEMA, MAXIMUM_INDEX_BYTES, MAXIMUM_PACKAGE_BYTES, MAXIMUM_PACKAGE_DEPTH,
-    MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
+    INDEX_API_VERSION, INDEX_FILE, INDEX_KIND, MAXIMUM_INDEX_BYTES, MAXIMUM_PACKAGE_BYTES,
+    MAXIMUM_PACKAGE_DEPTH, MAXIMUM_PACKAGE_FILES, PACKAGE_COMMAND,
 };
 use registry_platform_config::{write_package, PackageError, PackageLimits, VerifiedPackage};
 use registry_platform_httputil::{read_bounded, validate_response_headers, FetchUrlPolicy};
@@ -123,7 +123,8 @@ async fn package_project_with_timeouts(
         .map_err(|_| BuildError::Compile)?;
 
     let index = DiscoveryIndex {
-        schema_version: INDEX_SCHEMA.to_owned(),
+        api_version: INDEX_API_VERSION.to_owned(),
+        kind: INDEX_KIND.to_owned(),
         catalog_revision,
         mapping_revision,
         built_at: timestamp,
@@ -323,7 +324,8 @@ mod tests {
         let services = Vec::new();
         let mappings = Vec::new();
         let index = DiscoveryIndex {
-            schema_version: INDEX_SCHEMA.into(),
+            api_version: INDEX_API_VERSION.into(),
+            kind: INDEX_KIND.into(),
             catalog_revision: catalog_revision(&services).expect("catalog revision"),
             mapping_revision: mapping_revision(&mappings).expect("mapping revision"),
             built_at: "2026-08-14T00:00:00Z".into(),
@@ -350,7 +352,8 @@ mod tests {
         let services = Vec::new();
         let mappings = Vec::new();
         let index = DiscoveryIndex {
-            schema_version: INDEX_SCHEMA.into(),
+            api_version: INDEX_API_VERSION.into(),
+            kind: INDEX_KIND.into(),
             catalog_revision: catalog_revision(&services).expect("catalog revision"),
             mapping_revision: mapping_revision(&mappings).expect("mapping revision"),
             built_at: "2026-08-14T00:00:00Z".into(),

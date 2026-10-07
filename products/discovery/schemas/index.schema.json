@@ -1,14 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/discovery/schema/index-v1alpha1.json",
+  "$id": "https://id.registrystack.org/schemas/discovery/index/index.v1alpha1.schema.json",
   "title": "Registry Discovery immutable index",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "catalogRevision", "mappingRevision", "builtAt", "origins", "services", "mappings"],
+  "required": ["apiVersion", "kind", "catalogRevision", "mappingRevision", "builtAt", "origins", "services", "mappings"],
   "properties": {
-    "schemaVersion": {"const": "registry-discovery/index/v1alpha1"},
-    "catalogRevision": {"$ref": "#/$defs/digest"},
-    "mappingRevision": {"$ref": "#/$defs/digest"},
+    "apiVersion": {"const": "id.registrystack.org/formats/discovery/index/v1alpha1"},
+    "kind": {"const": "DiscoveryIndex"},
+    "catalogRevision": {"$ref": "#/$defs/Digest"},
+    "mappingRevision": {"$ref": "#/$defs/Digest"},
     "builtAt": {"type": "string", "format": "date-time", "maxLength": 64},
     "origins": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/origin"}},
     "services": {"type": "array", "maxItems": 100000, "items": {"$ref": "#/$defs/service"}},
@@ -19,7 +20,7 @@
     "uriIdentifier": {"allOf": [{"$ref": "#/$defs/identifier"}, {"format": "uri"}]},
     "publicUrl": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 4096, "pattern": "^(?:https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"},
     "text": {"type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
-    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "Digest": {"description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "uriSet": {
       "type": "array",
       "maxItems": 256,
@@ -40,7 +41,7 @@
       "properties": {
         "originId": {"$ref": "#/$defs/identifier"},
         "catalogUrl": {"$ref": "#/$defs/publicUrl"},
-        "contentDigest": {"$ref": "#/$defs/digest"},
+        "contentDigest": {"$ref": "#/$defs/Digest"},
         "fetchedAt": {"type": "string", "format": "date-time", "maxLength": 64}
       }
     },
@@ -68,7 +69,7 @@
         "operationFamilyIds": {"type": "array", "maxItems": 0},
         "originId": {"$ref": "#/$defs/identifier"},
         "originUrl": {"$ref": "#/$defs/publicUrl"},
-        "originContentDigest": {"$ref": "#/$defs/digest"},
+        "originContentDigest": {"$ref": "#/$defs/Digest"},
         "originFetchedAt": {"type": "string", "format": "date-time", "maxLength": 64}
       }
     },

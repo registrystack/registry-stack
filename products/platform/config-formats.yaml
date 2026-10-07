@@ -2482,18 +2482,17 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'schema: registry-discovery/index/v1alpha1'
+      apiVersion: id.registrystack.org/formats/discovery/index/v1alpha1
+      kind: DiscoveryIndex
       checkedBy:
         file: crates/registry-discovery/src/model.rs
-        symbol: INDEX_SCHEMA
+        symbol: INDEX_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/discovery/index/v1alpha1
       kind: DiscoveryIndex
     schema:
       path: products/discovery/schemas/index.schema.json
-      id: https://registrystack.org/discovery/schema/index-v1alpha1.json
+      id: https://id.registrystack.org/schemas/discovery/index/index.v1alpha1.schema.json
       origin: hand-written
       differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
     reader:
@@ -2501,8 +2500,8 @@ formats:
       file: crates/registry-discovery/src/startup.rs
       function: load_index
       type: DiscoveryIndex
-    check: none
-    example: none
+    check: discoveryctl check --index {file}
+    example: products/discovery/fixtures/project/discovery-index.json
     conformance:
       requiredText: none
       optionalText: none
