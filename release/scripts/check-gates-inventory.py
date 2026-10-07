@@ -616,7 +616,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Release import audit", "release/scripts/registry-release audit"),
     (
         "Release source model",
-        "run: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh",
+        "run: release/scripts/check-release-source-model.sh",
     ),
     (
         "Release source model tests",

@@ -3,7 +3,6 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 release_dir="$(cd "${script_dir}/.." && pwd)"
-mode="${1:-${REGISTRY_RELEASE_SOURCE_MODE:-monorepo}}"
 
 resolve_dir() {
 	local raw="$1"
@@ -47,8 +46,8 @@ require_path() {
 	fi
 }
 
-if [[ "${mode}" != "monorepo" ]]; then
-	echo "usage: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh [monorepo]" >&2
+if [[ "$#" -ne 0 ]]; then
+	echo "usage: release/scripts/check-release-source-model.sh" >&2
 	exit 2
 fi
 

@@ -81,8 +81,7 @@ release/scripts/registry-release prepare \
   --release-id "${RELEASE_ID}"
 release/scripts/registry-release validate-current
 release/scripts/registry-release validate-docsets
-REGISTRY_RELEASE_SOURCE_MODE=monorepo \
-  release/scripts/check-release-source-model.sh
+release/scripts/check-release-source-model.sh
 
 if [[ -n "${RUNNER_TEMP:-}" ]]; then
   rehearsal_dir="$(mktemp -d "${RUNNER_TEMP%/}/registry-release-rehearsal.XXXXXX")"
