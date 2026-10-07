@@ -133,6 +133,10 @@ Before editing crates in these areas, also read the owning guide:
 - product clients, their language bindings, `registry-record`, and
   `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
 
+Before adding or changing any configuration format a product reads or writes
+(its keys, values, identifiers, parsing, schema, or diagnostics), read
+`products/platform/CONFIG-CONVENTIONS.md`. It is normative for every product.
+
 Base Registry Engine is implemented by `registry-breg` and `registry-bregctl`.
 Its approved contracts, acceptance journeys, quickstart, generated examples, and
 gates live under `products/breg`. A registry project is configuration: the

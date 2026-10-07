@@ -6,6 +6,11 @@ authorization, configuration, disclosure, durable state, and audit-release
 contract. Reuse a primitive when its semantics fit; do not move product policy
 into the platform just to remove superficially similar code.
 
+Platform also owns [the configuration conventions](CONFIG-CONVENTIONS.md),
+the rules every product's configuration formats follow, and the shared reader
+and gates that enforce them. A change to a rule changes its gate in the same
+change.
+
 Read the changed crate's README and public API, then identify actual consumers
 through Cargo dependencies. Current versions, dependency ownership, and feature
 gates come from the monorepo Cargo manifests and CI, not older standalone
