@@ -1,0 +1,3618 @@
+# Registry Stack configuration format registry (CFG-SCHEMA-1).
+#
+# One entry per configuration format a Registry Stack tool reads or writes:
+# authored files, operator files, read-back formats (generated files a tool
+# reads again), and output formats (`reader: none`, written for people or for
+# tools we do not own). The conventions every entry is held to are in
+# products/platform/CONFIG-CONVENTIONS.md. Repository tooling metadata is
+# out of scope: this file, config-conventions-exceptions.yaml, and the
+# contract records under products/*/contracts that only repository scripts
+# read. So are API payloads. `outOfScope` lists the schema and file patterns
+# the lint would otherwise expect to find registered.
+#
+# products/platform/scripts/check-config-conventions.py reads this file. It
+# checks every entry against the code (header constants, reader functions and
+# types, schema paths and `$id`s, examples and conformance members) and then
+# lints every registered schema and reader type against the conventions. A
+# deviation it finds must be recorded in config-conventions-exceptions.yaml.
+#
+# Adding a format:
+#
+#   1. Add an entry under `formats:` beside its product's other entries. `id`
+#      is `<product>/<format>`, where `<format>` is derived from `target.kind`
+#      (strip the product prefix and a trailing `Config`, split before each
+#      capital, lowercase, join with `-`). `target.apiVersion` is
+#      `id.registrystack.org/formats/<product>/<format>/<version>`.
+#   2. Record what the code does today under `current` (the header the reader
+#      accepts and the constant that holds it, or `none`), and the reader
+#      (`crate`, `file`, `function`, and the decoded `type`, or `untyped`).
+#   3. Record the schema (`origin: generated` with its `generator` command and
+#      `driftCheck` file, `frozen-contract` or `hand-written` with its
+#      `differentialTest` file), the offline `check` command, the minimal valid
+#      `example`, a `conformance` member per typed case (an example JSON
+#      pointer, or `none`), `securityMembers`, and `restrictingMembers`.
+#      Pointers use `*` for every list item or map value.
+#   4. Run products/platform/scripts/check-config-conventions.py. Fix what it
+#      reports, or record a classified exception for it.
+#
+# Field values:
+#
+#   audience       authored | operator | generated
+#   stability      promised | experimental | unpromised
+#   syntax         yaml | json | jsonl | text
+#   topLevel       project | bundle (the product's top-level authored file,
+#                  CFG-ENV-6)
+#   exceptionClass external-format | exchange-model (the whole format is
+#                  outside the naming rules; see the convention's Exceptions)
+#   whenOmitted    refused (the reader requires the member) | open (omitting
+#                  it widens access today) | closed (omitting it narrows
+#                  access) | unclassified (review owes the classification,
+#                  CFG-EMPTY-3)
+
+apiVersion: id.registrystack.org/formats/platform/config-format-registry/v1alpha1
+kind: PlatformConfigFormatRegistry
+
+sharedSchemas:
+  - id: platform/runtime-config-blocks
+    path: products/platform/generated/runtime-config-blocks.schema.json
+    origin: generated
+    driftCheck: products/platform/scripts/check-config-conformance.py
+
+formats:
+
+  # breg
+  - id: breg/project
+    product: breg
+    title: Registry project
+    files: [registry.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    topLevel: project
+    current:
+      apiVersion: registry.registrystack.org/v1alpha1
+      kind: RegistryProject
+      checkedBy:
+        file: crates/registry-breg/src/compiler.rs
+        symbol: AUTHORING_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+      kind: BRegProject
+    schema:
+      path: products/breg/generated/authoring/registry-project.schema.json
+      id: https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-breg --features schema --example authoring-schema -- --output products/breg/generated/authoring
+      driftCheck: products/breg/scripts/check-generated.sh
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/contract.rs
+      function: parse_project_yaml
+      type: RegistryProject
+    check: bregctl check {project}
+    example: products/breg/acceptance/asset-site-placement/registry.yaml
+    conformance:
+      requiredText: /registry/id
+      optionalText: /package/sourceRevision
+      integer: /entities/0/batch/maximumItems
+      boolean: /accessProfiles/0/default
+    securityMembers:
+      - pointer: /accessProfiles/*/anonymous
+        whenOmitted: closed
+      - pointer: /accessProfiles/*/requiredScopes
+        whenOmitted: open
+      - pointer: /accessProfiles/*/requiredPurposes
+        whenOmitted: open
+      - pointer: /accessProfiles/*/requesterClients
+        whenOmitted: unclassified
+      - pointer: /entities/*/accessRequirements/requiredScopes
+        whenOmitted: open
+    restrictingMembers: [/accessProfiles/*/requiredScopes, /accessProfiles/*/requiredPurposes, /accessProfiles/*/requesterClients, /entities/*/accessRequirements/requiredScopes]
+  - id: breg/module
+    product: breg
+    title: Registry module
+    files: [modules/*/module.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+      kind: BRegModule
+    schema:
+      path: products/breg/generated/authoring/registry-module.schema.json
+      id: https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-breg --features schema --example authoring-schema -- --output products/breg/generated/authoring
+      driftCheck: products/breg/scripts/check-generated.sh
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/contract.rs
+      function: parse_module_yaml
+      type: RegistryModule
+    check: bregctl check {project}
+    example: products/breg/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml
+    conformance:
+      requiredText: /id
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/runtime
+    product: breg
+    title: Base Registry Engine runtime configuration
+    files: [runtime.yaml, runtime-test.yaml, runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+      kind: BRegRuntimeConfig
+      checkedBy:
+        file: crates/registry-breg/src/runtime_config.rs
+        symbol: RUNTIME_CONFIG_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
+      kind: BRegRuntimeConfig
+    schema:
+      path: products/breg/generated/runtime/runtime.schema.json
+      id: https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-breg --features runtime,schema --example runtime-schema -- --output products/breg/generated/runtime
+      driftCheck: products/breg/scripts/check-generated.sh
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/runtime_config.rs
+      function: load_runtime_config
+      type: RuntimeConfig
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: open
+      - pointer: /authentication/oidc/allowedClients
+        whenOmitted: open
+      - pointer: /authentication/oidc/assertionIssuers
+        whenOmitted: open
+      - pointer: /attachmentVerification
+        whenOmitted: open
+      - pointer: /fieldEncryption
+        whenOmitted: open
+      - pointer: /package/expectedDigest
+        whenOmitted: open
+    restrictingMembers: [/authentication/oidc/assertionIssuers]
+    notes: 'No committed example file: runtime examples live only inside scripts and tests.'
+  - id: breg/mcp-runtime
+    product: breg
+    title: Citizen MCP gateway runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: registry.registrystack.org/breg-mcp-runtime/v1alpha1
+      kind: BRegMcpRuntimeConfig
+      checkedBy:
+        file: crates/registry-breg-mcp/src/config.rs
+        symbol: RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/mcp-runtime/v1alpha1
+      kind: BRegMcpRuntimeConfig
+    schema: none
+    reader:
+      crate: registry-breg-mcp
+      file: crates/registry-breg-mcp/src/config.rs
+      function: load
+      type: RuntimeConfig
+    check: breg-mcp --runtime-config {file} check
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: unclassified
+    restrictingMembers: []
+  - id: breg/review-runtime
+    product: breg
+    title: Citizen review page runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1
+      kind: BRegReviewRuntimeConfig
+      checkedBy:
+        file: crates/registry-breg-review/src/config.rs
+        symbol: RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
+      kind: BRegReviewRuntimeConfig
+    schema: none
+    reader:
+      crate: registry-breg-review
+      file: crates/registry-breg-review/src/config.rs
+      function: load
+      type: RuntimeConfig
+    check: breg-review --runtime-config {file} check
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: unclassified
+    restrictingMembers: []
+  - id: breg/package
+    product: breg
+    title: Built registry package envelope
+    files: [package.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/package/v2
+      kind: none
+      checkedBy:
+        file: crates/registry-breg/src/package.rs
+        symbol: PACKAGE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/package/v2
+      kind: BRegPackage
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/package.rs
+      function: parse_package_envelope
+      type: PackageEnvelope
+    check: bregctl check --package {package}
+    example: crates/registry-breg/tests/fixtures/person-registration-rhai-package/package.json
+    conformance:
+      requiredText: /manifest/packageId
+      optionalText: none
+      integer: /manifest/files/0/size
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/journeys
+    product: breg
+    title: Acceptance journeys
+    files: [tests/journeys.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/breg-journeys/v1
+      kind: none
+      checkedBy:
+        file: crates/registry-breg/src/fixtures.rs
+        symbol: JOURNEY_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/journeys/v1
+      kind: BRegJourneys
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/fixtures.rs
+      function: validate_fixture_journeys
+      type: JourneyDocument
+    check: none
+    example: products/breg/acceptance/asset-site-placement/tests/journeys.yaml
+    conformance:
+      requiredText: /journeys/0/id
+      optionalText: none
+      integer: /journeys/0/steps/0/expect/status
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/schema-test-receipt
+    product: breg
+    title: Schema test receipt
+    files: [schema-test-receipt.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/breg-schema-test-receipt/v2
+      kind: SchemaTestReceipt
+      checkedBy:
+        file: crates/registry-breg/src/fixtures.rs
+        symbol: RECEIPT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/schema-test-receipt/v2
+      kind: BRegSchemaTestReceipt
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/fixtures.rs
+      function: parse_canonical_schema_test_receipt
+      type: SchemaTestReceipt
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/schema-test-credentials
+    product: breg
+    title: Schema test credentials
+    files: [credentials.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
+      kind: SchemaTestCredentials
+      checkedBy:
+        file: crates/registry-bregctl/src/test_lifecycle.rs
+        symbol: CREDENTIALS_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+      kind: BRegSchemaTestCredentials
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/test_lifecycle.rs
+      function: load_credentials
+      type: CredentialDocument
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/data-import-checkpoint
+    product: breg
+    title: Data import checkpoint
+    files: ['*.checkpoint.json']
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/v1alpha1
+      kind: RegistryDataImportCheckpoint
+      checkedBy:
+        file: crates/registry-breg/src/data.rs
+        symbol: IMPORT_CHECKPOINT_KIND
+    target:
+      apiVersion: id.registrystack.org/formats/breg/data-import-checkpoint/v1alpha1
+      kind: BRegDataImportCheckpoint
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/data.rs
+      function: from_json
+      type: DataImportCheckpoint
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/data-export-checkpoint
+    product: breg
+    title: Data export checkpoint
+    files: ['*.checkpoint.json']
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/v1alpha1
+      kind: RegistryDataExportCheckpoint
+      checkedBy:
+        file: crates/registry-breg/src/data.rs
+        symbol: EXPORT_CHECKPOINT_KIND
+    target:
+      apiVersion: id.registrystack.org/formats/breg/data-export-checkpoint/v1alpha1
+      kind: BRegDataExportCheckpoint
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/data.rs
+      function: from_json
+      type: DataExportCheckpoint
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/data-import-state
+    product: breg
+    title: Data import state
+    files: [state.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/bregctl-data/v2
+      kind: BRegctlDataImportState
+      checkedBy:
+        file: crates/registry-bregctl/src/data_lifecycle.rs
+        symbol: IMPORT_STATE_KIND
+    target:
+      apiVersion: id.registrystack.org/formats/breg/data-import-state/v2
+      kind: BRegDataImportState
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/data_lifecycle.rs
+      function: read_import_state
+      type: ImportState
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/model-selection
+    product: breg
+    title: PublicSchema model selection
+    files: [model/selection.yaml, publicschema/starters/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+      kind: ModelSelection
+      checkedBy:
+        file: crates/registry-bregctl/src/init_from_model/selection.rs
+        symbol: KIND
+    target:
+      apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+      kind: BRegModelSelection
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/init_from_model/selection.rs
+      function: parse
+      type: Selection
+    check: none
+    example: crates/registry-linkml/publicschema/starters/household.yaml
+    conformance:
+      requiredText: /model
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/dev-clients
+    product: breg
+    title: Development clients
+    files: [dev-clients.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'version: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+      kind: BRegDevClients
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/dev/config.rs
+      function: clients
+      type: Clients
+    check: none
+    example: products/breg/acceptance/facility/dev-clients.yaml
+    conformance:
+      requiredText: /clients/0/id
+      optionalText: none
+      integer: /version
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/example-scenarios
+    product: breg
+    title: Example scenarios
+    files: [examples/scenarios.json]
+    syntax: json
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'version: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
+      kind: BRegExampleScenarios
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/dev/examples.rs
+      function: catalogue
+      type: Catalogue
+    check: none
+    example: products/breg/starters/seed-lots/core/examples/scenarios.json
+    conformance:
+      requiredText: /scenarios/0/id
+      optionalText: /scenarios/0/description
+      integer: /version
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/migration-descriptor
+    product: breg
+    title: Reviewed migration descriptor
+    files: ['*.migration.json']
+    syntax: json
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/migration-descriptor/v1alpha1
+      kind: BRegMigrationDescriptor
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/migration_plan.rs
+      function: parse_canonical
+      type: ReviewedMigrationDescriptor
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/migration-rehearsal-receipt
+    product: breg
+    title: Migration rehearsal receipt
+    files: ['*.rehearsal.json']
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1
+      kind: BRegMigrationRehearsalReceipt
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/migration_plan.rs
+      function: parse_canonical
+      type: MigrationRehearsalReceipt
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/backup-binding
+    product: breg
+    title: External backup binding
+    files: ['*.backup.json']
+    syntax: json
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/backup-binding/v1alpha1
+      kind: BRegBackupBinding
+    schema: none
+    reader:
+      crate: registry-breg
+      file: crates/registry-breg/src/migration.rs
+      function: read_backup_binding
+      type: ExternalBackupBinding
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/dev-state
+    product: breg
+    title: Development environment state
+    files: [.bregctl-dev/state.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1
+      kind: BRegDevState
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/dev/mod.rs
+      function: read_state
+      type: State
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/dev-prepared-source
+    product: breg
+    title: Development prepared source record
+    files: [source-prepared-*.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1
+      kind: BRegDevPreparedSource
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/dev/prepare_source.rs
+      function: run
+      type: PreparedSource
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/dev-source-transition
+    product: breg
+    title: Development source transition journal
+    files: [source-transition.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1
+      kind: BRegDevSourceTransition
+    schema: none
+    reader:
+      crate: registry-bregctl
+      file: crates/registry-bregctl/src/dev/prepare_source.rs
+      function: recover
+      type: Transition
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/evidence-source-export
+    product: breg
+    title: Evidence source export manifest
+    files: [source-export.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'formatVersion: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/evidence-source-export/v1alpha1
+      kind: BRegEvidenceSourceExport
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/source_import/mod.rs
+      function: load_export
+      type: ExportManifest
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+    notes: Written by registry-breg evidence_source.rs, read by evidencectl source import.
+  - id: breg/access-explanation
+    product: breg
+    title: bregctl explain output (AccessExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: AccessExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha3
+      kind: BRegAccessExplanation
+    schema:
+      path: products/breg/contracts/explain/AccessExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/access-preview
+    product: breg
+    title: bregctl explain output (AccessPreview)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: AccessPreview
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/access-preview/v1alpha3
+      kind: BRegAccessPreview
+    schema:
+      path: products/breg/contracts/explain/AccessPreview.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/actions-explanation
+    product: breg
+    title: bregctl explain output (ActionsExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: ActionsExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha3
+      kind: BRegActionsExplanation
+    schema:
+      path: products/breg/contracts/explain/ActionsExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/change-requests-explanation
+    product: breg
+    title: bregctl explain output (ChangeRequestsExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: ChangeRequestsExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/change-requests-explanation/v1alpha3
+      kind: BRegChangeRequestsExplanation
+    schema:
+      path: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/events-explanation
+    product: breg
+    title: bregctl explain output (EventsExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: EventsExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/events-explanation/v1alpha3
+      kind: BRegEventsExplanation
+    schema:
+      path: products/breg/contracts/explain/EventsExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/lifecycle-explanation
+    product: breg
+    title: bregctl explain output (LifecycleExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: LifecycleExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha3
+      kind: BRegLifecycleExplanation
+    schema:
+      path: products/breg/contracts/explain/LifecycleExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/model-explanation
+    product: breg
+    title: bregctl explain output (ModelExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: ModelExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha3
+      kind: BRegModelExplanation
+    schema:
+      path: products/breg/contracts/explain/ModelExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/queries-explanation
+    product: breg
+    title: bregctl explain output (QueriesExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: QueriesExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/queries-explanation/v1alpha3
+      kind: BRegQueriesExplanation
+    schema:
+      path: products/breg/contracts/explain/QueriesExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/routes-explanation
+    product: breg
+    title: bregctl explain output (RoutesExplanation)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/breg-explain/v1alpha3
+      kind: RoutesExplanation
+      checkedBy:
+        file: crates/registry-bregctl/src/lib.rs
+        symbol: EXPLAIN_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha3
+      kind: BRegRoutesExplanation
+    schema:
+      path: products/breg/contracts/explain/RoutesExplanation.schema.json
+      id: https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-bregctl/tests/explain_contract.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: EXPLAIN_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/ctl-report
+    product: breg
+    title: bregctl --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/breg/ctl-report/v1alpha1
+      kind: BRegCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-bregctl/src/lib.rs
+      symbol: write_failure
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/linkml-schema
+    product: breg
+    title: LinkML schema read by bregctl init --from
+    files: ['*.linkml.yaml']
+    syntax: yaml
+    audience: authored
+    stability: promised
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-linkml
+      file: crates/registry-linkml/src/reader.rs
+      function: read_bundle
+      type: untyped
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # casework
+  - id: casework/project
+    product: casework
+    title: Casework project
+    files: [casework.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    topLevel: project
+    current:
+      apiVersion: registry.registrystack.org/casework/v1alpha1
+      kind: CaseworkProject
+      checkedBy:
+        file: crates/registry-casework-core/src/config.rs
+        symbol: CASEWORK_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
+      kind: CaseworkProject
+    schema: none
+    reader:
+      crate: registry-casework-core
+      file: crates/registry-casework-core/src/config.rs
+      function: load
+      type: CaseworkProject
+    check: caseworkctl check {project}
+    example: products/casework/examples/payment-review/casework.yaml
+    conformance:
+      requiredText: /casework/id
+      optionalText: none
+      integer: /reviewKinds/0/retention/terminalDays
+      boolean: none
+    securityMembers:
+      - pointer: /accessProfiles/*/requiredScopes
+        whenOmitted: unclassified
+    restrictingMembers: [/accessProfiles/*/requiredScopes]
+  - id: casework/runtime
+    product: casework
+    title: Casework runtime configuration
+    files: [runtime.yaml, runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+      kind: CaseworkRuntimeConfig
+      checkedBy:
+        file: crates/registry-casework/src/config.rs
+        symbol: RUNTIME_CONFIG_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
+      kind: CaseworkRuntimeConfig
+    schema:
+      path: products/casework/generated/runtime/runtime.schema.json
+      id: https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-casework --features schema --example runtime-schema -- --output products/casework/generated/runtime
+      driftCheck: crates/registry-casework/src/schema.rs
+    reader:
+      crate: registry-casework
+      file: crates/registry-casework/src/config.rs
+      function: load
+      type: RuntimeConfig
+    check: none
+    example: products/casework/examples/payment-review/runtime.example.yaml
+    conformance:
+      requiredText: /authentication/oidc/audience
+      optionalText: /audit/path
+      integer: /reviewCompletionDestinations/payment-results/maximumAttempts
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: open
+      - pointer: /authentication/oidc/allowedClients
+        whenOmitted: open
+      - pointer: /authentication/oidc/assertionIssuers
+        whenOmitted: open
+      - pointer: /package/expectedDigest
+        whenOmitted: open
+    restrictingMembers: [/authentication/oidc/assertionIssuers]
+  - id: casework/fixture
+    product: casework
+    title: Casework fixture
+    files: [fixtures/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+      kind: CaseworkFixture
+      checkedBy:
+        file: crates/registry-caseworkctl/src/project.rs
+        symbol: validate_fixture
+    target:
+      apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
+      kind: CaseworkFixture
+    schema: none
+    reader:
+      crate: registry-caseworkctl
+      file: crates/registry-caseworkctl/src/project.rs
+      function: load_yaml
+      type: untyped
+    check: caseworkctl test {project}
+    example: products/casework/examples/payment-review/fixtures/payment-review.yaml
+    conformance:
+      requiredText: /name
+      optionalText: /expect/queue
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/simulation
+    product: casework
+    title: Casework clock simulation
+    files: [simulations/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
+      kind: CaseworkSimulation
+    schema: none
+    reader:
+      crate: registry-caseworkctl
+      file: crates/registry-caseworkctl/src/policy.rs
+      function: load_yaml
+      type: SimulationFixture
+    check: caseworkctl test {project}
+    example: products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/holiday-set
+    product: casework
+    title: Casework holiday set
+    files: [simulations/holiday-sets/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1
+      kind: CaseworkHolidaySet
+    schema: none
+    reader:
+      crate: registry-caseworkctl
+      file: crates/registry-caseworkctl/src/policy.rs
+      function: load_yaml
+      type: HolidaySetDocument
+    check: caseworkctl test {project}
+    example: products/casework/examples/multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml
+    conformance:
+      requiredText: /holidaySet
+      optionalText: none
+      integer: /revision
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/dev-clients
+    product: casework
+    title: Casework development clients
+    files: [dev-clients.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'version: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
+      kind: CaseworkDevClients
+    schema: none
+    reader:
+      crate: registry-caseworkctl
+      file: crates/registry-caseworkctl/src/dev/config.rs
+      function: clients
+      type: Clients
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/dev-state
+    product: casework
+    title: Casework development environment state
+    files: [.caseworkctl-dev/state.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1
+      kind: CaseworkDevState
+    schema: none
+    reader:
+      crate: registry-caseworkctl
+      file: crates/registry-caseworkctl/src/dev/mod.rs
+      function: read_state
+      type: State
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/breg-source-description
+    product: casework
+    title: Base Registry Engine source description for Casework
+    files: [sources/*.json]
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/casework-source-description/v1alpha2
+      kind: BRegCaseworkSourceDescription
+      checkedBy:
+        file: crates/registry-casework-breg/src/config.rs
+        symbol: DESCRIPTION_KIND
+    target:
+      apiVersion: id.registrystack.org/formats/casework/breg-source-description/v1alpha1
+      kind: CaseworkBregSourceDescription
+    schema: none
+    reader:
+      crate: registry-casework-breg
+      file: crates/registry-casework-breg/src/config.rs
+      function: validate_description
+      type: untyped
+    check: none
+    example: products/casework/examples/multi-stage-routing-clocks/sources/regional-register.json
+    conformance:
+      requiredText: /sourceId
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+    notes: Read at two versions (v1alpha1 and v1alpha2). The kind carries the BReg prefix while Casework owns the reader.
+  - id: casework/apply-report
+    product: casework
+    title: caseworkctl --format json output (ApplyReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: ApplyReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/apply-report/v1alpha3
+      kind: CaseworkApplyReport
+    schema:
+      path: products/casework/contracts/cli/ApplyReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/ApplyReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/attempt-settlement-report
+    product: casework
+    title: caseworkctl --format json output (AttemptSettlementReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: AttemptSettlementReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/attempt-settlement-report/v1alpha3
+      kind: CaseworkAttemptSettlementReport
+    schema:
+      path: products/casework/contracts/cli/AttemptSettlementReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/AttemptSettlementReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/attempt-uncertain-marking-report
+    product: casework
+    title: caseworkctl --format json output (AttemptUncertainMarkingReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: AttemptUncertainMarkingReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/attempt-uncertain-marking-report/v1alpha3
+      kind: CaseworkAttemptUncertainMarkingReport
+    schema:
+      path: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/AttemptUncertainMarkingReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/check-report
+    product: casework
+    title: caseworkctl --format json output (CheckReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: CheckReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/check-report/v1alpha3
+      kind: CaseworkCheckReport
+    schema:
+      path: products/casework/contracts/cli/CheckReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/dev-events-report
+    product: casework
+    title: caseworkctl --format json output (DevEventsReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: DevEventsReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/dev-events-report/v1alpha3
+      kind: CaseworkDevEventsReport
+    schema:
+      path: products/casework/contracts/cli/DevEventsReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/DevEventsReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/dev-grant-report
+    product: casework
+    title: caseworkctl --format json output (DevGrantReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: DevGrantReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/dev-grant-report/v1alpha3
+      kind: CaseworkDevGrantReport
+    schema:
+      path: products/casework/contracts/cli/DevGrantReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/DevGrantReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/dev-identity-report
+    product: casework
+    title: caseworkctl --format json output (DevIdentityReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: DevIdentityReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/dev-identity-report/v1alpha3
+      kind: CaseworkDevIdentityReport
+    schema:
+      path: products/casework/contracts/cli/DevIdentityReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/DevIdentityReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/dev-report
+    product: casework
+    title: caseworkctl --format json output (DevReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: DevReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/dev-report/v1alpha3
+      kind: CaseworkDevReport
+    schema:
+      path: products/casework/contracts/cli/DevReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/DevReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/dev-token-report
+    product: casework
+    title: caseworkctl --format json output (DevTokenReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: DevTokenReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/dev-token-report/v1alpha3
+      kind: CaseworkDevTokenReport
+    schema:
+      path: products/casework/contracts/cli/DevTokenReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/DevTokenReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/doctor-report
+    product: casework
+    title: caseworkctl --format json output (DoctorReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: DoctorReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/doctor-report/v1alpha3
+      kind: CaseworkDoctorReport
+    schema:
+      path: products/casework/contracts/cli/DoctorReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/DoctorReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/explain-report
+    product: casework
+    title: caseworkctl --format json output (ExplainReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: ExplainReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/explain-report/v1alpha3
+      kind: CaseworkExplainReport
+    schema:
+      path: products/casework/contracts/cli/ExplainReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/ExplainReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/init-report
+    product: casework
+    title: caseworkctl --format json output (InitReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: InitReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/init-report/v1alpha3
+      kind: CaseworkInitReport
+    schema:
+      path: products/casework/contracts/cli/InitReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/InitReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/lifecycle-report
+    product: casework
+    title: caseworkctl --format json output (LifecycleReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: LifecycleReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/lifecycle-report/v1alpha3
+      kind: CaseworkLifecycleReport
+    schema:
+      path: products/casework/contracts/cli/LifecycleReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/LifecycleReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/package-report
+    product: casework
+    title: caseworkctl --format json output (PackageReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: PackageReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/package-report/v1alpha3
+      kind: CaseworkPackageReport
+    schema:
+      path: products/casework/contracts/cli/PackageReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/PackageReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/plan-report
+    product: casework
+    title: caseworkctl --format json output (PlanReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: PlanReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/plan-report/v1alpha3
+      kind: CaseworkPlanReport
+    schema:
+      path: products/casework/contracts/cli/PlanReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/PlanReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/retention-erase-report
+    product: casework
+    title: caseworkctl --format json output (RetentionEraseReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: RetentionEraseReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/retention-erase-report/v1alpha3
+      kind: CaseworkRetentionEraseReport
+    schema:
+      path: products/casework/contracts/cli/RetentionEraseReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/RetentionEraseReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/simulation-report
+    product: casework
+    title: caseworkctl --format json output (SimulationReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: SimulationReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/simulation-report/v1alpha3
+      kind: CaseworkSimulationReport
+    schema:
+      path: products/casework/contracts/cli/SimulationReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/SimulationReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/source-add-report
+    product: casework
+    title: caseworkctl --format json output (SourceAddReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: SourceAddReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/source-add-report/v1alpha3
+      kind: CaseworkSourceAddReport
+    schema:
+      path: products/casework/contracts/cli/SourceAddReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/SourceAddReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/status-report
+    product: casework
+    title: caseworkctl --format json output (StatusReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: StatusReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/status-report/v1alpha3
+      kind: CaseworkStatusReport
+    schema:
+      path: products/casework/contracts/cli/StatusReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/StatusReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/test-report
+    product: casework
+    title: caseworkctl --format json output (TestReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: TestReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/test-report/v1alpha3
+      kind: CaseworkTestReport
+    schema:
+      path: products/casework/contracts/cli/TestReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/TestReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: casework/usage-report
+    product: casework
+    title: caseworkctl --format json output (UsageReport)
+    files: []
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/caseworkctl/v1alpha3
+      kind: UsageReport
+      checkedBy:
+        file: crates/registry-caseworkctl/src/lib.rs
+        symbol: CLI_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/casework/usage-report/v1alpha3
+      kind: CaseworkUsageReport
+    schema:
+      path: products/casework/contracts/cli/UsageReport.schema.json
+      id: https://registrystack.org/caseworkctl/v1alpha3/UsageReport.schema.json
+      origin: hand-written
+      differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-caseworkctl/src/lib.rs
+      symbol: CLI_API_VERSION
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # scheduling
+  - id: scheduling/project
+    product: scheduling
+    title: Scheduling project
+    files: [scheduling.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    topLevel: project
+    current:
+      apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+      kind: SchedulingPolicyPackage
+      checkedBy:
+        file: crates/registry-scheduling-core/src/naming.rs
+        symbol: SCHEDULING_POLICY_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+      kind: SchedulingProject
+    schema: none
+    reader:
+      crate: registry-scheduling-core
+      file: crates/registry-scheduling-core/src/policy.rs
+      function: parse_policy_yaml
+      type: SchedulingPolicy
+    check: schedulingctl check {project}
+    example: products/scheduling/examples/standalone-exact-time/scheduling.yaml
+    conformance:
+      requiredText: /scheduling/id
+      optionalText: /offerings/0/because
+      integer: /offerings/0/exactTime/durationMinutes
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: scheduling/records
+    product: scheduling
+    title: Scheduling supply records
+    files: [records.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+      kind: SchedulingRecords
+    schema: none
+    reader:
+      crate: registry-schedulingctl
+      file: crates/registry-schedulingctl/src/records.rs
+      function: parse_records
+      type: SchedulingFacts
+    check: schedulingctl check {project}
+    example: products/scheduling/examples/standalone-exact-time/records.yaml
+    conformance:
+      requiredText: /locations/0/id
+      optionalText: none
+      integer: none
+      boolean: /pools/0/members/0/available
+    securityMembers: []
+    restrictingMembers: []
+  - id: scheduling/fixture
+    product: scheduling
+    title: Scheduling fixture
+    files: [fixtures/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+      kind: SchedulingFixture
+      checkedBy:
+        file: crates/registry-scheduling-core/src/naming.rs
+        symbol: SCHEDULING_FIXTURE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
+      kind: SchedulingFixture
+    schema: none
+    reader:
+      crate: registry-schedulingctl
+      file: crates/registry-schedulingctl/src/project.rs
+      function: load_fixture
+      type: SchedulingFixture
+    check: schedulingctl test {project}
+    example: products/scheduling/examples/standalone-arrival-window/fixtures/household-afternoon.yaml
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: scheduling/runtime
+    product: scheduling
+    title: Scheduling runtime configuration
+    files: [runtime.yaml, runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
+      kind: SchedulingRuntimeConfig
+      checkedBy:
+        file: crates/registry-scheduling-core/src/naming.rs
+        symbol: SCHEDULING_RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1
+      kind: SchedulingRuntimeConfig
+    schema:
+      path: products/scheduling/generated/runtime/runtime.schema.json
+      id: https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-scheduling --features schema --example runtime-schema -- --output products/scheduling/generated/runtime
+      driftCheck: crates/registry-scheduling/src/schema.rs
+    reader:
+      crate: registry-scheduling
+      file: crates/registry-scheduling/src/config.rs
+      function: load
+      type: RuntimeConfig
+    check: none
+    example: products/scheduling/examples/standalone-exact-time/runtime.example.yaml
+    conformance:
+      requiredText: /authentication/oidc/audience
+      optionalText: /audit/path
+      integer: /retention/hookPayloadDays
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /authentication/oidc/allowedClients
+        whenOmitted: open
+      - pointer: /authentication/oidc/assertionIssuers
+        whenOmitted: open
+      - pointer: /package/expectedDigest
+        whenOmitted: open
+    restrictingMembers: [/authentication/oidc/assertionIssuers]
+  - id: scheduling/ctl-report
+    product: scheduling
+    title: schedulingctl --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/scheduling/ctl-report/v1alpha1
+      kind: SchedulingCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-schedulingctl/src/report.rs
+      symbol: write
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # messaging
+  - id: messaging/project
+    product: messaging
+    title: Messaging project
+    files: [messaging.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    topLevel: project
+    current:
+      apiVersion: registry.registrystack.org/messaging-package/v1alpha1
+      kind: MessagingPackage
+      checkedBy:
+        file: crates/registry-messaging-core/src/naming.rs
+        symbol: MESSAGING_PACKAGE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+      kind: MessagingProject
+    schema: none
+    reader:
+      crate: registry-messaging
+      file: crates/registry-messaging/src/package.rs
+      function: load_contents
+      type: MessagingPackage
+    check: messagingctl check --project {project}
+    example: products/messaging/examples/starter/messaging.yaml
+    conformance:
+      requiredText: /providers/0/id
+      optionalText: /senderProfiles/0/sender
+      integer: /senderProfiles/1/maximumSegments
+      boolean: /providers/1/idempotentSubmit
+    securityMembers:
+      - pointer: /accessProfiles/*/requiredScopes
+        whenOmitted: unclassified
+    restrictingMembers: [/accessProfiles/*/requiredScopes]
+  - id: messaging/template
+    product: messaging
+    title: Messaging template version
+    files: [templates/*/*/template.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/messaging/template/v1alpha1
+      kind: MessagingTemplate
+    schema: none
+    reader:
+      crate: registry-messaging
+      file: crates/registry-messaging/src/package.rs
+      function: read_version
+      type: TemplateDocument
+    check: messagingctl check --project {project}
+    example: products/messaging/examples/starter/templates/appointment-reminder/1/template.yaml
+    conformance:
+      requiredText: /channel
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: messaging/provider
+    product: messaging
+    title: Messaging HTTP provider package
+    files: [providers/*/provider.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
+      kind: MessagingProvider
+    schema: none
+    reader:
+      crate: registry-messaging
+      file: crates/registry-messaging/src/package.rs
+      function: read_provider
+      type: HttpProviderPackage
+    check: messagingctl check --project {project}
+    example: products/messaging/examples/starter/providers/sms-gateway/provider.yaml
+    conformance:
+      requiredText: /prepareScript
+      optionalText: none
+      integer: /capabilities/concurrencyLimit
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: messaging/runtime
+    product: messaging
+    title: Messaging runtime configuration
+    files: [runtime.yaml, runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+      kind: MessagingRuntimeConfig
+      checkedBy:
+        file: crates/registry-messaging-core/src/naming.rs
+        symbol: MESSAGING_RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1
+      kind: MessagingRuntimeConfig
+    schema:
+      path: products/messaging/generated/runtime/runtime.schema.json
+      id: https://id.registrystack.org/schemas/messaging/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-messaging --features schema --example runtime-schema -- --output products/messaging/generated/runtime
+      driftCheck: crates/registry-messaging/src/schema.rs
+    reader:
+      crate: registry-messaging
+      file: crates/registry-messaging/src/config.rs
+      function: load
+      type: RuntimeConfig
+    check: messagingctl check --runtime-config {file}
+    example: products/messaging/examples/starter/runtime.example.yaml
+    conformance:
+      requiredText: /authentication/oidc/audience
+      optionalText: /audit/path
+      integer: /retention/recordDays
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: open
+      - pointer: /authentication/oidc/allowedClients
+        whenOmitted: open
+      - pointer: /authentication/oidc/assertionIssuers
+        whenOmitted: open
+      - pointer: /package/expectedDigest
+        whenOmitted: open
+    restrictingMembers: [/authentication/oidc/assertionIssuers]
+  - id: messaging/template-schema
+    product: messaging
+    title: Messaging template data schema
+    files: [templates/*/*/schema.json]
+    syntax: json
+    audience: authored
+    stability: experimental
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-messaging
+      file: crates/registry-messaging/src/package.rs
+      function: read_version
+      type: untyped
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: messaging/ctl-report
+    product: messaging
+    title: messagingctl --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1
+      kind: MessagingCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-messagingctl/src/report.rs
+      symbol: write
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # discovery
+  - id: discovery/origins
+    product: discovery
+    title: Discovery approved origins
+    files: [origins.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schemaVersion: registry-discovery/origins/v1alpha1'
+      checkedBy:
+        file: crates/registry-discoveryctl/src/project.rs
+        symbol: ORIGINS_SCHEMA
+    target:
+      apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
+      kind: DiscoveryOrigins
+    schema:
+      path: products/discovery/schemas/origins.schema.json
+      id: https://registrystack.org/discovery/schema/origins-v1alpha1.json
+      origin: hand-written
+      differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
+    reader:
+      crate: registry-discoveryctl
+      file: crates/registry-discoveryctl/src/project.rs
+      function: check_project
+      type: OriginsFile
+    check: discoveryctl check --project {project}
+    example: products/discovery/fixtures/project/origins.yaml
+    conformance:
+      requiredText: /origins/0/originId
+      optionalText: none
+      integer: none
+      boolean: /origins/0/enabled
+    securityMembers: []
+    restrictingMembers: []
+  - id: discovery/evidence-mapping
+    product: discovery
+    title: Discovery Evidence mapping
+    files: [mappings/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schemaVersion: registry-discovery/evidence-mapping/v1alpha1'
+      checkedBy:
+        file: crates/registry-discoveryctl/src/project.rs
+        symbol: MAPPING_SCHEMA
+    target:
+      apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
+      kind: DiscoveryEvidenceMapping
+    schema:
+      path: products/discovery/schemas/evidence-mapping.schema.json
+      id: https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json
+      origin: hand-written
+      differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
+    reader:
+      crate: registry-discoveryctl
+      file: crates/registry-discoveryctl/src/project.rs
+      function: check_project
+      type: AuthoredEvidenceMapping
+    check: discoveryctl check --project {project}
+    example: products/discovery/fixtures/project/mappings/adult-status.yaml
+    conformance:
+      requiredText: /mappingId
+      optionalText: /jurisdiction
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: discovery/runtime
+    product: discovery
+    title: Discovery runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
+      kind: DiscoveryRuntimeConfig
+      checkedBy:
+        file: crates/registry-discovery/src/startup.rs
+        symbol: RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/discovery/runtime/v1alpha1
+      kind: DiscoveryRuntimeConfig
+    schema:
+      path: products/discovery/schemas/runtime.schema.json
+      id: https://registrystack.org/discovery/schema/runtime-v1alpha1.json
+      origin: hand-written
+      differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
+    reader:
+      crate: registry-discovery
+      file: crates/registry-discovery/src/startup.rs
+      function: load_runtime
+      type: RuntimeConfig
+    check: none
+    example: products/discovery/fixtures/project/runtime.yaml
+    conformance:
+      requiredText: /logLevel
+      optionalText: none
+      integer: /limits/maximumRequestBytes
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /package/expectedDigest
+        whenOmitted: open
+    restrictingMembers: []
+  - id: discovery/index
+    product: discovery
+    title: Discovery immutable index
+    files: [discovery-index.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schema: registry-discovery/index/v1alpha1'
+      checkedBy:
+        file: crates/registry-discovery/src/model.rs
+        symbol: INDEX_SCHEMA
+    target:
+      apiVersion: id.registrystack.org/formats/discovery/index/v1alpha1
+      kind: DiscoveryIndex
+    schema:
+      path: products/discovery/schemas/index.schema.json
+      id: https://registrystack.org/discovery/schema/index-v1alpha1.json
+      origin: hand-written
+      differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
+    reader:
+      crate: registry-discovery
+      file: crates/registry-discovery/src/startup.rs
+      function: load_index
+      type: DiscoveryIndex
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # render
+  - id: render/bundle
+    product: render
+    title: Render bundle manifest
+    files: [manifest.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    topLevel: bundle
+    current:
+      apiVersion: render.registrystack.org/v1alpha1
+      kind: RenderBundle
+      checkedBy:
+        file: crates/registry-render/src/manifest.rs
+        symbol: MANIFEST_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
+      kind: RenderBundle
+    schema: none
+    reader:
+      crate: registry-render
+      file: crates/registry-render/src/manifest.rs
+      function: parse
+      type: Manifest
+    check: registry-render check --bundle {project}
+    example: products/render/bundles/receipt/manifest.yaml
+    conformance:
+      requiredText: /documents/0/id
+      optionalText: none
+      integer: /documents/0/version
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: render/labels
+    product: render
+    title: Render label catalogue
+    files: [labels/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+      kind: RenderLabels
+    schema: none
+    reader:
+      crate: registry-render
+      file: crates/registry-render/src/bundle.rs
+      function: assemble
+      type: untyped
+    check: registry-render check --bundle {project}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: render/runtime
+    product: render
+    title: Render runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: registry.registrystack.org/render-runtime/v1alpha1
+      kind: RenderRuntimeConfig
+      checkedBy:
+        file: crates/registry-render/src/runtime.rs
+        symbol: RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
+      kind: RenderRuntimeConfig
+    schema: none
+    reader:
+      crate: registry-render
+      file: crates/registry-render/src/runtime.rs
+      function: load
+      type: RenderRuntime
+    check: registry-render check --bundle {project} --runtime-config {file}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: unclassified
+    restrictingMembers: []
+  - id: render/data-schema
+    product: render
+    title: Render document data schema
+    files: [schemas/*.schema.json]
+    syntax: json
+    audience: authored
+    stability: experimental
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-render
+      file: crates/registry-render/src/bundle.rs
+      function: assemble
+      type: untyped
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # evidence
+  - id: evidence/bundle
+    product: evidence
+    title: Evidence bundle
+    files: [evidence.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    topLevel: bundle
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'version: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/bundle/v1
+      kind: EvidenceBundle
+    schema:
+      path: products/evidence/contracts/bundle.schema.yaml
+      id: https://registrystack.org/schemas/evidence/bundle-v1.json
+      origin: frozen-contract
+      differentialTest: crates/registry-evidence/src/config.rs
+    reader:
+      crate: registry-evidence
+      file: crates/registry-evidence/src/config.rs
+      function: parse_yaml
+      type: EvidenceConfig
+    check: evidence check --runtime-config {runtime}
+    example: products/evidence/fixtures/acceptance/adult-status/evidence.yaml
+    conformance:
+      requiredText: /issuer/id
+      optionalText: /requirements/0/observationTimezone
+      integer: /rateLimits/burstPerPrincipal
+      boolean: /requirements/0/concepts/0/required
+    securityMembers:
+      - pointer: /authentication/oidc/allowedClients
+        whenOmitted: refused
+      - pointer: /authentication/oidc/assertionIssuers
+        whenOmitted: unclassified
+    restrictingMembers: [/authentication/oidc/assertionIssuers]
+  - id: evidence/runtime
+    product: evidence
+    title: Evidence runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: promised
+    current:
+      apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1
+      kind: EvidenceRuntimeConfig
+      checkedBy:
+        file: crates/registry-evidence/src/config.rs
+        symbol: EVIDENCE_RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1
+      kind: EvidenceRuntimeConfig
+    schema:
+      path: products/evidence/contracts/runtime.schema.yaml
+      id: https://registrystack.org/schemas/evidence/runtime-v1.json
+      origin: frozen-contract
+      differentialTest: crates/registry-evidence/src/config.rs
+    reader:
+      crate: registry-evidence
+      file: crates/registry-evidence/src/config.rs
+      function: parse_yaml
+      type: RuntimeConfig
+    check: evidence check --runtime-config {file}
+    example: products/evidence/reference/deployment-targets/environments/local/evidence/runtime.yaml
+    conformance:
+      requiredText: /package/root
+      optionalText: /audit/path
+      integer: /listener/maximumRequestBytes
+      boolean: /outboundTls/systemRoots
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: open
+      - pointer: /package/expectedDigest
+        whenOmitted: open
+    restrictingMembers: []
+  - id: evidence/codelist
+    product: evidence
+    title: Evidence code list
+    files: [codelists/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1
+      kind: EvidenceCodelist
+    schema: none
+    reader:
+      crate: registry-evidence
+      file: crates/registry-evidence/src/bundle.rs
+      function: load_codelist
+      type: CodelistDocument
+    check: evidence check --runtime-config {runtime}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/fixture
+    product: evidence
+    title: Evidence fixture set
+    files: [fixtures/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'fixture: registry.evidence.reference.<name>/v1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+      kind: EvidenceFixture
+    schema: none
+    reader:
+      crate: registry-evidence
+      file: crates/registry-evidence/src/bundle.rs
+      function: load_fixture
+      type: untyped
+    check: evidencectl test {project}
+    example: crates/registry-evidencectl/templates/sqlite-extract/fixtures/record-status.yaml
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/authoring-project
+    product: evidence
+    title: Evidence authoring project marker
+    files: [evidence-project.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
+      kind: EvidenceAuthoringProject
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/project-marker.schema.json
+      id: https://registrystack.example/schemas/evidence-authoring/project-marker.v1.json
+      origin: generated
+      generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
+    reader:
+      crate: registry-evidence-authoring
+      file: crates/registry-evidence-authoring/src/marker.rs
+      function: parse_project_marker
+      type: ProjectMarker
+    check: evidencectl check {project}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+    notes: The Evidence top-level authored file is the bundle (CFG-ENV-6); this marker kind ends in Project without being a project format.
+  - id: evidence/question
+    product: evidence
+    title: Evidence authoring question
+    files: [questions/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+      kind: EvidenceQuestion
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/question.schema.json
+      id: https://registrystack.example/schemas/evidence-authoring/question.v1.json
+      origin: generated
+      generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/authoring.rs
+      function: read_inputs
+      type: Question
+    check: evidencectl check {project}
+    example: crates/registry-evidencectl/templates/sqlite-extract/questions/record-status.yaml
+    conformance:
+      requiredText: /question
+      optionalText: /subject/role
+      integer: /governance/validitySeconds
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/source
+    product: evidence
+    title: Evidence authoring source
+    files: [sources/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+      kind: EvidenceSource
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/authoring.rs
+      function: read_named_objects
+      type: untyped
+    check: evidencectl check {project}
+    example: crates/registry-evidencectl/templates/sqlite-extract/sources/record-status.yaml
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/selector
+    product: evidence
+    title: Evidence authoring selector
+    files: [selectors/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+      kind: EvidenceSelector
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/authoring.rs
+      function: read_named_objects
+      type: untyped
+    check: evidencectl check {project}
+    example: crates/registry-evidencectl/templates/sqlite-extract/selectors/record-reference-v1.yaml
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/authoring-schema
+    product: evidence
+    title: Evidence authoring data schema
+    files: [schemas/*.schema.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/authoring.rs
+      function: read_named_objects
+      type: untyped
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/source-openapi
+    product: evidence
+    title: Retained source OpenAPI description
+    files: [source.openapi.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-evidence-authoring
+      file: crates/registry-evidence-authoring/src/openapi/openapi.rs
+      function: parse
+      type: untyped
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/access-policy
+    product: evidence
+    title: Evidence access policy
+    files: [access/policies/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
+      kind: EvidenceAccessPolicy
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/access.rs
+      function: load_policy_documents
+      type: AccessPolicy
+    check: evidencectl check {project}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/access-client
+    product: evidence
+    title: Evidence access client
+    files: [access/clients/*.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1
+      kind: EvidenceAccessClient
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/access.rs
+      function: read_client_document
+      type: ClientDocument
+    check: evidencectl check {project}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/target-governance
+    product: evidence
+    title: Evidence deployment target governance
+    files: [governance.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'version: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
+      kind: EvidenceTargetGovernance
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/build.rs
+      function: read_target_documents
+      type: TargetGovernance
+    check: evidencectl check {project} --target {target}
+    example: products/evidence/reference/deployment-targets/environments/local/evidence/governance.yaml
+    conformance:
+      requiredText: /issuer/id
+      optionalText: none
+      integer: /rateLimits/burstPerPrincipal
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/target-settings
+    product: evidence
+    title: Evidence deployment target settings
+    files: [targets/*/settings.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'formatVersion: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
+      kind: EvidenceTargetSettings
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/target.rs
+      function: new
+      type: TargetSettings
+    check: evidencectl check {project} --target {target}
+    example: products/breg/evidence/starter/targets/local/settings.yaml
+    conformance:
+      requiredText: /governance/issuer/id
+      optionalText: none
+      integer: /governance/audit/hashKeyVersion
+      boolean: /runtime/outboundTls/systemRoots
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/mock-plan
+    product: evidence
+    title: Evidence source mock plan
+    files: [mocks/source.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1
+      kind: EvidenceMockPlan
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/source_mock/plan.rs
+      function: parse_plan
+      type: MockPlan
+    check: evidencectl source mock check --config {file}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/verification-policy
+    product: evidence
+    title: Evidence relying-procedure verification policy
+    files: ['*.policy.yaml']
+    syntax: yaml
+    audience: operator
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1
+      kind: EvidenceVerificationPolicy
+    schema:
+      path: products/evidence/contracts/verification-policy.schema.yaml
+      id: https://registrystack.org/schemas/evidence/verification-policy-v1.json
+      origin: frozen-contract
+      differentialTest: crates/registry-evidence-verifier/src/verifier.rs
+    reader:
+      crate: registry-evidence
+      file: crates/registry-evidence/src/main.rs
+      function: verify_stored_response
+      type: EvidenceVerificationPolicyDocument
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/holder-bound-verification-policy
+    product: evidence
+    title: Evidence holder-bound presentation verification policy
+    files: ['*.policy.yaml']
+    syntax: yaml
+    audience: operator
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1
+      kind: EvidenceHolderBoundVerificationPolicy
+    schema:
+      path: products/evidence/contracts/holder-bound-verification-policy.schema.yaml
+      id: https://registrystack.org/schemas/evidence/holder-bound-verification-policy-v1.json
+      origin: frozen-contract
+      differentialTest: crates/registry-evidence-verifier/src/verifier.rs
+    reader:
+      crate: registry-evidence
+      file: crates/registry-evidence/src/main.rs
+      function: verify_stored_presentation
+      type: HolderBoundPresentationPolicyDocument
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/oid4vci-runtime
+    product: evidence
+    title: OID4VCI delivery runtime configuration
+    files: [runtime.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+      kind: EvidenceOid4vciRuntimeConfig
+    schema: none
+    reader:
+      crate: registry-evidence-oid4vci
+      file: crates/registry-evidence-oid4vci/src/config.rs
+      function: load
+      type: DeliveryConfig
+    check: evidence-oid4vci check --config {file}
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: unclassified
+    restrictingMembers: []
+  - id: evidence/client-profile
+    product: evidence
+    title: Evidence relying-party client profile
+    files: ['*.profile.yaml']
+    syntax: yaml
+    audience: operator
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schema: registry.evidence-client-profile/v1'
+      checkedBy:
+        file: crates/registry-evidence-client/src/profile.rs
+        symbol: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/client-profile/v1
+      kind: EvidenceClientProfile
+    schema:
+      path: products/evidence/contracts/client-profile.schema.yaml
+      id: https://registrystack.org/schemas/evidence/client-profile-v1.json
+      origin: frozen-contract
+      differentialTest: none
+    reader:
+      crate: registry-evidence-client
+      file: crates/registry-evidence-client/src/profile.rs
+      function: from_slice
+      type: EvidenceClientProfile
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/client-contracts
+    product: evidence
+    title: Reviewed Evidence client contracts
+    files: ['*.contracts.json']
+    syntax: json
+    audience: generated
+    stability: promised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schema: registry.evidence-client-contracts/v1'
+      checkedBy:
+        file: crates/registry-evidence-client/src/profile.rs
+        symbol: EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/client-contracts/v1
+      kind: EvidenceClientContracts
+    schema:
+      path: products/evidence/contracts/client-contracts.schema.yaml
+      id: https://registrystack.org/schemas/evidence/client-contracts-v1.json
+      origin: frozen-contract
+      differentialTest: none
+    reader:
+      crate: registry-evidence-client
+      file: crates/registry-evidence-client/src/profile.rs
+      function: load_reviewed_contracts
+      type: EvidenceDefinitionsDocument
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/dev-state
+    product: evidence
+    title: evidencectl development state
+    files: [.evidencectl-dev/state.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schema: registry.evidencectl.dev-state/v6'
+      checkedBy:
+        file: crates/registry-evidencectl/src/dev.rs
+        symbol: STATE_SCHEMA
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/dev-state/v6
+      kind: EvidenceDevState
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/dev.rs
+      function: read_state
+      type: DevState
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/source-resolution
+    product: evidence
+    title: Evidence source import resolution file
+    files: ['*.json']
+    syntax: json
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'formatVersion: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/source-resolution/v1alpha1
+      kind: EvidenceSourceResolution
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/source_import/mod.rs
+      function: read_resolutions
+      type: ResolutionFile
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/source-import-state
+    product: evidence
+    title: Evidence source import state
+    files: [.evidence/source-imports/state.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/source-import-state/v1alpha1
+      kind: EvidenceSourceImportState
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/source_import/mod.rs
+      function: parse_state
+      type: State
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/source-import-journal
+    product: evidence
+    title: Evidence source import transaction journal
+    files: [.evidence/source-imports/transaction.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/source-import-journal/v1alpha1
+      kind: EvidenceSourceImportJournal
+    schema: none
+    reader:
+      crate: registry-evidencectl
+      file: crates/registry-evidencectl/src/source_import/mod.rs
+      function: recover
+      type: Journal
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: evidence/ctl-report
+    product: evidence
+    title: evidencectl --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/evidence/ctl-report/v1alpha1
+      kind: EvidenceCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-evidencectl/src/report.rs
+      symbol: success
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # manifest
+  - id: manifest/metadata
+    product: manifest
+    title: Registry Manifest metadata document
+    files: ['*.metadata.yaml', metadata.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    exceptionClass: exchange-model
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schema_version: registry-manifest/v1'
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-manifest-cli
+      file: crates/registry-manifest-cli/src/main.rs
+      function: load_manifest
+      type: MetadataManifest
+    check: registry-manifest validate {file}
+    example: products/manifest/profiles/example-benefits-sync/fixtures/metadata.yaml
+    conformance:
+      requiredText: /catalog/id
+      optionalText: none
+      integer: /datasets/0/entities/0/fields/0/constraints/max_length
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: manifest/profile
+    product: manifest
+    title: Registry Manifest profile descriptor
+    files: [profile.yaml]
+    syntax: yaml
+    audience: authored
+    stability: promised
+    exceptionClass: exchange-model
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'schema_version: registry-manifest-profile/v1'
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-manifest-cli
+      file: crates/registry-manifest-cli/src/main.rs
+      function: load_profile_descriptor
+      type: ProfileDescriptor
+    check: registry-manifest validate-profiles {directory}
+    example: products/manifest/profiles/example-benefits-sync/profile.yaml
+    conformance:
+      requiredText: /profile/id
+      optionalText: /profile/description
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
+  # platform
+  - id: platform/package-sums
+    product: platform
+    title: Package SHA256SUMS
+    files: [SHA256SUMS]
+    syntax: text
+    audience: generated
+    stability: promised
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader:
+      crate: registry-platform-config
+      file: crates/registry-platform-config/src/package.rs
+      function: parse_sum_file
+      type: untyped
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: platform/task-connection
+    product: platform
+    title: Task-grant operator connection file
+    files: [task-connection.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      otherHeader: 'version: 1'
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
+      kind: PlatformTaskConnection
+    schema: none
+    reader:
+      crate: registry-thunderid-tooling
+      file: crates/registry-thunderid-tooling/src/grant_file.rs
+      function: acquire_to_header
+      type: Connections
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: platform/thunderid-session
+    product: platform
+    title: Local ThunderID session state
+    files: [session.json]
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target:
+      apiVersion: id.registrystack.org/formats/platform/thunderid-session/v1alpha1
+      kind: PlatformThunderidSession
+    schema: none
+    reader:
+      crate: registry-thunderid-tooling
+      file: crates/registry-thunderid-tooling/src/container.rs
+      function: load_state
+      type: SessionState
+    check: none
+    example: none
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: platform/thunderid-resources
+    product: platform
+    title: ThunderID declarative resources
+    files: ['*.thunderid.yaml']
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader: none
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: platform/jwks
+    product: platform
+    title: JSON Web Key Set
+    files: ['*.jwks.json', '*.jwk.json']
+    syntax: json
+    audience: generated
+    stability: promised
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader: none
+    check: none
+    example: none
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
+outOfScope:
+  - files: products/breg/generated/*/generated/**
+    reason: Compiled package content; the registry/package format governs the envelope.
+  - files: products/evidence/contracts/{audit-event,authority-context,definitions,evidence,request,request-batch,request-batch-response,request-batch-audit-event}.schema.yaml
+    reason: Evidence wire and audit contracts, governed by the API contract.
+  - files: products/evidence/generated/*.schema.json
+    reason: Generated Evidence wire schemas, governed by the API contract.
+  - files: products/discovery/profile/schema/*.schema.json
+    reason: Discovery provider description, a published wire resource.
+  - files: products/identifiers/contracts/*.schema.json
+    reason: Identifier catalog, repository tooling metadata.
+  - files: '**/*.jsonl'
+    reason: Record data (JSONL imports), an exchange of data, not configuration.
+  - files: '**/examples/inputs/*.json'
+    reason: API request payloads, governed by the API contract.
+  - files: release/**
+    reason: Release manifests and tooling metadata.
+  - files: docs/site/src/data/cli-reference.yaml
+    reason: Docs tooling metadata.
+  - files: '**/PIN.yaml'
+    reason: Repository pin metadata.
+  - files: products/messaging/examples/providers/*/connection.example.yaml
+    reason: Fragment of messaging/runtime providers.<id>; governed by that format.
+  - files: products/casework/examples/*/sources/*.breg-runtime.yaml
+    reason: Fragment of breg/runtime pasted by caseworkctl source add; governed by that format.
+  - files: products/evidence/fixtures/conformance/**
+    reason: Evidence conformance vectors, governed by the Evidence contracts.
+  - files: products/render/bundles/*/schemas/*.schema.json
+    reason: Render data schemas; registered as render/data-schema (external-format).
