@@ -85,6 +85,7 @@ them before it decodes any other member. Neither may come from `${...}`
 substitution. A document missing either is refused (`config.missing-envelope`);
 a document of another format, or at a version the reader does not read, is
 refused with a message that names the expected `apiVersion` and `kind`.
+When both are wrong, `kind` is reported first.
 *Why:* a reader can refuse the wrong file with a precise message ("this is a
 `CaseworkFixture`, `casework check` reads a `CaseworkProject`"), editors can
 pick a schema, and a format can be versioned on its own.
@@ -214,7 +215,8 @@ resolve to a number, boolean, or null (`1:`, `true:`, `~:`) is refused
 
 **CFG-YAML-6 (MUST). Input is bounded.** A document larger than 1 MiB is
 refused before parsing (`yaml.too-large`), naming the bound; the bound is the
-same for every format, YAML or JSON, and no reader sets another. A document
+same for every format, YAML or JSON; a product may lower it for a format,
+never raise it. A document
 nested deeper than 128 levels of mappings and lists is refused
 (`yaml.too-deep`), naming the bound. Input is UTF-8; a leading byte-order mark
 is accepted and ignored; LF and CRLF line endings are both accepted.
@@ -575,8 +577,10 @@ digest pins it.
 environment.** A diagnostic may name keys and the path to them (including
 local identifiers used as keys), the accepted values, bounds, the expected
 envelope, and a local identifier from an authored file that passes the
-`LocalId` grammar (the queue a dangling reference names). It never repeats any
-other value as written.
+`LocalId` grammar (the queue a dangling reference names). It may name an
+environment variable a substitution expression references. It never repeats
+any other value as written, a variable's value, a fallback, or a `:?`
+message.
 *Enforced by:* the shared reader's message construction; the conformance
 corpus plants a marker in scalar values that are not local identifiers and
 asserts that it never appears in any product's output.
