@@ -6,17 +6,15 @@ import { test } from 'node:test';
 
 import {
   catalogDigest,
-  contentDigest,
-  legacyReviewSchemaVersion,
+  catalogSnapshot,
   expectedBinaries,
   generateCliReference,
+  loadCatalog,
   renderCatalog,
-  reviewSchemaVersion,
   schemaVersion,
   validateCatalog,
   validateReviewMetadata,
 } from './generate-cli-reference.mjs';
-import { cliReferenceDigest, migrateCliReferenceReview } from './cli-reference-digest.mjs';
 
 function argument(display) {
   return {
@@ -60,14 +58,27 @@ function fixtureCatalog() {
 
 function fixtureReviewMetadata(overrides = {}) {
   return {
-    schema_version: reviewSchemaVersion,
     status: 'draft',
     last_reviewed: 'unreviewed',
-    reviewed_source_version: null,
-    reviewed_catalog_sha256: null,
-    reviewed_content_sha256: null,
     ...overrides,
   };
+}
+
+// A repository holding the committed snapshot and the workspace manifest the
+// generator reads.
+async function fixtureRepository(catalog, version = catalog.source_version) {
+  const root = await mkdtemp(join(tmpdir(), 'registry-cli-reference-'));
+  const snapshot = join(root, catalogSnapshot);
+  await mkdir(join(snapshot, '..'), { recursive: true });
+  await writeFile(
+    snapshot,
+    `${JSON.stringify({ schema_version: catalog.schema_version, binaries: catalog.binaries }, null, 2)}\n`,
+  );
+  await writeFile(
+    join(root, 'Cargo.toml'),
+    `[workspace]\nmembers = []\n\n[workspace.package]\nversion = "${version}"\n`,
+  );
+  return root;
 }
 
 test('renders one linked page for every nested public command', () => {
@@ -83,7 +94,22 @@ test('renders one linked page for every nested public command', () => {
   assert.match(pages.get('evidencectl.mdx'), /\.\/tooling\//u);
   assert.match(pages.get('evidencectl/tooling.mdx'), /\.\/editor\//u);
   assert.match(pages.get('evidencectl/tooling/editor.mdx'), /\| `-h, --help` \|/u);
-  assert.match(pages.get('evidencectl.mdx'), /\{\/\* Generated from Clap/u);
+  assert.match(
+    pages.get('evidencectl.mdx'),
+    /\{\/\* Generated from crates\/registry-cli-docs\/catalog\.json and the workspace version in Cargo\.toml /u,
+  );
+  // A command change reaches the pages through the committed catalog, so each
+  // generation contract names the catalog regeneration before the docs one.
+  for (const name of ['index.mdx', 'evidencectl.mdx']) {
+    assert.match(
+      pages.get(name),
+      /run `cargo run --locked -p registry-cli-docs -- --write`, commit `crates\/registry-cli-docs\/catalog\.json`, then run `npm run generate` from `docs\/site`\./u,
+    );
+  }
+  assert.match(
+    pages.get('index.mdx'),
+    /The `registry-cli-docs` snapshot test holds that catalog to the Clap definitions, and the docs check holds these pages to the catalog\./u,
+  );
   assert.match(pages.get('evidencectl.mdx'), /status: draft\ndraft: true/u);
   assert.match(pages.get('evidencectl.mdx'), /last_reviewed: "unreviewed"/u);
   assert.match(pages.get('evidencectl.mdx'), /source version `0\.21\.0`/u);
@@ -225,125 +251,86 @@ test('rejects empty public help and unstable conflict pairs', () => {
   assert.throws(() => validateCatalog(unsortedConflict), /distinct and sorted/u);
 });
 
-test('requires human review of content while retaining its original source provenance', () => {
+test('the review record controls publication without restating command content', () => {
   const catalog = fixtureCatalog();
   assert.throws(
-    () => validateReviewMetadata(fixtureReviewMetadata({ status: 'current' }), catalog),
+    () => validateReviewMetadata(fixtureReviewMetadata({ status: 'current' })),
     /unreviewed CLI reference metadata must be draft/u,
   );
-  const reviewed = fixtureReviewMetadata({
-    status: 'current',
-    last_reviewed: '2026-08-13',
-    reviewed_source_version: catalog.source_version,
-    reviewed_catalog_sha256: catalogDigest(catalog),
-    reviewed_content_sha256: contentDigest(catalog),
-  });
-  assert.equal(validateReviewMetadata(reviewed, catalog), reviewed);
+  const reviewed = fixtureReviewMetadata({ status: 'current', last_reviewed: '2026-08-13' });
+  assert.equal(validateReviewMetadata(reviewed), reviewed);
   assert.throws(
-    () => validateReviewMetadata({ ...reviewed, last_reviewed: '2026-02-30' }, catalog),
+    () => validateReviewMetadata({ ...reviewed, last_reviewed: '2026-02-30' }),
     /unreviewed or YYYY-MM-DD/u,
   );
-  const bumped = { ...catalog, source_version: '0.22.0' };
-  assert.notEqual(catalogDigest(bumped), catalogDigest(catalog));
-  assert.equal(contentDigest(bumped), contentDigest(catalog));
-  assert.equal(validateReviewMetadata(reviewed, bumped), reviewed);
   assert.throws(
-    () => validateReviewMetadata({ ...reviewed, reviewed_catalog_sha256: 'a'.repeat(64) }, bumped),
-    /does not cover the current command catalog digest/u,
+    () => validateReviewMetadata({ ...reviewed, reviewed_catalog_sha256: 'a'.repeat(64) }),
+    /must contain exactly last_reviewed, status/u,
   );
-  const page = renderCatalog(bumped, reviewed).get('evidencectl.mdx');
+  const page = renderCatalog(catalog, reviewed).get('evidencectl.mdx');
   assert.match(page, /status: current/u);
   assert.match(page, /last_reviewed: "2026-08-13"/u);
-  assert.match(page, /source version `0\.22\.0`/u);
-  assert.ok(page.includes(catalogDigest(bumped)));
+  assert.match(page, /source version `0\.21\.0`/u);
+  assert.ok(page.includes(catalogDigest(catalog)));
   assert.doesNotMatch(page, /^draft: true$/mu);
-  assert.match(renderCatalog(bumped, { ...reviewed, status: 'draft' }).get('evidencectl.mdx'), /^draft: true$/mu);
+  assert.match(renderCatalog(catalog, { ...reviewed, status: 'draft' }).get('evidencectl.mdx'), /^draft: true$/mu);
 });
 
-test('every public catalog content change invalidates review, including version-like help', () => {
+test('the catalog joins the committed snapshot to the workspace version', async () => {
   const catalog = fixtureCatalog();
-  const metadata = fixtureReviewMetadata({
-    status: 'current',
-    last_reviewed: '2026-08-13',
-    reviewed_source_version: catalog.source_version,
-    reviewed_catalog_sha256: catalogDigest(catalog),
-    reviewed_content_sha256: contentDigest(catalog),
-  });
-  const mutations = [
-    binary => { binary.about = 'Version 0.22.0 details'; },
-    binary => { binary.long_about = 'Detailed help'; },
-    binary => { binary.usage += ' <FILE>'; },
-    binary => { binary.options[0].description = 'Different help'; },
-    binary => { binary.options[0].display = '--other'; },
-    binary => { binary.options[0].default_values = ['0.22.0']; },
-    binary => { binary.options[0].possible_values = ['left']; },
-    binary => { binary.options[0].environment = 'CONFIG_PATH'; },
-    binary => { binary.options[0].repeatable = true; },
-    binary => { binary.options[0].always_required = true; },
-    binary => { binary.arguments.push(argument('<FILE>')); },
-    binary => { binary.constraints.push({ kind: 'required-exactly-one', when: null, arguments: ['--left', '--right'] }); },
-    binary => { binary.subcommands[0].subcommands[0].about = 'Nested help'; },
-    binary => { binary.subcommands.push(command('extra', 'evidencectl')); },
-  ];
-  for (const mutate of mutations) {
-    const changed = structuredClone(catalog);
-    mutate(changed.binaries.find(binary => binary.name === 'evidencectl'));
-    assert.notEqual(contentDigest(changed), contentDigest(catalog));
-    assert.throws(() => validateReviewMetadata(metadata, changed), /current command content/u);
+  const root = await fixtureRepository(catalog, '0.22.0');
+  try {
+    const loaded = await loadCatalog(root);
+    assert.deepEqual(Object.keys(loaded), ['schema_version', 'source_version', 'binaries']);
+    assert.equal(loaded.source_version, '0.22.0');
+    assert.deepEqual(loaded.binaries, catalog.binaries);
+    assert.equal(catalogDigest(loaded), catalogDigest({ ...catalog, source_version: '0.22.0' }));
+
+    await writeFile(join(root, catalogSnapshot), JSON.stringify(catalog));
+    await assert.rejects(loadCatalog(root), /snapshot must contain exactly binaries, schema_version/u);
+    await rm(join(root, catalogSnapshot));
+    await assert.rejects(loadCatalog(root), /registry-cli-docs\/catalog\.json could not be read/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test('legacy v2 reviews retain exact version and catalog checks', () => {
-  const catalog = fixtureCatalog();
-  const legacy = {
-    schema_version: legacyReviewSchemaVersion,
-    status: 'current',
-    last_reviewed: '2026-08-13',
-    reviewed_source_version: catalog.source_version,
-    reviewed_catalog_sha256: catalogDigest(catalog),
-  };
-  assert.equal(validateReviewMetadata(legacy, catalog), legacy);
-  assert.throws(
-    () => validateReviewMetadata(legacy, { ...catalog, source_version: '0.22.0' }),
-    /covers 0\.21\.0, not 0\.22\.0/u,
-  );
-  const changed = structuredClone(catalog);
-  changed.binaries[0].about = 'Changed help';
-  assert.throws(() => validateReviewMetadata(legacy, changed), /current command catalog digest/u);
-});
-
 test('writes deterministic pages and detects local output drift', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'registry-cli-reference-'));
+  const root = await fixtureRepository(fixtureCatalog());
   const docsRoot = join(root, 'docs', 'site');
-  const output = `${JSON.stringify(fixtureCatalog(), null, 2)}\n`;
-  const execute = async () => output;
   try {
     await mkdir(join(docsRoot, 'src/data'), { recursive: true });
     await writeFile(
       join(docsRoot, 'src/data/cli-reference.yaml'),
-      [
-        `schema_version: ${reviewSchemaVersion}`,
-        'status: draft',
-        'last_reviewed: unreviewed',
-        'reviewed_source_version: null',
-        'reviewed_catalog_sha256: null',
-        'reviewed_content_sha256: null',
-        '',
-      ].join('\n'),
+      'status: draft\nlast_reviewed: unreviewed\n',
       'utf8',
     );
-    await generateCliReference(docsRoot, root, { execute });
-    await generateCliReference(docsRoot, root, { check: true, execute });
+    await generateCliReference(docsRoot, root);
+    await generateCliReference(docsRoot, root, { check: true });
     const evidencectl = join(
       docsRoot,
       'src/content/docs/reference/cli/evidencectl.mdx',
     );
+    assert.match(await readFile(evidencectl, 'utf8'), /source version `0\.21\.0`/u);
     await writeFile(evidencectl, 'stale\n', 'utf8');
     await assert.rejects(
-      generateCliReference(docsRoot, root, { check: true, execute }),
+      generateCliReference(docsRoot, root, { check: true }),
       /is stale/u,
     );
     assert.match(await readFile(evidencectl, 'utf8'), /stale/u);
+
+    // A version bump changes the stated version, not the reviewed snapshot.
+    await generateCliReference(docsRoot, root);
+    await writeFile(
+      join(root, 'Cargo.toml'),
+      '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "0.22.0"\n',
+    );
+    await assert.rejects(
+      generateCliReference(docsRoot, root, { check: true }),
+      /is stale/u,
+    );
+    await generateCliReference(docsRoot, root);
+    assert.match(await readFile(evidencectl, 'utf8'), /source version `0\.22\.0`/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -362,129 +349,4 @@ test('the docs check generates missing outputs before validating CLI parity', as
   assert.ok(
     sourceSteps.indexOf('npm run generate') < sourceSteps.indexOf('npm run check:cli-reference'),
   );
-});
-
-test('the digest helper reports the values the review record must carry', async () => {
-  const catalog = fixtureCatalog();
-  const execute = async () => `${JSON.stringify(catalog, null, 2)}\n`;
-  const digest = await cliReferenceDigest('/unused', { execute });
-  assert.deepEqual(digest, {
-    reviewed_source_version: '0.21.0',
-    reviewed_catalog_sha256: catalogDigest(catalog),
-    reviewed_content_sha256: contentDigest(catalog),
-  });
-  const malformed = async () => 'not json';
-  await assert.rejects(cliReferenceDigest('/unused', { execute: malformed }), /did not emit JSON/u);
-});
-
-test('the digest helper is published as an npm script', async () => {
-  const packageJson = JSON.parse(
-    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
-  );
-  assert.equal(
-    packageJson.scripts['cli-reference:digest'],
-    'node scripts/cli-reference-digest.mjs',
-  );
-});
-
-test('migration proves legacy review after a version bump and preserves human provenance', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'registry-cli-migrate-'));
-  const directory = join(root, 'docs/site/src/data');
-  const path = join(directory, 'cli-reference.yaml');
-  const catalog = fixtureCatalog();
-  const original = [
-    '# Existing human review',
-    `schema_version: ${legacyReviewSchemaVersion}`,
-    'status: current',
-    'last_reviewed: 2026-08-13',
-    'reviewed_source_version: "0.21.0"',
-    `reviewed_catalog_sha256: ${catalogDigest(catalog)}`,
-    '',
-  ].join('\n');
-  const bumped = { ...catalog, source_version: '0.22.0' };
-  const execute = async () => JSON.stringify(bumped);
-  try {
-    await mkdir(directory, { recursive: true });
-    await writeFile(path, original);
-    const result = await migrateCliReferenceReview(root, { execute });
-    assert.equal(result.migrated, true);
-    assert.equal(result.metadata.last_reviewed, '2026-08-13');
-    assert.equal(result.metadata.reviewed_source_version, '0.21.0');
-    assert.equal(result.metadata.reviewed_catalog_sha256, catalogDigest(catalog));
-    assert.equal(result.metadata.reviewed_content_sha256, contentDigest(catalog));
-    const migrated = await readFile(path, 'utf8');
-    assert.match(migrated, /^# Existing human review/u);
-    assert.equal((await migrateCliReferenceReview(root, { execute })).migrated, false);
-    assert.equal(await readFile(path, 'utf8'), migrated);
-    await generateCliReference(join(root, 'docs/site'), root, { execute });
-    await generateCliReference(join(root, 'docs/site'), root, { execute, check: true });
-
-    await writeFile(path, original);
-    const changed = structuredClone(bumped);
-    changed.binaries[0].about = 'Changed reference';
-    await assert.rejects(
-      migrateCliReferenceReview(root, { execute: async () => JSON.stringify(changed) }),
-      /current command catalog digest/u,
-    );
-    assert.equal(await readFile(path, 'utf8'), original);
-
-    const draft = original.replace('status: current', 'status: draft')
-      .replace('last_reviewed: 2026-08-13', 'last_reviewed: unreviewed')
-      .replace('reviewed_source_version: "0.21.0"', 'reviewed_source_version: null')
-      .replace(`reviewed_catalog_sha256: ${catalogDigest(catalog)}`, 'reviewed_catalog_sha256: null');
-    await writeFile(path, draft);
-    const draftResult = await migrateCliReferenceReview(root, { execute });
-    assert.equal(draftResult.metadata.last_reviewed, 'unreviewed');
-    assert.equal(draftResult.metadata.reviewed_content_sha256, null);
-    assert.equal(draftResult.metadata.status, 'draft');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('migration preserves author edits made while the collector runs', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'registry-cli-migrate-edit-'));
-  const directory = join(root, 'docs/site/src/data');
-  const path = join(directory, 'cli-reference.yaml');
-  const catalog = fixtureCatalog();
-  const metadata = {
-    schema_version: legacyReviewSchemaVersion,
-    status: 'current',
-    last_reviewed: '2026-08-13',
-    reviewed_source_version: catalog.source_version,
-    reviewed_catalog_sha256: catalogDigest(catalog),
-  };
-  const original = JSON.stringify(metadata);
-  const edited = JSON.stringify({ ...metadata, status: 'draft' });
-  try {
-    await mkdir(directory, { recursive: true });
-    await writeFile(path, original);
-    await assert.rejects(migrateCliReferenceReview(root, {
-      execute: async () => {
-        await writeFile(path, edited);
-        return JSON.stringify(catalog);
-      },
-    }), /metadata changed during migration/u);
-    assert.equal(await readFile(path, 'utf8'), edited);
-    await assert.rejects(readFile(`${path}.tmp-${process.pid}`), { code: 'ENOENT' });
-
-    // A retry can migrate the author's record, preserving its chosen draft status.
-    const retry = await migrateCliReferenceReview(root, {
-      execute: async () => JSON.stringify(catalog),
-    });
-    assert.equal(retry.migrated, true);
-    assert.equal(retry.metadata.status, 'draft');
-    assert.equal(retry.metadata.last_reviewed, metadata.last_reviewed);
-
-    await writeFile(path, original);
-    const temporary = `${path}.tmp-${process.pid}`;
-    await writeFile(temporary, 'Existing temporary file owned by another operation');
-    await assert.rejects(migrateCliReferenceReview(root, {
-      execute: async () => JSON.stringify(catalog),
-    }), { code: 'EEXIST' });
-    assert.equal(await readFile(path, 'utf8'), original);
-    assert.equal(await readFile(temporary, 'utf8'), 'Existing temporary file owned by another operation');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
 });

@@ -3,8 +3,10 @@
 set -euo pipefail
 cp -R /input/. /workspace
 apt-get update -qq
-# The CLI reference collector links the workspace FIPS cryptography backend.
-# aws-lc-fips-sys requires CMake, Go, and Perl when it builds that backend.
+# Nothing below compiles Rust at this revision: the CLI reference renders the
+# committed command catalog. The Rust toolchain and its native build
+# dependencies, such as CMake, Go, and Perl for aws-lc-fips-sys, remain
+# installed until a separate change removes them.
 apt-get install -y -qq ca-certificates curl git python3 python3-yaml xz-utils \
   build-essential cmake golang-go perl pkg-config libssl-dev libclang-dev \
   protobuf-compiler
@@ -31,7 +33,6 @@ if ! git diff --cached --quiet; then
     -c user.email='docs-preparation@localhost' -c commit.gpgsign=false \
     -c core.hooksPath=/dev/null commit -m 'Stage candidate documentation metadata'
 fi
-npm run cli-reference:digest > /output/cli-reference-digest.txt
 npm test
 npm run check:draft-links
 npm run check:evidence-anchors

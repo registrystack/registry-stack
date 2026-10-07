@@ -1,12 +1,8 @@
-# Human-owned publication and source-review state for the generated CLI reference.
-# Change review provenance only after a human review of changed command content.
-# Version-only changes preserve the review date, source version, and full digest.
-# Mechanical v2 migration adds the content digest after proving equivalence.
-# Starlight excludes unreviewed output because the generator emits `draft: true`
-# while this record remains a draft.
-schema_version: registry.cli-reference-review/v3
+# Human-owned publication state for the generated CLI reference.
+# The command content is crates/registry-cli-docs/catalog.json, whose diff is
+# reviewed with the change that alters a command line. Set last_reviewed to the
+# date of that review; a version-only release bump leaves this record alone.
+# Starlight excludes the pages while this record is a draft, because the
+# generator emits `draft: true`.
 status: current
 last_reviewed: 2026-10-10
-reviewed_source_version: "0.40.0"
-reviewed_catalog_sha256: d068d548f80efd3dee2f3058aa89d0e29baa346555222f1b345fb2cecdcaabf2
-reviewed_content_sha256: 3e2193f2d544076b999031061146c0ffae89a49dbf61f42d32b5d7ed0d5d04ac

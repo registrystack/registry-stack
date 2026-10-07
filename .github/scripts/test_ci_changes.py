@@ -2128,19 +2128,22 @@ class CiChangesTest(unittest.TestCase):
             if entry["name"] == "breg"
         )
         self.assertIn("registry-breg-mcp", breg["packages"])
-        self.assertTrue(
-            classify(self.workspace, ("crates/registry-breg-mcp/src/cli.rs",))["docs"]
-        )
+        # Its command tree reaches the docs only through the catalog test.
+        command = classify(self.workspace, ("crates/registry-breg-mcp/src/cli.rs",))
+        self.assertFalse(command["docs"])
+        self.assertIn("registry-cli-docs", command["rust_packages"])
 
-    def test_review_page_command_change_runs_docs(self) -> None:
-        # `breg-review`'s Clap tree is built in its lib.rs, which the CLI
-        # reference renders, so a change there rebuilds the docs.
+    def test_review_page_command_change_runs_the_catalog_test(self) -> None:
+        # `breg-review`'s Clap tree is built in its lib.rs, which the
+        # registry-cli-docs snapshot test holds to the committed catalog, so a
+        # change there runs that test rather than rebuilding the docs.
         outputs = classify(
             self.workspace,
             ("crates/registry-breg-review/src/lib.rs",),
         )
-        self.assertTrue(outputs["docs"])
+        self.assertFalse(outputs["docs"])
         self.assertIn("registry-breg-review", outputs["rust_packages"])
+        self.assertIn("registry-cli-docs", outputs["rust_packages"])
         self.assertFalse(
             classify(
                 self.workspace, ("crates/registry-breg-review/src/pages.rs",)
@@ -2488,17 +2491,38 @@ on:
         )
 
     def test_cli_reference_inputs_run_docs(self) -> None:
+        # The docs job renders the CLI pages from the committed catalog and
+        # the workspace version, and reads nothing else outside docs/site.
         self.assertEqual(
-            {
-                pattern
-                for pattern, _source in CLI_REFERENCE_INPUTS
-                if pattern in {"Cargo.lock", "Cargo.toml"}
-            },
-            {"Cargo.lock", "Cargo.toml"},
+            {pattern for pattern, _source in CLI_REFERENCE_INPUTS},
+            {"Cargo.toml", "crates/registry-cli-docs/catalog.json"},
         )
         for _pattern, source in CLI_REFERENCE_INPUTS:
             with self.subTest(source=source):
+                self.assertTrue(Path(source).is_file())
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
+
+    def test_command_changes_reach_docs_only_through_the_catalog(self) -> None:
+        # A Clap change runs the registry-cli-docs snapshot test, which fails
+        # until the catalog is regenerated; the catalog diff then runs docs.
+        def snapshot_shard(outputs: dict[str, Any]) -> list[str]:
+            return next(
+                (
+                    row["packages"]
+                    for row in outputs["rust_matrix"]["include"]
+                    if row["name"] == "developer-tools"
+                ),
+                [],
+            )
+
+        clap = classify(self.workspace, ("crates/registry-bregctl/src/lib.rs",))
+        self.assertFalse(clap["docs"])
+        self.assertIn("registry-cli-docs", snapshot_shard(clap))
+        catalog = classify(
+            self.workspace, ("crates/registry-cli-docs/catalog.json",)
+        )
+        self.assertTrue(catalog["docs"])
+        self.assertIn("registry-cli-docs", snapshot_shard(catalog))
 
     def test_operator_docs_outside_the_site_run_docs(self) -> None:
         """The docs release-pin suite scans docker/README.md directly."""
@@ -2524,7 +2548,9 @@ on:
             with self.subTest(source=source):
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
 
-    def test_casework_command_changes_select_docs_and_product_checks(self) -> None:
+    def test_casework_command_changes_select_the_catalog_test_and_product_checks(
+        self,
+    ) -> None:
         for path in (
             "crates/registry-casework/src/runtime.rs",
             "crates/registry-caseworkctl/src/lib.rs",
@@ -2532,12 +2558,15 @@ on:
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
-                self.assertTrue(outputs["docs"])
+                self.assertFalse(outputs["docs"])
                 self.assertTrue(outputs["casework_postgres"])
                 selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
                 self.assertIn("casework", selected)
+                self.assertIn("developer-tools", selected)
 
-    def test_messaging_command_changes_select_docs_and_product_checks(self) -> None:
+    def test_messaging_command_changes_select_the_catalog_test_and_product_checks(
+        self,
+    ) -> None:
         for path in (
             "crates/registry-messaging/src/runtime.rs",
             "crates/registry-messagingctl/src/lib.rs",
@@ -2545,16 +2574,15 @@ on:
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
-                self.assertTrue(outputs["docs"])
+                self.assertFalse(outputs["docs"])
                 self.assertTrue(outputs["messaging_postgres"])
                 selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
                 self.assertIn("messaging", selected)
+                self.assertIn("developer-tools", selected)
 
     def test_docs_rebuild_from_generator_inputs_without_rendered_changes(self) -> None:
         for path in (
-            "crates/registry-cli-docs/Cargo.toml",
-            "crates/registry-breg/Cargo.toml",
-            "crates/registry-cli-docs/examples/catalog.rs",
+            "crates/registry-cli-docs/catalog.json",
             "products/evidence/generated/registry-evidence.openapi.json",
         ):
             with self.subTest(path=path):
@@ -2624,8 +2652,10 @@ on:
         self.assertTrue(Path(path).is_file())
         self.assertTrue(classify(self.workspace, (path,))["docs"])
 
-    def test_scheduling_and_render_command_changes_select_docs(self) -> None:
-        """The generated CLI pages publish these Clap trees with the others."""
+    def test_scheduling_and_render_command_changes_select_the_catalog_test(
+        self,
+    ) -> None:
+        """The command catalog holds these Clap trees with the others."""
         for path in (
             "crates/registry-cli-reference/src/lib.rs",
             "crates/registry-render/src/cli.rs",
@@ -2636,7 +2666,11 @@ on:
         ):
             with self.subTest(path=path):
                 self.assertTrue(Path(path).is_file())
-                self.assertTrue(classify(self.workspace, (path,))["docs"])
+                outputs = classify(self.workspace, (path,))
+                self.assertFalse(outputs["docs"])
+                self.assertIn("registry-cli-docs", outputs["rust_packages"])
+                selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
+                self.assertIn("developer-tools", selected)
 
     def test_files_the_docs_suite_holds_pages_against_run_docs(self) -> None:
         """The docs script tests read these files beside the pages they check."""
@@ -2960,6 +2994,10 @@ class LockfileSelectionTest(unittest.TestCase):
         self.assertFalse(outputs["platform_hygiene"])
         self.assertFalse(outputs["docs_archives"])
         self.assertFalse(outputs["breg_contracts"])
+        # registry-render's command tree is in the CLI catalog. The snapshot
+        # test covers it; the docs job reads the catalog, not the lock.
+        self.assertIn("registry-cli-docs", outputs["rust_packages"])
+        self.assertFalse(outputs["docs"])
         # The release helper validates workspace versions in the lock, and the
         # release source model binds the exact lock bytes.
         self.assertTrue(outputs["release_tool"])

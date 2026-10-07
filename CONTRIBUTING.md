@@ -361,8 +361,9 @@ Site reference pages and data are ignored build outputs. Commit their authored
 inputs and generators, then run `npm test` and `npm run check` under `docs/site`;
 both generate the required outputs from a fresh checkout. See the
 [docs contributor workflow](docs/site/README.md#generated-references).
-Product-owned generated schemas and checked-in release snapshots still belong
-in the source change and must reproduce the same bytes when regenerated.
+Product-owned generated schemas, the CLI command catalog
+`crates/registry-cli-docs/catalog.json`, and checked-in release snapshots still
+belong in the source change and must reproduce the same bytes when regenerated.
 Do not introduce generators that depend on
 wall-clock time, unordered traversal, ambient local paths, network responses, or
 unlocked dependencies unless the generated output is normalized or pinned so the

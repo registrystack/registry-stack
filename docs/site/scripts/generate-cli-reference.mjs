@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   mkdir,
@@ -12,18 +11,16 @@ import {
 } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import YAML from 'yaml';
 
-const execFileAsync = promisify(execFile);
+import { workspacePackageVersion } from './archive-lock.mjs';
+
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = dirname(scriptPath);
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
 export const schemaVersion = 'registry.cli-reference/v2';
-export const legacyReviewSchemaVersion = 'registry.cli-reference-review/v2';
-export const reviewSchemaVersion = 'registry.cli-reference-review/v3';
 export const expectedBinaries = [
   'breg',
   'breg-mcp',
@@ -41,6 +38,8 @@ export const expectedBinaries = [
   'schedulingctl',
 ];
 
+// The reviewed command catalog. registry-cli-docs holds it to the Clap trees.
+export const catalogSnapshot = 'crates/registry-cli-docs/catalog.json';
 const generatedTree = 'src/content/docs/reference/cli';
 const generatedData = 'src/data/generated/cli-reference.json';
 const reviewMetadataFile = 'src/data/cli-reference.yaml';
@@ -253,16 +252,6 @@ export function catalogDigest(catalog) {
   return createHash('sha256').update(JSON.stringify(catalog)).digest('hex');
 }
 
-// Release identity remains in catalogDigest; only the explicit source version is
-// excluded from editorial content. Versions appearing in help/defaults still count.
-export function contentDigest(catalog) {
-  validateCatalog(catalog);
-  return createHash('sha256').update(JSON.stringify({
-    schema_version: catalog.schema_version,
-    binaries: catalog.binaries,
-  })).digest('hex');
-}
-
 function validCalendarDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -272,75 +261,25 @@ function validCalendarDate(value) {
     && date.getUTCDate() === day;
 }
 
-export function validateReviewMetadata(metadata, catalog) {
-  validateCatalog(catalog);
-  const legacy = metadata?.schema_version === legacyReviewSchemaVersion;
-  exactKeys(
-    metadata,
-    new Set([
-      'schema_version',
-      'status',
-      'last_reviewed',
-      'reviewed_source_version',
-      'reviewed_catalog_sha256',
-      ...(legacy ? [] : ['reviewed_content_sha256']),
-    ]),
-    'CLI reference review metadata',
-  );
-  if (!legacy && metadata.schema_version !== reviewSchemaVersion) {
-    throw new Error(`CLI reference review metadata must use ${reviewSchemaVersion}`);
-  }
+export function validateReviewMetadata(metadata) {
+  exactKeys(metadata, new Set(['status', 'last_reviewed']), 'CLI reference review metadata');
   if (!['draft', 'current'].includes(metadata.status)) {
     throw new Error('CLI reference review metadata.status must be draft or current');
   }
   nonempty(metadata.last_reviewed, 'CLI reference review metadata.last_reviewed');
-
   if (metadata.last_reviewed === 'unreviewed') {
-    if (
-      metadata.status !== 'draft'
-      || metadata.reviewed_source_version !== null
-      || metadata.reviewed_catalog_sha256 !== null
-      || (!legacy && metadata.reviewed_content_sha256 !== null)
-    ) {
-      throw new Error(
-        'unreviewed CLI reference metadata must be draft with no reviewed source version or catalog digest',
-      );
+    if (metadata.status !== 'draft') {
+      throw new Error('unreviewed CLI reference metadata must be draft');
     }
     return metadata;
   }
-
   if (!validCalendarDate(metadata.last_reviewed)) {
     throw new Error('CLI reference review metadata.last_reviewed must be unreviewed or YYYY-MM-DD');
-  }
-  nonempty(
-    metadata.reviewed_source_version,
-    'CLI reference review metadata.reviewed_source_version',
-  );
-  if (legacy && metadata.reviewed_source_version !== catalog.source_version) {
-    throw new Error(
-      `CLI reference review metadata covers ${metadata.reviewed_source_version}, not ${catalog.source_version}`,
-    );
-  }
-  if (!/^[0-9a-f]{64}$/u.test(metadata.reviewed_catalog_sha256 ?? '')) {
-    throw new Error('CLI reference review metadata.reviewed_catalog_sha256 must be a lowercase SHA-256 digest');
-  }
-  if (!legacy) {
-    if (!/^[0-9a-f]{64}$/u.test(metadata.reviewed_content_sha256 ?? '')) {
-      throw new Error('CLI reference review metadata.reviewed_content_sha256 must be a lowercase SHA-256 digest');
-    }
-    if (metadata.reviewed_content_sha256 !== contentDigest(catalog)) {
-      throw new Error('CLI reference review metadata does not cover the current command content; review the changed reference before updating its review record');
-    }
-  }
-  // Preserve and verify the source identity recorded at the actual human review.
-  const reviewedCatalog = { ...catalog, source_version: metadata.reviewed_source_version };
-  if (metadata.reviewed_catalog_sha256 !== catalogDigest(reviewedCatalog)) {
-    throw new Error('CLI reference review metadata does not cover the current command catalog digest');
   }
   return metadata;
 }
 
-async function loadReviewMetadata(docsRoot, catalog) {
+async function loadReviewMetadata(docsRoot) {
   const path = resolve(docsRoot, reviewMetadataFile);
   let metadata;
   try {
@@ -348,32 +287,26 @@ async function loadReviewMetadata(docsRoot, catalog) {
   } catch (error) {
     throw new Error(`${reviewMetadataFile} could not be read: ${error.message}`);
   }
-  return validateReviewMetadata(metadata, catalog);
+  return validateReviewMetadata(metadata);
 }
 
-export async function executeCatalog(repoRoot) {
-  const environment = {
-    ...process.env,
-    CARGO_INCREMENTAL: '0',
-    CARGO_PROFILE_DEV_DEBUG: '0',
-    CARGO_PROFILE_TEST_DEBUG: '0',
-  };
+// The snapshot omits the workspace version so a release bump leaves it alone;
+// the pages still name the version they were generated for.
+export async function loadCatalog(repoRoot) {
+  let snapshot;
   try {
-    const { stdout } = await execFileAsync(
-      'cargo',
-      ['run', '--locked', '--quiet', '-p', 'registry-cli-docs'],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: environment,
-        maxBuffer: 16 * 1024 * 1024,
-      },
-    );
-    return stdout;
+    snapshot = JSON.parse(await readFile(resolve(repoRoot, catalogSnapshot), 'utf8'));
   } catch (error) {
-    const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
-    throw new Error(`CLI reference collector failed: ${stderr || error.message}`);
+    throw new Error(`${catalogSnapshot} could not be read: ${error.message}`);
   }
+  exactKeys(snapshot, new Set(['schema_version', 'binaries']), 'CLI reference catalog snapshot');
+  return {
+    schema_version: snapshot.schema_version,
+    source_version: workspacePackageVersion(
+      await readFile(resolve(repoRoot, 'Cargo.toml'), 'utf8'),
+    ),
+    binaries: snapshot.binaries,
+  };
 }
 
 function sentence(value) {
@@ -536,7 +469,7 @@ function renderCommand(command, catalog, reviewMetadata, sourceDigest) {
       reviewMetadata,
     ),
     '',
-    '{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}',
+    '{/* Generated from crates/registry-cli-docs/catalog.json and the workspace version in Cargo.toml by scripts/generate-cli-reference.mjs. Run npm run generate. */}',
     '',
     proseText(command.about),
     '',
@@ -568,7 +501,7 @@ function renderCommand(command, catalog, reviewMetadata, sourceDigest) {
   lines.push(
     '## Generation contract',
     '',
-    'Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.',
+    'After changing a public command, argument, option, default, environment binding, or help description, run `cargo run --locked -p registry-cli-docs -- --write`, commit `crates/registry-cli-docs/catalog.json`, then run `npm run generate` from `docs/site`.',
     '',
   );
   const rendered = lines
@@ -587,7 +520,7 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
       reviewMetadata,
     ),
     '',
-    '{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}',
+    '{/* Generated from crates/registry-cli-docs/catalog.json and the workspace version in Cargo.toml by scripts/generate-cli-reference.mjs. Run npm run generate. */}',
     '',
     'Use these generated references for exact command syntax, arguments, options, defaults, and environment bindings.',
     '',
@@ -608,7 +541,7 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
     '',
     '## Generation contract',
     '',
-    'Run `npm run generate` from `docs/site` after changing a supported command-line surface. The docs check compares the generated pages and JSON catalog with the current Clap definitions.',
+    'After changing a supported command-line surface, run `cargo run --locked -p registry-cli-docs -- --write`, commit `crates/registry-cli-docs/catalog.json`, then run `npm run generate` from `docs/site`. The `registry-cli-docs` snapshot test holds that catalog to the Clap definitions, and the docs check holds these pages to the catalog.',
     '',
   );
   return `${lines.join('\n').trimEnd()}\n`;
@@ -617,7 +550,7 @@ function renderIndex(catalog, reviewMetadata, sourceDigest) {
 export function renderCatalog(catalog, reviewMetadata) {
   validateCatalog(catalog);
   const sourceDigest = catalogDigest(catalog);
-  validateReviewMetadata(reviewMetadata, catalog);
+  validateReviewMetadata(reviewMetadata);
   const files = new Map([['index.mdx', renderIndex(catalog, reviewMetadata, sourceDigest)]]);
   const add = (command) => {
     files.set(commandPath(command), renderCommand(command, catalog, reviewMetadata, sourceDigest));
@@ -688,24 +621,10 @@ async function writeAtomic(path, contents) {
 export async function generateCliReference(
   docsRoot = defaultDocsRoot,
   repoRoot = defaultRepoRoot,
-  { check = false, execute = executeCatalog } = {},
+  { check = false, load = loadCatalog } = {},
 ) {
-  const first = await execute(repoRoot);
-  const second = await execute(repoRoot);
-  if (first !== second) {
-    throw new Error('CLI reference collector is not byte deterministic');
-  }
-  let catalog;
-  try {
-    catalog = JSON.parse(first);
-  } catch (error) {
-    throw new Error(`CLI reference collector did not emit JSON: ${error.message}`);
-  }
-  validateCatalog(catalog);
-  const reviewMetadata = await loadReviewMetadata(
-    docsRoot,
-    catalog,
-  );
+  const catalog = validateCatalog(await load(repoRoot));
+  const reviewMetadata = await loadReviewMetadata(docsRoot);
   const pages = renderCatalog(catalog, reviewMetadata);
   const data = `${JSON.stringify(catalog, null, 2)}\n`;
   const treePath = resolve(docsRoot, generatedTree);

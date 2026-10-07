@@ -115,7 +115,7 @@ function changedBaseArchiveEntries(baseLock, currentLock) {
   return { changed, removed };
 }
 
-function workspacePackageVersion(source) {
+export function workspacePackageVersion(source) {
   let section = null;
   for (const line of source.split(/\r?\n/)) {
     const heading = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);

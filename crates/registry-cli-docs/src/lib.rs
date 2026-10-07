@@ -5,6 +5,8 @@ pub use registry_cli_reference::{
     command_reference, ArgumentReference, Catalog, CommandReference, ConstraintKind,
     ConstraintReference, PATH_VALUE_NAMES, SCHEMA_VERSION, SYMBOLIC_LINK_REFUSAL,
 };
+use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 /// Build reference data for the supported Registry Stack command lines.
 pub fn catalog() -> Catalog {
@@ -34,6 +36,31 @@ pub fn catalog() -> Catalog {
         source_version: env!("CARGO_PKG_VERSION"),
         binaries,
     }
+}
+
+/// The committed catalog snapshot the docs site renders, beside this crate's
+/// manifest.
+pub fn snapshot_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog.json")
+}
+
+#[derive(Serialize)]
+struct Snapshot<'a> {
+    schema_version: &'a str,
+    binaries: &'a [CommandReference],
+}
+
+/// Serialize [`catalog`] in its committed, reviewed form. It omits the
+/// workspace version, so a release version bump leaves the snapshot unchanged;
+/// the docs generator reads that version from the workspace manifest.
+pub fn catalog_snapshot() -> serde_json::Result<String> {
+    let catalog = catalog();
+    let mut snapshot = serde_json::to_string_pretty(&Snapshot {
+        schema_version: catalog.schema_version,
+        binaries: &catalog.binaries,
+    })?;
+    snapshot.push('\n');
+    Ok(snapshot)
 }
 
 #[cfg(test)]
