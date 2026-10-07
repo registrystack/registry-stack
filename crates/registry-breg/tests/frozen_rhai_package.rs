@@ -118,6 +118,25 @@ fn local_project() -> registry_breg::contract::RegistryProject {
     project
 }
 
+/// The package's `source/registry.yaml`: the acceptance project as JSON, which
+/// the reader accepts as YAML. The serialized source writes an absent optional
+/// member as null, which an authored file never carries, so nulls are removed.
+fn local_project_bytes() -> Vec<u8> {
+    fn remove_nulls(value: &mut Value) {
+        match value {
+            Value::Object(members) => {
+                members.retain(|_, member| !member.is_null());
+                members.values_mut().for_each(remove_nulls);
+            }
+            Value::Array(items) => items.iter_mut().for_each(remove_nulls),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(local_project()).unwrap();
+    remove_nulls(&mut value);
+    serde_json::to_vec(&value).unwrap()
+}
+
 fn handler_assets() -> Vec<PackageSourceFile> {
     HANDLER_SCRIPTS
         .into_iter()
@@ -166,7 +185,7 @@ fn prepare_frozen_package() -> registry_breg::package::PreparedPackage {
         schema_fingerprint: digest(compiled.ddl().script().as_bytes()),
         project: PackageSourceFile {
             path: "source/registry.yaml".to_owned(),
-            bytes: serde_json::to_vec(&local_project()).unwrap(),
+            bytes: local_project_bytes(),
         },
         modules: vec![],
         fixture_journeys: fixture_journeys(),
@@ -414,7 +433,7 @@ fn frozen_package_remains_a_readable_predecessor() {
             schema_fingerprint: digest(candidate.registry().ddl().script().as_bytes()),
             project: PackageSourceFile {
                 path: "source/registry.yaml".to_owned(),
-                bytes: serde_json::to_vec(&local_project()).unwrap(),
+                bytes: local_project_bytes(),
             },
             modules: vec![],
             fixture_journeys: fixture_journeys(),

@@ -2515,7 +2515,7 @@ fn deployment_identity_keys_in_the_project_are_refused_as_unknown_fields() {
             ),
             (
                 parse_project_yaml(&bytes).expect_err("a deployment key is refused in YAML"),
-                "source.yaml.invalid",
+                "config.unknown-key",
             ),
         ] {
             let [diagnostic] = failure.diagnostics() else {
@@ -2525,7 +2525,10 @@ fn deployment_identity_keys_in_the_project_are_refused_as_unknown_fields() {
             assert!(
                 diagnostic
                     .message
-                    .contains(&format!("unknown field `{key}`")),
+                    .contains(&format!("unknown field `{key}`"))
+                    || diagnostic
+                        .message
+                        .contains(&format!("`{key}` is not a member of this mapping")),
                 "{}",
                 diagnostic.message
             );
@@ -2578,7 +2581,7 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
             (
                 parse_project_yaml(&bytes)
                     .expect_err("a singular projection key is refused in YAML"),
-                "source.yaml.invalid",
+                "config.unknown-key",
             ),
         ] {
             let [diagnostic] = failure.diagnostics() else {
@@ -2588,7 +2591,10 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
             assert!(
                 diagnostic
                     .message
-                    .contains(&format!("unknown field `{key}`")),
+                    .contains(&format!("unknown field `{key}`"))
+                    || diagnostic
+                        .message
+                        .contains(&format!("`{key}` is not a member of this mapping")),
                 "{}",
                 diagnostic.message
             );
@@ -3726,9 +3732,10 @@ registry:
 "#,
     )
     .expect_err("duplicate YAML member is refused");
-    assert_eq!(failure.diagnostics()[0].code, "source.yaml.invalid");
-    assert!(failure.diagnostics()[0].message.contains("duplicate"));
-    assert!(failure.diagnostics()[0].message.contains("kind"));
+    assert_eq!(failure.diagnostics()[0].code, "yaml.duplicate-key");
+    assert_eq!(failure.diagnostics()[0].path, "project.kind");
+    assert!(failure.diagnostics()[0].message.contains("line 4"));
+    assert!(!failure.diagnostics()[0].message.contains("AnotherKind"));
 }
 
 #[test]
@@ -3748,8 +3755,14 @@ entities:
 "#,
     )
     .expect_err("an environment expression in an authored project is refused");
-    let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.environment_expression");
+    // Every expression is refused where it is written, not only the first.
+    assert_eq!(failure.diagnostics().len(), 2, "{failure:?}");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "project.registry.canonicalBaseIri")
+        .expect("the expression in the registry block is refused");
+    assert_eq!(diagnostic.code, "config.substitution-not-allowed");
     assert_eq!(diagnostic.path, "project.registry.canonicalBaseIri");
     assert!(diagnostic.message.contains("runtime.yaml"));
     assert!(!diagnostic.message.contains("AUTHORED_BASE_IRI"));
@@ -3767,7 +3780,7 @@ entities:
     )
     .expect_err("an environment expression in an authored module is refused");
     let diagnostic = &module.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.environment_expression");
+    assert_eq!(diagnostic.code, "config.substitution-not-allowed");
     assert_eq!(diagnostic.path, "module.entities[0].fields[0].description");
 }
 
@@ -3787,10 +3800,12 @@ registry:
     )
     .expect_err("an unknown YAML member is refused");
     let diagnostic = &unknown_yaml_member.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.yaml.invalid");
+    assert_eq!(diagnostic.code, "config.unknown-key");
     assert_eq!(diagnostic.path, "project.registry.secretField");
-    assert!(diagnostic.message.contains("unknown field `secretField`"));
-    assert!(diagnostic.message.contains("expected one of"));
+    assert!(diagnostic
+        .message
+        .contains("`secretField` is not a member of this mapping"));
+    assert!(diagnostic.message.contains("the accepted keys are"));
     assert!(diagnostic.message.contains("canonicalBaseIri"));
     assert!(diagnostic.message.contains("line 9"));
     assert!(!diagnostic.message.contains("do-not-echo"));
@@ -3806,9 +3821,13 @@ registry:
 "#,
     )
     .expect_err("a missing YAML member is refused");
+    assert_eq!(
+        missing_yaml_member.diagnostics()[0].code,
+        "config.missing-key"
+    );
     assert!(missing_yaml_member.diagnostics()[0]
         .message
-        .contains("missing field `version`"));
+        .contains("`version`"));
 
     let wrong_yaml_type = parse_project_yaml(
         br#"
@@ -3824,9 +3843,9 @@ entities: do-not-echo
     )
     .expect_err("a wrongly typed YAML member is refused");
     let diagnostic = &wrong_yaml_type.diagnostics()[0];
+    assert_eq!(diagnostic.code, "config.invalid-type");
     assert_eq!(diagnostic.path, "project.entities");
-    assert!(diagnostic.message.contains("invalid type: string"));
-    assert!(diagnostic.message.contains("expected a sequence"));
+    assert!(diagnostic.message.contains("expected a list"));
     assert!(!diagnostic.message.contains("do-not-echo"));
 
     let unknown_enum_value = parse_project_json(

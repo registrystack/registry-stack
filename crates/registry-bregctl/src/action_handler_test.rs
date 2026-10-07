@@ -451,7 +451,7 @@ mod tests {
 kind: RegistryProject
 registry:
   id: wasm-planner-test-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://wasm-planner-test-fixture.example.test
 entities:

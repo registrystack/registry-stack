@@ -4875,6 +4875,7 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-script",
  "registry-platform-testing",
+ "registry-platform-yaml",
  "registry-review-client",
  "reqwest 0.12.28",
  "rhai",

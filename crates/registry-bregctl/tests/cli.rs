@@ -480,7 +480,7 @@ fn authoring_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: cli-authoring-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://cli-authoring-fixture.example.test
 entities:
@@ -501,7 +501,7 @@ fn action_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: action-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://action-fixture.example.test
 entities:
@@ -588,7 +588,7 @@ fn mixed_entity_and_action_route_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: mixed-route-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://mixed-route-fixture.example.test
 entities:
@@ -1247,13 +1247,13 @@ fn project_lock_keeps_comments_written_inside_the_modules_block() {
 kind: RegistryProject
 registry:
   id: modular-lock-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 modules:
   # The core module owns the record entity.
   - id: core
-    version: 1
+    version: "1"
     # Refreshed by project lock after every module edit.
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
 "#,
@@ -1370,15 +1370,15 @@ fn project_lock_sorts_module_locks_authored_out_of_order() {
 kind: RegistryProject
 registry:
   id: modular-lock-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 modules:
   - id: extra
-    version: 1
+    version: "1"
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
   - id: core
-    version: 1
+    version: "1"
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
 "#,
     );
@@ -1490,12 +1490,12 @@ fn project_lock_refuses_missing_locked_source_without_rendering_values() {
 kind: RegistryProject
 registry:
   id: modular-lock-missing
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-missing.example.test
 modules:
   - id: {MODULE_CANARY}
-    version: 1
+    version: "1"
     digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
 "#
         )
@@ -1581,7 +1581,7 @@ fn an_authored_claim_name_cannot_forge_a_line_of_the_access_report() {
 kind: RegistryProject
 registry:
   id: forged-line-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://forged-line-fixture.example.test
 entities:
@@ -2822,7 +2822,7 @@ const MINIMAL_ABI_WAT: &str = r#"
 #[cfg(feature = "wasm")]
 fn check_collects_project_and_module_hook_handler_assets() {
     let module_source = br#"id: hook-module
-version: 1
+version: "1"
 extendEntities:
   - entity: record
     hooks:
@@ -2847,12 +2847,12 @@ extendEntities:
 kind: RegistryProject
 registry:
   id: hook-asset-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://hook-asset-fixture.example.test
 modules:
   - id: hook-module
-    version: 1
+    version: "1"
     digest: {}
 entities:
   - id: record
@@ -2910,7 +2910,7 @@ fn wasm_action_fixture() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: wasm-explain-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://wasm-explain-fixture.example.test
 entities:
@@ -3070,7 +3070,7 @@ fn explain_query_filter_examples_match_field_types() {
 kind: RegistryProject
 registry:
   id: typed-query-examples
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://typed-query-examples.example.test
 entities:
@@ -3155,7 +3155,7 @@ fn explain_spatial_queries_maps_the_exact_profile_and_api_geometry() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: map-explanation, version: 1, defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
+registry: {id: map-explanation, version: "1", defaultLanguage: en, canonicalBaseIri: https://map-explanation.example.test}
 entities:
   - id: service-site
     primaryDataset: test-dataset
@@ -3223,12 +3223,12 @@ fn check_reports_derived_sql_module_path_without_sql_values() {
 kind: RegistryProject
 registry:
   id: derived-diagnostic-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://derived-diagnostic-fixture.example.test
 modules:
   - id: core
-    version: 1
+    version: "1"
 "#,
     );
     let module_dir = project.path().join("modules/core");
@@ -3236,7 +3236,7 @@ modules:
     fs::write(
         module_dir.join("module.yaml"),
         br#"id: core
-version: 1
+version: "1"
 entities:
   - id: record
     primaryDataset: test-dataset
@@ -3306,7 +3306,7 @@ fn explain_events_is_empty_for_outbox_only_and_deterministic_for_webhooks() {
 kind: RegistryProject
 registry:
   id: event-explain-outbox
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://event-explain-outbox.example.test
 entities:
@@ -3341,7 +3341,7 @@ entities:
 kind: RegistryProject
 registry:
   id: event-explain-webhook
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://event-explain-webhook.example.test
 entities:
@@ -5825,7 +5825,7 @@ fn unknown_source_is_refused_without_echoing_source_values() {
     assert!(output.stderr.is_empty());
     assert!(!String::from_utf8_lossy(&output.stdout).contains(SOURCE_VALUE_CANARY));
     let report = json_stdout(&output);
-    assert_eq!(report["diagnostics"][0]["code"], "source.yaml.invalid");
+    assert_eq!(report["diagnostics"][0]["code"], "config.unknown-key");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
         "registry_project",
@@ -6054,7 +6054,7 @@ fn modular_project_without_locks() -> &'static [u8] {
 kind: RegistryProject
 registry:
   id: modular-lock-fixture
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://modular-lock-fixture.example.test
 "#
@@ -6062,7 +6062,7 @@ registry:
 
 fn modular_project_extra_module() -> &'static [u8] {
     br#"id: extra
-version: 1
+version: "1"
 entities:
   - id: extra-record
     primaryDataset: test-dataset
@@ -6084,7 +6084,7 @@ entities:
 
 fn modular_project_module() -> &'static [u8] {
     br#"id: core
-version: 1
+version: "1"
 entities:
   - id: record
     primaryDataset: test-dataset

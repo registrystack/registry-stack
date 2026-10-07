@@ -177,7 +177,7 @@ fn assert_unparseable(value: &Value) {
     let refusal = registry_breg::parse_project_json(&serde_json::to_vec(value).unwrap())
         .expect_err("an encrypted consent key field must not parse");
     assert!(
-        format!("{refusal:?}").contains("encrypted requires"),
+        format!("{refusal:?}").contains("encrypted only on"),
         "{refusal:?}"
     );
 }

@@ -285,8 +285,20 @@ fn registry(plan: &Plan) -> String {
                 scalar(&entity.identifier.id)
             ),
         );
-        yaml.line(3, "fields:");
-        for field in entity.all_fields() {
+        // A field the projection cannot describe is left out, and an entity
+        // with none leaves out `fields`: an empty value would be null.
+        let projected = entity
+            .all_fields()
+            .filter(|field| {
+                field.concept_uri.is_some()
+                    && (matches!(field.kind, FieldKind::Reference { .. })
+                        || field.kind.manifest_scalar())
+            })
+            .collect::<Vec<_>>();
+        if !projected.is_empty() {
+            yaml.line(3, "fields:");
+        }
+        for field in projected {
             match (&field.kind, &field.concept_uri) {
                 (FieldKind::Reference { .. }, Some(uri)) => {
                     yaml.entry(4, "- id", &field.id);

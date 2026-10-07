@@ -4,10 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jsonschema::{Draft, JSONSchema};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use registry_platform_config::{
-    reject_environment_expressions_in_authored_yaml, RuntimeConfigErrorKind,
-};
+use registry_platform_config::contains_environment_expression;
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal, ScalarHook, ScalarSite,
+    Severity,
+};
+pub use registry_platform_yaml::{Decoded, Report};
 use serde::{
     de::DeserializeOwned, de::Error as _, de::IntoDeserializer, Deserialize, Deserializer,
     Serialize,
@@ -1279,9 +1282,10 @@ impl<'de> Deserialize<'de> for ActionInputSource {
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
         {
-            return Err(D::Error::custom(
-                "action inputs cannot declare validTimeRole, pattern, encrypted, or lookup",
-            ));
+            return Err(D::Error::custom(Invalid::expected(
+                "an action input without validTimeRole, pattern, encrypted, or lookup",
+                "Remove validTimeRole, pattern, encrypted, and lookup from the action input.",
+            )));
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
         Ok(Self {
@@ -1857,9 +1861,10 @@ impl<'de> Deserialize<'de> for FieldSource {
                 FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
             )
         {
-            return Err(D::Error::custom(
-                "pattern requires a persisted string or text field",
-            ));
+            return Err(D::Error::custom(Invalid::expected(
+                "pattern only on a persisted string or text field",
+                "Remove pattern, or declare the field with type string or text.",
+            )));
         }
         let encrypted = raw.encrypted.unwrap_or_default();
         if encrypted
@@ -1873,12 +1878,17 @@ impl<'de> Deserialize<'de> for FieldSource {
                         | FieldTypeSource::Structured { .. }
                 ))
         {
-            return Err(D::Error::custom(
-                "encrypted requires a restricted string, text, date, decimal, or structured field",
-            ));
+            return Err(D::Error::custom(Invalid::expected(
+                "encrypted only on a restricted string, text, date, decimal, or structured field",
+                "Remove encrypted, or declare the field restricted with type string, text, date, \
+                 decimal, or structured.",
+            )));
         }
         if raw.lookup.is_some() && !encrypted {
-            return Err(D::Error::custom("lookup requires an encrypted field"));
+            return Err(D::Error::custom(Invalid::expected(
+                "lookup only on an encrypted field",
+                "Declare encrypted: true on the field, or remove lookup.",
+            )));
         }
         Ok(Self {
             id: raw.id,
@@ -1918,9 +1928,11 @@ impl<'de> Deserialize<'de> for DerivedFieldSource {
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
         {
-            return Err(D::Error::custom(
-                "derived fields cannot declare required, validTimeRole, pattern, encrypted, or lookup",
-            ));
+            return Err(D::Error::custom(Invalid::expected(
+                "a derived field without required, validTimeRole, pattern, encrypted, or lookup",
+                "Remove required, validTimeRole, pattern, encrypted, and lookup from the derived \
+                 field.",
+            )));
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
         Ok(Self {
@@ -1942,17 +1954,23 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             reject_type_options::<E>(raw, TypeOptionAllowances::STRING)?;
             FieldTypeSource::String {
                 min_length: raw.min_length.unwrap_or_default(),
-                max_length: raw
-                    .max_length
-                    .ok_or_else(|| E::custom("string maxLength is required"))?,
+                max_length: raw.max_length.ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a string field with maxLength",
+                        "Declare maxLength on the string field.",
+                    ))
+                })?,
             }
         }
         RawFieldKind::Text => {
             reject_type_options::<E>(raw, TypeOptionAllowances::TEXT)?;
             FieldTypeSource::Text {
-                max_length: raw
-                    .max_length
-                    .ok_or_else(|| E::custom("text maxLength is required"))?,
+                max_length: raw.max_length.ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a text field with maxLength",
+                        "Declare maxLength on the text field.",
+                    ))
+                })?,
             }
         }
         RawFieldKind::Int64 => {
@@ -1962,12 +1980,18 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         RawFieldKind::Decimal => {
             reject_type_options::<E>(raw, TypeOptionAllowances::DECIMAL)?;
             FieldTypeSource::Decimal {
-                precision: raw
-                    .precision
-                    .ok_or_else(|| E::custom("decimal precision is required"))?,
-                scale: raw
-                    .scale
-                    .ok_or_else(|| E::custom("decimal scale is required"))?,
+                precision: raw.precision.ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a decimal field with precision",
+                        "Declare precision on the decimal field.",
+                    ))
+                })?,
+                scale: raw.scale.ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a decimal field with scale",
+                        "Declare scale on the decimal field.",
+                    ))
+                })?,
                 minimum: raw.minimum.clone(),
                 maximum: raw.maximum.clone(),
             }
@@ -1987,42 +2011,54 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         RawFieldKind::VocabularyCode => {
             reject_type_options::<E>(raw, TypeOptionAllowances::VOCABULARY)?;
             FieldTypeSource::VocabularyCode {
-                vocabulary: raw
-                    .vocabulary
-                    .clone()
-                    .ok_or_else(|| E::custom("vocabulary is required"))?,
+                vocabulary: raw.vocabulary.clone().ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a vocabulary-code field with vocabulary",
+                        "Declare vocabulary on the vocabulary-code field.",
+                    ))
+                })?,
                 values: raw.values.clone(),
             }
         }
         RawFieldKind::Reference => {
             reject_type_options::<E>(raw, TypeOptionAllowances::REFERENCE)?;
             FieldTypeSource::Reference {
-                target: raw
-                    .target
-                    .clone()
-                    .ok_or_else(|| E::custom("reference target is required"))?,
+                target: raw.target.clone().ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a reference field with target",
+                        "Declare target on the reference field.",
+                    ))
+                })?,
                 on_delete: raw.on_delete.clone().unwrap_or_default(),
             }
         }
         RawFieldKind::Crs84Point => {
             reject_type_options::<E>(raw, TypeOptionAllowances::CRS84_POINT)?;
             FieldTypeSource::Crs84Point {
-                precision: raw
-                    .precision
-                    .ok_or_else(|| E::custom("point precision is required"))?,
+                precision: raw.precision.ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a crs84-point field with precision",
+                        "Declare precision on the crs84-point field.",
+                    ))
+                })?,
                 bbox: raw.bbox.clone(),
             }
         }
         RawFieldKind::Structured => {
             reject_type_options::<E>(raw, TypeOptionAllowances::STRUCTURED)?;
             FieldTypeSource::Structured {
-                max_bytes: raw
-                    .max_bytes
-                    .ok_or_else(|| E::custom("structured maxBytes is required"))?,
-                schema: raw
-                    .schema
-                    .clone()
-                    .ok_or_else(|| E::custom("structured schema is required"))?,
+                max_bytes: raw.max_bytes.ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a structured field with maxBytes",
+                        "Declare maxBytes on the structured field.",
+                    ))
+                })?,
+                schema: raw.schema.clone().ok_or_else(|| {
+                    E::custom(Invalid::expected(
+                        "a structured field with schema",
+                        "Declare schema on the structured field.",
+                    ))
+                })?,
             }
         }
     };
@@ -2211,7 +2247,13 @@ fn reject_type_options<E: serde::de::Error>(
         || (!allowed.target && raw.target.is_some())
         || (!allowed.delete && raw.on_delete.is_some())
     {
-        return Err(E::custom("the field type contains an incompatible option"));
+        return Err(E::custom(Invalid::expected(
+            "only the options the field's type accepts",
+            "Remove the options the type does not take: string takes minLength and maxLength, \
+             text maxLength, decimal precision, scale, minimum, and maximum, vocabulary-code \
+             vocabulary and values, reference target and onDelete, crs84-point precision and \
+             bbox, and structured maxBytes and schema.",
+        )));
     }
     Ok(())
 }
@@ -3177,9 +3219,10 @@ impl<'de> Deserialize<'de> for AccessPermissionSource {
     {
         let raw = RawAccessPermissionSource::deserialize(deserializer)?;
         if !raw.entity.is_empty() && raw.row_boundaries.is_none() {
-            return Err(D::Error::custom(
-                "entity permissions require rowBoundaries; use an explicit empty array for intentional all-row access",
-            ));
+            return Err(D::Error::custom(Invalid::expected(
+                "an entity permission with rowBoundaries",
+                "Declare rowBoundaries on the permission; an explicit empty list grants every row.",
+            )));
         }
         Ok(Self {
             entity: raw.entity,
@@ -3407,12 +3450,71 @@ pub fn parse_module_json(bytes: &[u8]) -> Result<RegistryModule, CompileFailure>
     parse_json(bytes, "module")
 }
 
+/// The file name a project read from bytes alone is reported under.
+pub const PROJECT_FILE: &str = "registry.yaml";
+
+/// The file name a module read from bytes alone is reported under.
+pub const MODULE_FILE: &str = "module.yaml";
+
+const PROJECT_API_VERSIONS: [ApiVersion<'static>; 1] =
+    [ApiVersion::current(crate::compiler::AUTHORING_API_VERSION)];
+
+/// `registry.yaml`, the authored project file.
+pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: "RegistryProject",
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &PROJECT_API_VERSIONS,
+        retired_api_versions: &[],
+    },
+    removed_keys: &[],
+};
+
+/// A module's `module.yaml`. A module carries no envelope: its project's
+/// module lock names it by identifier, version, and digest.
+pub const MODULE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: "RegistryModule",
+    envelope: EnvelopeRule::Exempt {
+        reason: "a module is named by its project's module lock, which records its \
+                 identifier, version, and digest",
+    },
+    removed_keys: &[],
+};
+
+/// Read an authored project through the shared reader. `file` is the name
+/// diagnostics carry. Every diagnostic carries its code, path, line and
+/// column, and the action that fixes it (CFG-DIAG-1), and none repeats a
+/// value from the file.
+pub fn read_project_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryProject>, Report> {
+    read_authored(file, bytes, &PROJECT_FORMAT)
+}
+
+/// Read an authored module through the shared reader, as
+/// [`read_project_yaml`] reads a project.
+pub fn read_module_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryModule>, Report> {
+    read_authored(file, bytes, &MODULE_FORMAT)
+}
+
+fn read_authored<T: DeserializeOwned>(
+    file: &str,
+    bytes: &[u8],
+    format: &FormatSpec<'_>,
+) -> Result<Decoded<T>, Report> {
+    let mut hook = AuthoredExpressions;
+    Reader::new(file)
+        .with_hook(&mut hook)
+        .decode::<T>(bytes, &Expect::one(format))
+}
+
 pub fn parse_project_yaml(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
-    parse_yaml(bytes, "project")
+    read_project_yaml(PROJECT_FILE, bytes)
+        .map(|decoded| decoded.value)
+        .map_err(|report| compile_failure_from_report("project", &report))
 }
 
 pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
-    parse_yaml(bytes, "module")
+    read_module_yaml(MODULE_FILE, bytes)
+        .map(|decoded| decoded.value)
+        .map_err(|report| compile_failure_from_report("module", &report))
 }
 
 fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
@@ -3427,21 +3529,6 @@ fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, Compil
         ))
     })?;
     deserialize_value(value, root)
-}
-
-fn parse_yaml<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
-    reject_authored_environment_expression(bytes, root)?;
-    let deserializer = serde_norway::Deserializer::from_slice(bytes);
-    serde_path_to_error::deserialize(deserializer).map_err(|error| {
-        CompileFailure::from_one(Diagnostic::error(
-            "source.yaml.invalid",
-            document_path(root, &error),
-            &format!(
-                "the YAML source is structurally invalid: {}",
-                redact_authored_values(&error.inner().to_string())
-            ),
-        ))
-    })
 }
 
 fn deserialize_value<T: DeserializeOwned>(
@@ -3461,43 +3548,83 @@ fn deserialize_value<T: DeserializeOwned>(
     })
 }
 
+/// The shared reader's refusal of an authored file as compiler diagnostics:
+/// each error keeps the reader's code, its path in the compiler's
+/// `root.member[index]` form, and its message followed by the action that
+/// fixes it.
+pub fn compile_failure_from_report(root: &str, report: &Report) -> CompileFailure {
+    CompileFailure::from_errors(
+        report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .map(|diagnostic| {
+                let position = diagnostic
+                    .source
+                    .as_ref()
+                    .and_then(|source| Some((source.line?, source.column?)))
+                    .map(|(line, column)| format!(" (line {line}, column {column})"))
+                    .unwrap_or_default();
+                Diagnostic::error(
+                    &diagnostic.code,
+                    compiler_path(root, &diagnostic.path),
+                    &format!(
+                        "{}{position}; next: {}",
+                        diagnostic.message.trim_end_matches('.'),
+                        diagnostic.suggested_action
+                    ),
+                )
+            })
+            .collect(),
+    )
+}
+
 /// `${...}` substitution belongs to `runtime.yaml`; an authored project or
-/// module is reviewed as written, so an environment expression in one is
-/// refused with the member that holds it. A document the shared reader cannot
-/// parse falls through to the ordinary parse, which reports its own diagnostic.
-fn reject_authored_environment_expression(bytes: &[u8], root: &str) -> Result<(), CompileFailure> {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return Ok(());
-    };
-    match reject_environment_expressions_in_authored_yaml(text) {
-        Err(error) if error.kind() == RuntimeConfigErrorKind::AuthoredExpression => {
-            Err(CompileFailure::from_one(Diagnostic::error(
-                "source.environment_expression",
-                authored_member_path(root, error.field()),
-                "the authored value holds an environment expression; ${...} substitution \
-                 applies to runtime.yaml only, so write the value in the authored file directly",
-            )))
+/// module is reviewed and packaged as written, so an environment expression
+/// in a key or a text value of one is refused where it is written.
+struct AuthoredExpressions;
+
+impl AuthoredExpressions {
+    fn check(text: &str) -> Result<(), Refusal> {
+        if contains_environment_expression(text) {
+            return Err(Refusal {
+                code: "config.substitution-not-allowed".to_owned(),
+                message: "a `${...}` expression is written in an authored file; substitution \
+                          applies to runtime.yaml only"
+                    .to_owned(),
+                suggested_action: "Write the value in the authored file directly.".to_owned(),
+            });
         }
-        _ => Ok(()),
+        Ok(())
     }
 }
 
-/// Render the shared reader's dotted field, whose sequence indexes are numeric
-/// segments, in the `root.member[index]` form the compiler's other
-/// diagnostics use.
-fn authored_member_path(root: &str, field: &str) -> String {
-    let mut path = root.to_owned();
-    if field == "/" {
-        return path;
+impl ScalarHook for AuthoredExpressions {
+    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
+        Self::check(site.text)
     }
-    for segment in field.split('.') {
+
+    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+        Self::check(site.text).map(|()| None)
+    }
+}
+
+/// Render an RFC 6901 pointer in the `root.member[index]` form the
+/// compiler's other diagnostics use. A numeric segment is a list index.
+pub fn compiler_path(root: &str, pointer: &str) -> String {
+    let mut path = root.to_owned();
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return path;
+    };
+    for segment in rest.split('/') {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
         if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) {
             path.push('[');
-            path.push_str(segment);
+            path.push_str(&segment);
             path.push(']');
         } else {
             path.push('.');
-            path.push_str(segment);
+            path.push_str(&segment);
         }
     }
     path
@@ -3524,8 +3651,12 @@ pub(crate) fn document_path<E: std::fmt::Display>(
 /// `invalid value:` clause. Only the shape word that opens such a clause
 /// survives, so the message still says a string arrived where a sequence was
 /// required without repeating the string.
+///
+/// A refusal a source type writes for the shared reader carries the reader's
+/// markers after its sentence; only the sentence is kept.
 pub(crate) fn redact_authored_values(message: &str) -> String {
     const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
+    let message = message.split('\u{1f}').next().unwrap_or(message);
     let mut redacted = String::with_capacity(message.len());
     let mut rest = message;
     loop {

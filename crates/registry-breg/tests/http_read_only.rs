@@ -216,7 +216,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: discovery-matrix
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 entities:
@@ -289,7 +289,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: logical-schema-surface
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 entities:
@@ -321,7 +321,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: metadata-labels
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 manifestProjection:
@@ -536,7 +536,7 @@ impl SnapshotReadService for RecordingSnapshotReadService {
 const SNAPSHOT_PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
-registry: {id: snapshot-surface, version: 1, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+registry: {id: snapshot-surface, version: "1", defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
 entities:
   - id: assignment
     primaryDataset: test-dataset

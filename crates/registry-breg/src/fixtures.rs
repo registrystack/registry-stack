@@ -7057,6 +7057,17 @@ journeys:
         ));
     }
 
+    fn remove_nulls(value: &mut Value) {
+        match value {
+            Value::Object(members) => {
+                members.retain(|_, member| !member.is_null());
+                members.values_mut().for_each(remove_nulls);
+            }
+            Value::Array(items) => items.iter_mut().for_each(remove_nulls),
+            _ => {}
+        }
+    }
+
     #[test]
     fn evidence_contract_assets_survive_prepared_and_verified_schema_test_rederivation() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -7067,7 +7078,12 @@ journeys:
         .unwrap();
         let identity = source.package.as_mut().unwrap();
         identity.source_revision = "fixture-project-source".into();
-        let project = serde_json::to_vec(&source).unwrap();
+        // The serialized source writes an absent optional member as null,
+        // which an authored file never carries; the package build reads the
+        // source as authored.
+        let mut project = serde_json::to_value(&source).unwrap();
+        remove_nulls(&mut project);
+        let project = serde_json::to_vec(&project).unwrap();
         let assets = source
             .evidence_providers
             .iter()

@@ -15,7 +15,7 @@ manifestProjection:
     title:
       en: Business Establishments Registry Catalog
       fr: Catalogue du registre des entreprises et établissements
-    description: &a1
+    description:
       en: Business, establishment, and dated operator assignment metadata.
       fr: Métadonnées des entreprises, des établissements et de leurs exploitants successifs.
     publisher:
@@ -33,7 +33,9 @@ manifestProjection:
       title:
         en: Business Establishments Registry
         fr: Registre des entreprises et établissements
-      description: *a1
+      description:
+        en: Business, establishment, and dated operator assignment metadata.
+        fr: Métadonnées des entreprises, des établissements et de leurs exploitants successifs.
       owner: Business Registration Authority
       status: active
       version: "2026.1"

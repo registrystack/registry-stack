@@ -68,7 +68,7 @@ apiVersion: registry.registrystack.org/v1alpha1
 kind: RegistryProject
 registry:
   id: startup-http
-  version: 1
+  version: "1"
   defaultLanguage: en
   canonicalBaseIri: https://authoring.example.test
 entities:

@@ -277,6 +277,7 @@ schema = [
     "registry-platform-audit?/schema",
     "registry-platform-config/schema",
     "registry-platform-hooks/schema",
+    "registry-platform-yaml/schema",
 ]
 tooling = ["dep:tempfile", "dep:tower"]
 wasm = ["registry-platform-script/wasm"]
@@ -311,6 +312,7 @@ registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
 registry-review-client = { workspace = true, optional = true }
 registry-platform-script.workspace = true
+registry-platform-yaml.workspace = true
 jsonschema.workspace = true
 pg_query.workspace = true
 rhai = { workspace = true, features = ["internals"] }

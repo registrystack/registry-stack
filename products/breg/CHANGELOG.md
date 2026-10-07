@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- BREAKING: `registry.yaml` and `module.yaml` are read by the shared
+  configuration reader. A file that writes null, an unquoted number where text
+  is expected (`version: 1`), an ambiguous number, or a YAML anchor, alias,
+  merge key, or tag is refused, and source refusals carry the reader's codes
+  in place of `source.yaml.invalid` and `source.environment_expression`. A
+  package whose sealed sources carry such a shape must be rebuilt from a
+  corrected source. Migration steps and the code table are in
+  `release/notes/config-conventions/breg.md`.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
   row, and journaling a `GET` the caller did not send. A `HEAD` now receives
