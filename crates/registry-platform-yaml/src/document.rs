@@ -6,7 +6,9 @@
 //! 1. the size cap and the UTF-8 check;
 //! 2. the YAML subset, building the tree (every structural problem together);
 //! 3. the envelope (`apiVersion` and `kind`);
-//! 4. the format's removed keys;
+//! 4. the format's removed keys (also reported beside a missing envelope
+//!    when one format is expected, since such a file is usually an older
+//!    layout whose removed header names the fix);
 //! 5. decoding into the format's Rust type, recording every unknown key and
 //!    stopping at the first other error.
 //!
@@ -143,8 +145,17 @@ impl<'h> Reader<'h> {
             .into_iter()
             .map(|warning| warning.into_diagnostic(&file, artifact.as_deref()))
             .collect();
+        // A file with no envelope is usually an older layout of the one
+        // format expected, whose removed header key names the fix.
+        let missing_envelope = outcome
+            .problems
+            .iter()
+            .any(|problem| problem.code == "config.missing-envelope");
         // Structural and envelope problems are reported together.
         problems.extend(outcome.problems);
+        if let ([only], true, Some(root)) = (expect.formats(), missing_envelope, root.as_ref()) {
+            problems.extend(removed_keys(root, only.removed_keys));
+        }
         let (Some(root), Some((index, envelope)), true) =
             (root, outcome.matched, problems.is_empty())
         else {

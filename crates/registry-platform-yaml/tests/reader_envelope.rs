@@ -5,7 +5,8 @@ mod common;
 
 use common::*;
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Refusal, ScalarHook, ScalarSite, Severity,
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Refusal, RemovedKey, ScalarHook,
+    ScalarSite, Severity,
 };
 use serde::Deserialize;
 
@@ -314,6 +315,50 @@ fn cfg_change_2_a_removed_key_is_refused_at_the_key_with_its_replacement() {
         JWKS_URI_REPLACEMENT,
     );
     assert_eq!(diagnostic.artifact.as_deref(), Some("ExampleRuntimeConfig"));
+}
+
+#[test]
+fn cfg_change_2_a_file_without_an_envelope_also_names_its_removed_keys() {
+    const LEGACY: FormatSpec = FormatSpec {
+        kind: "ExampleRuntimeConfig",
+        envelope: FORMAT.envelope,
+        removed_keys: &[RemovedKey {
+            pointer: "/schemaVersion",
+            replacement: "Replace `schemaVersion` with apiVersion and kind.",
+        }],
+    };
+    let report = Reader::new(FILE)
+        .read(
+            b"schemaVersion: example/v1\nname: a\n",
+            &Expect::one(&LEGACY),
+        )
+        .unwrap_err();
+    let found: Vec<(&str, &str, (usize, usize))> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str(), at(d)))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("config.missing-envelope", "", (1, 1)),
+            ("config.removed-key", "/schemaVersion", (1, 1)),
+        ]
+    );
+    assert_eq!(
+        report.diagnostics()[1].suggested_action,
+        "Replace `schemaVersion` with apiVersion and kind."
+    );
+
+    // A file of another kind is not an older layout: its keys are not
+    // checked against this format's removed keys.
+    let report = Reader::new(FILE)
+        .read(
+            format!("apiVersion: {API_VERSION}\nkind: Other\nschemaVersion: a\n").as_bytes(),
+            &Expect::one(&LEGACY),
+        )
+        .unwrap_err();
+    assert_eq!(codes(&report), ["config.wrong-kind"]);
 }
 
 #[test]
