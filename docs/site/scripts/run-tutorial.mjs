@@ -48,7 +48,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { stopGroup } from './tutorial-runner/background.mjs';
+import { signalGroup, stopGroup } from './tutorial-runner/background.mjs';
 import { checkExcerpt } from './tutorial-runner/excerpt.mjs';
 import { checkExpectation } from './tutorial-runner/expect.mjs';
 import { copyCheckout } from './tutorial-runner/checkout.mjs';
@@ -219,7 +219,7 @@ function runScript(scriptPath, readerDir, binDir, toolsetEnv, onSpawn) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('bash', [scriptPath], { cwd: readerDir, env, stdio: ['ignore', 'inherit', 'inherit'], detached: true });
     onSpawn((signal) => {
-      if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, signal);
+      if (child.exitCode === null && child.signalCode === null) signalGroup(child.pid, signal);
     });
     child.on('error', reject);
     child.on('close', (code, signal) => {

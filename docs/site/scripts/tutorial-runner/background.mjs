@@ -22,25 +22,37 @@ import { pathToFileURL } from 'node:url';
 const READY_TIMEOUT_MS = 60_000;
 const STOP_GRACE_MS = 10_000;
 
-export function groupAlive(group) {
+// Send a signal to every process of a group this runner started; signal 0
+// only probes it. Returns whether the group still had a process to send to.
+//
+// Darwin answers EPERM for a group whose remaining processes have exited but
+// are not yet reaped by their parent, where Linux answers success until the
+// reap and ESRCH after it. An exited process runs nothing and holds no port,
+// so that group has ended. EPERM cannot mean a running process the runner may
+// not signal: every group it signals is one it started, whose processes run
+// as its own user.
+export function signalGroup(group, signal) {
   try {
-    process.kill(-group, 0);
+    process.kill(-group, signal);
     return true;
   } catch (error) {
-    if (error.code === 'ESRCH') return false;
+    if (error.code === 'ESRCH' || error.code === 'EPERM') return false;
     throw error;
   }
+}
+
+export function groupAlive(group) {
+  return signalGroup(group, 0);
 }
 
 // Send TERM to the process group, and KILL once the grace period has passed.
 // Returns once no process of the group is left, so a port it held is free.
 export async function stopGroup(group) {
-  if (!groupAlive(group)) return;
-  process.kill(-group, 'SIGTERM');
+  if (!signalGroup(group, 'SIGTERM')) return;
   const deadline = Date.now() + STOP_GRACE_MS;
   while (groupAlive(group)) {
     if (Date.now() > deadline) {
-      process.kill(-group, 'SIGKILL');
+      signalGroup(group, 'SIGKILL');
       while (groupAlive(group)) await sleep(50);
       return;
     }
