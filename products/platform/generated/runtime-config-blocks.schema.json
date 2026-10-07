@@ -1,6 +1,7 @@
 {
   "$defs": {
     "AuditKeyConfig": {
+      "additionalProperties": false,
       "description": "The key for the keyed references an audit record carries in place of raw\nidentifiers, written `audit.hashKeyRef` beside the product's own audit\nsettings.",
       "properties": {
         "hashKeyRef": {
@@ -18,14 +19,12 @@
       "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
       "properties": {
         "migrationUrlRef": {
-          "description": "Secret reference to the migration connection URL.",
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the migration connection URL."
         },
         "runtimeUrlRef": {
-          "description": "Secret reference to the least-privileged runtime connection URL.",
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the least-privileged runtime connection URL."
         },
         "testOnlyPlaintext": {
           "default": false,
@@ -33,13 +32,8 @@
           "type": "boolean"
         },
         "trustedRootCertificateRef": {
-          "default": null,
-          "description": "Secret reference to a PEM root certificate the connection trusts.",
-          "pattern": "^secret:(?:env|file)/",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
         }
       },
       "required": [
@@ -47,6 +41,11 @@
         "migrationUrlRef"
       ],
       "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
     },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
@@ -94,8 +93,7 @@
               "type": "string"
             },
             "uri": {
-              "pattern": "^https?://",
-              "type": "string"
+              "$ref": "#/$defs/Url"
             }
           },
           "required": [
@@ -109,8 +107,7 @@
           "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
           "properties": {
             "documentRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "kind": {
               "const": "static",
@@ -153,6 +150,7 @@
       "type": "string"
     },
     "OidcClientsConfig": {
+      "additionalProperties": false,
       "description": "The OAuth clients a runtime admits access tokens for, and the assertion\nauthorities each client may exchange a subject token from, written under\n`authentication.oidc` beside the issuer.",
       "properties": {
         "allowedClients": {
@@ -187,6 +185,7 @@
       "type": "object"
     },
     "OidcIssuerConfig": {
+      "additionalProperties": false,
       "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
       "properties": {
         "audience": {
@@ -196,9 +195,8 @@
           "type": "string"
         },
         "issuer": {
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL.",
-          "pattern": "^https?://",
-          "type": "string"
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL."
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
@@ -219,12 +217,8 @@
       "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
       "properties": {
         "expectedDigest": {
-          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage.",
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
         },
         "root": {
           "description": "Absolute path of the package directory.",
@@ -320,6 +314,13 @@
         "operator-controlled-upstream",
         "development-loopback"
       ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
       "type": "string"
     }
   },

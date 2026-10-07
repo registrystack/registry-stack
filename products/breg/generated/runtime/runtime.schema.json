@@ -23,6 +23,11 @@
       ],
       "type": "string"
     },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The environment secret provider. It takes no settings.",
@@ -194,8 +199,7 @@
               "type": "string"
             },
             "uri": {
-              "pattern": "^https?://",
-              "type": "string"
+              "$ref": "#/$defs/Url"
             }
           },
           "required": [
@@ -209,8 +213,7 @@
           "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
           "properties": {
             "documentRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "kind": {
               "const": "static",
@@ -1131,11 +1134,10 @@
           "uniqueItems": true
         },
         "issuer": {
+          "$ref": "#/$defs/Url",
           "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL.",
           "maxLength": 2048,
-          "minLength": 1,
-          "pattern": "^https?://",
-          "type": "string"
+          "minLength": 1
         },
         "jwksCache": {
           "$ref": "#/$defs/RawJwksCacheConfig",
@@ -1241,12 +1243,8 @@
       "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
       "properties": {
         "expectedDigest": {
-          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage.",
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
         },
         "root": {
           "description": "Absolute path of the package directory.",
@@ -1585,6 +1583,13 @@
         "caseworkResource"
       ],
       "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
     }
   },
   "$id": "https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json",

@@ -252,7 +252,6 @@ mod tests {
     use super::*;
     use crate::RuntimeConfigError;
     use jsonschema::{Draft, JSONSchema};
-    use registry_platform_config::blocks::SECRET_REFERENCE_PATTERN;
     use registry_platform_config::{
         ConfigBlockErrorKind, MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES,
         MAX_ASSERTION_ISSUER_CLIENTS, MAX_ASSERTION_ISSUER_CLIENT_BYTES,
@@ -375,8 +374,8 @@ mod tests {
             ])
         );
         assert_eq!(
-            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["pattern"],
-            SECRET_REFERENCE_PATTERN
+            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["$ref"],
+            "#/$defs/SecretReference"
         );
         // The shared blocks carry their own bounds into this schema.
         assert_eq!(
@@ -384,8 +383,8 @@ mod tests {
             "#/$defs/SecretReference"
         );
         assert_eq!(
-            document["$defs"]["OidcConfig"]["properties"]["issuer"]["pattern"],
-            "^https?://"
+            document["$defs"]["OidcConfig"]["properties"]["issuer"]["$ref"],
+            "#/$defs/Url"
         );
     }
 

@@ -589,26 +589,12 @@ fn install_runtime_constraints(schema: &mut Value) {
     ] {
         set_definition_property(schema, definition, property, "pattern", json!("^/"));
     }
-    for (definition, property) in [
-        ("DatabaseConfig", "runtimeUrlRef"),
-        ("DatabaseConfig", "migrationUrlRef"),
-        ("DatabaseConfig", "trustedRootCertificateRef"),
-        ("AuditConfig", "hashKeyRef"),
-    ] {
-        set_definition_property(
-            schema,
-            definition,
-            property,
-            "pattern",
-            json!("^secret:(?:env|file)/"),
-        );
-    }
     set_definition_property(
         schema,
-        "PackageConfig",
-        "expectedDigest",
+        "AuditConfig",
+        "hashKeyRef",
         "pattern",
-        json!("^sha256:[0-9a-f]{64}$"),
+        json!("^secret:(?:env|file)/"),
     );
     for (property, minimum, maximum) in [
         ("payloadDays", 1, MAXIMUM_PAYLOAD_DAYS),
@@ -833,21 +819,25 @@ mod tests {
                 "{definition}.{property} must be absolute"
             );
         }
-        for (definition, property) in [
-            ("DatabaseConfig", "runtimeUrlRef"),
-            ("DatabaseConfig", "migrationUrlRef"),
-            ("DatabaseConfig", "trustedRootCertificateRef"),
-            ("AuditConfig", "hashKeyRef"),
+        for property in [
+            "runtimeUrlRef",
+            "migrationUrlRef",
+            "trustedRootCertificateRef",
         ] {
             assert_eq!(
-                document["$defs"][definition]["properties"][property]["pattern"],
-                "^secret:(?:env|file)/",
-                "{definition}.{property} must be a secret reference"
+                document["$defs"]["DatabaseConfig"]["properties"][property]["$ref"],
+                "#/$defs/SecretReference",
+                "DatabaseConfig.{property} must be a secret reference"
             );
         }
         assert_eq!(
-            document["$defs"]["PackageConfig"]["properties"]["expectedDigest"]["pattern"],
-            "^sha256:[0-9a-f]{64}$",
+            document["$defs"]["AuditConfig"]["properties"]["hashKeyRef"]["pattern"],
+            "^secret:(?:env|file)/",
+            "AuditConfig.hashKeyRef must be a secret reference"
+        );
+        assert_eq!(
+            document["$defs"]["PackageConfig"]["properties"]["expectedDigest"]["$ref"],
+            "#/$defs/Digest",
             "package.expectedDigest must be a lowercase SHA-256 label"
         );
         assert_eq!(

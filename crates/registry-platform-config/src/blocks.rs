@@ -249,14 +249,15 @@ pub fn describe_secret_failure(field: &str, reference: &str, error: &SecretError
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DatabaseConfig {
     /// Secret reference to the least-privileged runtime connection URL.
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub runtime_url_ref: String,
     /// Secret reference to the migration connection URL.
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub migration_url_ref: String,
     /// Secret reference to a PEM root certificate the connection trusts.
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_PROVIDER_PATTERN)))]
+    /// Absent, the connection trusts the platform's root certificates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub trusted_root_certificate_ref: Option<String>,
     /// Allow a plaintext connection. Refused outside test builds.
     #[serde(default)]
@@ -308,14 +309,14 @@ pub enum JwksSource {
     Discovery {},
     /// Fetch the key set from this absolute `https` URI, skipping discovery.
     Uri {
-        #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^https?://")))]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
         uri: String,
     },
     /// Read the key set from a secret, for deployments without network access
     /// to the issuer.
     Static {
         #[serde(rename = "documentRef")]
-        #[cfg_attr(feature = "schema", schemars(extend("pattern" = SECRET_REFERENCE_PATTERN)))]
+        #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
         document_ref: String,
     },
 }
@@ -407,6 +408,7 @@ fn valid_jwks_uri(value: &str, allow_loopback_http: bool) -> bool {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct AuditKeyConfig {
     /// Secret reference to the audit hash key.
     pub hash_key_ref: SecretReference,
@@ -431,10 +433,11 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct OidcIssuerConfig {
     /// Exact issuer accepted in access-token `iss` claims, an absolute
     /// `https` URL.
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^https?://")))]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub issuer: String,
     /// The audience every accepted access token must carry in `aud`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
@@ -503,6 +506,7 @@ pub const MAX_ASSERTION_ISSUER_BYTES: usize = 512;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct OidcClientsConfig {
     /// Client identifiers whose access tokens are admitted. A runtime decides
     /// whether an empty list is acceptable in production.
@@ -580,7 +584,7 @@ pub struct PackageConfig {
     /// `SHA256SUMS` file. When set, the runtime refuses to start on any other
     /// package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^sha256:[0-9a-f]{64}$")))]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     pub expected_digest: Option<String>,
 }
 

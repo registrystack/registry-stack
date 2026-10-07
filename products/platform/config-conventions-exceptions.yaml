@@ -6033,13 +6033,6 @@ exceptions:
   wp: WP8
   reason: privateKeyRef ends in Ref but is not a SecretReference
   resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-VAL-6
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawPackageConfig/properties/expectedDigest
-  class: pending
-  wp: WP3
-  reason: expectedDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
 - rule: CFG-VAL-7
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig/properties/baseUrl
@@ -6060,13 +6053,6 @@ exceptions:
   class: pending
   wp: WP3
   reason: publicOrigin is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawOidcVerifierConfig/properties/issuer
-  class: pending
-  wp: WP3
-  reason: issuer is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-VAL-7
   format: breg/runtime
@@ -7680,13 +7666,6 @@ exceptions:
   class: pending
   wp: WP3
   reason: baseUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/issuer
-  class: pending
-  wp: WP3
-  reason: issuer is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-VAL-7
   format: casework/runtime
@@ -10230,13 +10209,6 @@ exceptions:
   resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-VAL-7
   format: messaging/runtime
-  location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/issuer
-  class: pending
-  wp: WP3
-  reason: issuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: messaging/runtime
   location: products/messaging/generated/runtime/runtime.schema.json#/$defs/ProviderConnection/oneOf/1/properties/baseUrl
   class: pending
   wp: WP3
@@ -10277,13 +10249,6 @@ exceptions:
   wp: WP3
   reason: the reader does not read through registry-platform-yaml
   resolution: Read through registry-platform-yaml
-- rule: CFG-EMPTY-4
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/DatabaseConfig/properties/trustedRootCertificateRef
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
 - rule: CFG-ID-1
   format: platform/runtime-config-blocks
   location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/OidcClientsConfig/properties/assertionIssuers
@@ -10296,76 +10261,6 @@ exceptions:
   class: stable-move
   reason: a union tagged by kind, not type
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'
-- rule: CFG-SCHEMA-4
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/AuditKeyConfig
-  class: pending
-  wp: WP3
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/OidcClientsConfig
-  class: pending
-  wp: WP3
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/OidcIssuerConfig
-  class: pending
-  wp: WP3
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SEC-1
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/DatabaseConfig/properties/migrationUrlRef
-  class: pending
-  wp: WP8
-  reason: migrationUrlRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/DatabaseConfig/properties/runtimeUrlRef
-  class: pending
-  wp: WP8
-  reason: runtimeUrlRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/DatabaseConfig/properties/trustedRootCertificateRef
-  class: pending
-  wp: WP8
-  reason: trustedRootCertificateRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/JwksSource/oneOf/2/properties/documentRef
-  class: pending
-  wp: WP8
-  reason: documentRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-VAL-6
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/PackageConfig/properties/expectedDigest
-  class: pending
-  wp: WP3
-  reason: expectedDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-7
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/JwksSource/oneOf/1/properties/uri
-  class: pending
-  wp: WP3
-  reason: uri is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/OidcIssuerConfig/properties/issuer
-  class: pending
-  wp: WP3
-  reason: issuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-CHECK-1
   format: platform/task-connection
   location: products/platform/config-formats.yaml#/check
@@ -10820,13 +10715,6 @@ exceptions:
   class: pending
   wp: WP3
   reason: url is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: scheduling/runtime
-  location: products/scheduling/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/issuer
-  class: pending
-  wp: WP3
-  reason: issuer is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-VAL-7
   format: scheduling/runtime

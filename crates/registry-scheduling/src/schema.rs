@@ -185,7 +185,6 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
 mod tests {
     use super::*;
     use crate::config::{DestinationsConfig, RetentionConfig, MAX_HOOK_DESTINATIONS};
-    use registry_platform_config::blocks::SECRET_REFERENCE_PATTERN;
 
     #[test]
     fn runtime_schema_is_deterministic_and_versioned() {
@@ -230,10 +229,18 @@ mod tests {
             registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN,
             "the audit path must be absolute with no `..` segment"
         );
+        for property in [
+            "runtimeUrlRef",
+            "migrationUrlRef",
+            "trustedRootCertificateRef",
+        ] {
+            assert_eq!(
+                document["$defs"]["DatabaseConfig"]["properties"][property]["$ref"],
+                "#/$defs/SecretReference",
+                "DatabaseConfig.{property} must be a secret reference"
+            );
+        }
         for (definition, property) in [
-            ("DatabaseConfig", "runtimeUrlRef"),
-            ("DatabaseConfig", "migrationUrlRef"),
-            ("DatabaseConfig", "trustedRootCertificateRef"),
             ("ReminderDestinationConfig", "bearerTokenRef"),
             ("HookDestinationConfig", "hmacSha256KeyRef"),
         ] {
@@ -252,8 +259,8 @@ mod tests {
             "at least one secret provider must be configured"
         );
         assert_eq!(
-            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["pattern"],
-            SECRET_REFERENCE_PATTERN
+            document["$defs"]["JwksSource"]["oneOf"][2]["properties"]["documentRef"]["$ref"],
+            "#/$defs/SecretReference"
         );
         // The shared blocks carry their own bounds into this schema.
         assert_eq!(
@@ -269,8 +276,8 @@ mod tests {
             512
         );
         assert_eq!(
-            document["$defs"]["OidcConfig"]["properties"]["issuer"]["pattern"],
-            "^https?://"
+            document["$defs"]["OidcConfig"]["properties"]["issuer"]["$ref"],
+            "#/$defs/Url"
         );
         let audit = &document["$defs"]["AuditConfig"];
         assert_eq!(
