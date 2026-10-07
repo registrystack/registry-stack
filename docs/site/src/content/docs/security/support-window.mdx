@@ -30,9 +30,10 @@ Registry Stack does not promise backports to an earlier minor.
 
 The rest of the lifecycle policy is designed to make rolling forward cheap:
 
-- Within a major line, upgrades are backward compatible per the
-  [compatibility promise](../../reference/api-stability/). Evidence Gateway and Registry Manifest
-  have no migrated state, so moving to the fixed release needs no migration step for them. Base
+- Within a major line, a minor release removes a covered surface only after deprecating it in an
+  earlier minor, per the [compatibility promise](../../reference/api-stability/). Evidence Gateway
+  and Registry Manifest have no migrated state, so moving to the fixed release needs no migration
+  step for them. Base
   Registry Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state;
   moving to the fixed release for one of them can require running the migration command its
   release notes name (`bregctl apply`, `caseworkctl apply`, `schedulingctl apply`, or
@@ -62,7 +63,7 @@ maintenance moves to the successor's latest minor.
   [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.13.0/SECURITY.md).
 - Release notes identify security-relevant changes. When a fix required tightening covered
   surface, the notes say so explicitly, per the security exception in the
-  [deprecation policy](../../reference/deprecation-policy/).
+  [deprecation rules](../../reference/api-stability/#deprecation-and-removal).
 - Dependency advisories are enforced through `cargo deny check` in the CI `rust` job, which runs on every push that touches Rust code (the job is path-filtered).
   An advisory without an upstream fix carries a scoped, documented ignore in `deny.toml`
   with a review trigger; a newly published advisory fails CI until it is fixed or receives

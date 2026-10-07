@@ -348,7 +348,7 @@ outside the reader's key checks, so a check stops at the first unknown key in th
 you to remove it without proposing or listing accepted keys.
 
 The code names the problem. The message wording is human-readable output, which
-[API stability](../api-stability/#exempt-surfaces) exempts from its promise.
+[API stability](../api-stability/#outside-the-promise) places outside its promise.
 
 {/* Evidence: crates/registry-platform-yaml/src/messages.rs, CODES, unknown_key(), closest(),
     suggest(), unknown_variant(), too_many_problems(), and deprecated_api_version();
@@ -558,13 +558,13 @@ The Stability column gives each format's label in the format registry:
 
 - **Promised**: the format is meant to be covered by
   [API stability and versioning](../api-stability/). The
-  [covered surfaces](../api-stability/#covered-surfaces) table there names the configuration
-  formats the promise covers today; where the two differ, that table holds.
+  [promised products](../api-stability/#promised-products) table there names the configuration
+  formats the promise covers; where the two differ, that table holds.
 - **Experimental**: shipped, and may change in a minor release, announced with a `BREAKING:` note.
 - **Unpromised**: no compatibility promise, for files such as fixtures, test journeys,
   development clients, and the Evidence Gateway authoring files.
 
-Before `v1.0.0`, the [pre-1.0 rule](../api-stability/#versioning-scheme) applies to every format:
+Before `v1.0.0`, the [pre-1.0 rule](../api-stability/#versioning) applies to every format:
 a minor release may change one, with a `BREAKING:` entry and migration steps in the release note.
 
 {/* Evidence: products/platform/CONFIG-CONVENTIONS.md, Stability;

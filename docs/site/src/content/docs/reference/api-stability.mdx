@@ -1,6 +1,6 @@
 ---
 title: API stability and versioning
-description: The compatibility promise Registry Stack makes at v1.0.0, the surfaces it covers, and what counts as a breaking change.
+description: What Registry Stack 1.0 promises, which surfaces stay experimental, how a covered surface is deprecated and removed, and how state moves between releases.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,209 +11,262 @@ locale: en
 standards_referenced: []
 ---
 
-This page defines the compatibility promise for Registry Stack releases: which surfaces are
-covered, what counts as a breaking change, and which surfaces stay exempt. The promise takes
-effect at `v1.0.0`. Until then, Registry Stack is a pre-1.0 technical release and the
-[pre-1.0 rule](#versioning-scheme) applies.
+Use this page to decide which Registry Stack surfaces you can build on across releases. It names
+the promised products and surfaces, the experimental ones, the rules a change to a covered surface
+follows, and how state moves from one release to the next. The promise takes effect at `v1.0.0`.
 
-## Versioning scheme
+## Versioning
 
-Registry Stack releases carry one stack-wide version, tagged `vMAJOR.MINOR.PATCH`. Every
-released artifact of a release (binaries, container images, the docs snapshot, the release
-manifest under `release/manifests/`) shares that version.
+Every artifact of a release (binaries, container images, client packages, the docs snapshot, and
+the release manifest under `release/manifests/`) carries one stack-wide version, tagged
+`vMAJOR.MINOR.PATCH`.
 
-Before `v1.0.0`:
+From `v1.0.0`, 1.x follows the deprecation rules on this page, not strict SemVer:
 
-- A minor release may contain breaking changes. Each one is announced with a `BREAKING:` entry and
-  concrete migration steps in the stack release note, plus the owning product CHANGELOG where one
-  exists.
-- A patch release is backward compatible with the latest minor line.
+- A patch release (`1.x.y`) fixes behavior and never breaks a covered surface.
+- A minor release (`1.x`) may add surface, deprecate surface, and remove a configuration or HTTP
+  surface that was deprecated in at least one earlier minor release.
+- A major release (`2.0`) may also remove deprecated SDK methods.
 
-From `v1.0.0`:
+Before `v1.0.0`, a minor release may contain breaking changes. Each one is announced with a
+`BREAKING:` entry and concrete migration steps in the stack release note, plus the owning product
+CHANGELOG where one exists. A patch release is backward compatible with the latest minor line.
 
-- A major release is the only release that may break a covered surface.
-- A minor release may add surface (new routes, new optional config keys, new CLI flags,
-  new error codes) and may deprecate surface, but not remove or change it incompatibly.
-- A patch release contains fixes only.
+{/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace). */}
 
-## Covered surfaces
+## Promised products
 
-The promise covers the surfaces in this table. For each, the contract artifact is the source
-of truth: if this page and the artifact disagree, the artifact wins.
+The promise covers five products: Base Registry Engine, Evidence Gateway, Registry Casework,
+Registry Discovery, and Registry Manifest. For each, it covers the configuration files, identified
+by their `apiVersion` or schema version, and the HTTP API with its OpenAPI document and its problem
+`code` values. The linked references define each surface; if this page and a reference disagree,
+the reference wins.
 
-The enforcement column names the repository CI checks so the mechanism is auditable.
-
-| Surface | Contract artifact | Enforcement today |
+| Product | Configuration | HTTP API |
 | --- | --- | --- |
-| Evidence Gateway HTTP API and its Version 1 contracts | The frozen Version 1 source contracts under `products/evidence/contracts/`, indexed by `products/evidence/contracts/README.md`, and the artifacts generated from them under `products/evidence/generated/`, including `registry-evidence.openapi.json` | Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which regenerates every contract artifact and fails on any byte difference from the committed copies, plus `products/evidence/scripts/check-source-neutrality.sh` and `products/evidence/scripts/check-verifier-portability.sh` |
-| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), and the `https://id.registrystack.org/` identifier space. Evidence Gateway's closed problem set has its own frozen contract, `products/evidence/contracts/problem-contract.yaml`, documented at [Evidence Gateway problem types](../evidence-problems/) | The `evidence-contracts` job regenerates and byte-diffs the committed Evidence Gateway problem schema against runtime-owned generation |
-| Configuration formats and documented environment variables | The frozen Evidence Gateway schemas `products/evidence/contracts/runtime.schema.yaml` and `products/evidence/contracts/bundle.schema.yaml`, plus the [environment variable reference](../environment-variables/) | Evidence Gateway parses with `deny_unknown_fields`, so a retired or misspelled key is a startup refusal rather than an ignored field. Its config parser is tested against the frozen contract schemas (`crates/registry-evidence/src/config.rs`), and `products/evidence/scripts/check-config-key-paths.sh` holds its configuration reference in exact parity with them |
-| Registry Manifest schema and rendered artifacts | `registry-manifest/v1` and the rendered artifact schema versions, governed by [RS-DM-MANIFEST](../../spec/rs-dm-manifest/) | `validate_manifest` accepts only `registry-manifest/v1`; REQ-DM-MANIFEST-013 requires strict unknown-key rejection at parse time |
-| Command-line interfaces | Documented commands and flags in the published CLI reference, and their machine-readable output modes | CLI reference pages rendered from the committed command catalog `crates/registry-cli-docs/catalog.json`, which the `registry-cli-docs` snapshot test holds to the Clap command definitions; the `evidence` command surface is stated in `products/evidence/OPERATOR-CONTRACT.md` and exercised end to end against the built binary in `crates/registry-evidence/tests/cli.rs`; the release candidate workflow asserts each built binary reports the release version |
-| Release artifacts and verification interface | Released binary asset names, the version-appropriate `ghcr.io/registrystack/<image>` roster recorded in the release manifest, and the signature and provenance layout in `release/VERIFY.md` | The release workflow verifies signed assets and exact image digests as documented in `release/VERIFY.md` |
+| Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI | [Base Registry Engine API](../breg-api/) |
+| Evidence Gateway | [Bundle and runtime files](../evidence-configuration/) | [Evidence Gateway API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS and SD-JWT VC response formats |
+| Registry Casework | [Casework policy](../../configure/casework/) and [runtime file](../../operate/casework/#write-the-runtime-file) | [Casework API](../apis/registry-casework/) |
+| Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../configure/discovery/#verify-resolution-and-exact-search) |
+| Registry Manifest | [`registry-manifest/v1` metadata documents](../../spec/rs-dm-manifest/) | None |
 
-`evidence-oid4vci` is absent from the table because it is a supporting service rather than a
-pattern of its own. Its configuration fields, route shapes, and CLI flags may still change without
-a major release.
+Evidence Gateway's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/batch`, and
+`GET /v1/evidence-definitions`. Its operational routes are `/health`, `/ready`, `/openapi.json`,
+`/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`.
+
+{/* Evidence: crates/registry-discovery/src/server.rs, SERVICES_ROUTE and EVIDENCE_TYPES_ROUTE. */}
+
+The promise also covers the client SDKs: the Node.js package `@registrystack/client`, the Python
+package `registry-stack-client`, and the Rust crate `registry-stack-client` taken from the release
+tag. In each, the `breg`, `evidence`, `casework`, and `discovery` namespaces are promised. The SDKs
+are additive-only across 1.x, because npm `^1.x`, Cargo `1.x`, and pip `~=1.x` ranges pick up minor
+releases automatically: a minor release may deprecate an SDK method, and its removal waits for
+`2.0`. See the [client API reference](../client-api/).
+
+## Experimental surfaces
+
+These surfaces ship in releases but stay outside the promise. They keep their `v1alpha1` version
+strings and may change or be removed in any minor release without deprecation:
+
+- Registry Scheduling, and the `scheduling` namespace of the client packages
+- Registry Messaging, and the `messaging` namespace the client packages carry from `v0.38.0`
+- Registry Render
+- `breg-mcp` and `breg-review`, the citizen services beside Base Registry Engine
+- `evidence-oid4vci`, the wallet-facing delivery service beside Evidence Gateway, including its
+  configuration, routes, and command-line flags
+- the Base Registry Engine statistics routes under `/v1/statistics/`, and the
+  `statisticalDatasets` declarations behind them
+- the Base Registry Engine spatial adapter routes under `/v1/gis`
+- the `scheduling` variant of a Casework task grant's bounds
+
+Before `v1.0.0`, one breaking release moves the promised products' version strings from
+`v1alpha1` to stable versions, so a `v1alpha1` string in a 1.x deployment marks an experimental
+surface.
+
+{/* Evidence: crates/registry-breg/src/api/statistics.rs; crates/registry-breg/src/api/gis.rs;
+    crates/registry-casework-core/src/task_grant.rs, TaskGrantBounds. */}
+
+## Outside the promise
+
+Two surfaces get best effort: ctl JSON output and audit record schemas. They may change in a minor
+release with a release note and no deprecation window.
+
+These surfaces are not covered:
+
+- Rust library crates. Every workspace crate is `publish = false`, and nothing is published to
+  crates.io. A crate other than the `registry-stack-client` SDK may change in any release; pinning
+  the repository by tag or commit gets exactly what you pinned.
+- Database internals.
+- Human-readable CLI text.
+- Log lines.
+
+A surface this page does not name is outside the promise.
+
+{/* Evidence: crates/registry-stack-client/Cargo.toml, publish = false. */}
 
 ## What counts as a breaking change
 
-For HTTP APIs:
+For an HTTP API:
 
-- Removing or renaming a route, parameter, request field, or response field
-- Changing the type, meaning, or optionality of an existing field
-- Removing or renaming a stable error `code`
-- Changing the stack-wide meaning of a released error code, or changing an existing
-  product-and-operation HTTP mapping for that code
-- Tightening authentication or scope requirements on an existing route, except as a security
-  fix announced in the release notes
+- removing or renaming a route, parameter, request field, or response field
+- changing the type, meaning, or optionality of an existing field
+- removing or renaming a problem `code`, changing the stack-wide meaning of a released code, or
+  changing an existing product-and-operation HTTP mapping for it
+- tightening authentication or scope requirements on an existing route, except as a security fix
+  announced in the release notes
 
 For configuration:
 
-- Removing or renaming a config key or documented environment variable
-- Narrowing the accepted values of an existing key
-- Changing the semantics or the default of an existing key (see
-  [Defaults are part of the contract](#defaults-are-part-of-the-contract))
+- removing or renaming a key
+- narrowing the accepted values of an existing key
+- changing the meaning or the default of an existing key
 
-For CLIs:
+For an SDK:
 
-- Removing or renaming a documented command or flag
-- Changing the schema of a machine-readable output mode incompatibly
+- removing or renaming a method, type, or member
+- changing a method's parameters or result incompatibly
 
-For portable metadata and authored projects:
+New routes, optional request fields, response members, optional configuration keys, problem codes,
+and SDK methods are additive. Descriptions, summaries, and ordering inside an OpenAPI document,
+and problem `detail` strings, are not part of the contract.
 
-- Removing or renaming a document key, or changing the meaning of an existing one
+## Deprecation and removal
 
-For a selected metric family, once a maintained product publishes one:
+Nothing changes meaning in place. The replacement ships first, then the old form is deprecated,
+then removed. For configuration, the replacement is a new `apiVersion` accepted alongside the old
+one.
 
-- Removing or renaming a family
-- Changing a family type, label key, or label meaning
+A deprecation lasts at least one minor release. There is no time floor; a later revision of this
+policy may lengthen the window and never shortens it. During the window:
 
-Metric help text, output ordering, and corrections to observed values are not covered. New
-families and new values for an existing bounded label are additive changes.
+- the product's `check` command, or `registry-manifest validate` for Registry Manifest, reports
+  deprecated keys
+- HTTP responses carry `Deprecation` and `Sunset` headers (RFC 9745 and RFC 8594), and the OpenAPI
+  document marks the route or field `deprecated: true`
+- the release note carries a `Deprecated` entry naming the surface, its replacement, the earliest
+  release that may remove it, and copyable upgrade steps
+- the docs page for the surface notes `since vX.Y` and names the replacement
 
-Additive changes (new routes, new optional fields, new optional config keys, new error codes,
-new commands and flags) are minor-release material and are not breaking.
+A removal turns a retired configuration key into a refusal, never a silently ignored key, and its
+release note repeats the migration steps.
 
-## Compatibility direction
+A security fix may tighten or remove surface without the full window when keeping the surface
+would leave deployments exploitable. The release notes document the removal, the shortened window,
+and the migration steps without details that put unpatched deployments at more risk.
 
-From 1.0, the promise is backward compatibility: a new binary within a major line reads the wire data,
-config files, manifests, and persisted state written for any earlier release of that line.
+Changes made before `v1.0.0`, including the
+[Registry Relay retirement](../../decisions/registry-relay-retirement-2026-10-03/), predate these
+rules. A docs page with `status: deprecated` frontmatter is a superseded page, not a scheduled
+removal.
 
-Before 1.0, persisted state has a narrower promise: a release reads only the state its
-immediate predecessor wrote, and documents the forward state path from that predecessor. If you
-run an older release, upgrade one release at a time, and complete each release's upgrade steps
+## Clients and servers
+
+A client must ignore response members it does not recognize, and must not fail on a problem `code`
+it does not recognize; it handles that problem by its HTTP status. That rule is what lets a minor
+release add members and codes.
+
+Servers stay strict on requests and configuration: an unknown request member or configuration key
+is refused, not ignored. A configuration file that uses a key a later release introduced fails to
+load on an earlier binary, so pin configuration to the release you deploy.
+
+{/* Evidence: crates/registry-evidence/src/config.rs, deny_unknown_fields;
+    crates/registry-casework-core/src/task_grant.rs, deny_unknown_fields. */}
+
+## Evidence Gateway Version 1 contracts
+
+Evidence Gateway's frozen Version 1 contracts under `products/evidence/contracts/` are the
+artifacts that define its configuration and HTTP surfaces. Frozen means they change only under the
+rules on this page: Evidence Gateway has the same promise and the same deprecation rule as the
+other promised products.
+
+## Base Registry Engine WASM action handlers
+
+A WASM action handler is promised within the limits the
+[WASM action handler guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/wasm-action-handlers.md)
+states:
+
+- the project keys `handler.type: wasm`, the `module` path, and handler ABI
+  `registry.action-handler/v1`
+- the guest byte ABI: a wasm32 core module with zero imports; the exports `alloc`, `handle`,
+  `result_ptr`, `result_len`, and `memory`; the `handle` status codes `0` (success), `1` (malformed
+  request), and `2` (internal error); the `{"inputs": ...}` request document; and the one JSON
+  outcome document
+- the runtime `wasmExecution` keys `maximumModuleBytes`, `maximumGuestMemoryBytes`, and `backend`, with
+  their documented ranges and defaults
+
+Raising a limit is additive; lowering one is breaking. The fuel budget, which limit stops a call
+first, performance, backend speed, and the Wasmtime version are not promised. WASM hook handlers
+and the WASM handler SDK are outside the promise.
+
+{/* Evidence: products/breg/wasm-action-handlers.md, What ships and Operator configuration;
+    crates/registry-breg/src/wasm_handler.rs, structural_violation() and admission_violation();
+    crates/registry-platform-script/src/wasm.rs, GuestMalformedRequest and GuestInternalError. */}
+
+## Upgrades and state
+
+Each release reads the state its immediate predecessor wrote, with two exceptions: `v0.40.0` and
+`v1.0.0`. `v1.0.0` is a fresh install, and no upgrade from a `v0.x` release to it is supported. For
+a minor release, the immediate predecessor is the last release of the previous line. For a patch
+release, it is the previous release of its own line; a patch release promises no direct path from a
+release before its line. Upgrade one release at a time, and complete each release's upgrade steps
 before you start the next.
 
-`v0.40.0` is the exception: it does not upgrade state `v0.39.0` wrote in place. Rewrite the
+`v0.40.0` does not upgrade state `v0.39.0` wrote in place. Rewrite the
 configuration you carry over, rebuild packages, and apply them to new databases as the
 [upgrade runbook](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order) describes.
 The forward state path starts at `v0.40.0`; subsequent pre-1.0 releases read the state their
 immediate predecessor wrote.
 
-{/* Evidence: CONTRIBUTING.md, predecessor readability and the v0.40.0 exception;
-    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR and check_forward_path(). */}
+Upgrades are forward-only: no release reads state a later release wrote. To roll back, restore the
+backup taken before the upgrade and run the previous release, as
+[Roll back](../../operate/advanced/upgrade-and-retire/#roll-back) describes.
 
-The reverse is not promised. Evidence Gateway parses config with `deny_unknown_fields`, so a config
-file that uses keys introduced in a newer release fails to load on an older binary. Pin your config
-to the release you deploy.
-
-Evidence Gateway and Registry Manifest have no migrated state or migration command. Evidence
-Gateway writes the audit log named by the `audit` block in its runtime file.
-
-Base Registry Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state with
-their own migration command:
+Evidence Gateway, Registry Discovery, and Registry Manifest have no migrated state. Base Registry
+Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state:
 [`bregctl apply`](../../operate/breg-changes/#activate-the-successor) activates a package and runs
 its migration, [`caseworkctl apply`](../../operate/casework/#plan-apply-and-serve) activates a
 Casework package and runs its migrations, and `schedulingctl apply` activates a Scheduling package
 and runs its migrations. `messagingctl apply` activates a Messaging package and runs its migrations.
-Before 1.0, an upgrade between releases of these products can require the migration steps that
-release's notes name; read them before upgrading. The `v0.40.0` exception above applies to all four.
+Read each release's notes for the migration steps it needs. The `v0.40.0` exception above applies to
+all four.
 Base Registry Engine's Beta pilot conditions are under
 [Stability](../../operate/breg-requirements/#stability) in its requirements.
 
-## Defaults are part of the contract
-
-A default value is behavior an operator relies on without writing it down.
-Changing a covered default incompatibly requires a major release, except for a documented
-security removal under the [deprecation policy](../deprecation-policy/).
-
-## Exempt surfaces
-
-The following are not covered by the compatibility promise, at any version:
-
-- Rust crate APIs. Every workspace crate is `publish = false`; nothing is published to
-  crates.io. Consumers who pin the repository by tag or commit get exactly what they pinned,
-  and crate-level APIs may change in any release.
-- Human-readable CLI output, log message text, and problem `detail` strings. Machine
-  consumers must use the JSON output modes, the structured log format, and the `code` member.
-- Hidden commands and internal protocols. A command or protocol that no reference page documents
-  is not a covered surface.
-- Adopter tooling that wraps a covered surface rather than defining one. `evidencectl` generates
-  key material and project scaffolds, delegates runtime decisions to the `evidence` binary, and
-  reuses the Evidence client and portable verifier for relying-party request preparation and
-  offline response verification.
-- The layout of the repository, the `products/` export trees, the docs site internals, and
-  the lab tooling.
-- Descriptions, summaries, and ordering inside generated OpenAPI documents. The contract is
-  the paths, operations, schemas, and status codes, not the prose.
-- Supporting-service surfaces explicitly identified as pre-contract, and release channels,
-  examples, or draft documentation that make no stable contract claim.
-
-## Route version namespaces
-
-The HTTP surface carries independent version prefixes per product and per plane. Each namespace
-versions independently; a version bump in one namespace does not imply one in another.
-
-Evidence Gateway's three versioned operations, `POST /v1/evidence`, `POST /v1/evidence/batch`, and
-`GET /v1/evidence-definitions`, are the whole of its evidence surface under the frozen Version 1
-contract. Its remaining routes are
-operational or discovery routes and are unversioned by convention: `/health`, `/ready`,
-`/openapi.json`, `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. Evidence Gateway
-serves `/metrics` on a separate listener when one is configured, never on the request listener.
+{/* Evidence: CONTRIBUTING.md, predecessor readability and the v0.40.0 exception;
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR, check_forward_path(),
+    select_from_tag(), and check_floor_is_current(); crates/registry-discovery/Cargo.toml. */}
 
 ## Enforcement
 
 The promise is machine-checked where a checker exists:
 
-- Evidence Gateway: root CI's `evidence-contracts` job regenerates every contract artifact from the
-  code with `products/evidence/scripts/check-contracts.sh` and fails on any byte difference from the
-  committed copies, so the OpenAPI document, problem schema, and request and response schemas
-  cannot drift from a released binary.
-- Config: Evidence Gateway's config parser is tested against the frozen contract schemas rather
-  than a schema generated from it.
+- Evidence Gateway: root CI's `evidence-contracts` job runs
+  `products/evidence/scripts/check-contracts.sh`, which regenerates every contract artifact and
+  fails on any byte difference from the committed copies. `products/evidence/scripts/check-config-key-paths.sh`
+  holds the configuration reference in exact parity with the frozen schemas.
 - Registry Manifest: schema and renderer tests pin accepted inputs and deterministic artifacts.
-- Published CLI reference: the `registry-cli-docs` snapshot test holds the committed command
-  catalog to the Clap command definitions, and documentation generation checks the pages against
-  that catalog.
 - Forward state path: the release upgrade rehearsal workflow runs
   `release/scripts/rehearse-upgrade.py` on every pull request that changes a release manifest, and
-  on manual dispatch. It downloads the previous release's Base Registry Engine, Casework,
-  Evidence Gateway, and Messaging binaries, verifies them against the signed `SHA256SUMS` as
-  `release/VERIFY.md` describes, and writes records, review work, messages, and audit entries with
-  them against disposable PostgreSQL. It then runs the upgrade steps with the binaries built from
-  the pull request and
-  fails when captured domain data or stored revisions change, other captured views differ, or
-  retained tables lose rows. Base Registry Engine rebuilds its package with the current compiler,
-  applies it as a successor when the rebuilt digest changes, and serves; it then applies an
-  additive successor and serves again. Its package-bound ETags may change. The upgraded Casework,
-  Evidence Gateway, and Messaging runtimes continue the audit files the previous release wrote,
-  and the rehearsal fails when a file was empty before the upgrade or holds fewer entries after
-  it than before plus the number the upgraded runtime must write. It refuses to start from a
-  release before `v0.40.0`. While no release from that floor onward is published, the rehearsal uses the
-  binaries under test on both sides and reports that it has no published predecessor. This
-  exercises the scenarios with the same build; it does not demonstrate compatibility between
-  releases. Once a release on the forward state path is published, the default run downloads it.
-  Scheduling state is not rehearsed: the rehearsal has no Scheduling leg.
+  on manual dispatch. It verifies the previous release's binaries against the signed `SHA256SUMS`,
+  writes records, review work, messages, and audit entries with them against disposable PostgreSQL,
+  upgrades with the binaries built from the pull request, and fails when captured domain data or
+  stored revisions change, other captured views differ, retained tables lose rows, or an audit file
+  loses entries. It starts from the newest published release at or below the workspace version, so
+  it rehearses the immediate predecessor, and it refuses to start from a release before `v0.40.0`.
+  While no release from that floor onward is published, the rehearsal uses the binaries under test
+  on both sides and reports that it has no published predecessor. This exercises the scenarios with
+  the same build; it does not demonstrate compatibility between releases. Once a release on the
+  forward state path is published, the default run downloads it. Scheduling state is not rehearsed.
 
-{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), and check_forward_path(). */}
+{/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), breg_view_differences(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(). */}
 
-A change that a gate flags as breaking lands only in a release whose version number permits
-it, together with the deprecation and migration steps required by the
-[deprecation policy](../deprecation-policy/).
+A change that a gate flags as breaking lands only in a release whose version permits it, with the
+deprecation and migration steps this page requires.
 
 ## Next
 
-- [Deprecation policy](../deprecation-policy/)
 - [Security support window](../../security/support-window/)
+- [Upgrade and retire](../../operate/advanced/upgrade-and-retire/)
+- [Client API reference](../client-api/)
+- [Error and status code reference](../errors/)
 - [Contracts](../contracts/)

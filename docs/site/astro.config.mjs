@@ -262,6 +262,8 @@ export default defineConfig({
     '/start/evaluate-breg/': internalRedirect('/operate/breg-requirements/'),
     // One client package documents the retained namespaces in one reference.
     '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
+    // The deprecation rules are a section of the one stability promise page.
+    '/reference/deprecation-policy/': internalRedirect('/reference/api-stability/'),
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
@@ -703,7 +705,6 @@ export default defineConfig({
               items: [
                 { label: 'Contracts', slug: 'reference/contracts' },
                 { label: 'API stability and versioning', slug: 'reference/api-stability' },
-                { label: 'Deprecation policy', slug: 'reference/deprecation-policy' },
                 { label: 'Standards', slug: 'reference/standards' },
                 { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
               ],
