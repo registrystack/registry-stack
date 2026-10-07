@@ -82,16 +82,27 @@ class PreparationTest(TestCase):
         self.assertEqual(prep.git(self.repo, "status", "--porcelain"), "")
         self.assertEqual(json.loads((output / "report.json").read_text())["source_sha"], head)
 
-    def test_container_installs_fips_native_build_tools(self):
+    def test_container_installs_only_documentation_tools(self):
         script = CONTAINER_SCRIPT.read_text(encoding="utf-8").replace("\\\n", " ")
         install = next(
             line for line in script.splitlines() if line.startswith("apt-get install ")
         )
-        packages = set(shlex.split(install))
+        packages = set(shlex.split(install)) - {"apt-get", "install", "-y", "-qq"}
 
-        for required in ("build-essential", "cmake", "golang-go", "perl"):
-            with self.subTest(package=required):
-                self.assertIn(required, packages)
+        self.assertEqual(
+            packages,
+            {"ca-certificates", "curl", "git", "python3", "python3-yaml", "xz-utils"},
+        )
+
+    def test_container_installs_no_rust_toolchain(self):
+        commands = [
+            line for line in CONTAINER_SCRIPT.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        ]
+
+        for line in commands:
+            with self.subTest(line=line):
+                self.assertNotRegex(line, r"\b(rustup|cargo|rustc)\b")
 
     def test_apply_preserves_untracked_work_and_rerun_is_noop(self):
         user_file = self.repo / "user-notes.txt"
