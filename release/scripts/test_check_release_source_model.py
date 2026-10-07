@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import tempfile
@@ -55,49 +54,43 @@ external: {}
 
 
 class MonorepoSourceModelTest(unittest.TestCase):
-    def test_monorepo_mode_passes_without_lab_directory(self) -> None:
+    def test_passes_without_lab_directory(self) -> None:
         with MonorepoFixture() as stack_root:
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("release-source registry-stack", result.stdout)
         self.assertNotIn("lab", result.stdout)
 
-    def test_monorepo_mode_passes_without_retired_notary_crates(self) -> None:
+    def test_passes_without_retired_notary_crates(self) -> None:
         with MonorepoFixture() as stack_root:
             shutil.rmtree(stack_root / "crates" / "registry-notary-server")
 
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_monorepo_mode_rejects_legacy_vendor_mode(self) -> None:
-        with MonorepoFixture() as stack_root:
-            result = run_validator(stack_root, "vendor")
+    def test_rejects_arguments(self) -> None:
+        for argument in ("monorepo", "vendor"):
+            with self.subTest(argument=argument), MonorepoFixture() as stack_root:
+                result = run_validator(stack_root, argument)
 
-        self.assertEqual(2, result.returncode)
-        self.assertIn("REGISTRY_RELEASE_SOURCE_MODE=monorepo", result.stderr)
-
-    def test_monorepo_mode_rejects_deprecated_source_mode_env(self) -> None:
-        with MonorepoFixture() as stack_root:
-            result = run_validator_with_env_default(
-                stack_root,
-                extra_env={"REGISTRY_RELEASE_SOURCE_MODE": "source"},
+            self.assertEqual(2, result.returncode)
+            self.assertIn(
+                "usage: release/scripts/check-release-source-model.sh",
+                result.stderr,
             )
 
-        self.assertEqual(2, result.returncode)
-        self.assertIn("REGISTRY_RELEASE_SOURCE_MODE=monorepo", result.stderr)
-
-    def test_monorepo_mode_rejects_missing_evidence_oid4vci_crate(self) -> None:
+    def test_rejects_missing_evidence_oid4vci_crate(self) -> None:
         with MonorepoFixture() as stack_root:
             shutil.rmtree(stack_root / "crates" / "registry-evidence-oid4vci")
 
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("registry-evidence-oid4vci crate", result.stderr)
 
-    def test_monorepo_mode_requires_both_breg_service_crates(self) -> None:
+    def test_requires_both_breg_service_crates(self) -> None:
         for crate, name in (
             ("registry-breg-mcp", "registry-breg-mcp gateway crate"),
             ("registry-breg-review", "registry-breg-review page crate"),
@@ -106,12 +99,12 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 with MonorepoFixture() as stack_root:
                     shutil.rmtree(stack_root / "crates" / crate)
 
-                    result = run_monorepo_validator(stack_root)
+                    result = run_validator(stack_root)
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
-    def test_monorepo_mode_requires_every_casework_crate(self) -> None:
+    def test_requires_every_casework_crate(self) -> None:
         for crate, name in (
             ("registry-casework-core", "registry-casework core crate"),
             ("registry-casework-breg", "registry-casework BReg source adapter crate"),
@@ -131,12 +124,12 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 with MonorepoFixture() as stack_root:
                     shutil.rmtree(stack_root / "crates" / crate)
 
-                    result = run_monorepo_validator(stack_root)
+                    result = run_validator(stack_root)
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
-    def test_monorepo_mode_requires_every_messaging_client_crate(self) -> None:
+    def test_requires_every_messaging_client_crate(self) -> None:
         for crate, name in (
             ("registry-messaging-client", "registry-messaging client crate"),
             (
@@ -152,12 +145,12 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 with MonorepoFixture() as stack_root:
                     shutil.rmtree(stack_root / "crates" / crate)
 
-                    result = run_monorepo_validator(stack_root)
+                    result = run_validator(stack_root)
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
-    def test_monorepo_mode_requires_every_scheduling_client_crate(self) -> None:
+    def test_requires_every_scheduling_client_crate(self) -> None:
         for crate, name in (
             ("registry-scheduling-client", "registry-scheduling client crate"),
             (
@@ -173,14 +166,14 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 with MonorepoFixture() as stack_root:
                     shutil.rmtree(stack_root / "crates" / crate)
 
-                    result = run_monorepo_validator(stack_root)
+                    result = run_validator(stack_root)
 
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
-    def test_monorepo_mode_records_all_declared_external_release_refs(self) -> None:
+    def test_records_all_declared_external_release_refs(self) -> None:
         with MonorepoFixture() as stack_root:
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn(
@@ -192,7 +185,7 @@ class MonorepoSourceModelTest(unittest.TestCase):
             result.stdout,
         )
 
-    def test_monorepo_mode_rejects_malformed_external_ref(self) -> None:
+    def test_rejects_malformed_external_ref(self) -> None:
         with MonorepoFixture() as stack_root:
             manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
             manifest.write_text(
@@ -203,17 +196,17 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("external.registry-atlas", result.stderr)
 
-    def test_monorepo_mode_allows_omitting_historical_lab_externals(self) -> None:
+    def test_allows_omitting_historical_lab_externals(self) -> None:
         with MonorepoFixture() as stack_root:
             manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
             manifest.write_text(POST_LAB_MANIFEST_YAML, encoding="utf-8")
 
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn(
@@ -223,17 +216,17 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotIn("registry-atlas", result.stdout)
         self.assertNotIn("esignet-relay-authenticator", result.stdout)
 
-    def test_monorepo_mode_allows_no_external_source_dependencies(self) -> None:
+    def test_allows_no_external_source_dependencies(self) -> None:
         with MonorepoFixture() as stack_root:
             manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
             manifest.write_text(NO_EXTERNAL_MANIFEST_YAML, encoding="utf-8")
 
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("release-source-external", result.stdout)
 
-    def test_monorepo_mode_requires_externals_for_historical_lab_artifact(self) -> None:
+    def test_requires_externals_for_historical_lab_artifact(self) -> None:
         with MonorepoFixture() as stack_root:
             manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
             manifest.write_text(
@@ -246,16 +239,16 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing required external.registry-atlas", result.stderr)
 
-    def test_monorepo_mode_rejects_missing_manifests(self) -> None:
+    def test_rejects_missing_manifests(self) -> None:
         with MonorepoFixture() as stack_root:
             shutil.rmtree(stack_root / "release" / "manifests")
 
-            result = run_monorepo_validator(stack_root)
+            result = run_validator(stack_root)
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("no release manifest", result.stderr)
@@ -336,45 +329,13 @@ class MonorepoFixture:
         self.tmp.cleanup()
 
 
-def run_monorepo_validator(
-    stack_root: Path,
-    *,
-    extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    return run_validator(stack_root, "monorepo", extra_env=extra_env)
-
-
 def run_validator(
     stack_root: Path,
-    mode: str,
-    *,
-    extra_env: dict[str, str] | None = None,
+    *arguments: str,
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    if extra_env:
-        env.update(extra_env)
     return subprocess.run(
-        ["bash", "release/scripts/check-release-source-model.sh", mode],
+        ["bash", "release/scripts/check-release-source-model.sh", *arguments],
         cwd=stack_root,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def run_validator_with_env_default(
-    stack_root: Path,
-    *,
-    extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    if extra_env:
-        env.update(extra_env)
-    return subprocess.run(
-        ["bash", "release/scripts/check-release-source-model.sh"],
-        cwd=stack_root,
-        env=env,
         text=True,
         capture_output=True,
         check=False,

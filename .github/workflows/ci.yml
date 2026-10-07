@@ -1761,7 +1761,7 @@ jobs:
           version: "0.11.16"
 
       - name: Check monorepo source model
-        run: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
+        run: release/scripts/check-release-source-model.sh
 
       - name: Test source model checker
         run: uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_check_release_source_model.py

@@ -214,8 +214,7 @@ jobs:
             "${{ steps.request.outputs.manifest }}"
           release/scripts/registry-release validate-docsets
           cargo metadata --locked --format-version 1 >/dev/null
-          REGISTRY_RELEASE_SOURCE_MODE=monorepo \
-            release/scripts/check-release-source-model.sh
+          release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
 
   protected-ci:
