@@ -2913,7 +2913,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "9cac7eccc4311044b2149aa323c2bd079a84f03d345abea17e1c38e42461aadd",
+        "sha256": "44e94f20ea57d6f4c2b72d7ee8fcc848d0f46a9b0326ef293f4f13ff6f661283",
         "mediaType": "application/schema+json"
       }
     },
@@ -2927,11 +2927,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "d0800b2abf13736c2836ffe54b7e94b4d3c5605d178e6b7e28d4b239937c32e3"
+        "sha256": "4028e2408c195aec62c6f096dc553cdfdc86d2fe4c821d08f23803d24358b95c"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "5dcd8e3823c7ee8ecd6c38ba54dce5d8c69f8aa39ce00ba20b8fa18ea2541f13",
+        "sha256": "3dfad2523060d5b43ca14e9ea5a429d3296d66b62095ece59a1b5229862b4eed",
         "mediaType": "application/schema+json"
       }
     },
@@ -2963,11 +2963,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "98c66fb7fe12020300c9c8df16d349931fa33e268498fc321d35ff7258a57931"
+        "sha256": "e0975fd1bbab8a304ea899e1eb693cb7f1f6a307e764d88bcbb79ea4de9f1b77"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "39e0445aa4e04afa8fb237d123d3e5f5540cad0740ec4683a00812501069a419",
+        "sha256": "3f1e3c30d730820c1e6eade98ec4bc6fff641610531e1c474b695d4324f07e26",
         "mediaType": "application/schema+json"
       }
     },
@@ -2999,11 +2999,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "e64a5b454b5caf6d2e190715f8c1d7cee0f9b27b633e1c3eed728ef76867d986"
+        "sha256": "d4b85149f512b495f8ea2cf058b19a043a0b010913829aecd966d9436f8af071"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "ad86e21e01ad9d48260f318a5f934437e4f855f685b4e965805f821c0f349216",
+        "sha256": "46d38fe1b65adbb920d8df63990903a18becb608e149b99bd4e6747d96619b26",
         "mediaType": "application/schema+json"
       }
     },
