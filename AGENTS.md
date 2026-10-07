@@ -91,6 +91,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-casework-client` | Rust Casework client and its bounded problem and recovery contract |
 | `crates/registry-casework-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-casework-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `crates/registry-review-protocol` | Runtime-free wire contract between review producers and Registry Casework |
+| `crates/registry-review-client` | Product-neutral bounded client for the review handoff protocol, shared by the Casework client and BReg |
 | `crates/registry-scheduling-core` | Source-neutral Scheduling policy model, wire DTOs, problem codes, and authoring checks |
 | `crates/registry-scheduling` | PostgreSQL-backed Scheduling runtime and the `scheduling` binary |
 | `crates/registry-schedulingctl` | Scheduling authoring and local operator tooling and the `schedulingctl` binary |
@@ -101,6 +103,8 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-messaging` | PostgreSQL-backed Messaging runtime and the `messaging` binary |
 | `crates/registry-messagingctl` | Messaging operator tooling and the `messagingctl` binary |
 | `crates/registry-messaging-client` | Bounded Rust Messaging client over the runtime's HTTP contract |
+| `crates/registry-messaging-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
+| `crates/registry-messaging-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-record` | Product-neutral Registry Record v1 response DTOs used by the Base Registry Engine clients |
 | `crates/registry-render` | Registry Render: governed, byte-stable PDF documents from registry data, rendered with Typst, and the `registry-render` binary |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
@@ -118,7 +122,9 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Evidence |
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
 | `crates/registry-language-server` | Editor language server for Evidence authoring documents, hosted for adopters by `evidencectl`; product navigation rules add no runtime dependencies |
+| `crates/registry-thunderid-tooling` | Tooling-only support for adopter CLIs and integration tests against a pinned upstream ThunderID issuer; no runtime depends on it |
 | `crates/registry-cli-docs` | Deterministic CLI reference data generated from Registry Stack Clap command trees, consumed by the docs site's CLI reference build |
+| `crates/registry-cli-reference` | Deterministic reference data walked from one Clap command tree, shared by `registry-cli-docs` and each binary's `help --format json` |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
