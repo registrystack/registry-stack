@@ -10,8 +10,8 @@ The rules are normative. **MUST** rules are enforced by the gate the
 [Enforcement summary](#enforcement-summary) gives them. A mechanical gate fails
 CI when a change breaks its rule; where the gate is review, the reviewer cites
 the rule ID. **SHOULD** rules are reviewed by people; a deviation needs a
-reason in the pull request. Every rule names why it exists, so a reviewer can
-tell a real exception from a habit.
+reason in the pull request. A rule whose reason is not evident states it, so
+a reviewer can tell a real exception from a habit.
 
 Product guides decide what a format means. These conventions decide how it is
 written and read. When a product guide and this page disagree on spelling,
@@ -33,7 +33,8 @@ In scope:
   `runtime.yaml`, development client files, and operator request files.
 - **Generated files** are of two kinds. A **read-back format** is one a
   Registry Stack tool reads again (module locks, package manifests, receipts,
-  checkpoints, development state); it follows every rule. An **output format**
+  checkpoints, development state); it follows every rule except CFG-SCHEMA-2
+  and CFG-SCHEMA-6, which cover the files people edit. An **output format**
   is written for people or for tools we do not own and is never read back
   (explain output, `--format json` reports); it is registered with
   `reader: none`, follows CFG-ENV, CFG-NAME, CFG-ID, CFG-QTY, and CFG-EMPTY,
@@ -157,7 +158,9 @@ check starts from (CFG-CHECK-2), is `<Prefix>Project`,** format `project`
 (`BRegProject`, `CaseworkProject`, `SchedulingProject`, `MessagingProject`).
 It names the project in a top-level `project` block holding the shared
 `ProjectIdentity` members, `id` (a local identifier) and `version` (text); the
-block may add project-wide members of the product's own.
+block may add project-wide members of the product's own. A product whose
+top-level authored file is a bundle of files rather than a project (Render,
+Evidence) names it `<Prefix>Bundle`, format `bundle`.
 *Why:* a person who has written one product's project file knows how the next
 one opens, and "package" stays the name of the built artifact.
 *Enforced by:* the format registry lint (a `project` format's kind ends in
@@ -173,8 +176,10 @@ reports the file, line, and column.
 through `registry-platform-yaml` (runtime files through
 `RuntimeConfigLoader`, which builds on it). No crate deserializes YAML with
 `serde_norway` or any other YAML crate directly; serialization (writing YAML)
-is unaffected. The language server may parse incomplete buffers with its own
-parser for editor features, but reports diagnostics from the shared reader.
+is unaffected. JSON documents are read by the same reader, as YAML 1.2 flow
+content, so their refusals carry the same codes. The language server may parse
+incomplete buffers with its own parser for editor features, but reports
+diagnostics from the shared reader.
 *Why:* the audit that produced these rules found five parse pipelines whose
 behavior depended on the target type: duplicate keys refused in one product
 and silently last-wins in another, `id: null` read as the text `"null"`, line
@@ -323,7 +328,8 @@ declares `propertyNames`, and the lint skips it.
 is lowercase kebab-case** (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`): enum values,
 sentinels, each segment of an `apiVersion` path, and each segment of a
 diagnostic code. A value that names a member of a Registry Stack document or
-wire contract is spelled as the member is (`anchor: stageEnteredAt`). A value
+wire contract is spelled as the member is (`anchor: stageEnteredAt`), and its
+schema marks the enum with `x-registry-member-names: true`. A value
 the product's API also returns has one spelling in both: renaming a
 configuration value renames the API value and regenerates the OpenAPI document
 in the same change.
@@ -669,7 +675,9 @@ words the common type errors this way, taking `<unit>` from the key
 **CFG-SCHEMA-1 (MUST). Every format is registered** in
 `products/platform/config-formats.yaml` with its kind, apiVersion values,
 audience, owning product, stability (promised, experimental, unpromised),
-schema path and `$id`, reader, and check command.
+schema path and `$id`, reader, check command, minimal valid example, the
+member it offers for each typed conformance case (CFG-CHECK-3), and its
+security-relevant members (CFG-EMPTY-3).
 
 **CFG-SCHEMA-2 (MUST). Every authored and operator format ships a JSON
 Schema generated from the Rust types** (schemars under a `schema` feature,
@@ -704,7 +712,8 @@ concept a shared block covers, whatever its shape. Embedded definitions are
 compared with the platform schema; flattened blocks are checked at their Rust
 type.
 
-**CFG-SCHEMA-6 (MUST). Every registered format is mapped for editors** by
+**CFG-SCHEMA-6 (MUST). Every authored and operator format is mapped for
+editors** by
 `editors/configure.py`, per project directory; where file names collide
 across products, the modeline (CFG-SCHEMA-7) selects the schema.
 
