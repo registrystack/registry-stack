@@ -29,17 +29,16 @@ production hostnames. Follow the repository's `SECURITY.md` for suspected vulner
 - `scripts/check-draft-links.mjs` is not a standalone check. Run
   `npm run generate` first so its draft-page links can resolve synced product
   pages and generated example assets.
-- `src/data/cli-reference.yaml` is the publication record for the generated CLI
-  reference. Its v3 content digest covers the public command catalog except the
-  top-level workspace version. Version-only bumps preserve the original human
-  review date, source version, and full catalog digest; real command, help,
-  default, environment, or constraint changes require review of the changed
-  reference and an updated record. `npm run cli-reference:digest` prints the
-  three values to record after review. `npm run cli-reference:digest -- --migrate`
-  upgrades a v2 record only after proving the content still matches its recorded
-  full digest, preserving review dates and provenance. Legacy v2 records retain
-  their exact-version check. Setting the record back to `draft` hides every CLI
-  page from the site; do that only deliberately.
+- The generated CLI reference renders the committed command catalog
+  `crates/registry-cli-docs/catalog.json`, which omits the workspace version.
+  A command, help, default, environment, or constraint change fails the
+  `registry-cli-docs` snapshot test until
+  `cargo run --locked -p registry-cli-docs -- --write` regenerates the catalog;
+  review that diff as the reference change. `src/data/cli-reference.yaml` holds
+  only the publication `status` and `last_reviewed` date; set the date when you
+  review a catalog diff, and leave it alone for a version-only bump. Setting the
+  record back to `draft` hides every CLI page from the site; do that only
+  deliberately.
 - For `src/content/docs/products/**`, edit the owning source and metadata listed
   in `src/data/repo-docs.yaml`. The sync script generates the site copies.
 - `src/content/docs/reference/cli/**`, `src/data/generated/**`, and fetched

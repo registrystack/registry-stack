@@ -369,20 +369,11 @@ and replace the draft's compatibility and migration placeholders when authoring
 `release/notes/v<version>.md`; titles and paths alone do not establish behavior.
 
 Update and commit the version metadata, workspace package versions in current
-lockfiles, changelogs, release notes, manifest, and generated inputs. The CLI
-publication record uses schema v3 to distinguish command content from its
-top-level release version. A version-only bump preserves the original review
-date and provenance without editing `docs/site/src/data/cli-reference.yaml`.
-When commands, defaults, help, or other public reference content changes, review
-the generated reference and run `npm run cli-reference:digest` from `docs/site`.
-Record all three printed source/content digest fields with the actual review
-date. Content changes still fail the docs build until reviewed.
-
-For a legacy v2 record, run `npm run cli-reference:digest -- --migrate` once
-from `docs/site`. Migration verifies the existing full digest at its recorded
-source version before adding the content digest. It preserves the review date,
-source version, and full digest, and refuses changed content. Existing v3
-records are checked without rewriting them. Published archives are unchanged.
+lockfiles, changelogs, release notes, manifest, and generated inputs. A
+version-only bump needs no CLI reference change: the committed command catalog
+`crates/registry-cli-docs/catalog.json` omits the workspace version, and the
+generated pages read it from `Cargo.toml`. Command content changes reach review
+as a diff of that catalog with the change that made them.
 
 Then run `registry-release prepare-docs` as described below. It derives the
 candidate docset and mirrored-page metadata and prepares the archive lock from
@@ -436,7 +427,8 @@ Conflicting existing candidate metadata
 or changes to a frozen archive stop preparation.
 
 The command builds a committed-source clone in Ubuntu 24.04 on Linux AMD64,
-with Node 22.12.0, `npm ci`, and the repository's Rust toolchain. It excludes
+with Node 22.12.0 and `npm ci`. It also installs the repository's Rust
+toolchain, although no preparation step compiles Rust. It excludes
 local dependencies, uncommitted files, and ignored generated assets. It runs
 `npm test`, draft-link checks, and evidence-anchor checks before building the
 archive, adds a missing lock entry or verifies an existing one, then runs
@@ -477,8 +469,7 @@ their published tag and must reproduce their recorded digest.
 
 If a build or check fails, inspect the retained report and log, fix the owning
 source, and commit the correction before retrying in a new output directory.
-For a stale CLI publication record, regenerate and review the CLI reference
-before recording its digest and actual review date. For conflicting metadata
+For conflicting metadata
 or an archive digest mismatch, inspect the selected source and existing frozen
 record; do not rewrite historical metadata or locks to make the check pass.
 If your source revision or any tracked input changed during the build,

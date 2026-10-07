@@ -115,7 +115,7 @@ class PreparationTest(TestCase):
             return REAL_RUN(args, **kwargs)
         output = self.root / "failure"
         with mock.patch.object(prep.subprocess, "run", side_effect=fail):
-            with self.assertRaisesRegex(prep.PreparationError, "cli-reference:digest"):
+            with self.assertRaisesRegex(prep.PreparationError, "No generated patch was applied"):
                 self.prepare(output_dir=output, apply=True)
         self.assertEqual(prep.git(self.repo, "status", "--porcelain"), "")
         self.assertEqual(json.loads((output / "report.json").read_text())["status"], "failed")

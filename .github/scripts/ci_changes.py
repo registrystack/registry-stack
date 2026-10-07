@@ -352,53 +352,17 @@ EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
     pattern for pattern, _ in EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS
 )
 
-# Generated CLI pages consume the supported public Clap trees.
-# Keep this list at module ownership so changing an Args
-# type beside a top-level parser cannot leave its published page stale.
+# The docs job renders the generated CLI pages from the committed command
+# catalog and the workspace version in the root Cargo.toml, and compiles no
+# Clap tree. A Clap change reaches the pages only through that catalog: the
+# registry-cli-docs snapshot test, which package routing selects through the
+# crate's dependencies, fails until the catalog is regenerated.
 CLI_REFERENCE_INPUTS = (
-    ("Cargo.lock", "Cargo.lock"),
     ("Cargo.toml", "Cargo.toml"),
-    ("crates/registry-cli-docs/**", "crates/registry-cli-docs/src/lib.rs"),
     (
-        "crates/registry-cli-reference/src/**",
-        "crates/registry-cli-reference/src/lib.rs",
+        "crates/registry-cli-docs/catalog.json",
+        "crates/registry-cli-docs/catalog.json",
     ),
-    # Feature/dependency changes can alter the collector without editing Clap.
-    ("crates/*/Cargo.toml", "crates/registry-cli-docs/Cargo.toml"),
-    ("crates/registry-evidence/src/cli.rs", "crates/registry-evidence/src/cli.rs"),
-    (
-        "crates/registry-evidence-oid4vci/src/cli.rs",
-        "crates/registry-evidence-oid4vci/src/cli.rs",
-    ),
-    ("crates/registry-evidencectl/src/**", "crates/registry-evidencectl/src/lib.rs"),
-    ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
-    ("crates/registry-breg-mcp/src/cli.rs", "crates/registry-breg-mcp/src/cli.rs"),
-    (
-        "crates/registry-breg-review/src/lib.rs",
-        "crates/registry-breg-review/src/lib.rs",
-    ),
-    ("crates/registry-bregctl/src/**", "crates/registry-bregctl/src/lib.rs"),
-    (
-        "crates/registry-casework/src/runtime.rs",
-        "crates/registry-casework/src/runtime.rs",
-    ),
-    ("crates/registry-caseworkctl/src/**", "crates/registry-caseworkctl/src/lib.rs"),
-    (
-        "crates/registry-messaging/src/runtime.rs",
-        "crates/registry-messaging/src/runtime.rs",
-    ),
-    ("crates/registry-messagingctl/src/**", "crates/registry-messagingctl/src/lib.rs"),
-    (
-        "crates/registry-scheduling/src/runtime.rs",
-        "crates/registry-scheduling/src/runtime.rs",
-    ),
-    (
-        "crates/registry-schedulingctl/src/**",
-        "crates/registry-schedulingctl/src/lib.rs",
-    ),
-    ("crates/registry-render/src/cli.rs", "crates/registry-render/src/cli.rs"),
-    # The check subcommand takes its --format values from this module.
-    ("crates/registry-render/src/check.rs", "crates/registry-render/src/check.rs"),
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
@@ -1298,9 +1262,6 @@ def classify(
             "products/manifest/CHANGELOG.md",
         }
         for path in paths
-    ) or (
-        # Generated CLI pages compile every public Clap tree.
-        lock_members is not None and "registry-cli-docs" in affected
     )
     # Rebuild immutable history only when archive inputs or assembly semantics
     # change. Publication workflows, this workflow and this classifier do not

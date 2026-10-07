@@ -168,9 +168,7 @@ def prepare_docs(
         report.update(status="failed", error=str(exc))
         raise PreparationError(
             f"documentation preparation failed; inspect {output / 'prepare.log'} and {report_path}. "
-            "No generated patch was applied. For stale CLI review metadata, run "
-            "npm run cli-reference:digest in docs/site, review the changed reference, "
-            "and commit its publication record before retrying."
+            "No generated patch was applied."
         ) from exc
     finally:
         report["elapsed_seconds"] = round(time.monotonic() - started, 3)

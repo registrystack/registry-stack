@@ -560,14 +560,20 @@ that still resolves in the pull request, not a rewritten or squashed SHA.
   minimization are security-sensitive and need explicit review notes.
 - Generated outputs (site references, OpenAPI, release artifacts) must be
   reproduced by their documented generator commands, never hand-edited, and
-  must be bit-for-bit repeatable. Site CLI pages and generated data are ignored
-  build artifacts; commit their sources and generators, not rendered copies.
-  If you change an HTTP endpoint, regenerating and committing the OpenAPI
-  documents is part of the change, not a follow-up. If you change a binary's
-  clap definitions or other public command content, review and update the CLI
-  publication record `docs/site/src/data/cli-reference.yaml` as part of the
-  change. A workspace-version-only change preserves an existing v3 review;
-  `docs/site/AGENTS.md` gives the digest and legacy migration commands.
+  must be bit-for-bit repeatable. Site CLI pages and the site's generated data
+  under `docs/site/src/data/generated/` are ignored build artifacts; commit
+  their sources and generators, not rendered copies. Generated inputs whose
+  diff is the review, such as the OpenAPI documents and the CLI command catalog
+  `crates/registry-cli-docs/catalog.json`, are committed instead and held to
+  their sources by drift gates. If you change an HTTP endpoint, regenerating
+  and committing the OpenAPI documents is part of the change, not a follow-up.
+  If you change a binary's clap definitions or other public command content,
+  run `cargo run --locked -p registry-cli-docs -- --write` and commit the
+  regenerated `crates/registry-cli-docs/catalog.json` as part of the change;
+  its diff is the CLI reference review, and the `registry-cli-docs` snapshot
+  test fails until it is current. A workspace-version-only change leaves that
+  catalog and the publication record `docs/site/src/data/cli-reference.yaml`
+  unchanged; `docs/site/AGENTS.md` describes both.
 - Suspected vulnerabilities (minimum-disclosure failure, auth bypass, audit
   redaction failure, connector data leakage, signing key handling) go through
   `SECURITY.md`, never public issues or PRs.
