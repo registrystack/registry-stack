@@ -2306,6 +2306,14 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_empty_assertion_issuer_map_is_refused_at_its_pointer() {
+        let mut value = base();
+        value["authentication"]["oidc"]["assertionIssuers"] = json!({});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+    }
+
+    #[test]
     fn relative_paths_are_refused() {
         let mut value = base();
         value["audit"]["path"] = json!("audit");

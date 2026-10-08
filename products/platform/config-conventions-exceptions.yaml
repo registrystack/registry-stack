@@ -2839,25 +2839,12 @@ exceptions:
   class: stable-move
   reason: kind is RetentionEraseReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkRetentionEraseReport'
-- rule: CFG-EMPTY-2
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty default ({})
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
 - rule: CFG-ENV-2
   format: casework/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion
   class: stable-move
   reason: apiVersion is registry.registrystack.org/casework-runtime/v1alpha1
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Read and write id.registrystack.org/formats/casework/runtime/v1alpha1; refuse the old value with config.retired-api-version'
-- rule: CFG-ID-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: stable-move
-  reason: a mapping whose keys are not typed
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
 - rule: CFG-ID-1
   format: casework/runtime
   location: products/casework/generated/runtime/runtime.schema.json#/$defs/TaskAuthorityConfig/properties/statusClients
@@ -3907,26 +3894,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map products/evidence/contracts/verification-policy.schema.yaml in editors/configure.py
-- rule: CFG-EMPTY-2
-  format: messaging/runtime
-  location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty default ({})
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-ID-1
-  format: messaging/runtime
-  location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: a mapping whose keys are not typed
-  resolution: 'Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
-- rule: CFG-ID-1
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/OidcClientsConfig/properties/assertionIssuers
-  class: stable-move
-  reason: a mapping whose keys are not typed
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
 - rule: CFG-ID-7
   format: platform/runtime-config-blocks
   location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/JwksSource
@@ -3963,17 +3930,3 @@ exceptions:
   class: protocol-constant
   reason: 2.0 is written as the PDF specification (ISO 32000) numbers its versions
   resolution: Permanent.
-- rule: CFG-EMPTY-2
-  format: scheduling/runtime
-  location: products/scheduling/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty default ({})
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-ID-1
-  format: scheduling/runtime
-  location: products/scheduling/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: a mapping whose keys are not typed
-  resolution: 'Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'

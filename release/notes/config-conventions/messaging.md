@@ -268,6 +268,12 @@ meant.
   script that compared the whole report, or its leading members, accepts the
   two new members; a script that reads members by name needs no change.
 
+## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
+
+| Before | Now | Migration |
+|---|---|---|
+| `authentication.oidc.assertionIssuers: {}`, which applied no assertion-issuer rule | `config.invalid-value` at `/authentication/oidc/assertionIssuers` | Delete the member: omitting it applies no assertion-issuer rule. |
+
 ## BREAKING: Rust API
 
 - `registry-messaging-core`: `MessagingPackage` is `MessagingProject`, read

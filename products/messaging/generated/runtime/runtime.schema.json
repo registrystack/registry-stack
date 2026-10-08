@@ -204,6 +204,13 @@
       "description": "The environment secret provider. It takes no settings.",
       "type": "object"
     },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
     "FileSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The file secret provider.",
@@ -525,12 +532,11 @@
             "type": "array",
             "uniqueItems": true
           },
-          "default": {},
-          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. An empty map applies no rule. Once a\nclient is listed, a token it exchanged is accepted only for one of\nthat client's declared authorities.",
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client. Once a client is listed, a\ntoken it exchanged is accepted only for one of that client's declared\nauthorities.",
           "maxProperties": 64,
+          "minProperties": 1,
           "propertyNames": {
-            "maxLength": 128,
-            "minLength": 1
+            "$ref": "#/$defs/ExternalId"
           },
           "type": "object"
         },

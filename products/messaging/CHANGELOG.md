@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
+  member to apply no assertion-issuer rule. The generated runtime schema types
+  the client keys as `ExternalId` and requires at least one client.
 - BREAKING: the runtime file follows the Registry Stack configuration
   conventions. Its `apiVersion` is
   `id.registrystack.org/formats/messaging/runtime/v1alpha1`; the retention

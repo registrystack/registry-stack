@@ -569,6 +569,12 @@ published beside the report schema.
 The members still left open are listed in
 `products/casework/contracts/cli/README.md`.
 
+## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
+
+| Before | Now | Migration |
+|---|---|---|
+| `authentication.oidc.assertionIssuers: {}`, which applied no assertion-issuer rule | `config.invalid-value` at `/authentication/oidc/assertionIssuers` | Delete the member: omitting it applies no assertion-issuer rule. |
+
 ## Diagnostic codes
 
 | Old code | New code |

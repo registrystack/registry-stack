@@ -1679,6 +1679,15 @@ holdPolicy:
     }
 
     #[test]
+    fn an_empty_assertion_issuer_map_is_refused_at_its_pointer() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({});
+        let error = parse_runtime(&document).expect_err("an empty map is refused");
+        assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+    }
+
+    #[test]
     fn a_development_configuration_loads_and_exposes_its_defaults() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());

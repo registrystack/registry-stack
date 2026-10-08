@@ -515,24 +515,55 @@ pub struct OidcClientsConfig {
     #[serde(default)]
     pub allowed_clients: Vec<String>,
     /// Assertion authorities each client may exchange a subject token from,
-    /// keyed by client identifier. An empty map applies no rule. Once a
-    /// client is listed, a token it exchanged is accepted only for one of
-    /// that client's declared authorities.
-    #[serde(default)]
+    /// keyed by client identifier. Omitted, no assertion-issuer rule applies;
+    /// written, it lists at least one client. Once a client is listed, a
+    /// token it exchanged is accepted only for one of that client's declared
+    /// authorities.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "non_empty_assertion_issuers"
+    )]
     #[cfg_attr(
         feature = "schema",
-        schemars(extend(
-            "maxProperties" = MAX_ASSERTION_ISSUER_CLIENTS,
-            "propertyNames" = {"minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_CLIENT_BYTES},
-            "additionalProperties" = {
-                "type": "array",
-                "maxItems": MAX_ASSERTION_ISSUERS_PER_CLIENT,
-                "uniqueItems": true,
-                "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_BYTES}
-            }
-        ))
+        schemars(schema_with = "assertion_issuers_schema")
     )]
     pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+/// Client identifiers are external identifiers (CFG-ID-2) with a stated
+/// bound, so the schema types the keys with the shared `ExternalId` and states
+/// the bounds `OidcClientsConfig::check` enforces.
+#[cfg(feature = "schema")]
+fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": MAX_ASSERTION_ISSUER_CLIENTS,
+        "propertyNames": generator.subschema_for::<registry_platform_yaml::ExternalId>(),
+        "additionalProperties": {
+            "type": "array",
+            "maxItems": MAX_ASSERTION_ISSUERS_PER_CLIENT,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASSERTION_ISSUER_BYTES}
+        }
+    })
+}
+
+/// An empty mapping is not how a file says "no assertion-issuer rule"
+/// (CFG-EMPTY-2): omitting the member says it.
+fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
+    let issuers = BTreeMap::<String, Vec<String>>::deserialize(deserializer)?;
+    if issuers.is_empty() {
+        return Err(registry_platform_yaml::Invalid::expected(
+            "at least one client",
+            "List at least one client with its assertion issuers, or omit assertionIssuers to apply no assertion-issuer rule.",
+        )
+        .into_error());
+    }
+    Ok(issuers)
 }
 
 impl OidcClientsConfig {

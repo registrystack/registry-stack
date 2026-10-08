@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
+  member to apply no assertion-issuer rule. The generated runtime schema types
+  the client keys as `ExternalId` and requires at least one client.
 - BREAKING: the authored files follow the Registry Stack configuration
   conventions and are read by the shared configuration reader, which reports
   every problem at its line and column with a JSON Pointer and a next step.

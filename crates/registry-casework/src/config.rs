@@ -2292,6 +2292,15 @@ reviewProducers:
     }
 
     #[test]
+    fn an_empty_assertion_issuer_map_is_refused_at_its_pointer() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({});
+        let error = parse_runtime(&document).expect_err("an empty map is refused");
+        assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+    }
+
+    #[test]
     fn human_identity_defaults_to_an_explicit_fail_closed_claim_contract() {
         let root = canonical_tempdir();
         let document = operator_value(&root.path().join("package"), "development-loopback");
