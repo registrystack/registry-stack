@@ -1752,13 +1752,12 @@ fn a_case_identifier_carrying_a_control_character_is_refused() {
         !output.status.success(),
         "the forged identifier was accepted"
     );
-    assert_eq!(
-        std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
-        concat!(
-            "case (fixture): fixture case identifier is invalid\n",
-            "evidence: fixture case identifier is invalid\n",
-        ),
-        "a failure no case was running for is attributed to the fixture scope"
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    assert!(
+        stderr.contains("error[evidence.fixture.invalid-case-id]")
+            && stderr.contains("/cases/1/id")
+            && !stderr.contains("forged"),
+        "the forged identifier was not refused by the reader, or was echoed: {stderr}"
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
     assert!(

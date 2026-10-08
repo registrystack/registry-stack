@@ -11,7 +11,8 @@
 use std::collections::BTreeSet;
 
 use registry_platform_yaml::{
-    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
+    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, LocalId, Reader, RemovedKey, Report,
+    Severity,
 };
 use serde_json::Value;
 
@@ -38,10 +39,7 @@ pub const EVIDENCE_FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The most cases one fixture holds.
-const MAXIMUM_CASES: usize = 256;
-
-/// The most bytes of one case identifier.
-const MAXIMUM_CASE_ID_BYTES: usize = 128;
+pub const MAXIMUM_CASES: usize = 256;
 
 /// Read one fixture file and check that it is synthetic and covers every
 /// case category. `file` is the name the diagnostics carry.
@@ -119,12 +117,12 @@ fn check_coverage(
                 "Write the case as a mapping and give it an `id`.",
             ));
         };
-        if id.is_empty() || id.len() > MAXIMUM_CASE_ID_BYTES || !ids.insert(id) {
+        if LocalId::new(id).is_err() || !ids.insert(id) {
             return Err(refuse(
                 "evidence.fixture.invalid-case-id",
                 &format!("/cases/{index}/id"),
-                "a case id is 1 to 128 bytes and unique within its fixture",
-                "Give every case a short id no other case of this fixture uses.",
+                "a case id is a local identifier and unique within its fixture",
+                "Give every case a lowercase id of up to 64 letters, digits, `_`, or `-` that no other case of this fixture uses.",
             ));
         }
         let pointer = format!("/cases/{index}/declaredUnresolved");

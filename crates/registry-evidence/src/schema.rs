@@ -17,11 +17,12 @@
 
 use std::collections::BTreeMap;
 
-use registry_platform_yaml::ExternalId;
+use registry_platform_yaml::{ExternalId, LocalId};
 use schemars::generate::SchemaSettings;
 use serde_json::{json, Value};
 
 use crate::codelist::{CodelistDocument, CODELIST_MAXIMUM_ITEMS};
+use crate::fixture::{EVIDENCE_FIXTURE_API_VERSION, EVIDENCE_FIXTURE_KIND, MAXIMUM_CASES};
 
 /// The committed code list schema file name.
 pub const CODELIST_SCHEMA_FILE: &str = "codelist.schema.json";
@@ -57,6 +58,67 @@ pub fn codelist_documents() -> Result<BTreeMap<&'static str, String>, serde_json
     let mut rendered = serde_json::to_string_pretty(&Value::Object(object))?;
     rendered.push('\n');
     Ok([(CODELIST_SCHEMA_FILE, rendered)].into())
+}
+
+/// The committed fixture schema file name.
+pub const FIXTURE_SCHEMA_FILE: &str = "fixture.schema.json";
+
+/// The fixture schema `$id` (CFG-SCHEMA-3).
+pub const FIXTURE_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/fixture/fixture.v1alpha1.schema.json";
+
+/// The fixture schema document, by file name.
+///
+/// `read_fixture` is untyped: it reads the envelope, `synthetic_only`, and the
+/// case list, and hands every other member to the offline runner, which checks
+/// the members of the replay mode it runs. The schema states what the reader
+/// itself holds and leaves the runner's members open under a stated reason.
+/// The schema requires `synthetic_only` but does not type it: the key is not
+/// camelCase, so the schema cannot name it, and the reader alone refuses a
+/// value other than `true`.
+pub fn fixture_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
+    let local_id = serde_json::to_value(<LocalId as schemars::JsonSchema>::json_schema(
+        &mut SchemaSettings::draft2020_12().into_generator(),
+    ))?;
+    let runner = "the offline runner reads the members of the replay mode it runs and refuses what that mode does not know";
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": FIXTURE_SCHEMA_ID,
+        "title": "Evidence fixture set",
+        "type": "object",
+        "required": ["apiVersion", "kind", "synthetic_only", "cases"],
+        "properties": {
+            "apiVersion": {"const": EVIDENCE_FIXTURE_API_VERSION},
+            "kind": {"const": EVIDENCE_FIXTURE_KIND},
+            "common": {
+                "type": "object",
+                "description": "What every case starts from.",
+                "x-registry-passthrough": runner
+            },
+            "cases": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAXIMUM_CASES,
+                "description": "The cases, which together cover every required category.",
+                "items": {
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": {"$ref": "#/$defs/LocalId"},
+                        "declaredUnresolved": {"const": true}
+                    },
+                    "additionalProperties": true,
+                    "x-registry-passthrough": runner
+                }
+            }
+        },
+        "additionalProperties": true,
+        "x-registry-passthrough": runner,
+        "$defs": {"LocalId": local_id}
+    });
+    let mut rendered = serde_json::to_string_pretty(&schema)?;
+    rendered.push('\n');
+    Ok([(FIXTURE_SCHEMA_FILE, rendered)].into())
 }
 
 /// State the form and size rules `read_codelist` enforces.
@@ -155,6 +217,71 @@ mod tests {
             assert_eq!(reader.is_ok(), expected == "accepted", "reader: {text}");
             assert_eq!(schema_accepts, expected == "accepted", "schema: {text}");
         }
+    }
+
+    fn fixture_validator() -> jsonschema::JSONSchema {
+        let document: Value =
+            serde_json::from_str(&fixture_documents().unwrap()[FIXTURE_SCHEMA_FILE]).unwrap();
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&document)
+            .expect("the fixture schema compiles")
+    }
+
+    #[test]
+    fn the_fixture_schema_accepts_what_the_reader_accepts_and_refuses_what_it_refuses() {
+        let validator = fixture_validator();
+        let header = "apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\n";
+        let complete: String = [
+            "positive",
+            "negative-false",
+            "boundary-on",
+            "missing-fact",
+            "no-match",
+            "ambiguous",
+            "source-failure",
+            "anti-reconstruction",
+        ]
+        .iter()
+        .map(|id| format!("  - {{id: {id}}}\n"))
+        .collect();
+        let too_many: String = (0..257)
+            .map(|n| format!("  - {{id: case-{n}}}\n"))
+            .collect();
+        let cases: Vec<(String, bool)> = vec![
+            (format!("{header}synthetic_only: true\ncases:\n{complete}"), true),
+            (format!("{header}synthetic_only: true\ncommon: {{observed_at: x}}\ncases:\n{complete}"), true),
+            (format!("{header}cases:\n{complete}"), false),
+            (format!("{header}synthetic_only: true\n"), false),
+            (format!("{header}synthetic_only: true\ncases: []\n"), false),
+            (format!("{header}synthetic_only: true\ncases:\n{too_many}"), false),
+            (format!("{header}synthetic_only: true\ncases:\n  - {{id: Positive}}\n"), false),
+            (format!("{header}synthetic_only: true\ncases:\n  - {{note: no id}}\n"), false),
+            (
+                format!("{header}synthetic_only: true\ncases:\n{complete}  - {{id: extra, declaredUnresolved: false}}\n"),
+                false,
+            ),
+            (format!("synthetic_only: true\ncases:\n{complete}"), false),
+        ];
+        for (text, expected) in cases {
+            let reader = crate::fixture::read_fixture("fixtures/case.yaml", text.as_bytes(), true);
+            let instance: Value =
+                serde_json::to_value(serde_norway::from_str::<serde_norway::Value>(&text).unwrap())
+                    .unwrap();
+            assert_eq!(reader.is_ok(), expected, "reader: {text}");
+            assert_eq!(validator.is_valid(&instance), expected, "schema: {text}");
+        }
+    }
+
+    #[test]
+    fn committed_fixture_schema_matches_generated_bytes() {
+        let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/generated/fixture")
+            .join(FIXTURE_SCHEMA_FILE);
+        assert_eq!(
+            std::fs::read_to_string(committed).unwrap(),
+            fixture_documents().unwrap()[FIXTURE_SCHEMA_FILE]
+        );
     }
 
     #[test]

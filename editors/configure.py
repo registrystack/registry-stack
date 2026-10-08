@@ -119,6 +119,7 @@ SCHEMAS = {
         ("products/evidence/contracts/holder-bound-verification-policy.schema.yaml", "holder-bound*.policy.yaml"),
         ("products/evidence/contracts/verification-policy.schema.yaml", "verification*.policy.yaml"),
         ("products/evidence/generated/codelist/codelist.schema.json", "bundle/codelists/*.yaml"),
+        ("products/evidence/generated/fixture/fixture.schema.json", "bundle/fixtures/*.yaml"),
     ),
 }
 CHECKS = {

@@ -2994,7 +2994,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
       kind: EvidenceFixture
-    schema: none
+    schema:
+      path: products/evidence/generated/fixture/fixture.schema.json
+      id: https://id.registrystack.org/schemas/evidence/fixture/fixture.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidence --features schema --example fixture-schema -- --output products/evidence/generated/fixture
+      driftCheck: products/evidence/scripts/check-contracts.sh
     reader:
       crate: registry-evidence
       file: crates/registry-evidence/src/fixture.rs
