@@ -390,8 +390,8 @@ formats:
     audience: operator
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-      kind: SchemaTestCredentials
+      apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+      kind: BRegSchemaTestCredentials
       checkedBy:
         file: crates/registry-bregctl/src/test_lifecycle.rs
         symbol: CREDENTIALS_API_VERSION
@@ -402,12 +402,12 @@ formats:
     reader:
       crate: registry-bregctl
       file: crates/registry-bregctl/src/test_lifecycle.rs
-      function: load_credentials
+      function: read_credentials_document
       type: CredentialDocument
     check: none
-    example: none
+    example: products/breg/examples/formats/credentials.yaml
     conformance:
-      requiredText: none
+      requiredText: /bindings/0/journeyId
       optionalText: none
       integer: none
       boolean: none

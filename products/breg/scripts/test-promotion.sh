@@ -487,8 +487,8 @@ steps = {
     "read-record-within-the-claim": "reader", "retire-record": "operator",
     "read-record-outside-the-claim": "reader", "list-records": "operator",
 }
-lines = ["apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1",
-         "kind: SchemaTestCredentials", "bindings:"]
+lines = ["apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1",
+         "kind: BRegSchemaTestCredentials", "bindings:"]
 for step, token in steps.items():
     lines.append(f"  - {{journeyId: record-lifecycle, stepId: {step}, "
                  f"credential: {{type: bearer, tokenRef: secret:file/{token}-token}}}}")

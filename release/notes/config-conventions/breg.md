@@ -1114,3 +1114,35 @@ receipt file in `source.file`. Two product codes replace the single
 `breg.receipt.not-canonical` (the bytes are not the canonical JSON `bregctl
 test` writes) and `breg.receipt.too-large` (the receipt is over 64 KiB). An
 unknown member is refused with `config.unknown-key` at its position.
+
+### BREAKING: schema-test credentials version 1 header
+
+`bregctl test --credentials` reads the credentials file through the shared
+reader. Migrate a file by replacing its first two lines:
+
+| Old | New |
+|---|---|
+| `apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1` | `apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1` |
+| `kind: SchemaTestCredentials` | `kind: BRegSchemaTestCredentials` |
+
+The bindings are unchanged. A file with the old kind is refused with
+`config.wrong-kind`, and the old header beside the current kind with
+`config.retired-api-version`, naming the current header.
+
+Every refusal of the file's content is now printed as one sentence
+(`bregctl test refused the schema-test credentials.`) followed by the
+reader's diagnostics, each naming the credentials file as given in
+`source.file` with its line and column. Every unknown key is reported, not
+only the first. The single `test.credentials.refused` diagnostic remains for
+a file that cannot be read; the content refusals carry these codes instead:
+
+| Condition | Old | New |
+|---|---|---|
+| unknown, missing, or malformed member, or a `tokenRef` that is not `secret:env/NAME` or `secret:file/name` | `test.credentials.refused` | the reader's `config.*` and `yaml.*` codes |
+| a binding names a journey the packaged suite does not declare | `test.credentials.refused` | `breg.credentials.unknown-journey` |
+| a step is bound twice | `test.credentials.refused` | `breg.credentials.duplicate-binding` |
+| a referenced secret cannot be resolved, or is not UTF-8 | `test.credentials.refused` | `breg.credentials.unresolved-secret` |
+| a step is left unbound, or a binding does not suit its step | `test.credentials.refused` | `breg.credentials.incomplete-bindings` |
+
+The diagnostics name the credentials file and the journey and step ids;
+they never repeat a token, a secret reference, or a secret name.

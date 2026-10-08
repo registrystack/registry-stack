@@ -252,8 +252,8 @@ impl ProjectFixture {
         fs::write(
             &credentials,
             format!(
-                r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+                r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: {JOURNEY_ID}
     stepId: invoke-fixed-output

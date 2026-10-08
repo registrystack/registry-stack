@@ -4844,6 +4844,13 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
                 report: report_in_project(report, &args.candidate.project),
             }));
         }
+        Err(TestLifecycleError::CredentialsDocument(report)) => {
+            return Err(Refusal::Document(DocumentRefusal {
+                command: "test",
+                subject: "the schema-test credentials",
+                report,
+            }));
+        }
         Err(error) => return Err(test_lifecycle_failure(error).into()),
     };
     Ok(SchemaTestSuccessReport {
@@ -5551,6 +5558,13 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         ),
         TestLifecycleError::Journeys { .. } => unreachable!("handled before match"),
         TestLifecycleError::Credentials { .. } => unreachable!("handled before match"),
+        TestLifecycleError::CredentialsDocument(_) => (
+            "test.credentials.refused",
+            "credentials",
+            "the schema-test credentials were refused",
+            DiagnosticArtifact::SchemaTestCredentials,
+            SuggestedAction::SupplySchemaTestCredentials,
+        ),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
         TestLifecycleError::Rehearsal(_) => unreachable!("handled before match"),
         TestLifecycleError::Candidate => (

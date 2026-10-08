@@ -582,8 +582,8 @@ write_jwt "$temporary_root/oidc-signer.pem" "adopter-oidc-key" "synthetic-site-p
 write_jwt "$temporary_root/oidc-signer.pem" "adopter-oidc-key" "synthetic-site-planner" "" "$temporary_root/secrets/planner-no-purpose-token"
 
 cat >"$temporary_root/schema-test-credentials.yaml" <<'EOF'
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - {journeyId: asset-and-site-caller-surfaces, stepId: create-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
   - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-asset, credential: {type: bearer, tokenRef: secret:file/planner-token}}

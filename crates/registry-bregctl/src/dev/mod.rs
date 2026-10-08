@@ -2675,7 +2675,11 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
             &purpose_requests,
         ))?;
     }
-    let credentials = json!({"apiVersion":"registry.registrystack.org/breg-schema-test-credentials/v1","kind":"SchemaTestCredentials","bindings":bindings});
+    let credentials = json!({
+        "apiVersion": crate::test_lifecycle::CREDENTIALS_API_VERSION,
+        "kind": crate::test_lifecycle::CREDENTIALS_KIND,
+        "bindings": bindings,
+    });
     private::replace(
         &root.join("schema-test-credentials.yaml"),
         serde_norway::to_string(&credentials)?.as_bytes(),

@@ -4159,27 +4159,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-2
-  format: breg/schema-test-credentials
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/breg-schema-test-credentials/v1
-  resolution: Read and write id.registrystack.org/formats/breg/schema-test-credentials/v1; refuse the old value with config.retired-api-version
-- rule: CFG-ENV-3
-  format: breg/schema-test-credentials
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: kind is SchemaTestCredentials
-  resolution: Rename the kind to BRegSchemaTestCredentials
-- rule: CFG-SCHEMA-1
-  format: breg/schema-test-credentials
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: breg/schema-test-credentials
   location: products/platform/config-formats.yaml#/schema
@@ -4194,27 +4173,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: breg/schema-test-credentials
-  location: crates/registry-bregctl/src/test_lifecycle.rs#CredentialDocumentMode
-  class: pending
-  wp: WP3
-  reason: CredentialDocumentMode derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/schema-test-credentials
-  location: crates/registry-bregctl/src/test_lifecycle.rs#CredentialDocumentMode/Anonymous
-  class: pending
-  wp: WP3
-  reason: CredentialDocumentMode/Anonymous is a unit variant of a tagged union
-  resolution: Make it a struct variant (Anonymous {})
-- rule: CFG-YAML-1
-  format: breg/schema-test-credentials
-  location: crates/registry-bregctl/src/test_lifecycle.rs#load_credentials()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/schema-test-receipt
   location: products/platform/config-formats.yaml#/check

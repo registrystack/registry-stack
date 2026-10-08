@@ -651,8 +651,8 @@ receipt that `package` later binds to. Prepare three inputs:
 3. A credentials document binding every journey step to a token or to anonymous access:
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: record-lifecycle
     stepId: create-record

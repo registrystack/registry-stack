@@ -130,7 +130,7 @@ def main() -> None:
         journeys = yaml.safe_load((project / "tests/journeys.yaml").read_text())
         bindings = [{"journeyId": journey["id"], "stepId": step["id"], "credential": {"type": "bearer", "tokenRef": f'secret:file/{step["accessProfile"]}-token'}} for journey in journeys["journeys"] for step in journey["steps"]]
         credentials = root / "credentials.json"
-        write(credentials, {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1", "kind": "SchemaTestCredentials", "bindings": bindings})
+        write(credentials, {"apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1", "kind": "BRegSchemaTestCredentials", "bindings": bindings})
         command = [sys.executable, str(project_source / "tests/live_registration.py"), "--project", str(project), "--test-runtime", str(root / "runtime-0.yaml"), "--runtime", str(root / "runtime-1.yaml"), "--credentials", str(credentials), "--secrets", str(secret_root), "--output", str(root / "journey"), "--bregctl", str(args.bregctl.resolve()), "--breg", str(args.breg.resolve()), "--requests", ready["requestsFile"]]
         subprocess.run(command, env=child_env, check=True)
         # Only committed acquisitions are retained. Inactive and blank refusals

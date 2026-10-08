@@ -4291,8 +4291,8 @@ fn refused_credentials_name_the_document_path_and_the_journey() {
     let credentials = project.path().join("unknown-journey-credentials.yaml");
     fs::write(
         &credentials,
-        r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+        r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-lists
     stepId: list-records
@@ -4309,8 +4309,18 @@ bindings:
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(result.status.code(), Some(1), "{rendered}");
-    assert_eq!(report["diagnostics"][0]["code"], "test.credentials.refused");
-    assert_eq!(report["diagnostics"][0]["path"], "bindings[0].journeyId");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "test");
+    assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "breg.credentials.unknown-journey"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/bindings/0/journeyId");
+    assert_eq!(
+        report["diagnostics"][0]["source"],
+        json!({"file": path(&credentials), "line": 4, "column": 16})
+    );
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("credential message is a string");
@@ -4325,8 +4335,8 @@ bindings:
     let duplicate = project.path().join("duplicate-credentials.yaml");
     fs::write(
         &duplicate,
-        r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+        r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-list
     stepId: list-records
@@ -4348,8 +4358,12 @@ bindings:
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(result.status.code(), Some(1), "{rendered}");
-    assert_eq!(report["diagnostics"][0]["code"], "test.credentials.refused");
-    assert_eq!(report["diagnostics"][0]["path"], "bindings[1]");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "breg.credentials.duplicate-binding"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/bindings/1");
+    assert_eq!(report["diagnostics"][0]["source"]["line"], 9);
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("credential message is a string");
@@ -4371,17 +4385,21 @@ fn test_credentials_are_strict_secret_refs_and_preflight_before_database() {
     let cases = [
         (
             "duplicate-field",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "yaml.duplicate-key",
+            "/apiVersion",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings: []
 "#
             .to_owned(),
         ),
         (
             "unknown-field",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "config.unknown-key",
+            "/literal",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings: []
 literal: aaa.bbb.ccc
 "#
@@ -4389,37 +4407,56 @@ literal: aaa.bbb.ccc
         ),
         (
             "literal-token",
+            "config.unknown-key",
+            "/bindings/0/credential/token",
             credential_source("type: bearer\n      token: aaa.bbb.ccc\n"),
         ),
-        ("missing-token-ref", credential_source("type: bearer\n")),
+        (
+            "missing-token-ref",
+            "config.missing-key",
+            "/bindings/0/credential",
+            credential_source("type: bearer\n"),
+        ),
         (
             "extra-token-ref",
+            "config.unknown-key",
+            "/bindings/0/credential/tokenRef",
             credential_source("type: anonymous\n      tokenRef: secret:file/operator-token\n"),
         ),
         (
             "wrong-discriminator",
+            "config.missing-key",
+            "/bindings/0/credential",
             credential_source("mode: bearer\n      tokenRef: secret:file/operator-token\n"),
         ),
         (
             "literal-ref",
+            "config.invalid-value",
+            "/bindings/0/credential/tokenRef",
             credential_source("type: bearer\n      tokenRef: aaa.bbb.ccc\n"),
         ),
         (
             "unknown-provider",
+            "config.invalid-value",
+            "/bindings/0/credential/tokenRef",
             credential_source("type: bearer\n      tokenRef: secret:literal/operator-token\n"),
         ),
         (
             "missing-coverage",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "breg.credentials.incomplete-bindings",
+            "/bindings",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings: []
 "#
             .to_owned(),
         ),
         (
             "duplicate-binding",
-            r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+            "breg.credentials.duplicate-binding",
+            "/bindings/1",
+            r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-list
     stepId: list-records
@@ -4436,22 +4473,18 @@ bindings:
         ),
     ];
 
-    for (name, source) in cases {
+    for (name, code, pointer, source) in cases {
         let credentials = project.path().join(format!("credentials-{name}.yaml"));
         fs::write(&credentials, source).expect("credential fixture writes");
         let output = project.path().join(format!("receipt-{name}.json"));
         let result = test_candidate_command(&project, &runtime, &credentials, &output);
-        assert_schema_test_refusal(
+        assert_credentials_document_refusal(
             result,
-            "test.credentials.refused",
-            "schema_test_credentials",
-            "supply_schema_test_credentials",
+            &credentials,
+            code,
+            pointer,
             &output,
-            &[
-                path(&credentials),
-                "aaa.bbb.ccc",
-                "secret:file/operator-token",
-            ],
+            &["aaa.bbb.ccc", "secret:file/operator-token"],
         );
     }
 }
@@ -4460,14 +4493,26 @@ bindings:
 fn test_credentials_secret_value_failures_are_preflight_and_value_free() {
     let project = packaging_project();
     let runtime = test_runtime_config(&project);
-    let cases: Vec<(&str, Vec<u8>)> = vec![
-        ("utf8", vec![0xff, b'.', b'a', b'.', b'b']),
-        ("empty", Vec::new()),
-        ("oversized", vec![b'a'; 65 * 1024]),
-        ("malformed-token", b"not.a-token!".to_vec()),
+    let unresolved = "breg.credentials.unresolved-secret";
+    let token_ref = "/bindings/0/credential/tokenRef";
+    let cases: Vec<(&str, &str, &str, Vec<u8>)> = vec![
+        (
+            "utf8",
+            unresolved,
+            token_ref,
+            vec![0xff, b'.', b'a', b'.', b'b'],
+        ),
+        ("empty", unresolved, token_ref, Vec::new()),
+        ("oversized", unresolved, token_ref, vec![b'a'; 65 * 1024]),
+        (
+            "malformed-token",
+            "breg.credentials.incomplete-bindings",
+            "/bindings",
+            b"not.a-token!".to_vec(),
+        ),
     ];
 
-    for (name, secret) in cases {
+    for (name, code, pointer, secret) in cases {
         let secret_name = format!("operator-token-{name}");
         write_test_secret(&project, &secret_name, &secret);
         let credentials = project
@@ -4482,13 +4527,13 @@ fn test_credentials_secret_value_failures_are_preflight_and_value_free() {
         .expect("credential fixture writes");
         let output = project.path().join(format!("secret-receipt-{name}.json"));
         let result = test_candidate_command(&project, &runtime, &credentials, &output);
-        assert_schema_test_refusal(
+        assert_credentials_document_refusal(
             result,
-            "test.credentials.refused",
-            "schema_test_credentials",
-            "supply_schema_test_credentials",
+            &credentials,
+            code,
+            pointer,
             &output,
-            &[path(&credentials), &secret_name, "not.a-token!"],
+            &[&secret_name, "not.a-token!"],
         );
     }
 }
@@ -6542,8 +6587,8 @@ fn test_runtime_config(project: &TestProject) -> PathBuf {
 
 fn credential_source(credential: &str) -> String {
     format!(
-        r#"apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
+        r#"apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
+kind: BRegSchemaTestCredentials
 bindings:
   - journeyId: package-record-list
     stepId: list-records
@@ -6577,6 +6622,48 @@ fn assert_schema_test_refusal(
     assert_eq!(report["command"], "test");
     assert_eq!(report["diagnostics"][0]["code"], expected_code);
     assert_tool_diagnostic(&report["diagnostics"][0], artifact, action);
+}
+
+/// A refused credentials file is reported in the reader's diagnostic shape,
+/// naming the file as given and never a value it holds (CFG-SEC-3).
+fn assert_credentials_document_refusal(
+    output: Output,
+    credentials: &Path,
+    expected_code: &str,
+    expected_pointer: &str,
+    receipt: &Path,
+    forbidden: &[&str],
+) {
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty());
+    assert!(!receipt.exists(), "receipt was not published on refusal");
+    let rendered = String::from_utf8(output.stdout).expect("refusal JSON is UTF-8");
+    for canary in forbidden {
+        assert!(!rendered.contains(canary), "refusal leaked {canary}");
+    }
+    let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "test");
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("refusal diagnostics are a list");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == expected_code && diagnostic["path"] == expected_pointer
+        }),
+        "{rendered}"
+    );
+    for diagnostic in diagnostics {
+        assert_eq!(diagnostic["artifact"], "BRegSchemaTestCredentials");
+        assert_eq!(diagnostic["source"]["file"], path(credentials));
+        assert!(diagnostic["source"]["line"].is_u64(), "{rendered}");
+        assert!(
+            diagnostic["suggestedAction"]
+                .as_str()
+                .is_some_and(|action| !action.is_empty()),
+            "{rendered}"
+        );
+    }
 }
 
 fn assert_inspection_refusal(
