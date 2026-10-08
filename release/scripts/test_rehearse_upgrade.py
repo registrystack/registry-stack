@@ -799,7 +799,7 @@ class BregLedgerTest(unittest.TestCase):
             breg.keys.mint.return_value = "minted"
             (breg.project / "tests").mkdir(parents=True)
             dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": [
-                {"id": "j", "steps": [{"id": "open"},
+                {"id": "j", "steps": [{"id": "open", "claims": {"principal": "q"}},
                                       {"id": "held", "claims": {"principal": "p"}}]}]})
             for label, envelope in envelopes.items():
                 with self.subTest(side=label):
@@ -809,7 +809,8 @@ class BregLedgerTest(unittest.TestCase):
                     written = load_json(root / f"{label}.json")
                     self.assertEqual(written, {**envelope, "bindings": [
                         {"journeyId": "j", "stepId": "open",
-                         "credential": {"type": "anonymous"}},
+                         "credential": {"type": "bearer",
+                                        "tokenRef": "secret:file/journey-token-j-open"}},
                         {"journeyId": "j", "stepId": "held",
                          "credential": {"type": "bearer",
                                         "tokenRef": "secret:file/journey-token-j-held"}}]})
@@ -905,11 +906,14 @@ class BregLedgerTest(unittest.TestCase):
             MODULE.expect_ledger(unchained, "sha256:" + "b" * 64)
 
 
-@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
-@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 # JSON is YAML, so the journeys document reads without PyYAML.
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class BregCredentialsTest(unittest.TestCase):
+    def side(self) -> object:
+        side = unittest.mock.Mock()
+        side.label = "to"
+        return side
+
     def breg(self, root: Path, steps: list[dict[str, Any]]) -> object:
         breg = MODULE.Breg.__new__(MODULE.Breg)
         breg.secrets = root / "secrets"
@@ -925,7 +929,7 @@ class BregCredentialsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             breg = self.breg(root, [{"id": "read", "claims": {"principal": "operator"}}])
-            breg.credentials(root / "credentials.json")
+            breg.credentials(root / "credentials.json", self.side())
             bindings = load_json(root / "credentials.json")["bindings"]
             self.assertEqual(bindings, [{
                 "journeyId": "journey", "stepId": "read",
@@ -937,10 +941,12 @@ class BregCredentialsTest(unittest.TestCase):
             root = Path(directory)
             breg = self.breg(root, [{"id": "read"}])
             with self.assertRaisesRegex(MODULE.RehearsalError, "names no claims"):
-                breg.credentials(root / "credentials.json")
+                breg.credentials(root / "credentials.json", self.side())
             self.assertFalse((root / "credentials.json").exists())
 
 
+@unittest.mock.patch.object(MODULE, "dump_yaml", dump_json)
+@unittest.mock.patch.object(MODULE, "load_yaml", load_json)
 class EvidencePackageTest(unittest.TestCase):
     def test_a_sealed_installed_package_is_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
