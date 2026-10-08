@@ -1,0 +1,12 @@
+id: substitution-unset-accepted-without-environment
+rules: [CFG-CHECK-1]
+summary: Without --environment, an operator check reads no environment value, so an unset variable is not refused.
+appliesTo:
+  audiences: [operator]
+mutation:
+  member:
+    role: optionalText
+    value: '"${REGISTRY_CONFORMANCE_UNSET}"'
+expect:
+  exit: 0
+  diagnostics: []

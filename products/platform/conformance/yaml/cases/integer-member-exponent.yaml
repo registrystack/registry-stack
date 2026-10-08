@@ -1,0 +1,14 @@
+id: integer-member-exponent
+rules: [CFG-VAL-1, CFG-DIAG-6]
+summary: A number with an exponent in an integer member is refused, never converted.
+mutation:
+  member:
+    role: integer
+    value: "1e3"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-integer
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Write digits only.

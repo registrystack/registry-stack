@@ -1,0 +1,12 @@
+id: unrepresentable-integer
+rules: [CFG-VAL-1]
+summary: An integer the reader cannot represent is refused in every position, before decoding.
+mutation:
+  append: |
+    conformanceNumber: 18446744073709551616
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.out-of-range
+      path: /conformanceNumber
+      at: {line: 1, column: 20}

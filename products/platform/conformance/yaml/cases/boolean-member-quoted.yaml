@@ -1,0 +1,14 @@
+id: boolean-member-quoted
+rules: [CFG-VAL-3, CFG-DIAG-6]
+summary: A quoted `"true"` in a boolean member is text, refused with the fix to remove the quotes.
+mutation:
+  member:
+    role: boolean
+    value: '"true"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-boolean
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Remove the quotes.

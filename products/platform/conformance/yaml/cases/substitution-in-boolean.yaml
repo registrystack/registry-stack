@@ -1,0 +1,16 @@
+id: substitution-in-boolean
+rules: [CFG-SEC-2, CFG-VAL-3, CFG-DIAG-6, CFG-SEC-3]
+summary: A substitution expression in a boolean member is refused with the fix to write the value or template the whole file.
+appliesTo:
+  audiences: [operator]
+mutation:
+  member:
+    role: boolean
+    value: '"${REGISTRY_CONFORMANCE_VALUE}"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-boolean
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Write the value, or template the whole file.

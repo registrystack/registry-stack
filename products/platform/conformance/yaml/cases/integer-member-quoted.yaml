@@ -1,0 +1,14 @@
+id: integer-member-quoted
+rules: [CFG-VAL-3, CFG-DIAG-6, CFG-SCHEMA-8]
+summary: A quoted number in an integer member is text, refused with the fix to remove the quotes.
+mutation:
+  member:
+    role: integer
+    value: '"7"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-integer
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Remove the quotes.

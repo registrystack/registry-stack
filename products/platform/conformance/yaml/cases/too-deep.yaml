@@ -1,0 +1,12 @@
+id: too-deep
+rules: [CFG-YAML-6]
+summary: Lists nested deeper than 128 levels are refused at the first level past the bound.
+mutation:
+  append: |
+    conformanceDeep: {repeat:129:[}{repeat:129:]}
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.too-deep
+      path: /conformanceDeep{repeat:127:/0}
+      at: {line: 1, column: 145}

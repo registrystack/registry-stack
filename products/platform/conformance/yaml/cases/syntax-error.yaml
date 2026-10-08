@@ -1,0 +1,13 @@
+id: syntax-error
+rules: [CFG-YAML-8]
+summary: A list item where the top-level mapping expects a key is any other syntax error, with a position and a fix.
+mutation:
+  append: |
+    - conformance
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.syntax
+      path: ""
+      at: {line: 1, column: 3}
+      suggestedAction: Check the indentation and punctuation at this position.

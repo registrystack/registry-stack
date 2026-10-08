@@ -1,0 +1,15 @@
+id: wrong-kind
+rules: [CFG-ENV-1, CFG-SEC-3]
+summary: A kind the command does not read is refused at the value, naming the expected kind and not the one written.
+appliesTo:
+  envelope: true
+mutation:
+  envelope:
+    kind: "{marker}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.wrong-kind
+      path: /kind
+      from: kind
+      at: {line: 1, column: 1}

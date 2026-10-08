@@ -1,0 +1,13 @@
+id: multiple-documents
+rules: [CFG-ENV-4]
+summary: A second document after content is refused where it starts.
+mutation:
+  append: |
+    ---
+    conformance: other
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.multiple-documents
+      path: ""
+      at: {line: 1, column: 1}

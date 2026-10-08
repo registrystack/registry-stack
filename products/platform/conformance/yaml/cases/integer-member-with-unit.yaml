@@ -1,0 +1,14 @@
+id: integer-member-with-unit
+rules: [CFG-DIAG-6]
+summary: A number with a unit in an integer member is refused, and the fix takes the unit from the key.
+mutation:
+  member:
+    role: integer
+    value: "7s"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-integer
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Write the {numberOfUnit} as digits.

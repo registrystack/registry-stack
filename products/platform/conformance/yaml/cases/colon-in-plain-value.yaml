@@ -1,0 +1,13 @@
+id: colon-in-plain-value
+rules: [CFG-YAML-8]
+summary: A colon followed by a space inside an unquoted value is refused at the colon, with the fix to quote the value.
+mutation:
+  append: |
+    conformanceReason: Overdue: move it
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.colon-in-plain-value
+      path: ""
+      at: {line: 1, column: 27}
+      suggestedAction: Quote the value.

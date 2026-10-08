@@ -1,0 +1,13 @@
+id: lone-star
+rules: [CFG-YAML-3, CFG-YAML-8]
+summary: A lone `*` is an alias, not a wildcard or a syntax error, and the fix says to quote it.
+mutation:
+  append: |
+    conformanceStar: *
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.alias
+      path: /conformanceStar
+      at: {line: 1, column: 18}
+      suggestedAction: Write the value in full where it is used, or quote it if it is text such as `*`.

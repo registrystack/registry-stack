@@ -1,0 +1,15 @@
+id: wrong-api-version
+rules: [CFG-ENV-1, CFG-SEC-3]
+summary: An apiVersion the command does not read for the kind is refused at the value, naming the expected one and not the one written.
+appliesTo:
+  envelope: true
+mutation:
+  envelope:
+    apiVersion: example.org/{marker}/v1
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.unsupported-api-version
+      path: /apiVersion
+      from: apiVersion
+      at: {line: 1, column: 1}

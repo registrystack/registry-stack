@@ -1,0 +1,14 @@
+id: text-member-integer
+rules: [CFG-VAL-2, CFG-DIAG-6]
+summary: A plain integer in a text member is refused, not read as text.
+mutation:
+  member:
+    role: requiredText
+    value: "123"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.expected-string
+      path: "{pointer}"
+      at: {line: 1, column: 1}
+      suggestedAction: Quote the value to make it text.

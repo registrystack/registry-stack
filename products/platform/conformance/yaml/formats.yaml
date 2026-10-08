@@ -1,0 +1,104 @@
+# How products/platform/scripts/run-config-conformance.py stages a format
+# whose check command needs more than a copy of its example's directory.
+# A format not listed here is staged as a copy of its example's directory.
+# The members are documented at the top of the runner.
+formats:
+  breg/module:
+    project: products/breg/acceptance/asset-site-placement
+
+  casework/fixture:
+    project: products/casework/examples/payment-review
+  casework/simulation:
+    project: products/casework/examples/multi-stage-routing-clocks
+  casework/holiday-set:
+    project: products/casework/examples/multi-stage-routing-clocks
+
+  scheduling/fixture:
+    project: products/scheduling/examples/standalone-arrival-window
+
+  messaging/template:
+    project: products/messaging/examples/starter
+  messaging/provider:
+    project: products/messaging/examples/starter
+  # The removed key the Messaging runtime refuses by name; the registry does
+  # not declare it yet.
+  messaging/runtime:
+    removedKeys:
+      - /authentication/oidc/jwksUri
+
+  discovery/evidence-mapping:
+    project: products/discovery/fixtures/project
+
+  manifest/profile:
+    project: products/manifest/profiles
+
+  # The authoring template ships without the project marker and the
+  # disposable signing key `evidencectl new` writes, so the copy gets a marker
+  # and, where the check signs fixture answers, a freshly generated key.
+  evidence/fixture:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    write:
+      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+    prepare:
+      - evidencectl keygen signing --out-dir {project}/secrets
+  evidence/question:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    write:
+      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+  evidence/source:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    write:
+      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+  evidence/selector:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    write:
+      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+  evidence/target-governance:
+    project: crates/registry-evidencectl/templates/sqlite-extract
+    write:
+      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+    copies:
+      target:
+        from: products/evidence/reference/deployment-targets/environments/local/evidence
+    # The reference target grants a question no committed project holds, so
+    # its one grant is pointed at the template's question.
+    set:
+      /authorityProfiles/example-requester/grants/0/requirement: urn:example:requirement:record-status:v1
+      /authorityProfiles/example-requester/grants/0/purpose: record-status-check
+      /authorityProfiles/example-requester/grants/0/subjects/0/selectorProfile: record-reference-v1
+  # The registered check reads a target directory, not the settings file
+  # `evidencectl target new --settings` reads, so a mutation of this example
+  # is not seen by its check.
+  evidence/target-settings:
+    project: products/breg/evidence/starter
+    write:
+      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+    values:
+      target: "{project}/targets/local"
+
+  # The bundle is checked through a runtime configuration that points at the
+  # staged copy, and its SHA256SUMS is refreshed after each mutation.
+  evidence/bundle:
+    copies:
+      runtime:
+        from: products/evidence/reference/deployment-targets/environments/local/evidence/runtime.yaml
+        set:
+          /package/root: "{project}"
+    digests: SHA256SUMS
+
+  # The runtime configuration is checked against a staged copy of an
+  # acceptance bundle. The removed keys are the ones the Evidence runtime
+  # refuses by name; the registry does not declare them yet.
+  evidence/runtime:
+    copies:
+      bundle:
+        from: products/evidence/fixtures/acceptance/adult-status
+    set:
+      /package/root: "{bundle}"
+    removedKeys:
+      - /version
+      - /bundleDirectory
+      - /listener/bindHost
+      - /listener/port
+      - /metricsListener/bindHost
+      - /metricsListener/port

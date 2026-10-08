@@ -1,0 +1,16 @@
+id: substitution-required-message
+rules: [CFG-SEC-2, CFG-SEC-3, CFG-CHECK-1]
+summary: With --environment, `${NAME:?message}` on an unset variable is refused without repeating the message.
+appliesTo:
+  audiences: [operator]
+args: [--environment]
+mutation:
+  member:
+    role: optionalText
+    value: '"${REGISTRY_CONFORMANCE_UNSET:?{marker}}"'
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.substitution
+      path: "{pointer}"
+      at: {line: 1, column: 1}

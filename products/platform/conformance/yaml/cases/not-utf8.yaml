@@ -1,0 +1,14 @@
+id: not-utf8
+rules: [CFG-YAML-6]
+summary: A byte that is not UTF-8 is refused at its position.
+mutation:
+  append: "# conformance "
+encoding:
+  appendBytes: ff0a
+expect:
+  exit: 1
+  diagnostics:
+    - code: yaml.not-utf8
+      path: ""
+      at: {line: 1, column: 15}
+      suggestedAction: Save the file as UTF-8.

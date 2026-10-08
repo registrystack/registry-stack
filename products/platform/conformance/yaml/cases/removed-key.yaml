@@ -1,0 +1,12 @@
+id: removed-key
+rules: [CFG-CHANGE-2, CFG-SEC-3]
+summary: Every key the format declares removed is refused at the key, without repeating its value.
+mutation:
+  removedKeys:
+    value: "{marker}"
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.removed-key
+      path: "{pointer}"
+      at: {line: 1, column: 1}

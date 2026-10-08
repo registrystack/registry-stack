@@ -1,0 +1,16 @@
+id: wrong-kind-and-api-version
+rules: [CFG-ENV-1]
+summary: When both envelope members are wrong, the kind is reported and the apiVersion is not.
+appliesTo:
+  envelope: true
+mutation:
+  envelope:
+    apiVersion: example.org/conformance/v1
+    kind: ConformanceOther
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.wrong-kind
+      path: /kind
+      from: kind
+      at: {line: 1, column: 1}
