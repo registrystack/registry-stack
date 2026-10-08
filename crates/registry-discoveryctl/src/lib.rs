@@ -441,6 +441,24 @@ mod tests {
         assert_eq!(report["diagnostics"], json!([]));
     }
 
+    /// The registered example of the report format (CFG-SCHEMA-1) is this
+    /// command's own output.
+    #[test]
+    fn cfg_schema_1_the_report_example_is_the_check_output() {
+        let example = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/discovery/fixtures/ctl-report/check.json"
+        );
+        let (exit, stdout, _) = run_cli(&["check", "--project", FIXTURE, "--format", "json"]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}");
+        assert_eq!(
+            fs::read_to_string(example).expect("the report example"),
+            stdout,
+            "regenerate it with `discoveryctl check --project \
+             products/discovery/fixtures/project --format json`"
+        );
+    }
+
     #[test]
     fn cfg_diag_2_a_clean_check_prints_the_counts_and_the_summary() {
         let (exit, stdout, stderr) = run_cli(&["check", "--project", FIXTURE]);

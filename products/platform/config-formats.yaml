@@ -2515,6 +2515,32 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
+  - id: discovery/ctl-report
+    product: discovery
+    title: discoveryctl --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/discovery/ctl-report/v1alpha1
+      kind: DiscoveryCtlReport
+      checkedBy:
+        file: crates/registry-discoveryctl/src/lib.rs
+        symbol: CTL_REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/discovery/ctl-report/v1alpha1
+      kind: DiscoveryCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-discoveryctl/src/report.rs
+      symbol: write
+    check: none
+    example: products/discovery/fixtures/ctl-report/check.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
 
   # render
   - id: render/bundle
