@@ -158,11 +158,24 @@ impl ReaderRefusal {
     pub fn deciding_diagnostic(&self) -> &Diagnostic {
         self.0.deciding_diagnostic()
     }
+}
 
-    /// The deciding diagnostic on one line, without the file.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        self.0.message()
+/// The deciding diagnostic on one line, without the file: its pointer, its
+/// message, and after `next:` its suggested action. Like every diagnostic, it
+/// never repeats a value.
+impl fmt::Display for ReaderRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let deciding = self.deciding_diagnostic();
+        let path = if deciding.path.is_empty() {
+            "/"
+        } else {
+            deciding.path.as_str()
+        };
+        write!(formatter, "{path}: {}", deciding.message)?;
+        if !deciding.suggested_action.is_empty() {
+            write!(formatter, "; next: {}", deciding.suggested_action)?;
+        }
+        Ok(())
     }
 }
 
@@ -183,7 +196,7 @@ pub enum RuntimeConfigError {
     /// in the shared YAML subset, its envelope is wrong, a substitution
     /// failed, or a member does not fit its typed shape. The message is the
     /// deciding diagnostic on one line and never repeats a value.
-    #[error("{}", .0.message())]
+    #[error("{0}")]
     Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
