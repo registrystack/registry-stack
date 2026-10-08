@@ -548,18 +548,6 @@ expectedFailures:
   case: at-size-cap
   reason: exit status 1, expected 0; unexpected yaml.too-large at the root (file)
   digest: d7919e78b06d
-- format: messaging/template
-  case: text-member-boolean
-  reason: missing config.expected-string at /channel 4:10; unexpected config.unknown-variant at /channel 4:10
-  digest: 36c35fb7e2c0
-- format: messaging/template
-  case: text-member-integer
-  reason: missing config.expected-string at /channel 4:10; unexpected config.unknown-variant at /channel 4:10
-  digest: 36c35fb7e2c0
-- format: messaging/template
-  case: text-member-number
-  reason: missing config.expected-string at /channel 4:10; unexpected config.unknown-variant at /channel 4:10
-  digest: 36c35fb7e2c0
 - format: scheduling/fixture
   case: duplicate-id
   reason: missing config.duplicate-id at /facts/locations/1/id 10:11; unexpected scheduling.fixture.duplicate-identifier at /facts/locations/1/id 10:11
