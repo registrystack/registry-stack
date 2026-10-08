@@ -2913,7 +2913,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "7d814d1869c5cc4f3e6922f14b756d9d1d75962a4095310e6a6ee58160593196",
+        "sha256": "6ba42582e6752b3cb70a3fd52a9996055730f9178a60e6e198365e56a0ea444f",
         "mediaType": "application/schema+json"
       }
     },

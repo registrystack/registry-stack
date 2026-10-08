@@ -217,8 +217,7 @@
               "type": "string"
             },
             "uri": {
-              "pattern": "^https?://",
-              "type": "string"
+              "$ref": "#/$defs/Url"
             }
           },
           "required": [
@@ -232,8 +231,7 @@
           "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
           "properties": {
             "documentRef": {
-              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
-              "type": "string"
+              "$ref": "#/$defs/SecretReference"
             },
             "kind": {
               "const": "static",
