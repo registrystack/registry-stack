@@ -1265,9 +1265,7 @@ fn resolution_refusal(text: &str) -> Vec<(String, String)> {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("resolutions.json");
     fs::write(&path, text).unwrap();
-    let error = read_resolutions(Some(&path))
-        .err()
-        .expect("the resolution file is refused");
+    let error = read_resolutions(Some(&path)).expect_err("the resolution file is refused");
     error
         .downcast_ref::<DocumentRefused>()
         .expect("the shared reader refused the resolution file")
