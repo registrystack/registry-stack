@@ -52,6 +52,20 @@
   volume they consumed. Finish or cancel open runs before upgrading. A
   `bregctl data import` whose run was discarded refuses to resume; import
   only the uncommitted lines under a fresh checkpoint path.
+- BREAKING: `breg-mcp` and `breg-review` read `runtime.yaml` through the
+  shared configuration reader, as
+  `id.registrystack.org/formats/breg/mcp-runtime/v1alpha1` and
+  `id.registrystack.org/formats/breg/review-runtime/v1alpha1`; the previous
+  `apiVersion` is refused with its replacement named. In `breg-mcp`,
+  `maxTokenLifetimeSeconds` becomes `maximumTokenLifetimeSeconds` (now at
+  most 86400), `registry.requestTimeoutMilliseconds` becomes
+  `attemptTimeoutMilliseconds`, `limits.maxRequestBodyBytes` becomes
+  `maximumRequestBytes`, and `audit.retainDays` becomes `retentionDays`; in
+  `breg-review`, `limits` becomes `rateLimits` and `audit.retainDays` becomes
+  `retentionDays`. Each old key is refused naming its replacement. `check`
+  reads no secret, takes `--format json` and `--deny-warnings`, and exits 0,
+  1, 2, or 3. Migration steps and the code table are in
+  `release/notes/config-conventions/breg-services.md`.
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up
