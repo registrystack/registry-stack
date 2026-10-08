@@ -593,7 +593,7 @@ jobs:
 
       - name: Reproduce the Render schemas
         if: matrix.name == 'render'
-        run: cargo test --locked -p registry-render --features schema --lib schema::
+        run: cargo test --locked -p registry-render --features schema --lib schema::tests
 
       - name: Report disk usage
         if: always()
