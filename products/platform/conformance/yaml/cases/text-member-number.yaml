@@ -3,7 +3,7 @@ rules: [CFG-VAL-2, CFG-DIAG-6]
 summary: A plain number in a text member is refused, not read as text.
 mutation:
   member:
-    role: requiredText
+    role: [requiredText, optionalText]
     value: "1.0"
 expect:
   exit: 1

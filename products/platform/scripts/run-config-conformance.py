@@ -27,7 +27,11 @@ A case file (`cases/<id>.yaml`) has these members:
                 member: {role, value}     the scalar at the format's
                                           registered `conformance` pointer for
                                           `role` (requiredText, optionalText,
-                                          integer, boolean) becomes `value`
+                                          integer, boolean) becomes `value`;
+                                          a `role` of any operation may be a
+                                          list in preference order, and the
+                                          first role the format registers is
+                                          the one used
                 envelope: {apiVersion, kind}
                                           each member's value replaced, or
                                           `remove`; an absent member is added
@@ -511,11 +515,15 @@ def replace_span(text: str, node: yaml.Node, source: str) -> tuple[str, int]:
     return text[:start] + source + text[end:], start
 
 
-def role_pointer(fmt: Format, role: str) -> str:
-    pointer = fmt.roles.get(role)
-    if pointer is None:
-        raise NotApplicable(f"the format registers no {role} member")
-    return pointer
+def role_pointer(fmt: Format, named: Any) -> tuple[str, str]:
+    """The first role of a case's `role` (one role, or a list in preference
+    order) the format registers a member for, and that member's pointer."""
+    roles = [str(role) for role in named] if isinstance(named, list) else [str(named)]
+    for role in roles:
+        pointer = fmt.roles.get(role)
+        if pointer is not None:
+            return role, pointer
+    raise NotApplicable(f"the format registers no {' or '.join(roles)} member")
 
 
 def missing_pointer(fmt: Format, role: str, pointer: str) -> HarnessError:
@@ -545,8 +553,7 @@ def site_values(pointer: str) -> dict[str, str]:
 
 
 def mutate_member(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
-    role = str(spec.get("role"))
-    pointer = role_pointer(fmt, role)
+    role, pointer = role_pointer(fmt, spec.get("role"))
     key, node = scalar_at(compose(text), pointer, fmt, role)
     text, start = replace_span(text, node, expand(str(spec.get("value", "")), {}))
     anchors = {"start": (1, 1), "value": position(text, start)}
@@ -643,8 +650,7 @@ def mutate_retired(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant
 
 
 def mutate_spelling(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
-    role = str(spec.get("role"))
-    pointer = role_pointer(fmt, role)
+    role, pointer = role_pointer(fmt, spec.get("role"))
     parts = segments(pointer)
     other = spelling_variant(parts[-1]) if parts else None
     if other is None:
@@ -666,8 +672,7 @@ def mutate_spelling(text: str, spec: dict[str, Any], fmt: Format) -> list[Varian
 
 
 def mutate_duplicate_item(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
-    role = str(spec.get("role"))
-    pointer = role_pointer(fmt, role)
+    role, pointer = role_pointer(fmt, spec.get("role"))
     _, node = find(compose(text), pointer)
     if node is None:
         raise missing_pointer(fmt, role, pointer)
@@ -698,11 +703,10 @@ def mutate_duplicate_item(text: str, spec: dict[str, Any], fmt: Format) -> list[
 
 
 def mutate_path_outside(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
-    role = str(spec.get("role"))
     via = spec.get("via")
     if via not in ("parent", "link"):
         raise HarnessError("`pathOutside` takes `via: parent` or `via: link`")
-    pointer = role_pointer(fmt, role)
+    role, pointer = role_pointer(fmt, spec.get("role"))
     key, node = scalar_at(compose(text), pointer, fmt, role)
     named = node.value
     name = Path(named).name

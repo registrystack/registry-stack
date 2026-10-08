@@ -2356,7 +2356,7 @@ formats:
     check: messagingctl check --project {project}
     example: products/messaging/examples/starter/templates/appointment-reminder/1/template.yaml
     conformance:
-      requiredText: /channel
+      requiredText: none
       optionalText: none
       integer: none
       boolean: none

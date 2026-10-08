@@ -163,6 +163,25 @@ class MutationTest(unittest.TestCase):
         with self.assertRaises(runner.NotApplicable):
             runner.mutate(EXAMPLE, {"member": {"role": "integer", "value": "1"}}, fmt)
 
+    def test_cfg_val_2_member_roles_take_the_first_the_format_registers(self) -> None:
+        spec = {"member": {"role": ["requiredText", "optionalText"], "value": "123"}}
+        variant = one(runner.mutate(EXAMPLE, spec, demo_format()))
+        self.assertIn("  id: 123\n", variant.text)
+        self.assertEqual(variant.sites[0].values["pointer"], "/project/id")
+
+    def test_cfg_val_2_member_roles_fall_back_to_an_optional_text_member(self) -> None:
+        fmt = demo_format(roles={"requiredText": None, "optionalText": "/items/0/note"})
+        spec = {"member": {"role": ["requiredText", "optionalText"], "value": "123"}}
+        variant = one(runner.mutate(EXAMPLE, spec, fmt))
+        self.assertIn("    note: 123\n", variant.text)
+        self.assertEqual(variant.sites[0].values["pointer"], "/items/0/note")
+
+    def test_cfg_val_2_member_roles_none_registered_does_not_apply(self) -> None:
+        fmt = demo_format(roles={"requiredText": None, "optionalText": None})
+        spec = {"member": {"role": ["requiredText", "optionalText"], "value": "123"}}
+        with self.assertRaisesRegex(runner.NotApplicable, "no requiredText or optionalText member"):
+            runner.mutate(EXAMPLE, spec, fmt)
+
     def test_member_pointer_the_example_lacks_is_a_harness_error(self) -> None:
         fmt = demo_format(roles={"integer": "/listener/missing"})
         with self.assertRaises(runner.HarnessError):
@@ -1376,6 +1395,29 @@ class CommittedCorpusTest(unittest.TestCase):
             self.assertIn(case_id, ids)
         self.assertLessEqual(set(expected.unreached), formats)
         self.assertLessEqual(set(expected.inapplicable), ids)
+
+    def text_member_cases(self) -> list[Any]:
+        cases = [case for case in self.cases if case.id.startswith("text-member-")]
+        self.assertEqual(len(cases), 3)
+        return cases
+
+    def test_cfg_val_2_text_member_cases_fall_back_to_an_optional_text_member(self) -> None:
+        fmt = demo_format(roles={"requiredText": None, "optionalText": "/items/0/note"})
+        for case in self.text_member_cases():
+            variant = one(runner.mutate(EXAMPLE, case.mutation, fmt))
+            with self.subTest(case=case.id):
+                self.assertEqual(variant.sites[0].values["pointer"], "/items/0/note")
+
+    def test_cfg_val_2_text_member_cases_do_not_apply_to_messaging_template(self) -> None:
+        # Its one member outside a list is an enum (`channel`) and it has no
+        # optional member, so it has no text member to mutate.
+        harness = runner.load_harness(self.corpus / "formats.yaml")
+        fmt = next(fmt for fmt in self.registry if fmt.id == "messaging/template")
+        fmt = fmt.with_harness(harness.get(fmt.id, {}))
+        text = runner.prepare_example((ROOT / fmt.example).read_text(encoding="utf-8"), fmt, {})
+        for case in self.text_member_cases():
+            with self.subTest(case=case.id), self.assertRaises(runner.NotApplicable):
+                runner.mutate(text, case.mutation, fmt)
 
     def syntax_error_case(self) -> Any:
         return next(case for case in self.cases if case.id == "syntax-error")
