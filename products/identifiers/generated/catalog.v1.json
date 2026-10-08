@@ -2895,7 +2895,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "a659d8537ac280ce79d6399f27a3335b287bb8504bcad5ea6f38ade3444fc270",
+        "sha256": "ae9225f9f1796761215939e6ba2443f454d988dadf76e9f01a37c44721a24d52",
         "mediaType": "application/schema+json"
       }
     },
@@ -2913,7 +2913,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "4195a8ecce225da52c210b1913c2b4d7da06f1ed24fdc3248b6e3d513a05dfe8",
+        "sha256": "c238ca2b51678993adefcd74d4c463998659908d6320f919b92c398bbe23a41e",
         "mediaType": "application/schema+json"
       }
     },
@@ -2949,7 +2949,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "65f71abac720eea57ffc90135c0c4b1f7a0263a433954684aee7d6c5b6c1509a",
+        "sha256": "3e54cf8a8358a60ab8682d1b6e97e2534a82ade3efb52927d60594244bcbaf14",
         "mediaType": "application/schema+json"
       }
     },
