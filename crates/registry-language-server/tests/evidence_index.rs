@@ -924,12 +924,13 @@ fn the_same_source_is_reported_once_a_question_reads_it() {
 
 /// A source is opened for a question the form accepts, not for any document that spells its name.
 ///
-/// `read_inputs` in `crates/registry-evidencectl/src/authoring.rs:464-492` refuses a question at
-/// `first_finding(validate_question(&question))?` before a single source is compiled, so a question
-/// whose shape the form refuses never reaches `compile_referenced_question` (:1127-1144) and the
-/// source it names is never read for its artifacts. The editor answers that one malformed document
-/// with the one sentence that holds its departure, and says nothing in a file the author has not
-/// touched.
+/// `read_inputs` in `crates/registry-evidencectl/src/authoring.rs` reads the questions through
+/// `read_questions`, which gathers what `check_question` reports for a refused question and leaves
+/// that question out of the ones it returns, and the build stops at the gathered errors before a
+/// single source is compiled, so a question whose shape the form refuses never reaches
+/// `compile_referenced_question` and the source it names is never read for its artifacts. The
+/// editor answers that one malformed document with the one sentence that holds its departure, and
+/// says nothing in a file the author has not touched.
 #[test]
 fn a_source_named_only_by_a_question_the_form_refuses_is_left_alone() {
     let missing_schema = without(&adult_status_project(), "schemas/people-facts.schema.yaml");

@@ -1050,10 +1050,11 @@ fn read_questions<'a>(
 /// loaded, so this is the set of sources anything checks. A source outside it is loaded, read far
 /// enough to see that it is an object under a usable name, and never opened again.
 ///
-/// A question the form refuses is outside it too, whatever it spells. `read_inputs`
-/// (`crates/registry-evidencectl/src/authoring.rs:464-492`) stops at
-/// `first_finding(validate_question(&question))?` before a source is compiled, so
-/// `compile_referenced_question` (:1127-1144) never reads the artifacts of the source that question
+/// A question the form refuses is outside it too, whatever it spells. `read_inputs` in
+/// `crates/registry-evidencectl/src/authoring.rs` reads the questions through `read_questions`,
+/// which gathers what `check_question` reports for a refused question and leaves that question out
+/// of the ones it returns, and the build stops at the gathered errors before a source is compiled,
+/// so `compile_referenced_question` never reads the artifacts of the source that question
 /// names. Classifying that source as read would answer one malformed document with a second
 /// sentence, in a file the author has not touched and may have nothing wrong with it.
 fn sources_accepted_questions_read<'a>(

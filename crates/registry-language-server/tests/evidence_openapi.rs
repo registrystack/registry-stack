@@ -766,9 +766,10 @@ fn one_question_naming_an_operation_makes_the_description_a_prerequisite() {
 
 /// A question the form refuses is not a question that needs a description.
 ///
-/// `read_inputs` stops at `first_finding(validate_question(&question))?` before any question is
-/// compiled, so the sentence the author gets from the build is the one about the question. Adding a
-/// second sentence about a missing file would send them to a file that is not the problem.
+/// `read_inputs` gathers what `check_question` reports for the question and stops at the gathered
+/// errors before any question is compiled, so the sentence the author gets from the build is the
+/// one about the question. Adding a second sentence about a missing file would send them to a file
+/// that is not the problem.
 #[test]
 fn a_question_the_form_refuses_does_not_make_the_description_a_prerequisite() {
     let project = EvidenceProject::new(&replacing(
