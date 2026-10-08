@@ -393,14 +393,24 @@ mod tests {
 
     #[test]
     fn cfg_sec_1_a_refused_reference_names_the_grammar_and_never_the_value() {
-        let error = serde_norway::from_str::<SecretReference>("canary-inline-secret")
+        use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader};
+        const REFERENCE: FormatSpec = FormatSpec {
+            kind: "SecretReference",
+            envelope: EnvelopeRule::Exempt {
+                reason: "a secret reference read alone by its unit test",
+            },
+            removed_keys: &[],
+        };
+        let report = Reader::new("reference.yaml")
+            .decode::<SecretReference>(b"canary-inline-secret", &Expect::one(&REFERENCE))
             .expect_err("a literal is not a reference");
-        let message = error.to_string();
+        let message = &report.diagnostics()[0].message;
         assert!(
             message.starts_with("expected an exact secret:env/NAME or secret:file/name reference"),
             "{message:?}"
         );
-        assert!(!message.contains("canary-inline-secret"), "{message:?}");
+        let rendered = report.render_human();
+        assert!(!rendered.contains("canary-inline-secret"), "{rendered:?}");
     }
 
     #[test]

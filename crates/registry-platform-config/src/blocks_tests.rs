@@ -1,7 +1,32 @@
 use super::*;
+use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader, Report};
+
+/// One shared block read alone, through the shared reader a runtime file's
+/// members are read with, so these tests see what an operator sees.
+const BLOCK: FormatSpec = FormatSpec {
+    kind: "SharedRuntimeBlock",
+    envelope: EnvelopeRule::Exempt {
+        reason: "a shared runtime block read alone by its unit tests",
+    },
+    removed_keys: &[],
+};
+
+fn read_block<T: serde::de::DeserializeOwned>(yaml: &str) -> Result<T, Report> {
+    Reader::new("block.yaml")
+        .decode::<T>(yaml.as_bytes(), &Expect::one(&BLOCK))
+        .map(|decoded| decoded.value)
+}
+
+fn codes(report: &Report) -> Vec<&str> {
+    report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect()
+}
 
 fn providers(yaml: &str) -> SecretProvidersConfig {
-    serde_norway::from_str(yaml).expect("providers parse")
+    read_block(yaml).expect("providers parse")
 }
 
 #[test]
@@ -20,7 +45,7 @@ fn secret_providers_must_enable_at_least_one_provider_with_an_absolute_root() {
     providers("file: {root: /run/secrets}\nenvironment: {}")
         .check()
         .expect("both");
-    assert!(serde_norway::from_str::<SecretProvidersConfig>("environment: {x: 1}").is_err());
+    assert!(read_block::<SecretProvidersConfig>("environment: {x: 1}").is_err());
 }
 
 #[test]
@@ -53,7 +78,7 @@ fn the_resolver_enables_exactly_the_declared_providers() {
 
 #[test]
 fn database_debug_redacts_every_reference() {
-    let database: DatabaseConfig = serde_norway::from_str(
+    let database: DatabaseConfig = read_block(
         "runtimeUrlRef: secret:env/RUNTIME_URL\nmigrationUrlRef: secret:env/MIGRATION_URL\ntrustedRootCertificateRef: secret:file/ca",
     )
     .expect("database parses");
@@ -75,11 +100,11 @@ fn a_discovery_jwks_source_refuses_the_members_of_the_other_kinds() {
         "kind: discovery\nuri: https://keys.example.test/jwks",
         "kind: discovery\ndocumentRef: secret:file/jwks",
     ] {
-        let error = serde_norway::from_str::<JwksSource>(text)
-            .expect_err("a discovery source carries no other member");
-        assert!(error.to_string().contains("unknown field"), "{error}");
+        let error =
+            read_block::<JwksSource>(text).expect_err("a discovery source carries no other member");
+        assert_eq!(codes(&error), ["config.unknown-key"], "{error}");
     }
-    let discovery: JwksSource = serde_norway::from_str("kind: discovery").unwrap();
+    let discovery: JwksSource = read_block("kind: discovery").unwrap();
     assert_eq!(discovery, JwksSource::Discovery {});
 }
 
@@ -96,15 +121,14 @@ fn a_jwks_source_refuses_a_missing_or_unknown_kind() {
 #[test]
 fn jwks_source_has_three_kinds_and_defaults_to_discovery() {
     assert_eq!(JwksSource::default(), JwksSource::Discovery {});
-    let uri: JwksSource =
-        serde_norway::from_str("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
+    let uri: JwksSource = read_block("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
     assert_eq!(uri.uri(), Some("https://issuer.example.test/jwks"));
     uri.check("authentication.oidc.jwksSource", false)
         .expect("https uri");
     let static_source: JwksSource =
-        serde_norway::from_str("kind: static\ndocumentRef: secret:file/jwks").unwrap();
+        read_block("kind: static\ndocumentRef: secret:file/jwks").unwrap();
     assert_eq!(static_source.document_ref(), Some("secret:file/jwks"));
-    assert!(serde_norway::from_str::<JwksSource>("kind: static\nuri: x").is_err());
+    assert!(read_block::<JwksSource>("kind: static\nuri: x").is_err());
 
     for (uri, loopback) in [
         ("http://issuer.example.test/jwks", true),
@@ -179,24 +203,24 @@ fn package_root_is_absolute_and_the_pin_is_a_sha256_label() {
 
 #[test]
 fn listener_bind_is_an_ip_socket_address() {
-    let listener: ListenerConfig = serde_norway::from_str("bind: \"[::1]:8080\"").unwrap();
+    let listener: ListenerConfig = read_block("bind: \"[::1]:8080\"").unwrap();
     assert_eq!(listener.bind.socket_addr().port(), 8080);
     for bad in ["localhost:8080", "127.0.0.1", "8080"] {
-        let error = serde_norway::from_str::<ListenerConfig>(&format!("bind: \"{bad}\""))
-            .expect_err("refused bind");
+        let error =
+            read_block::<ListenerConfig>(&format!("bind: \"{bad}\"")).expect_err("refused bind");
         assert!(error
             .to_string()
             .contains("expected host:port with an IP address host"));
     }
-    assert!(serde_norway::from_str::<ListenerConfig>("address: 127.0.0.1:1").is_err());
+    assert!(read_block::<ListenerConfig>("address: 127.0.0.1:1").is_err());
 
     let padded = |port: &str| {
         let width = MAX_LISTENER_BIND_CHARACTERS - "127.0.0.1:".len();
         format!("bind: \"127.0.0.1:{port:0>width$}\"")
     };
-    serde_norway::from_str::<ListenerConfig>(&padded("80")).expect("bound length");
+    read_block::<ListenerConfig>(&padded("80")).expect("bound length");
     let overlong = padded("80").replacen(":0", ":00", 1);
-    let error = serde_norway::from_str::<ListenerConfig>(&overlong).expect_err("overlong bind");
+    let error = read_block::<ListenerConfig>(&overlong).expect_err("overlong bind");
     assert!(error
         .to_string()
         .contains("expected host:port with an IP address host"));
@@ -262,11 +286,10 @@ fn sha256_label_shape() {
 #[test]
 fn blocks_serialize_back_to_the_form_they_were_read_from() {
     let providers: SecretProvidersConfig =
-        serde_norway::from_str("file: {root: /run/secrets}\nenvironment: {}").unwrap();
-    let package: PackageConfig = serde_norway::from_str("root: /srv/package").unwrap();
-    let listener: ListenerConfig = serde_norway::from_str("bind: \"[::1]:8080\"").unwrap();
-    let jwks: JwksSource =
-        serde_norway::from_str("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
+        read_block("file: {root: /run/secrets}\nenvironment: {}").unwrap();
+    let package: PackageConfig = read_block("root: /srv/package").unwrap();
+    let listener: ListenerConfig = read_block("bind: \"[::1]:8080\"").unwrap();
+    let jwks: JwksSource = read_block("kind: uri\nuri: https://issuer.example.test/jwks").unwrap();
     assert_eq!(
         serde_json::to_value(&providers).unwrap(),
         serde_json::json!({"file": {"root": "/run/secrets"}, "environment": {}})
@@ -311,9 +334,8 @@ struct ProductAudit {
 
 #[test]
 fn the_audit_key_embeds_beside_product_members_and_redacts_its_reference() {
-    let audit: ProductAudit =
-        serde_norway::from_str("path: /var/lib/audit\nhashKeyRef: secret:file/audit-key")
-            .expect("embedded audit key parses");
+    let audit: ProductAudit = read_block("path: /var/lib/audit\nhashKeyRef: secret:file/audit-key")
+        .expect("embedded audit key parses");
     assert_eq!(audit.path, "/var/lib/audit");
     assert_eq!(audit.key.hash_key_ref.as_str(), "secret:file/audit-key");
     assert!(!format!("{audit:?}").contains("audit-key"), "{audit:?}");
@@ -330,15 +352,14 @@ fn the_audit_key_embeds_beside_product_members_and_redacts_its_reference() {
         ("path: /var/lib/audit", "no key"),
     ] {
         assert!(
-            serde_norway::from_str::<ProductAudit>(text).is_err(),
+            read_block::<ProductAudit>(text).is_err(),
             "{reason} must be refused"
         );
     }
 
-    let error = serde_norway::from_str::<ProductAudit>(
-        "path: /var/lib/audit\nhashKeyRef: plaintext-literal-key",
-    )
-    .expect_err("a literal is not a reference");
+    let error =
+        read_block::<ProductAudit>("path: /var/lib/audit\nhashKeyRef: plaintext-literal-key")
+            .expect_err("a literal is not a reference");
     assert!(
         !error.to_string().contains("plaintext-literal-key"),
         "{error}"
@@ -347,7 +368,7 @@ fn the_audit_key_embeds_beside_product_members_and_redacts_its_reference() {
 
 #[test]
 fn the_audit_key_names_an_enabled_provider() {
-    let key: AuditKeyConfig = serde_norway::from_str("hashKeyRef: secret:env/AUDIT_KEY").unwrap();
+    let key: AuditKeyConfig = read_block("hashKeyRef: secret:env/AUDIT_KEY").unwrap();
     key.check(&providers("environment: {}"))
         .expect("enabled provider");
     let error = key
@@ -372,7 +393,7 @@ struct ProductOidc {
 
 #[test]
 fn the_oidc_issuer_embeds_beside_product_members() {
-    let oidc: ProductOidc = serde_norway::from_str(
+    let oidc: ProductOidc = read_block(
         "issuer: https://issuer.example.test\naudience: urn:example:api\n\
          jwksSource: {kind: uri, uri: https://issuer.example.test/jwks}\ntokenTypes: [at+jwt]",
     )
@@ -385,7 +406,7 @@ fn the_oidc_issuer_embeds_beside_product_members() {
     );
     assert_eq!(oidc.token_types, ["at+jwt"]);
 
-    let defaulted: ProductOidc = serde_norway::from_str(
+    let defaulted: ProductOidc = read_block(
         "issuer: https://issuer.example.test\naudience: urn:example:api\ntokenTypes: []",
     )
     .unwrap();
@@ -406,7 +427,7 @@ fn the_oidc_issuer_embeds_beside_product_members() {
         ),
     ] {
         assert!(
-            serde_norway::from_str::<ProductOidc>(text).is_err(),
+            read_block::<ProductOidc>(text).is_err(),
             "{reason} must be refused"
         );
     }
@@ -562,7 +583,7 @@ fn a_secret_reference_reads_and_writes_as_its_text() {
 }
 
 fn clients(yaml: &str) -> OidcClientsConfig {
-    serde_norway::from_str(yaml).expect("clients parse")
+    read_block(yaml).expect("clients parse")
 }
 
 #[test]
@@ -627,7 +648,7 @@ fn oidc_clients_default_to_no_rule_and_bound_the_assertion_issuer_map() {
         assert_eq!(error.field(), "authentication.oidc.assertionIssuers");
         assert!(!error.to_string().contains("example.test"), "{reason}");
     }
-    assert!(serde_norway::from_str::<OidcClientsConfig>("allowedClients: portal").is_err());
+    assert!(read_block::<OidcClientsConfig>("allowedClients: portal").is_err());
 }
 
 #[test]
