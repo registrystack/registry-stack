@@ -923,22 +923,6 @@
       },
       "type": "object"
     },
-    "RawListenerConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "bind": {
-          "$ref": "#/$defs/ListenerBind"
-        },
-        "publicOrigin": {
-          "$ref": "#/$defs/Url",
-          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. It is `https`; `http` is accepted\nonly for a loopback host, for local development. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links."
-        }
-      },
-      "required": [
-        "bind"
-      ],
-      "type": "object"
-    },
     "RawMetricsListenerConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1174,6 +1158,23 @@
       },
       "required": [
         "maxSize"
+      ],
+      "type": "object"
+    },
+    "RawRegistryListener": {
+      "additionalProperties": false,
+      "description": "The registry's listener: the shared listener block and an optional public\norigin.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "publicOrigin": {
+          "$ref": "#/$defs/Url",
+          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. It is `https`; `http` is accepted\nonly for a loopback host, for local development. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links."
+        }
+      },
+      "required": [
+        "bind"
       ],
       "type": "object"
     },
@@ -1507,7 +1508,7 @@
       "type": "string"
     },
     "listener": {
-      "$ref": "#/$defs/RawListenerConfig"
+      "$ref": "#/$defs/RawRegistryListener"
     },
     "metricsListener": {
       "$ref": "#/$defs/RawMetricsListenerConfig",

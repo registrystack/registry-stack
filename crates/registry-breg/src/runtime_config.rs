@@ -1203,8 +1203,8 @@ pub struct ListenerConfig {
 }
 
 impl ListenerConfig {
-    fn from_raw(raw: RawListenerConfig) -> Result<Self> {
-        let bind = raw.bind.socket_addr();
+    fn from_raw(raw: RawRegistryListener) -> Result<Self> {
+        let bind = raw.listener.bind.socket_addr();
         Ok(Self {
             bind,
             public_origin: raw
@@ -2610,7 +2610,7 @@ struct RawRuntimeConfig {
     api_version: String,
     #[cfg(feature = "schema")]
     kind: String,
-    listener: RawListenerConfig,
+    listener: RawRegistryListener,
     identity: RawDeploymentIdentity,
     secret_providers: registry_platform_config::SecretProvidersConfig,
     database: RawDatabaseConfig,
@@ -2661,8 +2661,12 @@ struct RawRuntimeConfig {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawListenerConfig {
-    bind: ListenerBind,
+/// The registry's listener: the shared listener block and an optional public
+/// origin.
+struct RawRegistryListener {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/listener"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    listener: registry_platform_config::ListenerConfig,
     /// Canonical public origin for QGIS discovery and pagination links, with
     /// an optional deployment path prefix such as
     /// `https://registry.example.org/breg`. It is `https`; `http` is accepted

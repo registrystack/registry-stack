@@ -2397,13 +2397,6 @@ exceptions:
   wp: WP3
   reason: RawDatabaseConfig redeclares the shared block DatabaseConfig
   resolution: Embed DatabaseConfig unchanged from the platform schema
-- rule: CFG-SCHEMA-5
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawListenerConfig
-  class: pending
-  wp: WP3
-  reason: RawListenerConfig redeclares the shared block ListenerConfig
-  resolution: Embed ListenerConfig unchanged from the platform schema
 - rule: CFG-VAL-7
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawContextualClaimNames/properties/grantSourceIssuer
