@@ -423,7 +423,8 @@ accessProfiles:
           - read-releases
   - id: statistics-publisher
     principalClaim: registry_principal
-    requiredScopes: unrestricted
+    requiredScopes:
+      - registry:facility:statistics:publish
     permissions:
       - entity: permit
         operations:
@@ -472,7 +473,8 @@ accessProfiles:
           - read-releases
   - id: statistics-reader
     principalClaim: registry_principal
-    requiredScopes: unrestricted
+    requiredScopes:
+      - registry:facility:statistics:read
     permissions:
       - dataset: monthly-discharge-reports
         operations:
