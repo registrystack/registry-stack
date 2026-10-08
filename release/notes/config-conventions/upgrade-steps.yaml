@@ -76,6 +76,12 @@ steps:
   file: questions/*.yaml
   edits:
   - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1, kind: EvidenceQuestion}
+- id: evidence-question-answer-uri
+  product: evidence
+  kind: edit
+  file: questions/*.yaml
+  edits:
+  - {op: rename, path: answers.*.id, to: uri, optional: true}
 - id: evidence-access-policy-envelope
   product: evidence
   kind: edit

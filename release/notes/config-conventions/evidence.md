@@ -334,7 +334,7 @@ Track: Evidence authoring tools (`evidencectl`, `registry-evidence-authoring`,
 `registry-language-server`).
 
 ### BREAKING changes
-<!-- upgrade: 1=evidence-project-envelope, evidence-question-envelope, evidence-access-policy-envelope, evidence-access-client-envelope, evidence-target-governance-envelope, evidence-target-settings-envelope, evidence-mock-plan-envelope; 2=no-file; 3=no-file; 4=evidence-authoring-reader-refusals; 5=evidence-authoring-reader-refusals; 6=no-file; 7=evidence-authoring-reader-refusals; 8=no-file; 9=no-file; 10=no-file -->
+<!-- upgrade: 1=evidence-project-envelope, evidence-question-envelope, evidence-access-policy-envelope, evidence-access-client-envelope, evidence-target-governance-envelope, evidence-target-settings-envelope, evidence-mock-plan-envelope; 2=no-file; 3=no-file; 4=evidence-authoring-reader-refusals; 5=evidence-authoring-reader-refusals; 6=no-file; 7=evidence-authoring-reader-refusals; 8=no-file; 9=no-file; 10=no-file; 11=evidence-question-answer-uri -->
 
 1. **Every authored YAML document except a source and a selector opens with
    `apiVersion` and `kind`.** A document without them is refused with
@@ -685,6 +685,7 @@ and refuses the old spelling with a diagnostic naming the new one.
 ## Evidence tooling files
 
 ### BREAKING: every `evidencectl --format json` report has an envelope
+<!-- upgrade: no-file -->
 
 Every report opens with `ok`, `command`, and `status`, then `apiVersion`
 (`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`) and `kind`
@@ -694,6 +695,7 @@ refused unknown members, accepts `apiVersion` and `kind`; a script that read
 members by name needs no change.
 
 ### BREAKING: the development session state has an envelope
+<!-- upgrade: no-file -->
 
 `.evidence/dev/state.json` opens with `apiVersion:
 id.registrystack.org/formats/evidence/dev-state/v6` and `kind:
@@ -706,6 +708,7 @@ it (`evidencectl dev stop`, then `evidencectl dev clean`), then run
 `evidencectl dev start` again.
 
 ### BREAKING: the source-import baseline and journal have an envelope
+<!-- upgrade: no-file -->
 
 `.evidence/source-imports/state.json` opens with `apiVersion:
 id.registrystack.org/formats/evidence/source-import-state/v1alpha1` and
@@ -722,6 +725,7 @@ import` with the evidencectl that started it to finish or roll back, then
 rerun.
 
 ### BREAKING: the source resolution file has an envelope
+<!-- upgrade: no-file -->
 
 A resolution file passed with `--resolutions` opens with `apiVersion:
 id.registrystack.org/formats/evidence/source-resolution/v1alpha1` and `kind:
