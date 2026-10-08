@@ -191,25 +191,33 @@ formats:
   evidence/mock-plan:
     project: products/evidence/reference/authoring-projects/example
 
-  # The bundle is checked through a runtime configuration that points at the
-  # staged copy, and its SHA256SUMS is refreshed after each mutation.
+  # The bundle is checked through its deployment project's runtime
+  # configuration, pointed at the staged copy, and its SHA256SUMS is refreshed
+  # after each mutation.
   evidence/bundle:
     copies:
       runtime:
-        from: products/evidence/reference/deployment-targets/environments/local/evidence/runtime.yaml
+        from: products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/runtime.yaml
         set:
           /package/root: "{project}"
     digests: SHA256SUMS
 
-  # The runtime configuration is checked against a staged copy of an
-  # acceptance bundle. The removed keys are the ones the Evidence runtime
-  # refuses by name; the registry does not declare them yet.
-  evidence/runtime:
+  # A code list is checked the same way, through the bundle that holds it.
+  evidence/codelist:
+    project: products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence/bundle
     copies:
-      bundle:
-        from: products/evidence/fixtures/acceptance/adult-status
+      runtime:
+        from: products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence/runtime.yaml
+        set:
+          /package/root: "{project}"
+    digests: SHA256SUMS
+
+  # The runtime configuration is checked against the bundle its staged
+  # deployment project holds. The removed keys are the ones the Evidence
+  # runtime refuses by name; the registry does not declare them yet.
+  evidence/runtime:
     set:
-      /package/root: "{bundle}"
+      /package/root: "{project}/bundle"
     removedKeys:
       - /version
       - /bundleDirectory
