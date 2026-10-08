@@ -60,6 +60,9 @@ SCHEMAS = {
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
     ),
+    "evidence-oid4vci": (
+        ("products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json", "{document}"),
+    ),
     "discovery": (
         ("products/discovery/schemas/origins.schema.json", "origins.yaml"),
         ("products/discovery/schemas/runtime.schema.json", "runtime.yaml"),
@@ -91,6 +94,7 @@ CHECKS = {
     "render": ("registry-render", "check", "--bundle", "{project}"),
     "evidence": ("evidencectl", "check", "{project}"),
     "platform": ("evidencectl", "dev", "check", "task-connection.yaml"),
+    "evidence-oid4vci": ("evidence-oid4vci", "check", "--config", "{document}"),
 }
 
 

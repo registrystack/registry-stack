@@ -529,11 +529,36 @@ ROWS: tuple[Row, ...] = (
             ),
         ),
     ),
+    Row(
+        product="evidence-oid4vci",
+        loader_sources=("crates/registry-evidence-oid4vci/src",),
+        runtime_schema="products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
+        shared_blocks=(
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "ListenerBind",
+            "ListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+        ),
+        reference_refusal=TestRef(
+            "crates/registry-evidence-oid4vci/src/config.rs",
+            "runtime_loader_refuses_environment_expressions_in_secret_references",
+        ),
+        authored_refusal=Exemption(
+            "the wallet delivery service reads only its runtime configuration, "
+            "not authored package files"
+        ),
+        digest_mismatch=Exemption(
+            "the wallet delivery service owns no installed package; the Evidence "
+            "runtime it calls verifies the bundle it serves"
+        ),
+    ),
 )
 
 EXPECTED_PRODUCTS = frozenset(
     {"render", "discovery", "evidence", "breg", "casework", "scheduling",
-     "messaging", "breg-mcp", "breg-review"}
+     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci"}
 )
 
 

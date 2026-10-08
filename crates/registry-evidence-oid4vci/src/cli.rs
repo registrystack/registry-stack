@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -17,11 +17,29 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Load and validate the configuration and the client key, then exit.
+    /// Check the configuration offline, as `serve` reads it, then exit.
+    ///
+    /// Reads the one file and nothing else: no network, no socket, and no
+    /// secret material. The client key is resolved, and its JWK parsed, when
+    /// `serve` or `inspect` starts. Exits 0 when the file passes, 1 when it
+    /// breaks a rule, 2 when the command line is invalid, and 3 when the file
+    /// cannot be read.
     Check {
         /// Wallet-delivery deployment configuration file.
         #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
         config: PathBuf,
+        /// Report for a person (`human`) or as one JSON document on standard
+        /// output (`json`).
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+        /// Exit 1 when the check reports a warning.
+        #[arg(long)]
+        deny_warnings: bool,
+        /// Substitute `${...}` expressions from this process's environment, as
+        /// startup does, and check the values they fill. Without it an
+        /// expression is checked by its syntax and position only.
+        #[arg(long)]
+        environment: bool,
     },
     /// Validate the deployment and print its derived protocol metadata.
     Inspect {
@@ -41,6 +59,16 @@ pub enum Command {
         #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
         config: PathBuf,
     },
+}
+
+/// Who a check report is rendered for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum OutputFormat {
+    /// Position-first diagnostic lines and a summary for a person.
+    #[default]
+    Human,
+    /// One JSON document for a machine reader.
+    Json,
 }
 
 /// Return the complete command tree without running wallet delivery.

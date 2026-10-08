@@ -3355,29 +3355,46 @@ formats:
     audience: operator
     stability: experimental
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+      kind: EvidenceOid4vciRuntimeConfig
+      checkedBy:
+        file: crates/registry-evidence-oid4vci/src/config.rs
+        symbol: OID4VCI_RUNTIME_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
       kind: EvidenceOid4vciRuntimeConfig
-    schema: none
+    schema:
+      path: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json
+      id: https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidence-oid4vci --features schema --example runtime-schema -- --output products/evidence/generated/oid4vci-runtime
+      driftCheck: crates/registry-evidence-oid4vci/src/schema.rs
     reader:
       crate: registry-evidence-oid4vci
       file: crates/registry-evidence-oid4vci/src/config.rs
       function: load
-      type: DeliveryConfig
+      type: DeliveryDocument
     check: evidence-oid4vci check --config {file}
-    example: none
+    example: products/evidence/examples/oid4vci-runtime/runtime.yaml
     conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
+      requiredText: /tokenClient/clientId
+      optionalText: /tokenClient/resource
+      integer: /store/maximumOffers
       boolean: none
     securityMembers:
       - pointer: /listener/bind
-        whenOmitted: unclassified
-    restrictingMembers: []
+        whenOmitted: refused
+      - pointer: /metricsListener/bind
+        whenOmitted: closed
+      - pointer: /offers/authorizedClients
+        whenOmitted: refused
+      - pointer: /offers/requiredScopes
+        whenOmitted: refused
+      - pointer: /offers/audiences
+        whenOmitted: refused
+      - pointer: /tokenClient/privateKeyRef
+        whenOmitted: refused
+    restrictingMembers: [/offers/authorizedClients, /offers/requiredScopes]
   - id: evidence/client-profile
     product: evidence
     title: Evidence relying-party client profile

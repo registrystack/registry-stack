@@ -26,13 +26,8 @@ pub(super) fn sibling_candidates(
     authored_value: &str,
     rule: FileRule,
 ) -> Vec<FileCandidate> {
-    // Key references identify an operator-selected role, so an adjacent key
-    // with the same extension is not an interchangeable repair suggestion.
     // Hierarchical and dynamic transforms need their own role-aware candidates.
-    if rule.path == "tokenClient/privateKeyFile"
-        || rule.prefix.contains(['{', '}'])
-        || rule.suffix.contains(['{', '}', '/'])
-    {
+    if rule.prefix.contains(['{', '}']) || rule.suffix.contains(['{', '}', '/']) {
         return Vec::new();
     }
     let Some(directory) = target.parent() else {

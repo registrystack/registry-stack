@@ -263,6 +263,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Stack task connection JSON Schema."
+    },
+    {
+      "glob": "products/evidence/generated/oid4vci-runtime/*.schema.json",
+      "sourcePath": "crates/registry-evidence-oid4vci/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence OID4VCI delivery runtime configuration JSON Schema."
     }
   ],
   "records": [

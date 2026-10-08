@@ -124,7 +124,7 @@ fn private_key_reference_does_not_enumerate_unrelated_key_roles() {
         ),
         file(
             "wallet.yaml",
-            "version: 1\ntokenClient:\n  privateKeyFile: <|key|>keys/missing.pem\n",
+            "apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1\nkind: EvidenceOid4vciRuntimeConfig\ntokenClient:\n  privateKeyRef: secret:file/<|key|>keys/missing.pem\n",
         ),
         file("keys/token.pem", "SYNTHETIC_TOKEN_KEY_CANARY"),
         file("keys/issuer.pem", "SYNTHETIC_UNRELATED_KEY_CANARY"),

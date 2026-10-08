@@ -3296,6 +3296,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "evidence",
+      "title": "Evidence OID4VCI delivery runtime configuration",
+      "description": "Evidence OID4VCI delivery runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-evidence-oid4vci/src/schema.rs",
+        "sha256": "135abfbd96e615c9c0d3c8a767b974a9a39b5a3805fb85e20c5b9fe31cfe5b5f"
+      },
+      "artifact": {
+        "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
+        "sha256": "1adf66ae738842dd0501175b1d84c935d4a3e07d0595f0312d8030eddf989ff8",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
       "kind": "schema",
       "status": "active",

@@ -43,21 +43,26 @@ const CONFIGURATION_ID: &str = "urn:example:requirement:holder-bound";
 const SELECTOR_VALUE: &str = "subject-identifier-value";
 
 const CONFIG: &str = r#"
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
 credentialIssuer: https://wallet.example.org
-listener: {address: 127.0.0.1, port: 8090}
+listener: {bind: "127.0.0.1:8090"}
+secretProviders:
+  file:
+    root: /run/secrets/evidence-oid4vci
 evidence:
   baseUrl: https://evidence.example.org
 tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
-  privateKeyFile: unused-delivery-client.jwk.json
+  privateKeyRef: secret:file/unused-delivery-client.jwk.json
 offers:
   issuer: https://mint.example.org
   jwksUri: https://mint.example.org/.well-known/jwks.json
   audiences: ["https://wallet.example.org"]
   algorithms: [EdDSA]
   authorizedClients: [adopter-front-end]
+  requiredScopes: unrestricted
   maximumTokenLifetimeSeconds: 900
 store:
   maximumOffers: 4096
@@ -343,7 +348,12 @@ impl TestClock {
 }
 
 fn loaded_config() -> DeliveryConfig {
-    let directory = tempfile::tempdir().expect("a temporary deployment directory");
+    // The reader refuses a path through a symbolic link, and the system
+    // temporary directory is one on some hosts.
+    let base = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temporary directory resolves");
+    let directory = tempfile::tempdir_in(base).expect("a temporary deployment directory");
     let path = directory.path().join("oid4vci.yaml");
     fs::write(&path, CONFIG).expect("write the test deployment");
     DeliveryConfig::load(&path).expect("the reference deployment loads before test mutation")
@@ -356,7 +366,7 @@ fn service_with_issuer(
     // The listener belongs to a real deployment. axum-test binds its own
     // random loopback port, while every published identifier remains the
     // deployment's exact configured value.
-    config.listener.port = 8090;
+    config.listener.bind = "127.0.0.1:8090".parse().expect("a socket address");
     DeliveryService::with_halves(config, Arc::new(StubAuthorizer), issuer)
 }
 

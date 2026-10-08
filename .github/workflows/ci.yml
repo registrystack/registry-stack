@@ -1461,7 +1461,7 @@ jobs:
           -p registry-bregctl -p registry-caseworkctl -p registry-schedulingctl
           -p registry-messagingctl -p registry-discoveryctl -p registry-render
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
-          -p registry-breg-mcp -p registry-breg-review
+          -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci
 
       - name: Run configuration conformance corpus
         run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug

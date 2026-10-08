@@ -244,18 +244,22 @@ fn discovery_indexes_mapping_symbols_without_claiming_remote_evidence_types() {
         .any(|symbol| symbol.name == "urn:example:mapping:other-region"));
 }
 
-const DELIVERY: &str = r#"version: 1
+const DELIVERY: &str = r#"apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
 credentialIssuer: https://issuer.example.test
-listener: {address: 127.0.0.1, port: 8081}
+listener: {bind: 127.0.0.1:8081}
+secretProviders: {file: {root: /run/secrets/delivery}}
 evidence: {baseUrl: 'https://evidence.example.test'}
 tokenClient:
   tokenEndpoint: https://identity.example.test/token
   clientId: delivery
-  privateKeyFile: <|key|>private-key.yaml
+  privateKeyRef: secret:file/<|key|>private-key.yaml
 offers:
   issuer: https://identity.example.test
   jwksUri: https://identity.example.test/jwks
   audiences: [delivery]
+  authorizedClients: [front-end]
+  requiredScopes: [oid4vci:offer]
 "#;
 fn delivery_project() -> Project {
     Project::new(&[
@@ -271,60 +275,18 @@ fn delivery_project() -> Project {
 }
 
 #[test]
-fn wallet_delivery_uses_config_relative_paths_without_indexing_key_bytes() {
+fn wallet_delivery_key_reference_is_not_navigable_and_key_bytes_are_not_indexed() {
     let project = delivery_project();
     let index = load(&project, ProductKind::EvidenceOid4vci);
-    let definitions = index.definitions_at(
-        &project.path("config/wallet.yaml"),
-        project.cursor("config/wallet.yaml", "key"),
-    );
-    assert_eq!(definitions.len(), 1);
-    assert_eq!(definitions[0].path, project.path("config/private-key.yaml"));
+    assert!(index
+        .definitions_at(
+            &project.path("config/wallet.yaml"),
+            project.cursor("config/wallet.yaml", "key"),
+        )
+        .is_empty());
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
     assert!(index
         .document_symbols(&project.path("config/private-key.yaml"))
-        .iter()
-        .all(|symbol| symbol.location.range.start.line == 0));
-}
-
-#[test]
-fn wallet_key_navigation_normalizes_contained_parent_paths() {
-    let project = Project::new(&[
-        file(
-            ".registry-stack-editor/project.json",
-            r#"{"product":"evidence-oid4vci","document":"config/wallet.yaml"}"#,
-        ),
-        file(
-            "config/wallet.yaml",
-            &DELIVERY.replace("private-key.yaml", "../keys/private-key.yaml"),
-        ),
-        file("keys/private-key.yaml", "[not: {valid: yaml"),
-    ]);
-    let index = load(&project, ProductKind::EvidenceOid4vci);
-    let definitions = index.definitions_at(
-        &project.path("config/wallet.yaml"),
-        project.cursor("config/wallet.yaml", "key"),
-    );
-    assert_eq!(definitions.len(), 1);
-    assert_eq!(definitions[0].path, project.path("keys/private-key.yaml"));
-    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
-
-    let escaped = Project::new(&[
-        file(
-            ".registry-stack-editor/project.json",
-            r#"{"product":"evidence-oid4vci","document":"config/wallet.yaml"}"#,
-        ),
-        file(
-            "config/wallet.yaml",
-            &DELIVERY.replace("private-key.yaml", "../../outside-private-key.yaml"),
-        ),
-    ]);
-    let index = load(&escaped, ProductKind::EvidenceOid4vci);
-    assert!(index
-        .definitions_at(
-            &escaped.path("config/wallet.yaml"),
-            escaped.cursor("config/wallet.yaml", "key")
-        )
         .is_empty());
 }
 

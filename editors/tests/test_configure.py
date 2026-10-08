@@ -112,22 +112,28 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("evidence-oid4vci", oid, self.workspace, "issuer.yaml")
         marker = json.loads((oid / ".registry-stack-editor/project.json").read_text())
         self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "issuer.yaml"})
-        self.assertEqual(len(json.loads((self.workspace / ".zed/tasks.json").read_text())), 1)
+        tasks = json.loads((self.workspace / ".zed/tasks.json").read_text())
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(tasks[1]["args"], ["check", "--config", str(oid / "issuer.yaml")])
 
-    def test_marker_only_setup_preserves_unrelated_jsonc(self):
-        project = self.project("wallet", "issuer.yaml")
-        originals = {}
-        for editor in ("vscode", "zed"):
-            for name in ("settings.json", "tasks.json"):
-                path = self.workspace / f".{editor}" / name
-                path.parent.mkdir(exist_ok=True)
-                content = '{ // preserved workspace comment\n}\n'
-                path.write_text(content)
-                originals[path] = content
-        configure.configure("evidence-oid4vci", project, self.workspace, "issuer.yaml")
-        self.assertEqual({path: path.read_text() for path in originals}, originals)
+    def test_oid_setup_maps_the_runtime_schema_to_the_named_document(self):
+        project = self.project(
+            "wallet", "wallet.yaml", "products/evidence/examples/oid4vci-runtime/runtime.yaml"
+        )
+        configure.configure("evidence-oid4vci", project, self.workspace, "wallet.yaml")
+        schema = (project / ".registry-stack-editor/schemas/oid4vci-runtime.schema.json")
+        self.assertEqual(
+            schema.read_bytes(),
+            (ROOT / "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json").read_bytes(),
+        )
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        self.assertEqual(settings["yaml.schemas"], {schema.as_uri(): [str(project / "wallet.yaml")]})
+        zed = json.loads((self.workspace / ".zed/settings.json").read_text())
+        self.assertEqual(
+            zed["lsp"]["yaml-language-server"]["settings"]["yaml"]["schemas"], settings["yaml.schemas"]
+        )
         marker = json.loads((project / ".registry-stack-editor/project.json").read_text())
-        self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "issuer.yaml"})
+        self.assertEqual(marker, {"product": "evidence-oid4vci", "document": "wallet.yaml"})
 
     def test_task_only_setup_preserves_unrelated_settings_jsonc(self):
         project = self.project("manifest", "metadata.yaml")
@@ -285,6 +291,7 @@ class ConfigureTests(unittest.TestCase):
             "render": ["check", "--bundle", str(project)],
             "evidence": ["check", str(project)],
             "platform": ["dev", "check", "task-connection.yaml"],
+            "evidence-oid4vci": ["check", "--config", str(document)],
         }
         for product, args in expected.items():
             with self.subTest(product=product):
@@ -292,7 +299,6 @@ class ConfigureTests(unittest.TestCase):
                 self.assertEqual(vscode["args"], args)
                 self.assertEqual(zed["args"], args)
                 self.assertEqual(zed["cwd"], str(project))
-        self.assertIsNone(configure.task_for("evidence-oid4vci", project, document))
 
     def test_hosting_cli_must_match_current_source_version(self):
         version = configure.workspace_version()

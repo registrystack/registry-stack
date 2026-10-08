@@ -28,7 +28,6 @@ use std::{
     collections::BTreeSet,
     future::{Future, IntoFuture},
     io,
-    net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -52,6 +51,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use registry_evidence_client::{HolderPublicKey, MAXIMUM_HOLDER_KEYS};
 use registry_evidence_verifier::sdjwt_vc::holder_thumbprint;
+use registry_platform_config::describe_secret_failure;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_sdjwt::{validate_oid4vci_proof_jwt, Oid4vciProofPolicy};
 use serde::Deserialize;
@@ -71,7 +71,6 @@ use crate::{
         credential_offer, credential_offer_uri, generate_secret, generate_transaction_code,
         offered_request, OfferError, OfferedRequest, RequestedSubject,
     },
-    secretfile::{read_owner_only, SecretFileError},
     store::{NonceError, NonceMinter, OfferStore, PreparedRequest, StoreError},
 };
 
@@ -141,8 +140,11 @@ const PROOF_MAX_FUTURE_SKEW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
+    /// The client key reference did not resolve to a usable private JWK. The
+    /// sentence names the field, the reference, and the reason, and never the
+    /// key material.
     #[error("the token client key cannot be used: {0}")]
-    ClientKey(#[from] SecretFileError),
+    ClientKey(String),
     #[error("the outbound credential client cannot be built: {0}")]
     Issuer(#[from] IssuanceError),
 }
@@ -183,7 +185,7 @@ impl DeliveryService {
     /// with it, and dropped. Nothing else in the process keeps a copy, and the
     /// offer boundary is built from its own document without seeing it.
     pub fn load(config: DeliveryConfig) -> Result<Self, ServiceError> {
-        let client_key = read_owner_only(&config.token_client.private_key_file)?;
+        let client_key = resolve_client_key(&config)?;
         let authorizer = Arc::new(MintResourceServer::from_config(
             &config.offers,
             config.validation_mode,
@@ -233,16 +235,6 @@ impl DeliveryService {
         (self.clock)()
     }
 
-    /// Validate a configuration without taking what a serving process holds.
-    ///
-    /// Everything [`DeliveryService::load`] does, and no socket. The loaded key
-    /// is dropped, and zeroized, before this returns.
-    pub fn check(config: &DeliveryConfig) -> Result<(), ServiceError> {
-        let client_key = read_owner_only(&config.token_client.private_key_file)?;
-        EvidenceIssuer::new(config, &client_key)?;
-        Ok(())
-    }
-
     #[must_use]
     pub fn config(&self) -> &DeliveryConfig {
         &self.config
@@ -265,6 +257,29 @@ impl DeliveryService {
             }
         }))
     }
+}
+
+/// Resolve the client key through the configured secret providers.
+///
+/// The key is returned zeroizing, read once, and never logged or rendered: a
+/// refusal names the field, the reference, and the reason only.
+fn resolve_client_key(config: &DeliveryConfig) -> Result<Zeroizing<String>, ServiceError> {
+    const FIELD: &str = "tokenClient.privateKeyRef";
+    let reference = &config.token_client.private_key_ref;
+    let refused =
+        |error| ServiceError::ClientKey(describe_secret_failure(FIELD, reference.as_str(), &error));
+    let secret = config
+        .secret_providers
+        .resolver()
+        .map_err(refused)?
+        .resolve_reference(reference)
+        .map_err(refused)?;
+    let text = std::str::from_utf8(secret.expose_secret()).map_err(|_| {
+        ServiceError::ClientKey(format!(
+            "{FIELD} must resolve to a private JWK written as UTF-8 JSON text"
+        ))
+    })?;
+    Ok(Zeroizing::new(text.to_owned()))
 }
 
 /// Build the router over an already loaded service.
@@ -332,25 +347,12 @@ pub async fn serve<F>(service: Arc<DeliveryService>, shutdown: F) -> io::Result<
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    service
-        .config
-        .validate()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let bind_ip = service
-        .config
-        .listener
-        .bind_address()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let address = SocketAddr::new(bind_ip, service.config.listener.port);
-    let listener = TcpListener::bind(address).await?;
+    if let Some(fault) = service.config.binding_fault() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, fault));
+    }
+    let listener = TcpListener::bind(service.config.listener.bind).await?;
     let metrics_listener = if let Some(config) = &service.config.metrics_listener {
-        let address = SocketAddr::new(
-            config
-                .bind_address()
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?,
-            config.port,
-        );
-        Some(TcpListener::bind(address).await?)
+        Some(TcpListener::bind(config.bind).await?)
     } else {
         None
     };
@@ -1210,6 +1212,7 @@ mod tests {
 
     use crate::{
         authorizer::AuthorizedOffer,
+        config::{tests::canonical_tempdir, OID4VCI_RUNTIME_API_VERSION, OID4VCI_RUNTIME_KIND},
         metadata::CredentialCatalog,
         testing::{
             ed25519_private_jwk, private_jwk, proof_jwt, proof_jwt_over_payload_text,
@@ -1327,12 +1330,15 @@ mod tests {
 
         let path = directory.join("oid4vci.yaml");
         let text = format!(
-            "version: 1\n\
+            "apiVersion: {OID4VCI_RUNTIME_API_VERSION}\n\
+             kind: {OID4VCI_RUNTIME_KIND}\n\
              credentialIssuer: https://wallet.example.org\n\
-             listener:\n  address: 127.0.0.1\n  port: {port}\n\
+             listener:\n  bind: 127.0.0.1:{port}\n\
+             secretProviders:\n  file:\n    root: {root}\n\
              evidence:\n  baseUrl: https://evidence.example.org\n\
-             tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyFile: delivery-client.jwk.json\n\
-             offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n"
+             tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyRef: secret:file/delivery-client.jwk.json\n\
+             offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n  authorizedClients: unrestricted\n  requiredScopes: unrestricted\n",
+            root = directory.display(),
         );
         fs::write(&path, text).expect("write the configuration document");
         path
@@ -1432,28 +1438,26 @@ mod tests {
     }
 
     #[test]
-    fn check_validates_a_deployment_without_binding_its_port() {
-        let directory = tempfile::tempdir().expect("temp dir");
-        // Hold the configured port for the whole check. A `check` that bound
-        // anything would fail here, which is exactly the property an operator
-        // relies on when validating an edit against the deployment it is about
-        // to replace.
+    fn loading_a_deployment_binds_nothing() {
+        let directory = canonical_tempdir();
+        // Hold the configured port while the service loads. A load that bound
+        // anything would fail here: sockets are opened by `serve` alone.
         let occupied = StdTcpListener::bind(("127.0.0.1", 0)).expect("hold a port");
         let port = occupied.local_addr().expect("read the held port").port();
         let path = write_deployment(directory.path(), port, 0o600);
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
 
-        DeliveryService::check(&config).expect("check succeeds against an occupied port");
+        DeliveryService::load(config).expect("the service loads against an occupied port");
     }
 
     #[test]
-    fn check_refuses_a_client_key_that_is_readable_by_anyone_else() {
+    fn loading_refuses_a_client_key_that_is_readable_by_anyone_else() {
         for mode in [0o640, 0o604, 0o644, 0o660] {
-            let directory = tempfile::tempdir().expect("temp dir");
+            let directory = canonical_tempdir();
             let path = write_deployment(directory.path(), 8090, mode);
             let config = DeliveryConfig::load(&path).expect("the configuration loads");
 
-            let error = DeliveryService::check(&config)
+            let error = DeliveryService::load(config)
                 .expect_err("a group or world readable client key must be refused");
             assert!(
                 matches!(error, ServiceError::ClientKey(_)),
@@ -1463,22 +1467,44 @@ mod tests {
     }
 
     #[test]
-    fn check_refuses_a_client_key_that_is_not_there() {
-        let directory = tempfile::tempdir().expect("temp dir");
+    fn loading_refuses_a_client_key_that_is_not_there() {
+        let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
         fs::remove_file(directory.path().join("delivery-client.jwk.json"))
             .expect("remove the client key file");
 
-        assert!(matches!(
-            DeliveryService::check(&config),
-            Err(ServiceError::ClientKey(_))
-        ));
+        let error = DeliveryService::load(config).expect_err("a missing key is refused");
+        let ServiceError::ClientKey(sentence) = &error else {
+            panic!("a missing key must be refused as a key fault, got {error:?}");
+        };
+        assert!(
+            sentence.contains("secret:file/delivery-client.jwk.json")
+                && sentence.contains("no readable secret"),
+            "{sentence}"
+        );
+    }
+
+    /// A key that is not text is refused before it is parsed, and the refusal
+    /// carries no byte of it.
+    #[test]
+    fn loading_refuses_a_client_key_that_is_not_text() {
+        let directory = canonical_tempdir();
+        let path = write_deployment(directory.path(), 8090, 0o600);
+        let key_path = directory.path().join("delivery-client.jwk.json");
+        fs::write(&key_path, b"\xffKEYMATERIAL").expect("write a binary key");
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+            .expect("set the client key mode");
+        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+
+        let error = DeliveryService::load(config).expect_err("a binary key is refused");
+        assert!(matches!(error, ServiceError::ClientKey(_)), "{error:?}");
+        assert!(!error.to_string().contains("KEYMATERIAL"), "{error}");
     }
 
     #[test]
     fn the_loaded_client_key_never_reaches_debug_output() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let config = load_deployment(directory.path());
         let service = DeliveryService::load(config).expect("the service loads");
 
@@ -1510,7 +1536,7 @@ mod tests {
 
         tracing::subscriber::with_default(subscriber, || {
             runtime.block_on(async {
-                let directory = tempfile::tempdir().expect("temp dir");
+                let directory = canonical_tempdir();
                 let (service, _) = wired_service(directory.path());
                 let server = TestServer::new(build_app(service));
                 let response = server
@@ -1541,7 +1567,7 @@ mod tests {
 
     #[tokio::test]
     async fn inspect_reports_the_same_derived_profile_the_service_serves() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let inspected = service.inspect().await.expect("inspection succeeds");
         assert_eq!(
@@ -1558,7 +1584,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_liveness_and_readiness_probes_answer() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1578,7 +1604,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_public_get_routes_refuse_implicit_head_requests() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1597,7 +1623,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_route_is_refused_rather_than_answered_emptily() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1609,7 +1635,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_published_metadata_is_derived_from_the_evidence_bundle() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1626,7 +1652,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_authorized_only_metadata_omits_authorization_response_types() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1643,7 +1669,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_offer_without_authorization_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1699,7 +1725,7 @@ mod tests {
     /// 6750 invites a resource server to elaborate.
     #[tokio::test]
     async fn an_unauthorized_offer_refusal_describes_nothing_this_deployment_offers() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1757,7 +1783,7 @@ mod tests {
         use crate::config::{AccessTokenAlgorithm, ValidationMode};
         use registry_platform_oidc::ClaimNames;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = canonical_tempdir();
         let key = private_jwk("offer-auth");
         let public = public_jwk(&key);
         let jwks = json!({"keys": [public]});
@@ -1861,7 +1887,7 @@ mod tests {
         // cannot be built from it. The offer boundary is built from its own
         // document and authorizes anyway, which is only possible because
         // neither half is derived from the other.
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
         fs::write(directory.path().join("delivery-client.jwk.json"), "{}")
             .expect("replace the client key with an unusable one");
@@ -1888,7 +1914,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_audience_scoped_requirement_cannot_be_offered_to_a_wallet() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1908,7 +1934,7 @@ mod tests {
 
     #[tokio::test]
     async fn selector_values_outside_the_published_contract_create_no_exchange() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(Arc::clone(&service)));
 
@@ -1945,7 +1971,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_offer_states_the_grant_and_the_transaction_code_shape() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1974,7 +2000,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_token_response_carries_no_nonce() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -1994,7 +2020,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pre_authorized_code_is_redeemable_once() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2017,7 +2043,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_wrong_transaction_code_is_refused_and_bounded() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2052,7 +2078,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unsupported_grant_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2072,7 +2098,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_nonce_endpoint_answers_without_authorization() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2101,7 +2127,7 @@ mod tests {
     /// specification says is not sent.
     #[tokio::test]
     async fn a_wallet_that_never_authorizes_its_nonce_request_can_collect_its_credential() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2130,7 +2156,7 @@ mod tests {
 
     #[tokio::test]
     async fn one_credential_request_with_several_proofs_becomes_one_evidence_request() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2162,7 +2188,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_credential_response_is_plural_and_is_what_evidence_signed() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2196,7 +2222,7 @@ mod tests {
         // Nothing in the configuration can give this process a credential
         // signing key: there is no member for one, and an unknown member is a
         // load failure rather than a key that is quietly ignored.
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
         let document = fs::read_to_string(&path).expect("read the configuration document");
         for member in [
@@ -2204,7 +2230,8 @@ mod tests {
             "credentialSigningKey: keys/signing.jwk.json",
             "issuerKey: keys/signing.jwk.json",
         ] {
-            let text = document.replace("version: 1", &format!("version: 1\n{member}"));
+            let text =
+                document.replace("credentialIssuer:", &format!("{member}\ncredentialIssuer:"));
             fs::write(&path, &text).expect("write the configuration document");
             assert!(
                 DeliveryConfig::load(&path).is_err(),
@@ -2281,7 +2308,7 @@ mod tests {
     async fn credential_request_with_proof(
         build_proof: impl FnOnce(&str, &str) -> String,
     ) -> (StatusCode, Value, usize) {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2571,7 +2598,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_proof_presenting_a_private_key_member_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2608,7 +2635,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_nonce_this_service_did_not_mint_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2636,7 +2663,7 @@ mod tests {
     /// a nonce this process did not mint rather than a longer-lived one.
     #[tokio::test]
     async fn a_nonce_whose_expiry_was_rewritten_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2672,7 +2699,7 @@ mod tests {
     /// string, whichever spelling of it the operator wrote.
     #[tokio::test]
     async fn a_proof_addressed_to_the_published_identifier_is_accepted() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
         let document = fs::read_to_string(&path).expect("read the configuration document");
         fs::write(
@@ -2746,7 +2773,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_access_token_is_claimed_once() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2787,7 +2814,7 @@ mod tests {
     /// them would let the retry below succeed.
     #[tokio::test]
     async fn a_credential_request_refused_after_the_token_is_claimed_leaves_it_spent() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2832,7 +2859,7 @@ mod tests {
     /// would fail on the refused case.
     #[tokio::test]
     async fn the_published_batch_size_is_what_the_credential_endpoint_accepts() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2888,7 +2915,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_credential_request_for_another_configuration_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2909,7 +2936,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_credential_request_without_a_token_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, _) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2925,7 +2952,7 @@ mod tests {
 
     #[tokio::test]
     async fn more_proofs_than_a_request_may_carry_are_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let (service, issuer) = wired_service(directory.path());
         let server = TestServer::new(build_app(service));
 
@@ -2975,7 +3002,7 @@ mod tests {
     async fn a_request_that_stalls_past_the_configured_timeout_is_refused() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let port = {
             let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe a free port");
             probe.local_addr().expect("read the probed port").port()
@@ -2985,8 +3012,8 @@ mod tests {
         fs::write(
             &path,
             document.replace(
-                &format!("  port: {port}\n"),
-                &format!("  port: {port}\n  requestTimeoutMilliseconds: 200\n"),
+                &format!("  bind: 127.0.0.1:{port}\n"),
+                &format!("  bind: 127.0.0.1:{port}\n  requestTimeoutMilliseconds: 200\n"),
             ),
         )
         .expect("write the configuration document");
@@ -3034,7 +3061,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_binds_the_configured_listener_and_stops_on_shutdown() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let port = {
             let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe a free port");
             probe.local_addr().expect("read the probed port").port()
@@ -3073,7 +3100,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_polls_periodic_cleanup_while_the_listeners_are_running() {
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         let port = {
             let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe a free port");
             probe.local_addr().expect("read the probed port").port()
@@ -3126,7 +3153,7 @@ mod tests {
     async fn a_configured_private_metrics_listener_serves_beside_the_delivery_listener() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let directory = tempfile::tempdir().expect("temp dir");
+        let directory = canonical_tempdir();
         // Keep both reservations alive so the OS cannot reuse the public port
         // when selecting the separate metrics port.
         let public_probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe public port");
@@ -3139,9 +3166,7 @@ mod tests {
             &path,
             document.replace(
                 "evidence:\n",
-                &format!(
-                    "metricsListener:\n  address: 127.0.0.1\n  port: {metrics_port}\nevidence:\n"
-                ),
+                &format!("metricsListener:\n  bind: 127.0.0.1:{metrics_port}\nevidence:\n"),
             ),
         )
         .expect("configure metrics");
@@ -3187,12 +3212,11 @@ mod tests {
 
     #[tokio::test]
     async fn serve_revalidates_the_metrics_listener_before_any_socket_is_bound() {
-        for (address, port) in [("0.0.0.0", 9090), ("127.0.0.1", 8090)] {
-            let directory = tempfile::tempdir().expect("temp dir");
+        for bind in ["0.0.0.0:9090", "127.0.0.1:8090"] {
+            let directory = canonical_tempdir();
             let mut config = load_deployment(directory.path());
             config.metrics_listener = Some(crate::config::MetricsListenerConfig {
-                address: address.to_owned(),
-                port,
+                bind: bind.parse().expect("a socket address"),
             });
             let (service, _) = wired_service_over(config);
 

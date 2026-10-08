@@ -235,17 +235,12 @@ const RENDER: &[DocumentRules] = &[DocumentRules {
     ],
 }];
 
-// DeliveryConfig resolves privateKeyFile beside its configuration, not beside the workspace. The
-// path is navigable if contained in the configured project; its bytes never enter the index.
+// A delivery runtime names its client key by secret reference, resolved by the configured secret
+// provider when the service starts, so no member is a navigable file and key bytes never enter
+// the index.
 const OID4VCI: &[DocumentRules] = &[DocumentRules {
     pattern: "@document",
     declarations: &[NameRule::global("$key", "configuration-section")],
     references: &[],
-    files: &[FileRule {
-        path: "tokenClient/privateKeyFile",
-        prefix: "",
-        suffix: "",
-        relative_to_document: true,
-        index_target: false,
-    }],
+    files: &[],
 }];

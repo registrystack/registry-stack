@@ -5809,48 +5809,24 @@ exceptions:
   wp: WP3
   reason: the reader does not read through registry-platform-yaml
   resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-1
+- rule: CFG-NAME-2
   format: evidence/oid4vci-runtime
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1'
-- rule: CFG-ENV-1
+  location: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
   format: evidence/oid4vci-runtime
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceOid4vciRuntimeConfig'
-- rule: CFG-SCHEMA-1
+  location: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/EdDSA
+  class: protocol-constant
+  reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
   format: evidence/oid4vci-runtime
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: evidence/oid4vci-runtime
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: evidence/oid4vci-runtime
-  location: editors/configure.py#/SCHEMAS/evidence
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/oid4vci-runtime
-  location: crates/registry-evidence-oid4vci/src/config.rs#load()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
+  location: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS256
+  class: protocol-constant
+  reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
 - rule: CFG-EMPTY-4
   format: evidence/question
   location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/id

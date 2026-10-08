@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Evidence clients and OID4VCI
+
+- BREAKING: the `evidence-oid4vci` runtime file has an envelope
+  (`apiVersion`, `kind`) and a published schema, binds listeners with
+  `bind`, names the delivery client key as a secret reference
+  (`tokenClient.privateKeyRef`) where it was a file path, and states
+  `offers.authorizedClients` and `offers.requiredScopes`. `evidence-oid4vci
+  check` reports positioned, coded diagnostics, supports `--format json` and
+  `--deny-warnings`, and exits 0, 1, 2, or 3. Every change, its migration
+  step, and the old-message-to-code table are in
+  `release/notes/config-conventions/evidence.md`, section "Evidence clients
+  and OID4VCI".
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: before 1.0, a release reads only the state its immediate

@@ -208,6 +208,18 @@ formats:
       - /metricsListener/bindHost
       - /metricsListener/port
 
+  # The keys the delivery runtime refuses by name, each naming its
+  # replacement; the registry does not declare them yet.
+  evidence/oid4vci-runtime:
+    removedKeys:
+      - /version
+      - /mint
+      - /listener/address
+      - /listener/port
+      - /metricsListener/address
+      - /metricsListener/port
+      - /tokenClient/privateKeyFile
+
   # The command each product documents for starting a project, and the file
   # of the format it writes there (CFG-SCHEMA-7: its first line is the schema
   # modeline). Formats with an entry above carry their `init` there.

@@ -127,6 +127,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
         "registry-casework",
         "registry-discovery",
         "registry-evidence",
+        "registry-evidence-oid4vci",
         "registry-render",
         "registry-scheduling",
         "registry-messaging",
@@ -143,6 +144,7 @@ CONFIG_CHECK_PACKAGES = frozenset(
         "registry-caseworkctl",
         "registry-discoveryctl",
         "registry-evidence",
+        "registry-evidence-oid4vci",
         "registry-evidencectl",
         "registry-manifest-cli",
         "registry-messagingctl",
@@ -161,6 +163,7 @@ CONFIG_CONFORMANCE_INPUTS = (
     "products/casework/generated/runtime/*",
     "products/scheduling/generated/runtime/*",
     "products/messaging/generated/runtime/*",
+    "products/evidence/generated/oid4vci-runtime/*",
 )
 
 # The configuration conventions lint runs in the same job. Beyond the files
