@@ -708,6 +708,32 @@ fn dependency_check_refuses_an_audit_sink_outside_the_required_root() {
     assert!(!stderr.contains(&deployment.path("audit.jsonl").display().to_string()));
 }
 
+/// A package refusal about the package itself, an entry it may not hold, is
+/// reported at the package directory as a whole, not at the runtime file's
+/// `package.root` member.
+#[test]
+fn check_reports_an_unsafe_package_entry_at_the_package_directory() {
+    let deployment = Deployment::stage("all-definitions");
+    let bundle = deployment.path("bundle");
+    std::os::unix::fs::symlink("evidence.yaml", bundle.join("link.yaml"))
+        .expect("stage a symlink entry");
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--format", "json", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .output()
+        .expect("evidence binary starts");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "evidence.package.unsafe-entry");
+    assert_eq!(diagnostic["path"], "");
+    assert_eq!(
+        diagnostic["source"]["file"],
+        bundle.display().to_string(),
+        "{diagnostic}"
+    );
+    assert!(diagnostic["source"].get("line").is_none(), "{diagnostic}");
+}
+
 #[test]
 fn dependency_check_refuses_an_audit_sink_symlinked_out_of_the_required_root() {
     let key_server = JwksServer::start();

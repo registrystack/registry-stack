@@ -196,6 +196,14 @@ impl OfflineCheck {
         }
     }
 
+    /// One error about the package directory as a whole, reported at the
+    /// directory rather than at a member of the runtime file.
+    fn push_package(&mut self, code: &str, message: impl Into<String>, action: impl Into<String>) {
+        let mut diagnostic = Diagnostic::error(code, "", message, action);
+        diagnostic.source = Some(source(&self.package_label(), None));
+        self.diagnostics.push(diagnostic);
+    }
+
     /// One error about a member of the runtime file.
     fn push_runtime(
         &mut self,
@@ -472,8 +480,7 @@ fn push_package_error(check: &mut OfflineCheck, layout: &Layout, error: &Package
         ),
         PackageErrorKind::SumFileMissing => (
             "evidence.package.sum-file-missing",
-            "the directory package.root names has no SHA256SUMS, so it is not a package"
-                .to_owned(),
+            "the directory package.root names has no SHA256SUMS, so it is not a package".to_owned(),
             BUILD_PACKAGE_ACTION,
         ),
         PackageErrorKind::SumFileInvalid { line, reason } => (
@@ -494,19 +501,25 @@ fn push_package_error(check: &mut OfflineCheck, layout: &Layout, error: &Package
             }
             ("evidence.package.mismatch", message, REBUILD_PACKAGE_ACTION)
         }
-        PackageErrorKind::UnsafeEntry { path, reason } => (
-            "evidence.package.unsafe-entry",
-            format!("the package holds {path}, which {reason}"),
-            "Remove the entry, since a package holds only regular files, and rebuild the package with `evidencectl package`.",
-        ),
-        PackageErrorKind::Bound { path, reason } => (
-            "evidence.package.too-large",
-            match path {
-                Some(path) => format!("the package is refused: {reason} ({path})"),
-                None => format!("the package is refused: {reason}"),
-            },
-            "Reduce the project and rebuild the package with `evidencectl package`.",
-        ),
+        PackageErrorKind::UnsafeEntry { path, reason } => {
+            check.push_package(
+                "evidence.package.unsafe-entry",
+                format!("the package holds {path}, which {reason}"),
+                "Remove the entry, since a package holds only regular files, and rebuild the package with `evidencectl package`.",
+            );
+            return;
+        }
+        PackageErrorKind::Bound { path, reason } => {
+            check.push_package(
+                "evidence.package.too-large",
+                match path {
+                    Some(path) => format!("the package is refused: {reason} ({path})"),
+                    None => format!("the package is refused: {reason}"),
+                },
+                "Reduce the project and rebuild the package with `evidencectl package`.",
+            );
+            return;
+        }
         PackageErrorKind::Io { path } => {
             check.mark_unavailable();
             (
@@ -597,6 +610,13 @@ fn push_bundle_error(check: &mut OfflineCheck, layout: &Layout, error: BundleErr
             "the package exceeds a Version 1 size bound",
         ),
     };
+    if matches!(
+        code,
+        "evidence.bundle.unsupported-entry" | "evidence.bundle.too-large"
+    ) {
+        check.push_package(code, message, REBUILD_PACKAGE_ACTION);
+        return;
+    }
     check.push_runtime(
         layout,
         code,
