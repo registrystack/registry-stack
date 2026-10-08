@@ -79,6 +79,18 @@ fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
         "{label}: {report:#?}"
     );
     assert_eq!(report["kind"], kind, "{label}: {report:#?}");
+    let compiled = contract_schema(kind);
+    let validation = compiled.validate(report);
+    if let Err(errors) = validation {
+        let details = errors
+            .map(|error| format!("  - {}: {error}", error.instance_path))
+            .collect::<Vec<_>>()
+            .join("\n");
+        panic!("{label}: {kind} does not satisfy its schema:\n{details}\n{report:#?}");
+    }
+}
+
+fn contract_schema(kind: &str) -> JSONSchema {
     let path = repo_root()
         .join("products/casework/contracts/cli")
         .join(format!("{kind}.schema.json"));
@@ -98,19 +110,11 @@ fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
         .as_str()
         .expect("the project schema names its identifier")
         .to_owned();
-    let compiled = JSONSchema::options()
+    JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .with_document(project_id, project_schema)
         .compile(&schema)
-        .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"));
-    let validation = compiled.validate(report);
-    if let Err(errors) = validation {
-        let details = errors
-            .map(|error| format!("  - {}: {error}", error.instance_path))
-            .collect::<Vec<_>>()
-            .join("\n");
-        panic!("{label}: {kind} does not satisfy its schema:\n{details}\n{report:#?}");
-    }
+        .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"))
 }
 
 #[test]
@@ -139,6 +143,40 @@ fn every_committed_report_example_matches_its_schema() {
         let label = path.display().to_string();
         assert_matches_contract(&label, kind, &report);
     }
+}
+
+#[test]
+fn a_checked_request_target_is_closed_and_names_a_local_id() {
+    let example = repo_root().join("products/casework/examples/professional-review");
+    let (exit, report) = invoke(project_arguments("check", &example));
+    assert_eq!(exit, ExitCode::SUCCESS, "{report:#?}");
+    let target = "/effective/sources/0/requests/0/target";
+    assert_eq!(
+        report.pointer(target),
+        Some(&json!({"id": "first-review-response", "elapsed": "PT48H"})),
+        "{report:#?}"
+    );
+    assert_matches_contract("check", "CheckReport", &report);
+    let schema = contract_schema("CheckReport");
+    for (member, value) in [
+        ("note", json!("an unknown member")),
+        ("id", json!("First Review")),
+        ("elapsed", json!(172800)),
+    ] {
+        let mut changed = report.clone();
+        changed.pointer_mut(target).expect("target")[member] = value;
+        assert!(!schema.is_valid(&changed), "{member}");
+    }
+    let mut missing = report.clone();
+    missing
+        .pointer_mut(target)
+        .and_then(Value::as_object_mut)
+        .expect("target")
+        .remove("elapsed");
+    assert!(!schema.is_valid(&missing));
+    let mut none = report;
+    *none.pointer_mut(target).expect("target") = Value::Null;
+    assert!(schema.is_valid(&none));
 }
 
 #[test]

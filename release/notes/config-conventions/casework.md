@@ -384,6 +384,9 @@ Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.displ
   descriptions, and 1024 files from each of the three directories.
   A `warning` in a report's `diagnostics` is a closed object. A consumer that
   validates reports takes the regenerated schemas.
+- A checked request's `target` in `CheckReport.schema.json` is a closed
+  object holding `id`, a local identifier, and `elapsed`, or null when the
+  request declares no target. The report itself is unchanged.
 
 ## BREAKING: `source add` reports positioned warnings in `diagnostics`
 

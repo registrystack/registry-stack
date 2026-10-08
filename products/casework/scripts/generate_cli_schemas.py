@@ -46,6 +46,7 @@ FILES_CHECKED = {"type": "integer", "minimum": 1, "maximum": 1 + 1 + 1 + 1 + 64 
 
 
 DIGEST = {"$ref": "#/$defs/Digest"}
+LOCAL_ID = {"$ref": "#/$defs/LocalId"}
 URL = {"$ref": "#/$defs/Url"}
 NULLABLE_STRING = {"type": ["string", "null"]}
 ROLE_MODE = {"enum": ["single", "split"]}
@@ -435,7 +436,9 @@ REPORTS = {
                 },
             },
             # `queueMode` is `default` or `first_match`. `target` is the
-            # authored passive target, or null when the request declares none.
+            # authored passive target, or null when the request declares none;
+            # its `id` is the one `casework.yaml` declares and its `elapsed`
+            # the duration it is due after.
             "checkedRequest": {
                 "type": "object",
                 "additionalProperties": False,
@@ -455,7 +458,17 @@ REPORTS = {
                     "routingRules": {"type": "integer", "minimum": 0, "maximum": MAXIMUM_ROUTING_RULES},
                     "applicationMode": NULLABLE_STRING,
                     "clock": NULLABLE_STRING,
-                    "target": {"type": ["object", "null"]},
+                    "target": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": ["id", "elapsed"],
+                                "properties": {"id": LOCAL_ID, "elapsed": STRING},
+                            },
+                            {"type": "null"},
+                        ]
+                    },
                 },
             },
         },
@@ -1141,6 +1154,11 @@ VALUE_DEFS = {
     "Digest": {
         "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
         "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+    },
+    "LocalId": {
+        "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
         "type": "string",
     },
     "Url": {

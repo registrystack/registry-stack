@@ -399,9 +399,26 @@
           ]
         },
         "target": {
-          "type": [
-            "object",
-            "null"
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "elapsed"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "elapsed": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -409,6 +426,11 @@
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     }
   }

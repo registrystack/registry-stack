@@ -3023,13 +3023,6 @@ exceptions:
   class: stable-move
   reason: kind is CheckReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkCheckReport'
-- rule: CFG-SCHEMA-4
-  format: casework/check-report
-  location: products/casework/contracts/cli/CheckReport.schema.json#/$defs/checkedRequest/properties/target
-  class: pending
-  wp: WP6
-  reason: the target a request checks names its record with an `id` that is not a LocalId, so the member stays open rather than declare an `id` the identifier rule refuses
-  resolution: Type the checked target's members once the target identifier grammar is settled, then close the object
 - rule: CFG-ENV-2
   format: casework/dev-events-report
   location: products/platform/config-formats.yaml#/current/apiVersion
