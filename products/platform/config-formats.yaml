@@ -689,14 +689,16 @@ formats:
   - id: breg/dev-state
     product: breg
     title: Development environment state
-    files: [.bregctl-dev/state.json]
+    files: [.breg/dev/state.json]
     syntax: json
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1
+      kind: BRegDevState
+      checkedBy:
+        file: crates/registry-bregctl/src/dev/mod.rs
+        symbol: STATE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1
       kind: BRegDevState

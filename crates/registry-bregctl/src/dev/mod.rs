@@ -20,6 +20,9 @@ use clap::{Args, Subcommand};
 use config::Clients;
 pub(crate) use config::ClientsRefused;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, UniqueList,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -70,6 +73,25 @@ const MISSING_SESSION: &str = "no local development session exists in this proje
 /// files to a new project directory.
 const CHANGED_INPUTS: &str = "authored package, clients, ports or issuer image differ from the retained development session, which still holds records; run bregctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records. Use the normal reviewed package lifecycle for an operated upgrade";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const STATE_API_VERSION: &str = "id.registrystack.org/formats/breg/dev-state/v1alpha1";
+pub(super) const STATE_KIND: &str = "BRegDevState";
+/// The session state `bregctl dev` retains in `.breg/dev/state.json`. Only
+/// this bregctl writes it; a refusal names no member value.
+const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: STATE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(STATE_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/version",
+        replacement: "Delete `version`; the apiVersion header names the format version.",
+    }],
+};
+/// Refusal for retained state this bregctl cannot read, including state an
+/// earlier bregctl wrote. Nothing is changed, so the earlier bregctl can still
+/// stop and remove what it started.
+const INVALID_STATE: &str = "retained dev state is invalid; preserve it for inspection, or, if an earlier bregctl started this session, run bregctl dev stop --remove with that bregctl, then remove .breg/dev and start again";
 /// Longest one supervised prerequisite command may run before the supervisor
 /// stops it and fails the start.
 const CHILD_DEADLINE: Duration = Duration::from_secs(120);
@@ -223,23 +245,31 @@ pub struct SupervisorArgs {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct State {
-    version: u8,
+    #[serde(skip_deserializing, default = "state_api_version")]
+    api_version: String,
+    #[serde(skip_deserializing, default = "state_kind")]
+    kind: String,
     project: PathBuf,
     owner: String,
     status: Status,
     breg_port: u16,
     issuer_port: u16,
     /// A separate ready BREG dev session owns this issuer and its registrations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_project: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_image: Option<String>,
     /// Session-owned loopback assertion endpoint used only while issuing
     /// multi-purpose rehearsal tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     purpose_port: Option<u16>,
     database_port: u16,
     /// Fixed at first start from the compiled schema; retained with the database.
     requires_postgis: bool,
     /// Kernel-selected loopback receiver port, retained with destination bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     webhook_port: Option<u16>,
     clients_file: PathBuf,
     /// The pin `capture` derives from what the session runs: the compiled
@@ -247,15 +277,18 @@ struct State {
     /// and clients. A change of spelling alone leaves it unchanged.
     source_digest: String,
     sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline_runtime: Option<PathBuf>,
     instance_id: String,
     source_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     container_id: Option<String>,
     tls_files_copied: bool,
     database_ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     package_digest: Option<String>,
     activated: bool,
-    seeded: BTreeSet<String>,
+    seeded: UniqueList<String>,
     /// Import authorities opened for a seed but not yet closed. Keeping the
     /// identifiers makes a failed start recover its own authority before it
     /// retries the seed.
@@ -272,6 +305,7 @@ struct State {
     /// asked for the start can report it. The supervisor writes both its
     /// streams to a private log, so this is the only path a refusal has back
     /// to the owner. A session that has not failed records none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<String>,
 }
 
@@ -293,6 +327,14 @@ enum Status {
     Stopping,
     Stopped,
     Failed,
+}
+
+fn state_api_version() -> String {
+    STATE_API_VERSION.to_owned()
+}
+
+fn state_kind() -> String {
+    STATE_KIND.to_owned()
 }
 
 impl State {
@@ -338,6 +380,15 @@ impl State {
             "urn:breg:dev:{}",
             self.issuer_owner.as_deref().unwrap_or(&self.owner)
         )
+    }
+    /// Record a seed as complete. A seed already recorded stays recorded once.
+    fn mark_seeded(&mut self, id: &str) -> Result<()> {
+        if !self.seeded.iter().any(|seeded| seeded == id) {
+            let mut seeded = std::mem::take(&mut self.seeded).into_vec();
+            seeded.push(id.to_owned());
+            self.seeded = UniqueList::new(seeded)?;
+        }
+        Ok(())
     }
     fn save(&self) -> Result<()> {
         private::replace(
@@ -486,11 +537,13 @@ fn retained_clients(root: &Path) -> Result<Clients> {
 
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
-    let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
-    let invalid = || anyhow::anyhow!("retained dev state is invalid; preserve it for inspection");
-    let state: State = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if state.version != 2
-        || state.sequence == 0
+    let file = root.join("state.json");
+    let bytes = private::read(&file, MAX_BYTES)?;
+    let state: State = Reader::new(file.display().to_string())
+        .decode::<State>(&bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map_err(|_| anyhow::anyhow!(INVALID_STATE))?
+        .value;
+    if state.sequence == 0
         || state.baseline_runtime
             != (state.sequence > 1).then(|| {
                 root.join(format!("baseline-{}", state.sequence - 1))
@@ -954,7 +1007,8 @@ fn start(args: StartArgs) -> Result<Value> {
             None
         };
         let mut state = State {
-            version: 2,
+            api_version: state_api_version(),
+            kind: state_kind(),
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
@@ -991,7 +1045,7 @@ fn start(args: StartArgs) -> Result<Value> {
             database_ready: false,
             package_digest: None,
             activated: false,
-            seeded: BTreeSet::new(),
+            seeded: UniqueList::default(),
             seed_import_authorities: BTreeMap::new(),
             seed_import_intents: BTreeMap::new(),
             binaries: BTreeMap::new(),
@@ -1266,7 +1320,7 @@ fn reclaimed(state: &mut State) {
     state.tls_files_copied = false;
     state.database_ready = false;
     state.activated = false;
-    state.seeded.clear();
+    state.seeded = UniqueList::default();
     // No authority in a reclaimed database can be a seed's own, and a
     // journaled one names a row the removed database held.
     state.seed_import_authorities.clear();
@@ -2828,7 +2882,7 @@ fn seed(state: &mut State, clients: &Clients) -> Result<()> {
         if status != 201 {
             bail!("synthetic seed was refused; inspect the authored seed/profile and retained state. Earlier completed seeds will not repeat");
         }
-        state.seeded.insert(seed.id.clone());
+        state.mark_seeded(&seed.id)?;
         state.save()?;
     }
     Ok(())
@@ -2890,7 +2944,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
                         anyhow::anyhow!("cannot close resumed seed authority: {error:?}")
                     })?;
                     state.seed_import_authorities.remove(&seed.id);
-                    state.seeded.insert(seed.id.clone());
+                    state.mark_seeded(&seed.id)?;
                     state.save()?;
                     return Ok(());
                 }
@@ -3045,7 +3099,7 @@ fn import_seed(state: &mut State, seed: &config::Seed) -> Result<()> {
         anyhow::anyhow!("cannot close seed import authority after import: {error:?}")
     })?;
     state.seed_import_authorities.remove(&seed.id);
-    state.seeded.insert(seed.id.clone());
+    state.mark_seeded(&seed.id)?;
     state.save()?;
     Ok(())
 }

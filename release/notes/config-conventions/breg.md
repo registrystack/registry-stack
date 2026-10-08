@@ -1310,3 +1310,19 @@ not resumed; start a new one with `--new-attempt`.
 
 `examples.failed` remains for every refusal that is not about the
 catalogue.
+
+### BREAKING: development session state header (`.breg/dev/state.json`)
+
+`bregctl dev` writes its session state with
+`apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1` and
+`kind: BRegDevState` in place of `version: 2`, leaves out a member that has
+no value instead of writing `null`, and reads the file back through the
+shared reader. The list of completed seeds is refused when it names a seed
+twice. Only `bregctl` writes this file, so there is nothing to edit: state an
+earlier `bregctl` wrote is refused unchanged (`retained dev state is
+invalid`), and the refusal names the fix. Before upgrading, run `bregctl dev
+stop --remove <project>` with the earlier `bregctl`, then remove
+`<project>/.breg/dev` and start again, the same step the development clients
+migration takes. A script that reads `state.json` finds `containerId`,
+`webhookPort`, and the other optional members absent, not `null`, until they
+have a value.

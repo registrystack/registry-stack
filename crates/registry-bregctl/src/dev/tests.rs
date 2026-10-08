@@ -70,7 +70,8 @@ seed: []
     )
     .expect("clients");
     let state = State {
-        version: 2,
+        api_version: state_api_version(),
+        kind: state_kind(),
         project: project.clone(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
@@ -94,7 +95,7 @@ seed: []
         database_ready: false,
         package_digest: None,
         activated: false,
-        seeded: BTreeSet::new(),
+        seeded: UniqueList::default(),
         seed_import_authorities: BTreeMap::new(),
         seed_import_intents: BTreeMap::new(),
         binaries: BTreeMap::new(),
@@ -1456,11 +1457,20 @@ fn retained_state_missing_a_recorded_field_is_invalid() {
             document.as_object_mut().unwrap().remove(field).is_some(),
             "{field}"
         );
-        assert!(
-            serde_json::from_value::<State>(document).is_err(),
+        let report = decode_state(&serde_json::to_vec(&document).unwrap()).unwrap_err();
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "config.missing-key",
             "{field}"
         );
     }
+}
+
+/// Decode state bytes the way `read_state` does, without its file checks.
+fn decode_state(bytes: &[u8]) -> std::result::Result<State, registry_platform_yaml::Report> {
+    Reader::new("state.json")
+        .decode::<State>(bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map(|decoded| decoded.value)
 }
 
 #[test]
@@ -1529,10 +1539,31 @@ fn a_retained_v1_state_is_invalid_without_mutation() {
     private::replace(&state_file, &bytes).unwrap();
 
     let refusal = read_state(&root).unwrap_err().to_string();
-    assert_eq!(
-        refusal,
-        "retained dev state is invalid; preserve it for inspection"
-    );
+    assert_eq!(refusal, INVALID_STATE);
+    assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
+}
+
+/// The state an earlier bregctl wrote carries `version: 2` and no header.
+/// It is refused unchanged, and the refusal names the earlier bregctl as the
+/// one that can still stop and remove what it started.
+#[test]
+fn a_retained_headerless_state_is_invalid_without_mutation() {
+    let (_temp, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let state_file = root.join("state.json");
+    let mut old: Value =
+        serde_json::from_slice(&private::read(&state_file, MAX_BYTES).unwrap()).unwrap();
+    let fields = old.as_object_mut().unwrap();
+    fields.remove("apiVersion").unwrap();
+    fields.remove("kind").unwrap();
+    fields.insert("version".to_owned(), json!(2));
+    let bytes = serde_json::to_vec(&old).unwrap();
+    private::replace(&state_file, &bytes).unwrap();
+
+    let refusal = read_state(&root).unwrap_err().to_string();
+    assert_eq!(refusal, INVALID_STATE);
+    assert!(refusal.contains("run bregctl dev stop --remove with that bregctl"));
     assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
 }
 
@@ -1542,18 +1573,76 @@ fn a_retained_state_of_another_version_is_invalid_without_mutation() {
     let root = state.root();
     initialize(&root, &state, &clients, &files).unwrap();
     let state_file = root.join("state.json");
-    let mut other: Value =
-        serde_json::from_slice(&private::read(&state_file, MAX_BYTES).unwrap()).unwrap();
-    other["version"] = json!(1);
-    let bytes = serde_json::to_vec(&other).unwrap();
-    private::replace(&state_file, &bytes).unwrap();
+    let original = private::read(&state_file, MAX_BYTES).unwrap();
+    for (member, value) in [
+        (
+            "apiVersion",
+            json!("id.registrystack.org/formats/breg/dev-state/v1alpha2"),
+        ),
+        ("kind", json!("BRegDevClients")),
+        ("version", json!(2)),
+    ] {
+        let mut other: Value = serde_json::from_slice(&original).unwrap();
+        other[member] = value;
+        let bytes = serde_json::to_vec(&other).unwrap();
+        private::replace(&state_file, &bytes).unwrap();
 
-    let refusal = read_state(&root).unwrap_err().to_string();
-    assert_eq!(
-        refusal,
-        "retained dev state ownership is invalid; no resources were changed"
-    );
-    assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
+        let refusal = read_state(&root).unwrap_err().to_string();
+        assert_eq!(refusal, INVALID_STATE, "{member}");
+        assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
+    }
+}
+
+/// State is written with its header and without null members, the shape the
+/// shared reader reads back.
+#[test]
+fn saved_state_carries_its_header_and_reads_back() {
+    let (_temp, mut state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    state.mark_seeded("first-record").unwrap();
+    state.mark_seeded("second-record").unwrap();
+    state.mark_seeded("first-record").unwrap();
+    state.save().unwrap();
+
+    let written: Value =
+        serde_json::from_slice(&private::read(&root.join("state.json"), MAX_BYTES).unwrap())
+            .unwrap();
+    assert_eq!(written["apiVersion"], STATE_API_VERSION);
+    assert_eq!(written["kind"], STATE_KIND);
+    assert!(written.get("version").is_none());
+    assert!(written.get("containerId").is_none());
+    assert!(written
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|value| !value.is_null()));
+    assert_eq!(written["seeded"], json!(["first-record", "second-record"]));
+
+    let read = read_state(&root).unwrap();
+    assert_eq!(&*read.seeded, ["first-record", "second-record"]);
+    assert_eq!(read.api_version, STATE_API_VERSION);
+}
+
+/// A seed named twice in the retained journal is refused, never collapsed
+/// into one completed seed (CFG-ID-6).
+#[test]
+fn a_retained_state_naming_a_seed_twice_is_invalid() {
+    let (_temp, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let state_file = root.join("state.json");
+    let mut repeated: Value =
+        serde_json::from_slice(&private::read(&state_file, MAX_BYTES).unwrap()).unwrap();
+    repeated["seeded"] = json!(["first-record", "first-record"]);
+    private::replace(&state_file, &serde_json::to_vec(&repeated).unwrap()).unwrap();
+
+    assert_eq!(read_state(&root).unwrap_err().to_string(), INVALID_STATE);
+    let report = decode_state(&private::read(&state_file, MAX_BYTES).unwrap()).unwrap_err();
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "config.duplicate-item");
+    assert_eq!(diagnostics[0].path, "/seeded/1");
 }
 
 #[test]
@@ -2268,7 +2357,7 @@ fn reclamation_forgets_the_database_and_keeps_the_reusable_identities() {
     state.database_ready = true;
     state.activated = true;
     state.package_digest = Some("revision-1".into());
-    state.seeded.insert("first-record".into());
+    state.mark_seeded("first-record").unwrap();
     state
         .seed_import_authorities
         .insert("imported-record".into(), uuid::Uuid::nil().to_string());
@@ -2306,7 +2395,8 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
     let captured = capture(project, &client_bytes).unwrap();
     private::directory(&project.join(".breg")).unwrap();
     let state = State {
-        version: 2,
+        api_version: state_api_version(),
+        kind: state_kind(),
         project: project.to_path_buf(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
@@ -2330,7 +2420,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         database_ready: false,
         package_digest: None,
         activated: false,
-        seeded: BTreeSet::new(),
+        seeded: UniqueList::default(),
         seed_import_authorities: BTreeMap::new(),
         seed_import_intents: BTreeMap::new(),
         binaries: BTreeMap::new(),
@@ -3997,7 +4087,7 @@ fn candidate_issuer_image_is_immutable_and_retained() {
     let (_temporary, mut state, _clients, _files) = fixture();
     state.issuer_image = Some(image.clone());
     let encoded = serde_json::to_vec(&state).unwrap();
-    let restored: State = serde_json::from_slice(&encoded).unwrap();
+    let restored = decode_state(&encoded).unwrap();
     assert_eq!(restored.issuer_image, Some(image));
 }
 
@@ -4033,10 +4123,10 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
 fn retained_database_selection_preserves_the_spatial_choice() {
     let (_temporary, mut state, _clients, _files) = fixture();
     assert!(!state.requires_postgis);
-    let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    let restored = decode_state(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.database_image(), IMAGE);
     state.requires_postgis = true;
-    let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    let restored = decode_state(&serde_json::to_vec(&state).unwrap()).unwrap();
     assert_eq!(restored.database_image(), SPATIAL_IMAGE);
 }
 

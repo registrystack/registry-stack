@@ -894,7 +894,7 @@ mod tests {
     #[test]
     fn preparation_retries_preserve_keys_seed_checkpoints_and_exact_source_recovery() {
         let (_temporary, mut state) = source_fixture();
-        state.seeded.insert("record-created".into());
+        state.mark_seeded("record-created").unwrap();
         state.save().unwrap();
         let root = state.root();
         private::directory(&root.join("build")).unwrap();
