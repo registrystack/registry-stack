@@ -432,8 +432,10 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 /// value, the `aud` value a token must carry, and where the issuer's signing
 /// keys come from, written under `authentication.oidc` beside the product's
 /// own token rules.
-// A product's `authentication.oidc` block embeds this with
-// `#[serde(flatten)]`.
+// A product's `authentication.oidc` block holds this as a member renamed to the
+// reader's shared-block marker `registry-platform-yaml/shared-block/...`, which
+// the reader reads as this block's members inline, beside the product's own
+// token rules.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
