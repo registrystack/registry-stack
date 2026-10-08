@@ -234,6 +234,79 @@ disclosure:
   allow: [is_adult]
 "#,
     ),
+    (
+        "a collection bound under an empty pointer",
+        r#"id: adult-status
+question: Is the person at least 18 years old?
+purpose: age-check
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {"": 2}
+answers:
+  - concept: is_adult
+    type: boolean
+derivation: derivations/adult-status.rhai
+disclosure:
+  allow: [is_adult]
+"#,
+    ),
+    (
+        "a bounded-integer answer whose minimum is past the JSON safe integers",
+        r#"id: adult-status
+question: Is the person at least 18 years old?
+purpose: age-check
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+
+answers:
+  - concept: is_adult
+    type: bounded-integer
+    minimum: -9007199254740992
+    maximum: 5
+derivation: derivations/adult-status.rhai
+disclosure:
+  allow: [is_adult]
+"#,
+    ),
+    (
+        "a bounded-integer answer whose maximum is past the JSON safe integers",
+        r#"id: adult-status
+question: Is the person at least 18 years old?
+purpose: age-check
+subject:
+  role: person
+  selector: person_id
+source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+
+answers:
+  - concept: is_adult
+    type: bounded-integer
+    minimum: 0
+    maximum: 9007199254740992
+derivation: derivations/adult-status.rhai
+disclosure:
+  allow: [is_adult]
+"#,
+    ),
 ];
 
 /// The marker documents the schema must turn away.

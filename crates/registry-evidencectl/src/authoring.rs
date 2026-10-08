@@ -3152,7 +3152,7 @@ fn compile_facts(
     let declared_collections = source
         .collection_bounds
         .keys()
-        .cloned()
+        .map(|pointer| pointer.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     if used_collections != declared_collections {
         let missing = used_collections
@@ -3173,7 +3173,7 @@ fn compile_facts(
     let collection_bounds = source
         .collection_bounds
         .iter()
-        .map(|(pointer, bound)| (pointer.clone(), bound.get()))
+        .map(|(pointer, bound)| (pointer.as_str().to_owned(), bound.get()))
         .collect::<BTreeMap<_, _>>();
 
     let plan = narrow::plan_advisories(

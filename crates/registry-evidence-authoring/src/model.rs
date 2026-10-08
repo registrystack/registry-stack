@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use registry_platform_yaml::{BoundedU64, Invalid, LocalId, UniqueList, Url};
+use registry_platform_yaml::{BoundedU64, ExternalId, Invalid, LocalId, UniqueList, Url};
 use serde::{Deserialize, Serialize};
 
 /// The longest validity window a question may declare, in seconds: one year,
@@ -192,7 +192,7 @@ pub struct QuestionSource {
     #[serde(default)]
     pub facts: Vec<QuestionFact>,
     #[serde(rename = "collectionBounds", default)]
-    pub collection_bounds: BTreeMap<String, BoundedU64<1, 256>>,
+    pub collection_bounds: BTreeMap<ExternalId, BoundedU64<1, 256>>,
 }
 
 /// One value projected out of a source response and handed to the derivation.
@@ -225,7 +225,9 @@ pub struct QuestionAnswer {
     pub answer_type: AnswerType,
     #[serde(default)]
     pub values: Vec<String>,
+    #[cfg_attr(feature = "schema", schemars(range(min = -9_007_199_254_740_991_i64, max = 9_007_199_254_740_991_i64)))]
     pub minimum: Option<i64>,
+    #[cfg_attr(feature = "schema", schemars(range(min = -9_007_199_254_740_991_i64, max = 9_007_199_254_740_991_i64)))]
     pub maximum: Option<i64>,
     pub prefix: Option<String>,
     #[serde(rename = "minimumBytes")]

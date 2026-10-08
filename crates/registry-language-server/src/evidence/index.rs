@@ -603,7 +603,12 @@ impl IndexBuilder<'_> {
                 path,
                 *range,
             );
-            if question.source.collection_bounds.contains_key(pointer) {
+            if question
+                .source
+                .collection_bounds
+                .keys()
+                .any(|bound| bound.as_str() == pointer.as_str())
+            {
                 continue;
             }
             self.report(

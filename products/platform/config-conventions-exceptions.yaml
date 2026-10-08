@@ -3435,27 +3435,6 @@ exceptions:
   wp: WP8
   reason: id is not typed as $defs/LocalId
   resolution: 'Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-1
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionSource/properties/collectionBounds
-  class: pending
-  wp: WP8
-  reason: a mapping whose keys are not typed
-  resolution: 'Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
-- rule: CFG-QTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/maximum
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/minimum
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-ENV-2
   format: evidence/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion

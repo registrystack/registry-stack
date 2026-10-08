@@ -11,6 +11,13 @@
       ],
       "type": "string"
     },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
     "FactCombination": {
       "description": "How many values a fact's path is expected to reach.",
       "enum": [
@@ -39,6 +46,8 @@
         },
         "maximum": {
           "format": "int64",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "type": [
             "integer",
             "null"
@@ -64,6 +73,8 @@
         },
         "minimum": {
           "format": "int64",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
           "type": [
             "integer",
             "null"
@@ -248,6 +259,9 @@
             "type": "integer"
           },
           "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
           "type": "object"
         },
         "facts": {

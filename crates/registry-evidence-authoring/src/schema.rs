@@ -111,30 +111,42 @@ pub fn publish(
     render(published(enveloped, title, schema_id))
 }
 
-/// Schemars writes a map keyed by `LocalId` as `patternProperties` under the
-/// identifier's pattern, which drops its other bounds. State the key as the
-/// identifier itself (CFG-SCHEMA-4, CFG-ID-1): `propertyNames` naming
-/// `$defs/LocalId`, and `additionalProperties` carrying the value schema.
+/// Schemars writes a map keyed by `LocalId` or `ExternalId` as
+/// `patternProperties` under the identifier's pattern, which drops its other
+/// bounds. State the key as the identifier itself (CFG-SCHEMA-4, CFG-ID-1):
+/// `propertyNames` naming `$defs/LocalId` or `$defs/ExternalId`, and
+/// `additionalProperties` carrying the value schema.
 fn type_map_keys(mut derived: Value) -> Result<Value, serde_json::Error> {
-    let identifier = serde_json::to_value(
-        <registry_platform_yaml::LocalId as schemars::JsonSchema>::json_schema(
-            &mut schemars::SchemaGenerator::default(),
+    let identifiers = [
+        (
+            "LocalId",
+            identifier_schema::<registry_platform_yaml::LocalId>()?,
         ),
-    )?;
-    let Some(pattern) = identifier.get("pattern").and_then(Value::as_str) else {
-        return Ok(derived);
-    };
-    let pattern = pattern.to_owned();
-    if retype_maps(&mut derived, &pattern) {
-        if let Some(Value::Object(defs)) = derived.get_mut("$defs") {
-            defs.entry("LocalId").or_insert(identifier);
+        (
+            "ExternalId",
+            identifier_schema::<registry_platform_yaml::ExternalId>()?,
+        ),
+    ];
+    for (name, identifier) in identifiers {
+        let Some(pattern) = identifier.get("pattern").and_then(Value::as_str) else {
+            continue;
+        };
+        let pattern = pattern.to_owned();
+        if retype_maps(&mut derived, &pattern, name) {
+            if let Some(Value::Object(defs)) = derived.get_mut("$defs") {
+                defs.entry(name).or_insert(identifier);
+            }
         }
     }
     Ok(derived)
 }
 
+fn identifier_schema<T: schemars::JsonSchema>() -> Result<Value, serde_json::Error> {
+    serde_json::to_value(T::json_schema(&mut schemars::SchemaGenerator::default()))
+}
+
 /// Rewrite every map keyed under `pattern`; true when one was rewritten.
-fn retype_maps(schema: &mut Value, pattern: &str) -> bool {
+fn retype_maps(schema: &mut Value, pattern: &str, name: &str) -> bool {
     let mut rewritten = false;
     match schema {
         Value::Object(object) => {
@@ -148,18 +160,18 @@ fn retype_maps(schema: &mut Value, pattern: &str) -> bool {
                 object.remove("patternProperties");
                 object.insert(
                     "propertyNames".to_owned(),
-                    serde_json::json!({"$ref": "#/$defs/LocalId"}),
+                    serde_json::json!({"$ref": format!("#/$defs/{name}")}),
                 );
                 object.insert("additionalProperties".to_owned(), value);
                 rewritten = true;
             }
             for member in object.values_mut() {
-                rewritten |= retype_maps(member, pattern);
+                rewritten |= retype_maps(member, pattern, name);
             }
         }
         Value::Array(items) => {
             for item in items {
-                rewritten |= retype_maps(item, pattern);
+                rewritten |= retype_maps(item, pattern, name);
             }
         }
         _ => {}

@@ -734,7 +734,11 @@ fn accepting_a_collection_bound_that_carries_a_separator_leaves_a_document_that_
     let question = read_question(&edited)
         .unwrap_or_else(|error| panic!("accepting '{collection}' left {edited:?}: {error}"));
     assert!(
-        question.source.collection_bounds.contains_key(collection),
+        question
+            .source
+            .collection_bounds
+            .keys()
+            .any(|bound| bound.as_str() == collection),
         "the bound the author accepted is the one the field holds: {:?}",
         question.source.collection_bounds
     );
