@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `caseworkctl dev grant --format json` carries `diagnostics`, an empty list,
+  like every other Casework report.
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
   member to apply no assertion-issuer rule. The generated runtime schema types
   the client keys as `ExternalId` and requires at least one client.

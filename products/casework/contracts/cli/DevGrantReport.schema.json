@@ -28,7 +28,8 @@
         "apiVersion",
         "kind",
         "headerFile",
-        "grantExpiresAt"
+        "grantExpiresAt",
+        "diagnostics"
       ],
       "properties": {
         "ok": {
@@ -51,6 +52,9 @@
         },
         "grantExpiresAt": {
           "type": "string"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/warnings"
         }
       }
     },

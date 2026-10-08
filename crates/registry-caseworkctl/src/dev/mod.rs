@@ -492,9 +492,11 @@ fn approved_grant(args: GrantArgs) -> Result<Value> {
             &args.client,
             &args.grant,
         ))?;
-    Ok(
-        json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at}),
-    )
+    Ok(grant_report(&output.header_file, output.grant_expires_at))
+}
+
+fn grant_report(header_file: impl Serialize, grant_expires_at: impl Serialize) -> Value {
+    json!({"ok":true,"command":"dev grant","headerFile":header_file,"grantExpiresAt":grant_expires_at,"diagnostics":[]})
 }
 
 fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {

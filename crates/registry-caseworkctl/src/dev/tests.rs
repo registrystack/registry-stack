@@ -3364,6 +3364,13 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
 }
 
 #[test]
+fn the_grant_report_carries_an_empty_diagnostics_list() {
+    let report = super::grant_report("/tmp/agent.header", "2026-10-09T00:00:00Z");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert_eq!(report["headerFile"], "/tmp/agent.header");
+}
+
+#[test]
 fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
     // A borrowed session authenticates against the shared BReg owner's
     // issuer, which holds every other local project's clients as well. The

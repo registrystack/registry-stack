@@ -1064,8 +1064,8 @@ REPORTS = {
     },
     "DevGrantReport": {
         "command": "dev grant",
-        "required": ["headerFile", "grantExpiresAt"],
-        "properties": {"headerFile": STRING, "grantExpiresAt": STRING},
+        "required": ["headerFile", "grantExpiresAt", "diagnostics"],
+        "properties": {"headerFile": STRING, "grantExpiresAt": STRING, "diagnostics": WARNINGS},
     },
     "DevIdentityReport": {
         "command": "dev identity",
