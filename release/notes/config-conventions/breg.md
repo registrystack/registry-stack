@@ -1687,6 +1687,49 @@ To migrate a registry project:
    finding: give the unrestricted profile a scope, or accept that its grants
    are reachable by every caller of the narrower profile.
 
+### BREAKING: the runtime file states which OAuth clients it accepts
+
+`authentication.oidc.allowedClients` in `runtime.yaml` is required. It takes
+the keyword `unrestricted`, to accept a token from every client of the
+issuer, or a list of at least one OAuth client.
+
+| Written | Before | Now |
+|---|---|---|
+| member omitted | every client accepted | refused, `config.missing-key` at `/authentication/oidc` |
+| `allowedClients: []` | every client accepted | refused, `config.invalid-value` at `/authentication/oidc/allowedClients` |
+| `allowedClients: unrestricted` | refused | every client accepted |
+| `allowedClients: [a, b]` | only `a` and `b` accepted | unchanged |
+
+The diagnostic names the fix and never repeats what was written. Any other
+word in place of the list is refused the same way. A list keeps its bounds:
+at most 128 distinct clients of 1 to 512 characters each. The published
+runtime schema states the same shape, so a file the schema accepts is a file
+the runtime reads.
+
+Token verification does not change. A registry whose runtime file is
+rewritten as below accepts exactly the tokens it accepted before.
+
+The startup check that ties a project's clients to this member is unchanged
+and compares against the written list. A project that names clients itself,
+in a profile's `requesterClients`, in `authorityClaims.trustedActors`, or in
+a consent recipient organization, still needs each of them listed, so
+`unrestricted` does not start with such a project, as an omitted member did
+not.
+
+`bregctl dev` writes the list of clients its session admits, and writes
+`unrestricted` when the session has no client to name. `bregctl init`
+writes a list.
+
+To migrate a runtime file:
+
+1. If `allowedClients` is missing or written `[]`, decide which OAuth
+   clients call this registry and list them. Listing them is the stronger
+   choice: a token issued to any other client of the same issuer is then
+   refused before any profile is selected.
+2. To keep accepting every client of the issuer, write
+   `allowedClients: unrestricted`.
+3. Run `bregctl check <project> --runtime-config runtime.yaml`.
+
 ## BReg citizen services
 
 This section covers the runtime files of the two citizen services beside the

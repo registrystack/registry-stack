@@ -1,5 +1,28 @@
 {
   "$defs": {
+    "AllowedClients": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Accept a token from every client.",
+          "type": "string"
+        },
+        {
+          "description": "Accept a token only from a listed client.",
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x20\\x7F]+$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "The OAuth clients whose tokens a runtime accepts: the keyword\n`unrestricted`, or a list of at least one client."
+    },
     "AuditDestinationKind": {
       "description": "The configured audit destination kind, as written in product configuration.",
       "oneOf": [
@@ -944,15 +967,8 @@
           "$ref": "#/$defs/OidcAlgorithm"
         },
         "allowedClients": {
-          "items": {
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x20\\x7F]+$",
-            "type": "string"
-          },
-          "maxItems": 128,
-          "type": "array",
-          "uniqueItems": true
+          "$ref": "#/$defs/AllowedClients",
+          "description": "The OAuth clients whose tokens this registry accepts: `unrestricted`\nto accept a token from every client, or a list of at least one\nclient."
         },
         "assertionIssuers": {
           "additionalProperties": {
@@ -1049,6 +1065,7 @@
         "accessTokenType",
         "scopeClaim",
         "scopeSeparator",
+        "allowedClients",
         "maxTokenLifetimeSeconds",
         "leewayMilliseconds"
       ],

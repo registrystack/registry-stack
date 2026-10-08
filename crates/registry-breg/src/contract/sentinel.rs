@@ -52,8 +52,15 @@ impl Items for Vec<RowBoundarySource> {
     }
 }
 
+#[cfg(feature = "runtime")]
+impl Items for Vec<String> {
+    fn holds_nothing(&self) -> bool {
+        self.is_empty()
+    }
+}
+
 /// The keyword `unrestricted`.
-pub(super) struct Unrestricted<M>(PhantomData<M>);
+pub(crate) struct Unrestricted<M>(PhantomData<M>);
 
 impl<'de, M: Member> Deserialize<'de> for Unrestricted<M> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -91,7 +98,7 @@ impl<'de, M: Member> Deserialize<'de> for NotAList<M> {
 }
 
 /// A list of at least one item.
-pub(super) struct Listed<L, M>(L, PhantomData<M>);
+pub(crate) struct Listed<L, M>(L, PhantomData<M>);
 
 impl<'de, L: Deserialize<'de> + Items, M: Member> Deserialize<'de> for Listed<L, M> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -163,6 +170,44 @@ pub(super) enum RowBoundaries {
 }
 
 shape_union!(RowBoundaries { scalar => Unrestricted, list => Listed });
+
+/// The OAuth clients a runtime accepts tokens from.
+#[cfg(feature = "runtime")]
+pub(crate) enum Clients {}
+
+#[cfg(feature = "runtime")]
+impl Member for Clients {
+    const EXPECTED: &'static str = "unrestricted, or a list of at least one OAuth client";
+    const ACTION: &'static str =
+        "List the OAuth clients whose tokens this registry accepts, or write unrestricted to accept every client.";
+}
+
+/// The OAuth clients whose tokens a runtime accepts: the keyword
+/// `unrestricted`, or a list of at least one client.
+#[cfg(feature = "runtime")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+pub(crate) enum AllowedClients {
+    /// Accept a token from every client.
+    Unrestricted(Unrestricted<Clients>),
+    /// Accept a token only from a listed client.
+    Listed(Listed<Vec<String>, Clients>),
+}
+
+#[cfg(feature = "runtime")]
+shape_union!(AllowedClients { scalar => Unrestricted, list => Listed });
+
+/// Reads the runtime's accepted clients into the list the token verifier
+/// holds, where empty means every client.
+#[cfg(feature = "runtime")]
+pub(crate) fn allowed_clients<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    Ok(match AllowedClients::deserialize(deserializer)? {
+        AllowedClients::Unrestricted(_) => Vec::new(),
+        AllowedClients::Listed(Listed(clients, _)) => clients,
+    })
+}
 
 pub(super) fn required_scopes<'de, D: Deserializer<'de>>(
     deserializer: D,

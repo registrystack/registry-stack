@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::diagnostics::{CompileFailure, Diagnostic};
 pub use crate::unique_set::UniqueSet;
 
-mod sentinel;
+pub(crate) mod sentinel;
 
 /// Serialize a union read by `tagged_union!` in its authored form: one
 /// mapping whose `tag` member names the variant. `external` is the variant as

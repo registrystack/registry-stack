@@ -1803,6 +1803,66 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
 }
 
 #[test]
+fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_client() {
+    let fixture = RuntimeFixture::new();
+    let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let written = |member: &str| {
+        let raw = baseline.replace("    allowedClients: [registry-client]\n", member);
+        assert_ne!(raw, baseline);
+        raw
+    };
+    let clients = |raw: &str| {
+        parse_runtime_config_with_env(raw, env_lookup)
+            .expect("the client decision is written")
+            .authentication()
+            .oidc()
+            .token_verifier_config()
+            .allowed_clients
+    };
+
+    assert_eq!(clients(&baseline), vec!["registry-client"]);
+    assert!(clients(&written("    allowedClients: unrestricted\n")).is_empty());
+
+    let error = parse_runtime_config_with_env(&written(""), env_lookup)
+        .expect_err("leaving the client decision out is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.missing-key", "/authentication/oidc")
+    );
+    let RuntimeConfigError::Reader(reader) = &error else {
+        unreachable!("the shared reader decided this refusal");
+    };
+    assert!(reader.to_string().contains("allowedClients"), "{reader}");
+
+    for refused in [
+        "    allowedClients: []\n",
+        "    allowedClients: every-client\n",
+        "    allowedClients: \"*\"\n",
+    ] {
+        let error = parse_runtime_config_with_env(&written(refused), env_lookup)
+            .expect_err("an empty list or another word is not a client decision");
+        assert_eq!(
+            reader_refusal(&error),
+            (
+                "config.invalid-value",
+                "/authentication/oidc/allowedClients"
+            ),
+            "{refused}"
+        );
+        let RuntimeConfigError::Reader(reader) = &error else {
+            unreachable!("the shared reader decided this refusal");
+        };
+        let message = reader.to_string();
+        assert!(
+            message.contains("unrestricted, or a list of at least one OAuth client")
+                && message.contains("write unrestricted to accept every client"),
+            "{message}"
+        );
+        assert!(!message.contains("every-client"), "{message}");
+    }
+}
+
+#[test]
 fn assertion_issuers_reach_the_verifier_and_stay_out_of_redacted_debug_output() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(

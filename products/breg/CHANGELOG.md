@@ -232,6 +232,14 @@
   `accessRequirements` without all three members gets a new digest. Migration
   steps are in `release/notes/config-conventions/breg.md`, section "BReg
   access".
+- BREAKING: `authentication.oidc.allowedClients` in `runtime.yaml` is
+  required and takes `unrestricted` or a list of at least one OAuth client.
+  A runtime file that omits the member is refused at startup as
+  `config.missing-key`, and `allowedClients: []` is refused as
+  `config.invalid-value`; both used to accept a token from every client of
+  the issuer, which is now written `allowedClients: unrestricted`. Token
+  verification does not change. Migration steps are in
+  `release/notes/config-conventions/breg.md`, section "BReg access".
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up

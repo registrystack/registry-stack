@@ -2820,6 +2820,7 @@ authentication:
     accessTokenType: JWT
     scopeClaim: scope
     scopeSeparator: " "
+    allowedClients: unrestricted
     maxTokenLifetimeSeconds: 300
     leewayMilliseconds: 60000
     jwksCache:

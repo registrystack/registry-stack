@@ -246,6 +246,7 @@ mod tests {
                     "accessTokenType": "JWT",
                     "scopeClaim": "scope",
                     "scopeSeparator": " ",
+                    "allowedClients": "unrestricted",
                     "maxTokenLifetimeSeconds": 300,
                     "leewayMilliseconds": 60000
                 },
@@ -1018,6 +1019,30 @@ mod tests {
             "OIDC scope separator grammar",
             |instance| {
                 instance["authentication"]["oidc"]["scopeSeparator"] = Value::String("a".into());
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC client decision omitted",
+            |instance| {
+                instance["authentication"]["oidc"]
+                    .as_object_mut()
+                    .expect("the OIDC section is a mapping")
+                    .remove("allowedClients");
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC client list empty",
+            |instance| {
+                instance["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC client decision spelled as another word",
+            |instance| {
+                instance["authentication"]["oidc"]["allowedClients"] = Value::String("any".into());
             },
         );
         assert_schema_rejects_parser_refused_runtime(

@@ -2785,7 +2785,14 @@ struct RawOidcVerifierConfig {
     access_token_type: String,
     scope_claim: String,
     scope_separator: char,
-    #[serde(default)]
+    /// The OAuth clients whose tokens this registry accepts: `unrestricted`
+    /// to accept a token from every client, or a list of at least one
+    /// client.
+    #[serde(deserialize_with = "crate::contract::sentinel::allowed_clients")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "crate::contract::sentinel::AllowedClients")
+    )]
     allowed_clients: Vec<String>,
     #[serde(default)]
     denied_kids: Vec<String>,
@@ -3249,7 +3256,6 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         "/properties/eventDestinations",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",
         "/$defs/RawEventDestinationConfig/properties/tls",
-        "/$defs/RawOidcVerifierConfig/properties/allowedClients",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
         "/$defs/RawOidcVerifierConfig/properties/jwksSource",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers",
@@ -3395,7 +3401,9 @@ fn install_schema_constraints(schema: &mut Value) {
     }
 
     for pointer in [
-        "/$defs/RawOidcVerifierConfig/properties/allowedClients",
+        // The list arm of `allowedClients`; the other arm is the keyword
+        // `unrestricted`.
+        "/$defs/AllowedClients/anyOf/1",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/additionalProperties",
     ] {

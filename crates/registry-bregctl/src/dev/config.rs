@@ -1834,6 +1834,13 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             .map(|app| app.id.clone()),
     );
     allowed_clients.extend(clients.issuer.browser_clients.iter().cloned());
+    // The runtime takes a list of at least one client. A session with no
+    // client to name accepts every client of its local issuer.
+    let allowed_clients = if allowed_clients.is_empty() {
+        json!("unrestricted")
+    } else {
+        json!(allowed_clients)
+    };
     let assertion_issuers = assertion_issuers(state, clients)?;
     // The local registry serves with the migration role, the one-role mode
     // a small deployment runs in. The schema-test rehearsal stays split,

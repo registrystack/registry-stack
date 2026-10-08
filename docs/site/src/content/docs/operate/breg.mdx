@@ -388,7 +388,7 @@ configured prefix and never derive their authority from request headers.
 | `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
 | `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
 | `package` | The package directory the activation ledger names as active and, optionally, the `expectedDigest` it must carry. |
-| `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. |
+| `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. `oidc.allowedClients` is required: list the OAuth clients whose tokens the registry accepts, or write `unrestricted` to accept a token from every client of the issuer. A project that names clients itself, in a profile's `requesterClients`, in `authorityClaims.trustedActors`, or in a consent recipient organization, needs each of them listed here, so `unrestricted` does not start with such a project. |
 | `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms only: spent idempotency keys are found and bound without it, so a retry after the rotation still replays or is refused. Changing the cursor secret invalidates existing cursors. |
 | `idempotency` | Optional `receiptRetentionDays` (default 7, 1 to 365): how long the response to a successful write stays available to an exact retry. The key stays spent after that; see [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses). |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
@@ -553,7 +553,7 @@ are never accepted by a running server.
 | `iss` | Equals `issuer`. |
 | `aud` | A string equal to `audience`, or an array of 1 to 16 distinct nonempty strings containing that exact resource audience. |
 | `exp`, `iat`, `nbf` | The lifetime is at most `maxTokenLifetimeSeconds`; clock skew up to `leewayMilliseconds` is tolerated. |
-| `azp` or `client_id` | Listed in `allowedClients` when that list is not empty. |
+| `azp` or `client_id` | Listed in `allowedClients`, unless that member is `unrestricted`. |
 | `scope` | The single claim named by `scopeClaim` covers every required permission. It is a string split on `scopeSeparator`, or a JSON array of permission strings. Other shapes are refused; permissions from several claims are not merged. |
 | principal claim | The claim named by `authorityClaims.principal` carries the identity recorded in audit and workflow decisions. It must match each authenticated profile's `principalClaim`. |
 | purpose claim | The claim named by `authorityClaims.purpose` is required when the profile lists `requiredPurposes`. |

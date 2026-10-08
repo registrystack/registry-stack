@@ -183,7 +183,7 @@ formats:
       - pointer: /metricsListener/bind
         whenOmitted: open
       - pointer: /authentication/oidc/allowedClients
-        whenOmitted: open
+        whenOmitted: refused
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /attachmentVerification
@@ -192,7 +192,7 @@ formats:
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
   - id: breg/mcp-runtime
     product: breg
     title: Citizen MCP gateway runtime configuration

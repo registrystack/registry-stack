@@ -401,6 +401,7 @@ authentication:
     accessTokenType: JWT
     scopeClaim: scope
     scopeSeparator: " "
+    allowedClients: unrestricted
     maxTokenLifetimeSeconds: 3600
     leewayMilliseconds: 60000
     jwksSource: {{kind: static, documentRef: secret:file/oidc-jwks}}

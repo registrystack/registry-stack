@@ -1182,7 +1182,7 @@ fn event_destinations(
         "authentication":{
             "oidc":{
                 "issuer":"https://issuer.example", "audience":"urn:breg:handler-test", "allowedAlgorithm":"EdDSA", "accessTokenType":"JWT",
-                "scopeClaim":"scope", "scopeSeparator":" ", "maxTokenLifetimeSeconds":300, "leewayMilliseconds":60000,
+                "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":"unrestricted", "maxTokenLifetimeSeconds":300, "leewayMilliseconds":60000,
                 "jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maxDocumentBytes":65536,"requestTimeoutMilliseconds":5000,"outageToleranceSeconds":900}
             },
             "authorityClaims":{"principal":"registry_principal", "purpose":"purpose"}

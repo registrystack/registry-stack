@@ -433,6 +433,27 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
     );
 }
 
+/// The runtime refuses an empty `allowedClients`. A session whose only
+/// clients are outside BReg admission names no client, so its runtime file
+/// carries the keyword the runtime reads as every client of the local issuer.
+#[test]
+fn a_session_naming_no_breg_client_writes_the_unrestricted_keyword() {
+    let (_temp, state, mut clients, files) = fixture();
+    for client in &mut clients.clients {
+        client.access_profiles.clear();
+        client.allow_breg_access = false;
+    }
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["authentication"]["oidc"]["allowedClients"],
+        "unrestricted"
+    );
+}
+
 #[test]
 fn multi_purpose_client_has_one_registration_and_one_bounded_exchange_connection() {
     let (_temp, mut state, mut clients, files) = fixture();
