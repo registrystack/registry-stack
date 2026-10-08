@@ -133,6 +133,10 @@ expectedFailures:
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: b53b1538b609
 - format: evidence/question
+  case: control-character
+  reason: missing yaml.control-character at /conformanceControl 48:21; missing yaml.control-character at /conformanceControlC1 49:23 (and 3 more problems)
+  digest: b5628850b6eb
+- format: evidence/question
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 4012a9695728
@@ -192,6 +196,10 @@ expectedFailures:
   case: integer-member-with-unit
   reason: missing config.expected-integer at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: ea53ac68f19a
+- format: evidence/question
+  case: invalid-escape
+  reason: missing yaml.invalid-escape at /conformanceEscape 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: d3fcccadcd71
 - format: evidence/question
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 48:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -261,6 +269,10 @@ expectedFailures:
   reason: missing yaml.tag at /conformanceTag 48:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 4b7710433402
 - format: evidence/question
+  case: text-after-quote
+  reason: missing yaml.text-after-quote at /conformanceQuote 48:23; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: da35a6039644
+- format: evidence/question
   case: text-member-boolean
   reason: exit status 0, expected 1; missing config.expected-string at /question 7:11
   digest: d8657a003d36
@@ -276,6 +288,10 @@ expectedFailures:
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 48:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 0793a4c635d5
+- format: evidence/question
+  case: too-many-problems
+  reason: missing config.unknown-key at /conformanceUnknown001 48:1; missing config.unknown-key at /conformanceUnknown002 49:1 (and 102 more problems)
+  digest: d40a32949e29
 - format: evidence/question
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 48:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -337,6 +353,10 @@ expectedFailures:
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: e2d28d84d58a
 - format: evidence/selector
+  case: control-character
+  reason: missing yaml.control-character at /conformanceControl 15:21; missing yaml.control-character at /conformanceControlC1 16:23 (and 3 more problems)
+  digest: a441a6b2a70c
+- format: evidence/selector
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: cb1f57605061
@@ -364,6 +384,10 @@ expectedFailures:
   case: init-modeline
   reason: the format registers no schema `$id` for the modeline to name
   digest: 60e5b6a3446c
+- format: evidence/selector
+  case: invalid-escape
+  reason: missing yaml.invalid-escape at /conformanceEscape 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 39680dea46da
 - format: evidence/selector
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 15:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -417,9 +441,17 @@ expectedFailures:
   reason: missing yaml.tag at /conformanceTag 15:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 672170ea59ab
 - format: evidence/selector
+  case: text-after-quote
+  reason: missing yaml.text-after-quote at /conformanceQuote 15:23; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 274070e0a592
+- format: evidence/selector
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 15:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 6aed61b5d159
+- format: evidence/selector
+  case: too-many-problems
+  reason: missing config.unknown-key at /conformanceUnknown001 15:1; missing config.unknown-key at /conformanceUnknown002 16:1 (and 102 more problems)
+  digest: 969b45846015
 - format: evidence/selector
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 15:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -477,6 +509,10 @@ expectedFailures:
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 14705a2d7f76
 - format: evidence/source
+  case: control-character
+  reason: missing yaml.control-character at /conformanceControl 62:21; missing yaml.control-character at /conformanceControlC1 63:23 (and 3 more problems)
+  digest: 80fc76975bf3
+- format: evidence/source
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 856dc1b85ba8
@@ -508,6 +544,10 @@ expectedFailures:
   case: init-modeline
   reason: the format registers no schema `$id` for the modeline to name
   digest: 60e5b6a3446c
+- format: evidence/source
+  case: invalid-escape
+  reason: missing yaml.invalid-escape at /conformanceEscape 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 0a27d8d2dbe9
 - format: evidence/source
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 62:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -561,9 +601,17 @@ expectedFailures:
   reason: missing yaml.tag at /conformanceTag 62:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 483b5dfbe5b6
 - format: evidence/source
+  case: text-after-quote
+  reason: missing yaml.text-after-quote at /conformanceQuote 62:23; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 9f269971afb1
+- format: evidence/source
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 62:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 11551e06c208
+- format: evidence/source
+  case: too-many-problems
+  reason: missing config.unknown-key at /conformanceUnknown001 62:1; missing config.unknown-key at /conformanceUnknown002 63:1 (and 102 more problems)
+  digest: cc7815ab8ce5
 - format: evidence/source
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 62:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -629,6 +677,10 @@ expectedFailures:
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 8ade4e8fefac
 - format: evidence/target-governance
+  case: control-character
+  reason: missing yaml.control-character at /conformanceControl 43:21; missing yaml.control-character at /conformanceControlC1 44:23 (and 3 more problems)
+  digest: 9816080552c4
+- format: evidence/target-governance
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: dc1cd240a1d1
@@ -680,6 +732,10 @@ expectedFailures:
   case: integer-member-with-unit
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 36e879d93586
+- format: evidence/target-governance
+  case: invalid-escape
+  reason: missing yaml.invalid-escape at /conformanceEscape 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 52cf7d24bd7a
 - format: evidence/target-governance
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 43:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -734,8 +790,8 @@ expectedFailures:
   digest: 36e879d93586
 - format: evidence/target-governance
   case: substitution-in-api-version
-  reason: missing config.substitution-not-allowed at /apiVersion 1:13; missing config.unsupported-api-version at /apiVersion 1:13 (and 3 more problems)
-  digest: a614303de5da
+  reason: missing config.substitution-not-allowed at /apiVersion 1:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 45df3d0be00e
 - format: evidence/target-governance
   case: substitution-in-integer
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -746,8 +802,8 @@ expectedFailures:
   digest: 59ca4ae0b42c
 - format: evidence/target-governance
   case: substitution-in-kind
-  reason: missing config.substitution-not-allowed at /kind 1:7; missing config.wrong-kind at /kind 1:7 (and 3 more problems)
-  digest: 276a78007032
+  reason: missing config.substitution-not-allowed at /kind 1:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 01ce5e0d81d9
 - format: evidence/target-governance
   case: substitution-in-reference
   reason: missing config.substitution-not-allowed at /conformanceRef 43:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -773,6 +829,10 @@ expectedFailures:
   reason: missing yaml.tag at /conformanceTag 43:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 6eb849d4446e
 - format: evidence/target-governance
+  case: text-after-quote
+  reason: missing yaml.text-after-quote at /conformanceQuote 43:23; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 1ef77661ae60
+- format: evidence/target-governance
   case: text-member-boolean
   reason: missing config.expected-string at /issuer/id 4:14; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 5ab7935568be
@@ -788,6 +848,10 @@ expectedFailures:
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 43:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 8c394ae1ae17
+- format: evidence/target-governance
+  case: too-many-problems
+  reason: missing config.unknown-key at /conformanceUnknown001 43:1; missing config.unknown-key at /conformanceUnknown002 44:1 (and 102 more problems)
+  digest: 6420ff19db26
 - format: evidence/target-governance
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 43:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
