@@ -34,6 +34,7 @@ pub mod source_evidence;
 pub mod source_sqlite;
 pub mod trace;
 pub mod values;
+pub mod verification_policy;
 
 /// The response formats, their payload contract, and the strict verifier are
 /// owned by the portable `registry-evidence-verifier` crate and served here at

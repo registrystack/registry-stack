@@ -232,6 +232,25 @@ pub enum Command {
         #[arg(long)]
         at: Option<String>,
     },
+    /// Check one relying-procedure verification policy offline, and report
+    /// every problem found with its line and column.
+    ///
+    /// `verify` and `verify-presentation` read the policy exactly this way but
+    /// report only their closed `malformed` class; this command says where the
+    /// policy is wrong. No diagnostic repeats a value written in the policy.
+    #[command(group(ArgGroup::new("policy").required(true)))]
+    CheckPolicy {
+        /// A Version 1 policy, as `verify --policy` reads it.
+        #[arg(long, value_name = "FILE", group = "policy")]
+        verification_policy: Option<PathBuf>,
+        /// A holder-bound policy, as `verify-presentation --policy` reads it.
+        #[arg(long, value_name = "FILE", group = "policy")]
+        holder_bound_policy: Option<PathBuf>,
+        /// Report for a person (`human`) or as one JSON document on standard
+        /// output (`json`).
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+    },
     /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]
     PrepareLocalRelyingProcedure {

@@ -3476,6 +3476,147 @@ fn fixture_evidence() -> serde_json::Value {
 ///
 /// A real relying party builds this from independently retained trusted state.
 /// The test simulates that state from the fixture it controls.
+/// `check-policy` reads a policy exactly as `verify` and `verify-presentation`
+/// read it, and says where a refused one is wrong without repeating a value
+/// written in it; the verify commands keep reporting only their closed class.
+#[test]
+fn check_policy_positions_what_verify_reports_only_as_malformed() {
+    let root = tempfile::tempdir().expect("temporary policies");
+    let policy = root.path().join("policy.yaml");
+    let holder_bound = root.path().join("holder-bound.yaml");
+    fs::write(&policy, fixture_policy()).expect("stage the policy");
+    fs::write(&holder_bound, holder_bound_fixture_policy()).expect("stage the policy");
+    let check = |arguments: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .arg("check-policy")
+            .args(arguments)
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+            .output()
+            .expect("evidence binary starts")
+    };
+    let policy_arg = policy.display().to_string();
+    let holder_bound_arg = holder_bound.display().to_string();
+
+    let passed = check(&["--verification-policy", &policy_arg]);
+    assert_eq!(passed.status.code(), Some(0), "the policy was refused");
+    assert_eq!(
+        passed.stdout,
+        b"Evidence verification policy passed check\n"
+    );
+    let summary = String::from_utf8(passed.stderr).expect("stderr is UTF-8");
+    assert!(
+        !summary.contains("error["),
+        "a passing check reported an error: {summary}"
+    );
+
+    let passed = check(&[
+        "--holder-bound-policy",
+        &holder_bound_arg,
+        "--format",
+        "json",
+    ]);
+    assert_eq!(passed.status.code(), Some(0), "the policy was refused");
+    assert!(passed.stderr.is_empty(), "the JSON form wrote to stderr");
+    let report: Value = serde_json::from_slice(&passed.stdout).expect("one JSON document");
+    assert_eq!(
+        report,
+        json!({
+            "ok": true,
+            "command": "check-policy",
+            "status": "complete",
+            "filesChecked": 1,
+            "diagnostics": []
+        })
+    );
+
+    // Each document is closed to the other, as on the verify paths.
+    let crossed = check(&["--holder-bound-policy", &policy_arg, "--format", "json"]);
+    assert_eq!(
+        crossed.status.code(),
+        Some(1),
+        "a Version 1 policy read as holder-bound"
+    );
+
+    fs::write(
+        &policy,
+        format!("{}unknownExpectation: {CANARY}\n", fixture_policy()),
+    )
+    .expect("stage the policy");
+    let refused = check(&["--verification-policy", &policy_arg, "--format", "json"]);
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "the check accepted the policy"
+    );
+    let stdout = String::from_utf8(refused.stdout).expect("stdout is UTF-8");
+    assert!(!stdout.contains(CANARY), "the report repeated a value");
+    let report: Value = serde_json::from_str(&stdout).expect("one JSON document");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("a diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "config.unknown-key");
+    assert_eq!(diagnostics[0]["path"], "/unknownExpectation");
+    assert_eq!(
+        diagnostics[0]["source"],
+        json!({"file": policy_arg, "line": 19, "column": 1})
+    );
+
+    let human = check(&["--verification-policy", &policy_arg]);
+    assert_eq!(
+        human.status.code(),
+        Some(1),
+        "the check accepted the policy"
+    );
+    assert!(
+        human.stdout.is_empty(),
+        "a refused check printed a success line"
+    );
+    let stderr = String::from_utf8(human.stderr).expect("stderr is UTF-8");
+    assert!(stderr.contains("config.unknown-key"), "{stderr}");
+    assert!(!stderr.contains(CANARY), "the report repeated a value");
+
+    let stored = StoredResponse::stage(
+        &fixture_evidence(),
+        &fixture_evidence(),
+        &fs::read_to_string(&policy).expect("the staged policy"),
+    );
+    assert_verification_failure(
+        &stored.verify(Some("2026-08-02T12:00:00Z")),
+        "2026-08-02T12:00:00Z",
+        "",
+        "evidence: stored response verification failed (malformed)\n",
+    );
+
+    let absent = root.path().join("absent.yaml").display().to_string();
+    let unavailable = check(&["--verification-policy", &absent, "--format", "json"]);
+    assert_eq!(
+        unavailable.status.code(),
+        Some(3),
+        "an unreadable policy was refused"
+    );
+    let report: Value = serde_json::from_slice(&unavailable.stdout).expect("one JSON document");
+    assert_eq!(report["status"], "operational-failure");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.policy.unavailable"
+    );
+
+    let both = check(&[
+        "--verification-policy",
+        &policy_arg,
+        "--holder-bound-policy",
+        &holder_bound_arg,
+    ]);
+    assert_eq!(
+        both.status.code(),
+        Some(2),
+        "two policies were checked as one"
+    );
+}
+
 fn fixture_policy() -> String {
     format!(
         "expectedAssuranceProfile: evidence-grade

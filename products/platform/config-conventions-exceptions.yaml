@@ -4155,13 +4155,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-CHECK-1
-  format: evidence/holder-bound-verification-policy
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-ENV-1
   format: evidence/holder-bound-verification-policy
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4180,13 +4173,6 @@ exceptions:
   class: stable-move
   reason: a union mixing unit variants with mapping variants
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'
-- rule: CFG-SCHEMA-1
-  format: evidence/holder-bound-verification-policy
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-3
   format: evidence/holder-bound-verification-policy
   location: products/evidence/contracts/holder-bound-verification-policy.schema.yaml#/$id
@@ -4201,13 +4187,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map products/evidence/contracts/holder-bound-verification-policy.schema.yaml in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/holder-bound-verification-policy
-  location: crates/registry-evidence/src/main.rs#verify_stored_presentation()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-SCHEMA-2
   format: evidence/mock-plan
   location: products/platform/config-formats.yaml#/schema
@@ -4534,13 +4513,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-CHECK-1
-  format: evidence/verification-policy
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-ENV-1
   format: evidence/verification-policy
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4559,13 +4531,6 @@ exceptions:
   class: stable-move
   reason: a union mixing unit variants with mapping variants
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'
-- rule: CFG-SCHEMA-1
-  format: evidence/verification-policy
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-3
   format: evidence/verification-policy
   location: products/evidence/contracts/verification-policy.schema.yaml#/$id
@@ -4580,13 +4545,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map products/evidence/contracts/verification-policy.schema.yaml in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/verification-policy
-  location: crates/registry-evidence/src/main.rs#verify_stored_response()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-EMPTY-2
   format: messaging/runtime
   location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers

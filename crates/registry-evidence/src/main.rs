@@ -60,10 +60,12 @@ use registry_evidence::{
         json_type, name_list, object_keys, CategoryClass, FindingCode, FixtureReport, FixtureTrace,
         ReasonCode, ResultClass, ResultClassification, Stage, StageStatus, ValueClass,
     },
+    verification_policy::{
+        check_policy, read_holder_bound_policy, read_verification_policy, PolicyKind,
+    },
     verifier::{
         verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_presentation_report,
-        verify_sd_jwt_vc_report, EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument,
-        HolderBoundPresentationPolicyDocument, VerificationError,
+        verify_sd_jwt_vc_report, EvidenceVerificationPolicy, VerificationError,
     },
 };
 use registry_platform_audit::{require_audit_under, AuditError, PersistentRootFault};
@@ -415,6 +417,22 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 at.as_deref(),
             )?)
         }
+        Command::CheckPolicy {
+            verification_policy,
+            holder_bound_policy,
+            format,
+        } => {
+            let (path, kind) = match (verification_policy, holder_bound_policy) {
+                (Some(path), None) => (path, PolicyKind::Verification),
+                (None, Some(path)) => (path, PolicyKind::HolderBound),
+                _ => {
+                    return Err(CommandError::Cli(CliError(
+                        "check-policy requires exactly one policy file",
+                    )))
+                }
+            };
+            Ok(run_check_policy(&path, kind, format))
+        }
         Command::VerifyPresentation {
             sd_jwt_vc_presentation,
             jwks,
@@ -609,6 +627,53 @@ async fn run_check(request: CheckRequest) -> ExitCode {
                     bundle.package_digest(),
                     bundle.config.requirements.len()
                 );
+            }
+            eprint!("{}", report.render_human());
+        }
+    }
+    exit
+}
+
+/// Check one verification policy offline and report every problem found.
+///
+/// Exit 0 when the policy reads as its verify command reads it, 1 when it
+/// was refused, and 3 when the file could not be read.
+fn run_check_policy(path: &Path, kind: PolicyKind, format: OutputFormat) -> ExitCode {
+    let check = check_policy(path, kind, MAX_VERIFY_INPUT_BYTES);
+    let report = &check.report;
+    let (status, exit) = if check.unavailable {
+        ("operational-failure", ExitCode::from(3))
+    } else if !report.diagnostics().is_empty() {
+        ("domain-refusal", ExitCode::FAILURE)
+    } else {
+        ("complete", ExitCode::SUCCESS)
+    };
+    match format {
+        OutputFormat::Json => {
+            let document = CheckReport {
+                ok: status == "complete",
+                command: "check-policy",
+                status,
+                package_digest: None,
+                requirements: None,
+                files_checked: report.files_checked().unwrap_or(1),
+                diagnostics: report.to_json_value(),
+            };
+            match serde_json::to_string(&document) {
+                Ok(text) => println!("{text}"),
+                Err(_) => {
+                    eprintln!("evidence: the check report could not be written");
+                    return ExitCode::from(3);
+                }
+            }
+        }
+        OutputFormat::Human => {
+            if status == "complete" {
+                let label = match kind {
+                    PolicyKind::Verification => "verification policy",
+                    PolicyKind::HolderBound => "holder-bound verification policy",
+                };
+                println!("Evidence {label} passed check");
             }
             eprint!("{}", report.render_human());
         }
@@ -1307,9 +1372,13 @@ fn verify_stored_response(
         parse_json_strict(&read_verification_input(jwks_path)?).map_err(|_| VERIFY_MALFORMED)?,
     )
     .map_err(|_| VERIFY_MALFORMED)?;
-    let document: EvidenceVerificationPolicyDocument =
-        serde_norway::from_slice(&read_verification_input(policy_path)?)
-            .map_err(|_| VERIFY_MALFORMED)?;
+    // The command reports only the closed class; `evidence check-policy`
+    // reports where the policy is wrong.
+    let document = read_verification_policy(
+        &policy_path.display().to_string(),
+        &read_verification_input(policy_path)?,
+    )
+    .map_err(|_| VERIFY_MALFORMED)?;
     // A policy stating a time bound the contract forbids is an unusable input
     // document. Reading it already refuses it; this is the same refusal for the
     // conversion, and both are the malformed-input class rather than a
@@ -1393,9 +1462,11 @@ fn verify_stored_presentation(
     .map_err(|_| VERIFY_MALFORMED)?;
     // The holder-bound document is closed and declares its own mode, so a
     // Version 1 policy never parses here and this policy never parses there.
-    let document: HolderBoundPresentationPolicyDocument =
-        serde_norway::from_slice(&read_verification_input(policy_path)?)
-            .map_err(|_| VERIFY_MALFORMED)?;
+    let document = read_holder_bound_policy(
+        &policy_path.display().to_string(),
+        &read_verification_input(policy_path)?,
+    )
+    .map_err(|_| VERIFY_MALFORMED)?;
     // As on the Version 1 path, a policy stating a bound the contract forbids
     // is an unusable input document rather than a verification outcome.
     let policy = document
@@ -5802,8 +5873,10 @@ mod tests {
             ),
         ] {
             let document = verification_policy_document(&format!("form: {written}"));
-            let policy: EvidenceVerificationPolicyDocument = serde_norway::from_str(&document)
-                .unwrap_or_else(|error| panic!("`{written}` is a policy form: {error}"));
+            let policy = read_verification_policy("policy.yaml", document.as_bytes())
+                .unwrap_or_else(|report| {
+                    panic!("`{written}` is a policy form: {}", report.render_human())
+                });
             assert_eq!(
                 policy
                     .try_into_policy(Utc::now())
@@ -5827,7 +5900,7 @@ mod tests {
         ] {
             let document = verification_policy_document(&format!("form: {written}"));
             assert!(
-                serde_norway::from_str::<EvidenceVerificationPolicyDocument>(&document).is_err(),
+                read_verification_policy("policy.yaml", document.as_bytes()).is_err(),
                 "`{written}` is not a policy form but parsed as one"
             );
         }

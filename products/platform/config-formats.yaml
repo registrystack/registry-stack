@@ -3368,11 +3368,11 @@ formats:
       differentialTest: crates/registry-evidence-verifier/src/verifier.rs
     reader:
       crate: registry-evidence
-      file: crates/registry-evidence/src/main.rs
-      function: verify_stored_response
-      type: EvidenceVerificationPolicyDocument
-    check: none
-    example: none
+      file: crates/registry-evidence/src/verification_policy.rs
+      function: read_verification_policy
+      type: VerificationPolicyFile
+    check: evidence check-policy --verification-policy {file}
+    example: products/evidence/examples/verification.policy.yaml
     conformance:
       requiredText: none
       optionalText: none
@@ -3401,11 +3401,11 @@ formats:
       differentialTest: crates/registry-evidence-verifier/src/verifier.rs
     reader:
       crate: registry-evidence
-      file: crates/registry-evidence/src/main.rs
-      function: verify_stored_presentation
-      type: HolderBoundPresentationPolicyDocument
-    check: none
-    example: none
+      file: crates/registry-evidence/src/verification_policy.rs
+      function: read_holder_bound_policy
+      type: HolderBoundPolicyFile
+    check: evidence check-policy --holder-bound-policy {file}
+    example: products/evidence/examples/holder-bound.policy.yaml
     conformance:
       requiredText: none
       optionalText: none
