@@ -78,8 +78,9 @@ report accepts only `--format human`, and the CLI reference shows which commands
 `--format json` on one of them is the usage error `evidencectl.format.unsupported`.
 
 Under `--format json`, a command writes exactly one JSON object on standard output and nothing on
-standard error. The object opens with `ok`, `command`, and `status`, in that order, then carries the
-command's own members. Every member name is camelCase; a map keyed by authored identifiers, such
+standard error. The object opens with `ok`, `command`, `status`, `apiVersion`, and `kind`, in that order, then carries the
+command's own members. `apiVersion` is `id.registrystack.org/formats/evidence/ctl-report/v1alpha1` and `kind` is
+`EvidenceCtlReport`. Every member name is camelCase; a map keyed by authored identifiers, such
 as `selectorProfiles`, keeps those identifiers as its keys. `command` is the command path, such as `check` or
 `dev start`, and `status` names what happened, such as `complete`, `incomplete`, `passed`, or
 `ready`. `ok` is `true` exactly when the process exits `0`. A refusal uses the same object with

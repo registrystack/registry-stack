@@ -570,7 +570,9 @@ fn list_pointers_prints_the_selectable_leaves_in_both_formats() {
     assert_eq!(
         report,
         serde_json::json!({
+            "apiVersion": "id.registrystack.org/formats/evidence/ctl-report/v1alpha1",
             "command": "source suggest",
+            "kind": "EvidenceCtlReport",
             "notes": [],
             "ok": true,
             "pointers": EXPECTED,

@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "command": "check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/evidence/ctl-report/v1alpha1",
+  "kind": "EvidenceCtlReport",
+  "diagnostics": []
+}

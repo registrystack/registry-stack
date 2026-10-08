@@ -25,6 +25,13 @@
 
 ### Evidence authoring tools
 
+- BREAKING: every `evidencectl --format json` report carries `apiVersion`
+  (`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`) and `kind`
+  (`EvidenceCtlReport`) after `ok`, `command`, and `status`. A consumer that
+  compared a whole report for equality, or rejected unknown members, must
+  accept the two new members. The release note "Evidence tooling files" has
+  the migration step.
+
 - BREAKING: every authored YAML document except a source and a selector
   opens with `apiVersion` and `kind`, and is read by the shared configuration
   reader: `${...}`, anchors, aliases, tags, unknown, duplicate, and null keys

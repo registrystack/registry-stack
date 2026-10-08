@@ -671,3 +671,14 @@ and refuses the old spelling with a diagnostic naming the new one.
 | verification policy | no `apiVersion` or `kind` | `apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1`, `kind: EvidenceVerificationPolicy` |
 | holder-bound verification policy | no `apiVersion` or `kind` | `apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1`, `kind: EvidenceHolderBoundVerificationPolicy` |
 | both policies | untagged expected forms | a `type` member |
+
+## Evidence tooling files
+
+### BREAKING: every `evidencectl --format json` report has an envelope
+
+Every report opens with `ok`, `command`, and `status`, then `apiVersion`
+(`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`) and `kind`
+(`EvidenceCtlReport`), then the command's own members. The format is
+unpromised. Migration: a script that compared a whole report for equality, or
+refused unknown members, accepts `apiVersion` and `kind`; a script that read
+members by name needs no change.

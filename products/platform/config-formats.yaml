@@ -3685,9 +3685,11 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/ctl-report/v1alpha1
+      kind: EvidenceCtlReport
+      checkedBy:
+        file: crates/registry-evidencectl/src/report.rs
+        symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/ctl-report/v1alpha1
       kind: EvidenceCtlReport
@@ -3697,7 +3699,7 @@ formats:
       file: crates/registry-evidencectl/src/report.rs
       symbol: success
     check: none
-    example: none
+    example: products/evidence/examples/formats/ctl-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
