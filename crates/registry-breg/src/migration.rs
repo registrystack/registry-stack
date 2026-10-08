@@ -20,7 +20,8 @@ use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::generated_ddl::DdlStatement;
 use crate::history_schema::HistorySchemaDescriptor;
 use crate::migration_plan::{
-    ExternalBackupBinding, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationPlan,
+    read_backup_binding_document, ExternalBackupBinding, ReviewedMigrationStepDescriptor,
+    ValidatedReviewedMigrationPlan,
 };
 use crate::package::{
     CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
@@ -37,7 +38,7 @@ use crate::postgres::{
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const MAX_BACKUP_AGE_SECONDS: u64 = 31 * 24 * 60 * 60;
+pub(crate) const MAX_BACKUP_AGE_SECONDS: u64 = 31 * 24 * 60 * 60;
 const MAX_BACKUP_BINDING_BYTES: u64 = 64 * 1024;
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const ACTIVATION_AUDIT_OPERATION_ID: &str = "breg.activation";
@@ -103,6 +104,10 @@ pub enum MigrationError {
     ActiveRequestProposals,
     #[error("destructive backup evidence is invalid")]
     BackupEvidence,
+    /// The shared reader refused the backup binding document; the report
+    /// carries each diagnostic with its position.
+    #[error("the backup binding is not a valid document")]
+    BackupBindingDocument(Box<registry_platform_yaml::Report>),
     /// The activation committed, but the audit refused a record it owed:
     /// the activation stands and its audit trail is incomplete.
     #[error("the activation committed but the audit refused a record it owed")]
@@ -2158,7 +2163,8 @@ fn read_backup_binding(path: &Path) -> Result<ExternalBackupBinding> {
     {
         return Err(MigrationError::BackupEvidence);
     }
-    serde_json::from_slice(&bytes).map_err(|_| MigrationError::BackupEvidence)
+    read_backup_binding_document(&path.display().to_string(), &bytes)
+        .map_err(|report| MigrationError::BackupBindingDocument(Box::new(report)))
 }
 
 /// Checks one backup binding against the identity the database records as
@@ -2448,6 +2454,67 @@ mod tests {
             check_backup_binding(&binding, &active_identity(), shortly_after_backup()),
             Err(MigrationError::BackupEvidence)
         );
+    }
+
+    #[test]
+    fn a_written_backup_binding_reads_back_through_the_shared_reader() {
+        let mut binding = backup_binding("database-a");
+        binding.sha256 = format!("sha256:{}", "1".repeat(64));
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("backup.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&binding).expect("binding serializes"),
+        )
+        .expect("binding writes");
+        assert_eq!(read_backup_binding(&path), Ok(binding));
+    }
+
+    #[test]
+    fn a_backup_binding_in_its_previous_spelling_is_refused_with_positioned_diagnostics() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("backup.json");
+        let active = active_identity();
+        let previous = json!({
+            "apiVersion": crate::migration_plan::BACKUP_BINDING_API_VERSION,
+            "kind": crate::migration_plan::BACKUP_BINDING_KIND,
+            "databaseId": "database-a",
+            "priorPackageDigest": active.package_digest,
+            "priorSchemaFingerprint": active.schema_fingerprint,
+            "backupFile": "/backups/registry.dump",
+            "sha256": format!("sha256:{}", "1".repeat(64)),
+            "byteLength": 1,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "maxAgeSeconds": 3600,
+        });
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&previous).expect("document serializes"),
+        )
+        .expect("binding writes");
+        let Err(MigrationError::BackupBindingDocument(report)) = read_backup_binding(&path) else {
+            panic!("the previous spelling is refused as a document");
+        };
+        let removed = report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.removed-key")
+            .map(|diagnostic| {
+                assert!(
+                    diagnostic
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.line.is_some()),
+                    "{diagnostic:?}"
+                );
+                diagnostic.path.as_str()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            removed,
+            ["/byteLength", "/databaseId", "/maxAgeSeconds", "/sha256"]
+        );
+        assert!(!format!("{report:?}").contains("database-a"));
     }
 
     #[test]

@@ -951,7 +951,6 @@ fn metadata_only_source(
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_schema_fingerprint.to_owned(),
-        proofs: None,
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),

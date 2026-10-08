@@ -92,7 +92,6 @@ impl ReviewFixture {
             postgres_major: 16,
             row_assertions: vec![],
             final_schema_fingerprint: FINGERPRINT.into(),
-            proofs: None,
         };
         let receipt_bytes = canonicalize_json(&serde_json::to_value(receipt).unwrap()).unwrap();
         let review = project.path().join("review");
@@ -150,6 +149,10 @@ impl ReviewFixture {
     }
 
     fn run(&self, command: &str, with_review: bool) -> Output {
+        self.run_as(command, with_review, true)
+    }
+
+    fn run_as(&self, command: &str, with_review: bool, json: bool) -> Output {
         let receipt = self.project.path().join("test-receipt.json");
         fs::write(
             &receipt,
@@ -162,16 +165,19 @@ impl ReviewFixture {
             "build"
         });
         let credentials = self.project.path().join("missing-credentials.yaml");
-        let mut args = vec![
-            "--format",
-            "json",
+        let mut args = if json {
+            vec!["--format", "json"]
+        } else {
+            vec![]
+        };
+        args.extend([
             command,
             path(self.project.path()),
             "--baseline-package",
             path(&self.baseline.package),
             "--output",
             path(&output),
-        ];
+        ]);
         if with_review {
             args.extend(["--reviewed-migrations", path(&self.review)]);
         }
@@ -191,6 +197,11 @@ impl ReviewFixture {
             ]);
         }
         bregctl(&args)
+    }
+
+    /// Run `command` with the review, printing human output.
+    fn run_human(&self, command: &str) -> Output {
+        self.run_as(command, true, false)
     }
 
     fn mutate_json(&self, file: &str, mutate: impl FnOnce(&mut Value)) {
@@ -404,11 +415,11 @@ fn reviewed_successor_changed_review_invalidates_the_schema_test_receipt() {
     let fixture = ReviewFixture::create();
     // This remains a valid review, but it is no longer the tested candidate.
     fixture.mutate_json("descriptor.json", |value| {
-        value["lockTimeoutMs"] = json!(2000)
+        value["lockTimeoutMilliseconds"] = json!(2000)
     });
     let descriptor = fs::read(fixture.review.join(BASE).join("descriptor.json")).unwrap();
     fixture.mutate_json("rehearsal.json", |value| {
-        value["planSha256"] = json!(sha256_prefixed(&descriptor))
+        value["planDigest"] = json!(sha256_prefixed(&descriptor))
     });
     let output = fixture.run("package", true);
     assert!(!output.status.success());
@@ -494,23 +505,19 @@ fn reviewed_successor_refuses_a_baseline_from_another_registry_before_receipt_va
 
 #[test]
 fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io() {
+    // A well-formed digest that binds nothing this review holds, so each
+    // refusal comes from the binding check rather than from the reader.
+    let unbound = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     for (field, code) in [
         ("priorPackageDigest", "migration.review.evidence_refused"),
         (
             "priorSchemaFingerprint",
             "migration.review.evidence_refused",
         ),
-        ("planSha256", "migration.review.evidence_refused"),
-        // The receipt's final schema fingerprint is also the candidate's own
-        // declared fingerprint, so mutating it away from a valid digest trips
-        // the request's digest-format precondition before reviewed migration
-        // content is ever validated, and keeps the generic fallback code.
-        ("finalSchemaFingerprint", "migration.review.refused"),
+        ("planDigest", "migration.review.evidence_refused"),
     ] {
         let fixture = ReviewFixture::create();
-        fixture.mutate_json("rehearsal.json", |value| {
-            value[field] = json!("private-review-value-canary")
-        });
+        fixture.mutate_json("rehearsal.json", |value| value[field] = json!(unbound));
         for command in ["test", "package"] {
             let output = fixture.run(command, true);
             assert!(!output.status.success());
@@ -518,9 +525,6 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
                 json_stdout(&output)["diagnostics"][0]["code"],
                 code,
                 "{field}: {output:?}"
-            );
-            assert!(
-                !String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary")
             );
             assert!(!fixture.project.path().join("build").exists());
             assert!(!fixture.project.path().join("result.json").exists());
@@ -533,6 +537,39 @@ fn reviewed_successor_refuses_unbound_evidence_and_uncovered_changes_before_io()
         json_stdout(&output)["diagnostics"][0]["code"],
         "migration.review.descriptor_refused"
     );
+}
+
+#[test]
+fn reviewed_successor_refuses_a_malformed_receipt_digest_at_its_key_without_repeating_it() {
+    for field in [
+        "priorPackageDigest",
+        "priorSchemaFingerprint",
+        "planDigest",
+        "finalSchemaFingerprint",
+    ] {
+        let fixture = ReviewFixture::create();
+        fixture.mutate_json("rehearsal.json", |value| {
+            value[field] = json!("private-review-value-canary")
+        });
+        for command in ["test", "package"] {
+            let output = fixture.run(command, true);
+            assert_eq!(output.status.code(), Some(1), "{field}: {output:?}");
+            let report = json_stdout(&output);
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(diagnostic["code"], "config.invalid-value", "{field}");
+            assert_eq!(diagnostic["path"], format!("/{field}"));
+            assert_eq!(
+                diagnostic["source"]["file"],
+                path(&fixture.review.join(BASE).join("rehearsal.json"))
+            );
+            assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary")
+            );
+            assert!(!fixture.project.path().join("build").exists());
+            assert!(!fixture.project.path().join("result.json").exists());
+        }
+    }
 }
 
 #[test]
@@ -550,31 +587,83 @@ fn reviewed_successor_refuses_a_receipt_that_carries_retired_proofs() {
         assert!(!output.status.success());
         let diagnostic = &json_stdout(&output)["diagnostics"][0];
         assert_eq!(
-            diagnostic["code"], "migration.review.receipt_proofs_retired",
+            diagnostic["code"], "config.removed-key",
             "{command}: {output:?}"
         );
-        assert_eq!(diagnostic["path"], format!("{BASE}/rehearsal.json"));
-        let message = diagnostic["message"].as_str().unwrap();
-        assert!(message.contains("proofs"), "{message}");
-        assert!(message.contains("regenerate"), "{message}");
+        assert_eq!(diagnostic["path"], "/proofs");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            path(&fixture.review.join(BASE).join("rehearsal.json"))
+        );
+        let action = diagnostic["suggestedAction"].as_str().unwrap();
+        assert!(action.contains("Delete `proofs`"), "{action}");
         assert!(!fixture.project.path().join("build").exists());
         assert!(!fixture.project.path().join("result.json").exists());
     }
+    let output = fixture.run_human("test");
+    let rendered = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        rendered.starts_with("bregctl test refused the migration rehearsal receipt.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("config.removed-key"), "{rendered}");
 }
 
 #[test]
-fn reviewed_successor_refuses_duplicate_keys_noncanonical_bytes_and_extra_artifacts() {
-    for malformed in [
-        b"{\"id\":\"read-label\",\"id\":\"private-review-value-canary\"}".as_slice(),
-        b"{}\n".as_slice(),
+fn reviewed_successor_accepts_a_reformatted_descriptor_and_refuses_previous_spellings() {
+    let fixture = ReviewFixture::create();
+    let descriptor_path = fixture.review.join(BASE).join("descriptor.json");
+    let value: Value = serde_json::from_slice(&fs::read(&descriptor_path).unwrap()).unwrap();
+    fs::write(&descriptor_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    // The review validates, so the run reaches the credentials it was not
+    // given.
+    let test = fixture.run("test", true);
+    assert_eq!(
+        json_stdout(&test)["diagnostics"][0]["code"],
+        "test.credentials.refused",
+        "{test:?}"
+    );
+
+    let fixture = ReviewFixture::create();
+    fixture.mutate_json("descriptor.json", |value| {
+        let object = value.as_object_mut().unwrap();
+        let timeout = object.remove("statementTimeoutMilliseconds").unwrap();
+        object.insert("statementTimeoutMs".into(), timeout);
+    });
+    let output = fixture.run("package", true);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.removed-key")
+        .unwrap_or_else(|| panic!("the previous spelling is named: {report}"));
+    assert_eq!(diagnostic["path"], "/statementTimeoutMs");
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .unwrap()
+        .contains("`statementTimeoutMilliseconds`"));
+}
+
+#[test]
+fn reviewed_successor_refuses_duplicate_keys_headerless_documents_and_extra_artifacts() {
+    for (malformed, code) in [
+        (
+            format!(
+                "{{\"apiVersion\":\"{}\",\"kind\":\"{}\",\"id\":\"read-label\",\"id\":\"private-review-value-canary\"}}",
+                registry_breg::migration_plan::MIGRATION_DESCRIPTOR_API_VERSION,
+                registry_breg::migration_plan::MIGRATION_DESCRIPTOR_KIND,
+            )
+            .into_bytes(),
+            "yaml.duplicate-key",
+        ),
+        (b"{}\n".to_vec(), "config.missing-envelope"),
     ] {
         let fixture = ReviewFixture::create();
-        fs::write(fixture.review.join(BASE).join("descriptor.json"), malformed).unwrap();
+        fs::write(fixture.review.join(BASE).join("descriptor.json"), &malformed).unwrap();
         let output = fixture.run("test", true);
-        assert_eq!(
-            json_stdout(&output)["diagnostics"][0]["code"],
-            "migration.review.descriptor_refused"
-        );
+        assert_eq!(json_stdout(&output)["diagnostics"][0]["code"], code);
         assert!(!String::from_utf8_lossy(&output.stdout).contains("private-review-value-canary"));
     }
     let fixture = ReviewFixture::create();

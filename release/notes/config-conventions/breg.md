@@ -1347,3 +1347,90 @@ edit: a record or journal an earlier `bregctl` wrote is refused unchanged
 Finish or recover any source preparation with the earlier `bregctl` before
 upgrading; otherwise run `bregctl dev stop --remove <project>`, remove
 `<project>/.breg/dev`, and start again.
+
+### BREAKING: reviewed migration documents and the backup binding (`descriptor.json`, `rehearsal.json`, the `--backup` binding)
+
+`bregctl test`, `bregctl package`, `bregctl plan`, `bregctl apply`, and the
+runtime's package load read a reviewed migration's descriptor and rehearsal
+receipt, and `plan` and `apply` read each backup binding, through the shared
+reader. Each document starts with its header and uses the convention's
+spellings; it no longer has to be canonical JSON bytes, so reformat it
+freely. The receipt's `planDigest` is the SHA-256 of the descriptor's
+RFC 8785 canonical JSON, header included, so a reformatted descriptor keeps
+its rehearsal while any member change still breaks it. SQL, assertion, and
+fixture files stay bound by their exact bytes.
+
+Migrate the descriptor (`modules/<module>/migrations/<id>/descriptor.json`):
+
+| Old | New |
+|---|---|
+| no header | `"apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1"` and `"kind": "BRegMigrationDescriptor"` |
+| `lockTimeoutMs`, `statementTimeoutMs` | `lockTimeoutMilliseconds`, `statementTimeoutMilliseconds` |
+| `steps[].kind` with `transactional_sql`, `chunked_backfill`, or `field_encryption_backfill` | `steps[].type` with `transactional-sql`, `chunked-backfill`, or `field-encryption-backfill` |
+| `steps[].sql_path` | `steps[].sqlPath` |
+| `steps[].affected_rows` with `min` and `max` | `steps[].affectedRows` with `minimum` and `maximum` |
+| `steps[].entity_id` | `steps[].entity` |
+| `steps[].cursor: record_id_uuid_array` | `steps[].cursor: record-id-uuid-array` |
+| `steps[].chunk_size`, `steps[].max_total_rows` | `steps[].chunkSize`, `steps[].maximumTotalRows` |
+| `steps[].lock_timeout_ms`, `steps[].statement_timeout_ms` | `steps[].lockTimeoutMilliseconds`, `steps[].statementTimeoutMilliseconds` |
+| `steps[].exact_affected_rows` | `steps[].exactAffectedRows` |
+| `steps[].objects[].entityId`, `steps[].objects[].memberId` | `steps[].objects[].entity`, `steps[].objects[].member` |
+
+`id`, `changeClass`, `covers` (with each change's `code` and `target` as
+`diff --format json` reports them), `recovery`, `history`, the assertion
+lists, and the two paths keep their spelling.
+
+Migrate the rehearsal receipt (`rehearsal.json`) and recompute its
+`planDigest` over the migrated descriptor, since the header and the renamed
+members change it (`jq -jcS . descriptor.json | shasum -a 256` computes it
+for a descriptor of ASCII text and integers):
+
+| Old | New |
+|---|---|
+| no header | `"apiVersion": "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1"` and `"kind": "BRegMigrationRehearsalReceipt"` |
+| `planSha256` | `planDigest` |
+| `sqlSha256` and `assertionSha256`, items `{path, sha256}` | `sqlDigests` and `assertionDigests`, items `{path, digest}` |
+| `fixtureInventory[].sha256` | `fixtureInventory[].digest` |
+| `rowAssertions[].stepId` | `rowAssertions[].step` |
+| `proofs` | removed; delete it |
+
+Migrate each backup binding:
+
+| Old | New |
+|---|---|
+| no header | `"apiVersion": "id.registrystack.org/formats/breg/backup-binding/v1alpha1"` and `"kind": "BRegBackupBinding"` |
+| `databaseId` | `database` |
+| `sha256` | `digest` |
+| `byteLength` | `sizeBytes` |
+| `maxAgeSeconds` | `maximumAgeSeconds` |
+
+A document without its header is refused with `config.missing-envelope`,
+whose fix names the header, and once the header is current every previous
+spelling is refused with `config.removed-key` at its position, naming its
+replacement. `bregctl` prints one sentence naming the document (`bregctl
+test refused the reviewed migration descriptor.`, `... the migration
+rehearsal receipt.`, or `bregctl apply refused the backup binding.`)
+followed by every diagnostic with its file, line, column, and key; with
+`--format json` the report's `diagnostics` carry the reader's shape
+unchanged. No diagnostic repeats a digest, path, or count it was given.
+
+| Condition | Old | New |
+|---|---|---|
+| a descriptor that does not parse, repeats a key, lacks its header, or has an unknown, missing, or malformed member | `migration.review.descriptor_refused` | the reader's `config.*` and `yaml.*` codes |
+| a receipt that does not parse or has an unknown, missing, or malformed member, including a malformed digest | `migration.review.evidence_refused` or `migration.review.refused` | the reader's codes, a malformed digest as `config.invalid-value` at its key |
+| a receipt carrying `proofs` | `migration.review.receipt_proofs_retired` | `config.removed-key` at `/proofs` |
+| a backup binding that does not parse or has an unknown, missing, or malformed member | `apply.backup_evidence.refused` | the reader's codes |
+
+`migration.review.descriptor_refused`, `migration.review.evidence_refused`,
+and `apply.backup_evidence.refused` remain for a document that reads but
+fails a semantic check, such as a cover the candidate does not make, a
+receipt that does not bind this candidate, or a backup that is too old.
+
+A package carrying a reviewed migration that an earlier `bregctl` built
+holds its documents in the old spelling, and the runtime refuses to load it
+after the upgrade; the previous release still loaded a package whose receipt
+carried `proofs`, and this one does not. Migrate the reviewed directory as
+above, then run `bregctl test` and `bregctl package` with
+`--reviewed-migrations` again to rebuild the package before upgrading the
+runtime. The activation ledger keeps
+its own record of each backup it accepted and is unchanged.

@@ -582,7 +582,7 @@ database is refused with `apply.backup_evidence.refused`.
 
 This project has no successor yet. When a later build changes the schema, it is packaged once and
 promoted the same way, and a destructive change requires one backup per environment. Each
-environment takes its own backup and writes its own binding, which names its `databaseId`, so the
+environment takes its own backup and writes its own binding, which names its `database`, so the
 production apply never accepts the staging backup. For a successor whose reviewed migration names
 `modules/core/migrations/retire-legacy-field/backup.json`, the per-environment step is:
 

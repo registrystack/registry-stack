@@ -18,7 +18,10 @@ use pg_query::protobuf::{
 use pg_query::NodeRef;
 #[cfg(feature = "tooling")]
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "tooling")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "tooling")]
@@ -45,17 +48,295 @@ const MAX_ARTIFACTS: usize = 1024;
 const MAX_STEPS: usize = 256;
 #[cfg(feature = "tooling")]
 const MAX_ASSERTIONS: usize = 256;
-#[cfg(feature = "tooling")]
 const MAX_LOCK_TIMEOUT_MS: u64 = 300_000;
-#[cfg(feature = "tooling")]
 const MAX_STATEMENT_TIMEOUT_MS: u64 = 3_600_000;
-#[cfg(feature = "tooling")]
 /// Every chunk of a chunked or field-encryption backfill journals one commit
 /// whose member budget the history machinery caps, so the chunk size shares
 /// that cap.
 const MAX_CHUNK_SIZE: u32 = crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as u32;
-#[cfg(feature = "tooling")]
 const MAX_TOTAL_ROWS: u64 = 100_000_000;
+
+pub const MIGRATION_DESCRIPTOR_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1";
+pub const MIGRATION_DESCRIPTOR_KIND: &str = "BRegMigrationDescriptor";
+pub const MIGRATION_REHEARSAL_RECEIPT_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1";
+pub const MIGRATION_REHEARSAL_RECEIPT_KIND: &str = "BRegMigrationRehearsalReceipt";
+pub const BACKUP_BINDING_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/backup-binding/v1alpha1";
+pub const BACKUP_BINDING_KIND: &str = "BRegBackupBinding";
+
+/// A reviewed migration's `descriptor.json`.
+pub const MIGRATION_DESCRIPTOR_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: MIGRATION_DESCRIPTOR_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(MIGRATION_DESCRIPTOR_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/lockTimeoutMs",
+            replacement: "Rename `lockTimeoutMs` to `lockTimeoutMilliseconds`.",
+        },
+        RemovedKey {
+            pointer: "/statementTimeoutMs",
+            replacement: "Rename `statementTimeoutMs` to `statementTimeoutMilliseconds`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/kind",
+            replacement: "Rename `kind` to `type` and write its value in kebab case, such as `transactional-sql`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/sql_path",
+            replacement: "Rename `sql_path` to `sqlPath`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/entity_id",
+            replacement: "Rename `entity_id` to `entity`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/affected_rows",
+            replacement: "Rename `affected_rows` to `affectedRows`, with `minimum` and `maximum` members.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/affectedRows/min",
+            replacement: "Rename `min` to `minimum`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/affectedRows/max",
+            replacement: "Rename `max` to `maximum`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/chunk_size",
+            replacement: "Rename `chunk_size` to `chunkSize`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/max_total_rows",
+            replacement: "Rename `max_total_rows` to `maximumTotalRows`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/lock_timeout_ms",
+            replacement: "Rename `lock_timeout_ms` to `lockTimeoutMilliseconds`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/statement_timeout_ms",
+            replacement: "Rename `statement_timeout_ms` to `statementTimeoutMilliseconds`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/exact_affected_rows",
+            replacement: "Rename `exact_affected_rows` to `exactAffectedRows`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/objects/*/entityId",
+            replacement: "Rename `entityId` to `entity`.",
+        },
+        RemovedKey {
+            pointer: "/steps/*/objects/*/memberId",
+            replacement: "Rename `memberId` to `member`.",
+        },
+    ],
+};
+
+/// A reviewed migration's `rehearsal.json`.
+pub const MIGRATION_REHEARSAL_RECEIPT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: MIGRATION_REHEARSAL_RECEIPT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(MIGRATION_REHEARSAL_RECEIPT_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/proofs",
+            replacement: "Delete `proofs`; the descriptor already determines everything it asserted.",
+        },
+        RemovedKey {
+            pointer: "/planSha256",
+            replacement: "Rename `planSha256` to `planDigest`.",
+        },
+        RemovedKey {
+            pointer: "/sqlSha256",
+            replacement: "Rename `sqlSha256` to `sqlDigests`, whose items carry `path` and `digest`.",
+        },
+        RemovedKey {
+            pointer: "/assertionSha256",
+            replacement: "Rename `assertionSha256` to `assertionDigests`, whose items carry `path` and `digest`.",
+        },
+        RemovedKey {
+            pointer: "/sqlDigests/*/sha256",
+            replacement: "Rename `sha256` to `digest`.",
+        },
+        RemovedKey {
+            pointer: "/assertionDigests/*/sha256",
+            replacement: "Rename `sha256` to `digest`.",
+        },
+        RemovedKey {
+            pointer: "/fixtureInventory/*/sha256",
+            replacement: "Rename `sha256` to `digest`.",
+        },
+        RemovedKey {
+            pointer: "/rowAssertions/*/stepId",
+            replacement: "Rename `stepId` to `step`.",
+        },
+    ],
+};
+
+/// The operator's backup binding a destructive apply names with `--backup`.
+pub const BACKUP_BINDING_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: BACKUP_BINDING_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(BACKUP_BINDING_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/databaseId",
+            replacement: "Rename `databaseId` to `database`.",
+        },
+        RemovedKey {
+            pointer: "/sha256",
+            replacement: "Rename `sha256` to `digest`.",
+        },
+        RemovedKey {
+            pointer: "/byteLength",
+            replacement: "Rename `byteLength` to `sizeBytes`.",
+        },
+        RemovedKey {
+            pointer: "/maxAgeSeconds",
+            replacement: "Rename `maxAgeSeconds` to `maximumAgeSeconds`.",
+        },
+    ],
+};
+
+/// Read a reviewed migration descriptor through the shared reader, naming
+/// it `file` in diagnostics.
+pub fn read_migration_descriptor(
+    file: &str,
+    bytes: &[u8],
+) -> Result<ReviewedMigrationDescriptor, Report> {
+    Reader::new(file)
+        .decode(bytes, &Expect::one(&MIGRATION_DESCRIPTOR_FORMAT))
+        .map(|decoded| decoded.value)
+}
+
+/// Read a migration rehearsal receipt through the shared reader, naming it
+/// `file` in diagnostics.
+pub fn read_rehearsal_receipt(
+    file: &str,
+    bytes: &[u8],
+) -> Result<MigrationRehearsalReceipt, Report> {
+    Reader::new(file)
+        .decode(bytes, &Expect::one(&MIGRATION_REHEARSAL_RECEIPT_FORMAT))
+        .map(|decoded| decoded.value)
+}
+
+/// Read a backup binding through the shared reader, naming it `file` in
+/// diagnostics.
+pub fn read_backup_binding_document(
+    file: &str,
+    bytes: &[u8],
+) -> Result<ExternalBackupBinding, Report> {
+    Reader::new(file)
+        .decode(bytes, &Expect::one(&BACKUP_BINDING_FORMAT))
+        .map(|decoded| decoded.value)
+}
+
+/// The three documents serialize with their `apiVersion` and `kind` header
+/// first, so a written document is one the reader accepts. Decoding never
+/// sees the header: the reader checks and strips it.
+macro_rules! enveloped_document {
+    ($type:ty, $api_version:expr, $kind:expr) => {
+        impl Serialize for $type {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                use serde::ser::Error as _;
+                let serde_json::Value::Object(members) =
+                    <$type>::serialize(self, serde_json::value::Serializer)
+                        .map_err(S::Error::custom)?
+                else {
+                    return Err(S::Error::custom("a document serializes as a mapping"));
+                };
+                let mut document = serde_json::Map::with_capacity(members.len() + 2);
+                document.insert("apiVersion".to_owned(), $api_version.into());
+                document.insert("kind".to_owned(), $kind.into());
+                document.extend(members);
+                document.serialize(serializer)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $type {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                <$type>::deserialize(deserializer)
+            }
+        }
+    };
+}
+
+/// Members decoded through the shared reader's types, so a refusal carries
+/// its code and position (CFG-ID-1, CFG-QTY-4, CFG-VAL-6, CFG-ID-5).
+mod members {
+    use registry_platform_yaml::{
+        BoundedU32, BoundedU64, Digest, Identified, Invalid, LocalId, UniqueIdList,
+    };
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer};
+
+    pub(super) fn local_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        LocalId::deserialize(deserializer).map(LocalId::into_string)
+    }
+
+    pub(super) fn digest<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+        Digest::deserialize(deserializer).map(Digest::into_string)
+    }
+
+    pub(super) fn unique_ids<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de> + Identified,
+    {
+        UniqueIdList::<T>::deserialize(deserializer).map(UniqueIdList::into_vec)
+    }
+
+    pub(super) fn lock_timeout<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u64, D::Error> {
+        BoundedU64::<1, { super::MAX_LOCK_TIMEOUT_MS }>::deserialize(deserializer)
+            .map(BoundedU64::get)
+    }
+
+    pub(super) fn statement_timeout<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u64, D::Error> {
+        BoundedU64::<1, { super::MAX_STATEMENT_TIMEOUT_MS }>::deserialize(deserializer)
+            .map(BoundedU64::get)
+    }
+
+    pub(super) fn chunk_size<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+        BoundedU32::<1, { super::MAX_CHUNK_SIZE }>::deserialize(deserializer).map(BoundedU32::get)
+    }
+
+    pub(super) fn total_rows<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<1, { super::MAX_TOTAL_ROWS }>::deserialize(deserializer).map(BoundedU64::get)
+    }
+
+    pub(super) fn row_count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<0, { super::MAX_TOTAL_ROWS }>::deserialize(deserializer).map(BoundedU64::get)
+    }
+
+    pub(super) fn postgres_major<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u16, D::Error> {
+        let major = BoundedU32::<15, 18>::deserialize(deserializer)?;
+        u16::try_from(major.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(15, 18)))
+    }
+
+    pub(super) fn backup_age<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<1, { crate::migration::MAX_BACKUP_AGE_SECONDS }>::deserialize(deserializer)
+            .map(BoundedU64::get)
+    }
+
+    pub(super) fn size_bytes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<1, { u64::MAX }>::deserialize(deserializer).map(BoundedU64::get)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewedMigrationFile {
@@ -70,17 +351,33 @@ pub struct ReviewedMigrationSource {
     pub files: Vec<ReviewedMigrationFile>,
 }
 
+/// A reviewed migration's `descriptor.json`. Rust field names keep their
+/// engine spelling; each serde rename names the document member.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReviewedMigrationDescriptor {
+    #[serde(deserialize_with = "members::local_id")]
     pub id: String,
     pub change_class: CompiledRegistryChangeClass,
     pub covers: Vec<ReviewedChangeCover>,
     pub recovery: ReviewedMigrationRecovery,
+    /// The document member `lockTimeoutMilliseconds`.
+    #[serde(
+        rename = "lockTimeoutMilliseconds",
+        deserialize_with = "members::lock_timeout"
+    )]
     pub lock_timeout_ms: u64,
+    /// The document member `statementTimeoutMilliseconds`.
+    #[serde(
+        rename = "statementTimeoutMilliseconds",
+        deserialize_with = "members::statement_timeout"
+    )]
     pub statement_timeout_ms: u64,
+    #[serde(deserialize_with = "members::unique_ids")]
     pub steps: Vec<ReviewedMigrationStepDescriptor>,
+    #[serde(deserialize_with = "members::unique_ids")]
     pub pre_assertions: Vec<ReviewedMigrationAssertionDescriptor>,
+    #[serde(deserialize_with = "members::unique_ids")]
     pub post_assertions: Vec<ReviewedMigrationAssertionDescriptor>,
     pub rehearsal_receipt_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +388,11 @@ pub struct ReviewedMigrationDescriptor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<ReviewedFieldEncryptionHistory>,
 }
+enveloped_document!(
+    ReviewedMigrationDescriptor,
+    MIGRATION_DESCRIPTOR_API_VERSION,
+    MIGRATION_DESCRIPTOR_KIND
+);
 
 /// What the reviewed plan does with the plaintext history that exists before
 /// a field-encryption flip activates. `EraseAndRebaseline` destroys the full
@@ -120,16 +422,27 @@ impl From<&CompiledRegistryChange> for ReviewedChangeCover {
     }
 }
 
+/// Spelled in snake case because `bregctl plan --format json`, a promised
+/// output, prints the same value; it moves to kebab case with that output's
+/// other respellings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewedMigrationRecovery {
     ExactTargetResume,
 }
 
+/// One reviewed step, tagged by `type` (CFG-ID-7). Rust field names keep
+/// their engine spelling; each serde rename names the document member.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", deny_unknown_fields, rename_all = "snake_case")]
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ReviewedMigrationStepDescriptor {
     TransactionalSql {
+        #[serde(deserialize_with = "members::local_id")]
         id: String,
         sql_path: String,
         objects: Vec<ReviewedMigrationObject>,
@@ -137,14 +450,30 @@ pub enum ReviewedMigrationStepDescriptor {
         affected_rows: Option<AffectedRowBounds>,
     },
     ChunkedBackfill {
+        #[serde(deserialize_with = "members::local_id")]
         id: String,
+        /// The document member `entity`.
+        #[serde(rename = "entity")]
         entity_id: String,
         sql_path: String,
         objects: Vec<ReviewedMigrationObject>,
         cursor: ChunkCursorProtocol,
+        #[serde(deserialize_with = "members::chunk_size")]
         chunk_size: u32,
+        /// The document member `maximumTotalRows`.
+        #[serde(rename = "maximumTotalRows", deserialize_with = "members::total_rows")]
         max_total_rows: u64,
+        /// The document member `lockTimeoutMilliseconds`.
+        #[serde(
+            rename = "lockTimeoutMilliseconds",
+            deserialize_with = "members::lock_timeout"
+        )]
         lock_timeout_ms: u64,
+        /// The document member `statementTimeoutMilliseconds`.
+        #[serde(
+            rename = "statementTimeoutMilliseconds",
+            deserialize_with = "members::statement_timeout"
+        )]
         statement_timeout_ms: u64,
         exact_affected_rows: bool,
     },
@@ -155,25 +484,69 @@ pub enum ReviewedMigrationStepDescriptor {
     /// JSON of this descriptor step, so the ledger checksum pins it without a
     /// SQL artifact.
     FieldEncryptionBackfill {
+        #[serde(deserialize_with = "members::local_id")]
         id: String,
+        /// The document member `entity`.
+        #[serde(rename = "entity")]
         entity_id: String,
         objects: Vec<ReviewedMigrationObject>,
         cursor: ChunkCursorProtocol,
+        #[serde(deserialize_with = "members::chunk_size")]
         chunk_size: u32,
+        /// The document member `maximumTotalRows`.
+        #[serde(rename = "maximumTotalRows", deserialize_with = "members::total_rows")]
         max_total_rows: u64,
+        /// The document member `lockTimeoutMilliseconds`.
+        #[serde(
+            rename = "lockTimeoutMilliseconds",
+            deserialize_with = "members::lock_timeout"
+        )]
         lock_timeout_ms: u64,
+        /// The document member `statementTimeoutMilliseconds`.
+        #[serde(
+            rename = "statementTimeoutMilliseconds",
+            deserialize_with = "members::statement_timeout"
+        )]
         statement_timeout_ms: u64,
     },
 }
+registry_platform_yaml::tagged_union!(ReviewedMigrationStepDescriptor);
 
-impl ReviewedMigrationStepDescriptor {
-    #[cfg(feature = "tooling")]
+/// A step serializes in the same `type`-tagged form it is read in, so the
+/// canonical JSON a field-encryption backfill's checksum covers is the
+/// reviewed document's own spelling.
+impl Serialize for ReviewedMigrationStepDescriptor {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error as _;
+        let serde_json::Value::Object(external) =
+            Self::serialize(self, serde_json::value::Serializer).map_err(S::Error::custom)?
+        else {
+            return Err(S::Error::custom("a step serializes as a mapping"));
+        };
+        let Some((tag, serde_json::Value::Object(members))) = external.into_iter().next() else {
+            return Err(S::Error::custom("a step serializes as one tagged mapping"));
+        };
+        let mut step = serde_json::Map::with_capacity(members.len() + 1);
+        step.insert("type".to_owned(), serde_json::Value::String(tag));
+        step.extend(members);
+        step.serialize(serializer)
+    }
+}
+
+impl registry_platform_yaml::Identified for ReviewedMigrationStepDescriptor {
     fn id(&self) -> &str {
         match self {
             Self::TransactionalSql { id, .. }
             | Self::ChunkedBackfill { id, .. }
             | Self::FieldEncryptionBackfill { id, .. } => id,
         }
+    }
+}
+
+impl ReviewedMigrationStepDescriptor {
+    #[cfg(feature = "tooling")]
+    fn id(&self) -> &str {
+        registry_platform_yaml::Identified::id(self)
     }
 
     #[cfg(feature = "tooling")]
@@ -201,15 +574,18 @@ impl ReviewedMigrationStepDescriptor {
 pub struct ReviewedMigrationObject {
     pub schema: String,
     pub table: String,
+    /// The document member `entity`.
+    #[serde(rename = "entity")]
     pub entity_id: String,
     pub kind: ReviewedMigrationObjectKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The document member `member`.
+    #[serde(rename = "member", default, skip_serializing_if = "Option::is_none")]
     pub member_id: Option<String>,
     pub physical_name: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ReviewedMigrationObjectKind {
     Entity,
     Field,
@@ -218,7 +594,7 @@ pub enum ReviewedMigrationObjectKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum ChunkCursorProtocol {
     RecordIdUuidArray,
 }
@@ -226,81 +602,122 @@ pub enum ChunkCursorProtocol {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AffectedRowBounds {
+    /// The document member `minimum`.
+    #[serde(rename = "minimum", deserialize_with = "members::row_count")]
     pub min: u64,
+    /// The document member `maximum`.
+    #[serde(rename = "maximum", deserialize_with = "members::row_count")]
     pub max: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReviewedMigrationAssertionDescriptor {
+    #[serde(deserialize_with = "members::local_id")]
     pub id: String,
     pub sql_path: String,
 }
 
+impl registry_platform_yaml::Identified for ReviewedMigrationAssertionDescriptor {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// A reviewed migration's `rehearsal.json`. Rust field names keep their
+/// engine spelling; each serde rename names the document member.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "camelCase")]
 pub struct MigrationRehearsalReceipt {
+    #[serde(deserialize_with = "members::digest")]
     pub prior_package_digest: String,
+    #[serde(deserialize_with = "members::digest")]
     pub prior_schema_fingerprint: String,
+    /// The document member `planDigest`: the digest of the descriptor's
+    /// canonical JSON.
+    #[serde(rename = "planDigest", deserialize_with = "members::digest")]
     pub plan_sha256: String,
+    /// The document member `sqlDigests`.
+    #[serde(rename = "sqlDigests")]
     pub sql_sha256: Vec<ArtifactDigestBinding>,
+    /// The document member `assertionDigests`.
+    #[serde(rename = "assertionDigests")]
     pub assertion_sha256: Vec<ArtifactDigestBinding>,
     pub fixture_inventory: Vec<RehearsalFixture>,
+    #[serde(deserialize_with = "members::postgres_major")]
     pub postgres_major: u16,
     pub row_assertions: Vec<RehearsalRowAssertion>,
+    #[serde(deserialize_with = "members::digest")]
     pub final_schema_fingerprint: String,
-    /// Accepted only so a package the previous release built keeps loading;
-    /// nothing reads it, and `bregctl` refuses a captured receipt that
-    /// carries it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proofs: Option<RehearsalProofs>,
 }
+enveloped_document!(
+    MigrationRehearsalReceipt,
+    MIGRATION_REHEARSAL_RECEIPT_API_VERSION,
+    MIGRATION_REHEARSAL_RECEIPT_KIND
+);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ArtifactDigestBinding {
     pub path: String,
+    /// The document member `digest`.
+    #[serde(rename = "digest", deserialize_with = "members::digest")]
     pub sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RehearsalFixture {
+    #[serde(deserialize_with = "members::local_id")]
     pub id: String,
     pub path: String,
+    /// The document member `digest`.
+    #[serde(rename = "digest", deserialize_with = "members::digest")]
     pub sha256: String,
+    #[serde(deserialize_with = "members::row_count")]
     pub row_count: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RehearsalRowAssertion {
+    /// The document member `step`.
+    #[serde(rename = "step", deserialize_with = "members::local_id")]
     pub step_id: String,
+    #[serde(deserialize_with = "members::row_count")]
     pub affected_rows: u64,
 }
 
-/// The previous release's receipt `proofs` member, kept in its exact shape so
-/// its bytes still round-trip canonically. Nothing reads its values.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RehearsalProofs {
-    pub lock_timeout: bool,
-    pub chunk_resume: bool,
-    pub destructive_resume: bool,
-}
-
+/// The operator's backup binding. Rust field names keep their engine
+/// spelling; each serde rename names the document member.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "camelCase")]
 pub struct ExternalBackupBinding {
+    /// The document member `database`: the database identity the binding
+    /// was taken from.
+    #[serde(rename = "database")]
     pub database_id: String,
+    #[serde(deserialize_with = "members::digest")]
     pub prior_package_digest: String,
+    #[serde(deserialize_with = "members::digest")]
     pub prior_schema_fingerprint: String,
     pub backup_file: String,
+    /// The document member `digest`.
+    #[serde(rename = "digest", deserialize_with = "members::digest")]
     pub sha256: String,
+    /// The document member `sizeBytes`.
+    #[serde(rename = "sizeBytes", deserialize_with = "members::size_bytes")]
     pub byte_length: u64,
     pub created_at: String,
+    /// The document member `maximumAgeSeconds`.
+    #[serde(rename = "maximumAgeSeconds", deserialize_with = "members::backup_age")]
     pub max_age_seconds: u64,
 }
+enveloped_document!(
+    ExternalBackupBinding,
+    BACKUP_BINDING_API_VERSION,
+    BACKUP_BINDING_KIND
+);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedReviewedMigrationPlan {
@@ -483,7 +900,19 @@ pub(crate) fn validate_reviewed_migration_plan(
         if descriptor_bytes.len() > MAX_DESCRIPTOR_BYTES {
             return Err(ReviewedMigrationError::Descriptor);
         }
-        let descriptor: ReviewedMigrationDescriptor = parse_canonical(descriptor_bytes)?;
+        let decoded = Reader::new(descriptor_path.as_str())
+            .decode::<ReviewedMigrationDescriptor>(
+                descriptor_bytes,
+                &Expect::one(&MIGRATION_DESCRIPTOR_FORMAT),
+            )
+            .map_err(|_| ReviewedMigrationError::Descriptor)?;
+        // The receipt binds the descriptor's canonical JSON, so reformatting
+        // the authored file never invalidates its rehearsal.
+        let plan_digest = digest(
+            &canonicalize_json(&decoded.document.to_json_value())
+                .map_err(|_| ReviewedMigrationError::Descriptor)?,
+        );
+        let descriptor = decoded.value;
         let (module_id, base) = descriptor_base(descriptor_path, &descriptor.id)?;
         referenced_paths.insert(descriptor_path.clone());
         validate_descriptor_shape(&descriptor, &base)?;
@@ -562,12 +991,12 @@ pub(crate) fn validate_reviewed_migration_plan(
         let receipt_bytes = files
             .get(&descriptor.rehearsal_receipt_path)
             .ok_or(ReviewedMigrationError::Evidence)?;
-        let receipt: MigrationRehearsalReceipt =
-            parse_canonical(receipt_bytes).map_err(|_| ReviewedMigrationError::Evidence)?;
+        let receipt = read_rehearsal_receipt(&descriptor.rehearsal_receipt_path, receipt_bytes)
+            .map_err(|_| ReviewedMigrationError::Evidence)?;
         validate_receipt(
             &receipt,
             ReceiptValidationContext {
-                descriptor_bytes,
+                plan_digest: &plan_digest,
                 steps: &steps,
                 pre_assertions: &pre_assertions,
                 post_assertions: &post_assertions,
@@ -1095,7 +1524,7 @@ fn validate_assertions(
 
 #[cfg(feature = "tooling")]
 struct ReceiptValidationContext<'a> {
-    descriptor_bytes: &'a [u8],
+    plan_digest: &'a str,
     steps: &'a [ValidatedReviewedMigrationStep],
     pre_assertions: &'a [ValidatedReviewedMigrationAssertion],
     post_assertions: &'a [ValidatedReviewedMigrationAssertion],
@@ -1112,7 +1541,7 @@ fn validate_receipt(
     context: ReceiptValidationContext<'_>,
 ) -> Result<(), ReviewedMigrationError> {
     let ReceiptValidationContext {
-        descriptor_bytes,
+        plan_digest,
         steps,
         pre_assertions,
         post_assertions,
@@ -1124,7 +1553,7 @@ fn validate_receipt(
     } = context;
     // The engine-executed backfill carries no SQL artifact, so the receipt
     // binds no digest for it: its canonical-JSON checksum is pinned through
-    // plan_sha256 over the whole descriptor, and row assertions carry its
+    // the plan digest over the whole descriptor, and row assertions carry its
     // rehearsal row count.
     let expected_sql = steps
         .iter()
@@ -1146,7 +1575,7 @@ fn validate_receipt(
     if receipt.prior_package_digest != bindings.prior_package_digest
         || receipt.prior_schema_fingerprint != bindings.prior_schema_fingerprint
         || receipt.final_schema_fingerprint != bindings.final_schema_fingerprint
-        || receipt.plan_sha256 != digest(descriptor_bytes)
+        || receipt.plan_sha256 != plan_digest
         || receipt.sql_sha256 != expected_sql
         || receipt.assertion_sha256 != expected_assertions
         || !(15..=18).contains(&receipt.postgres_major)
@@ -2026,18 +2455,6 @@ fn descriptor_base(
         module_id.to_owned(),
         format!("modules/{module_id}/migrations/{descriptor_id}"),
     ))
-}
-
-#[cfg(feature = "tooling")]
-fn parse_canonical<T: for<'de> Deserialize<'de>>(
-    bytes: &[u8],
-) -> Result<T, ReviewedMigrationError> {
-    let value = parse_json_strict(bytes).map_err(|_| ReviewedMigrationError::Descriptor)?;
-    let canonical = canonicalize_json(&value).map_err(|_| ReviewedMigrationError::Descriptor)?;
-    if canonical != bytes {
-        return Err(ReviewedMigrationError::Descriptor);
-    }
-    serde_json::from_value(value).map_err(|_| ReviewedMigrationError::Descriptor)
 }
 
 #[cfg(feature = "tooling")]

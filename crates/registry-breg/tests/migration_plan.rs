@@ -8,6 +8,7 @@ use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::migration_plan::{
+    read_backup_binding_document, read_migration_descriptor, read_rehearsal_receipt,
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
     RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover, ReviewedFieldEncryptionHistory,
     ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationError,
@@ -149,7 +150,7 @@ fn reviewed_migration_plan_closes_ast_sql_and_bound_evidence() {
 }
 
 #[test]
-fn reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_loads() {
+fn reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused() {
     let previous = compile_variant(Variant::Base);
     let candidate = compile_variant(Variant::RequiredField);
     let artifacts = backfill_artifacts("required-field", &previous, &candidate);
@@ -166,36 +167,109 @@ fn reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_load
         .find(|file| file.path == artifacts.descriptor.rehearsal_receipt_path)
         .expect("source carries the rehearsal receipt");
     receipt_file.bytes = canonical(&receipt);
-    let prepared = prepare_reviewed_package(Variant::RequiredField, previous, vec![source])
-        .expect("a package the previous release built with receipt proofs prepares");
+    assert_refused(
+        Variant::RequiredField,
+        previous,
+        vec![source],
+        ReviewedMigrationError::Evidence,
+        "a receipt carrying the retired proofs",
+    );
 
-    let root = tempfile::Builder::new()
-        .prefix("registry-migration-plan-")
-        .tempdir_in(
-            std::env::temp_dir()
-                .canonicalize()
-                .expect("canonical temporary root"),
-        )
-        .expect("temporary package parent");
-    let package = root.path().join("package");
-    prepared
-        .publish_to_directory(&package)
-        .expect("reviewed package publishes");
-    let inspected =
-        inspect_package_integrity(&package).expect("reviewed package with receipt proofs loads");
-    assert_eq!(
-        inspected.package_digest(),
-        prepared
-            .package_digest()
-            .expect("prepared package plans its digest")
+    let report = read_rehearsal_receipt("rehearsal.json", &canonical(&receipt))
+        .expect_err("the reader refuses the retired proofs");
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].code, "config.removed-key");
+    assert_eq!(diagnostics[0].path, "/proofs");
+    assert!(diagnostics[0].suggested_action.contains("Delete `proofs`"));
+    assert!(diagnostics[0]
+        .source
+        .as_ref()
+        .is_some_and(|source| source.line.is_some()));
+}
+
+#[test]
+fn reviewed_migration_documents_refuse_their_previous_spellings_at_each_key() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let mut descriptor =
+        serde_json::to_value(&artifacts.descriptor).expect("descriptor serializes");
+    let lock_timeout = descriptor["lockTimeoutMilliseconds"].take();
+    descriptor
+        .as_object_mut()
+        .expect("descriptor is an object")
+        .remove("lockTimeoutMilliseconds");
+    descriptor["lockTimeoutMs"] = lock_timeout;
+    let step = &mut descriptor["steps"][0];
+    let entity = step["entity"].take();
+    step.as_object_mut()
+        .expect("step is an object")
+        .remove("entity");
+    step["entity_id"] = entity;
+    let report = read_migration_descriptor("descriptor.json", &canonical(&descriptor))
+        .expect_err("the reader refuses the previous spellings");
+    let removed: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert!(
+        removed.contains(&("config.removed-key", "/lockTimeoutMs")),
+        "{removed:?}"
     );
-    let published_receipt = fs::read(package.join(&artifacts.descriptor.rehearsal_receipt_path))
-        .expect("published receipt reads");
-    assert_eq!(
-        published_receipt,
-        canonical(&receipt),
-        "the receipt keeps its proofs bytes, so the package digest is unchanged"
+    assert!(
+        removed.contains(&("config.removed-key", "/steps/0/entity_id")),
+        "{removed:?}"
     );
+
+    let mut receipt = serde_json::to_value(&artifacts.receipt).expect("receipt serializes");
+    let item = &mut receipt["sqlDigests"][0];
+    let sql_digest = item["digest"].take();
+    item.as_object_mut()
+        .expect("digest item is an object")
+        .remove("digest");
+    item["sha256"] = sql_digest;
+    let report = read_rehearsal_receipt("rehearsal.json", &canonical(&receipt))
+        .expect_err("the reader refuses the previous digest item spelling");
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "config.removed-key"
+            && diagnostic.path == "/sqlDigests/0/sha256"
+            && diagnostic.suggested_action.contains("`digest`")));
+
+    let mut binding = serde_json::json!({
+        "apiVersion": registry_breg::migration_plan::BACKUP_BINDING_API_VERSION,
+        "kind": registry_breg::migration_plan::BACKUP_BINDING_KIND,
+        "databaseId": DATABASE,
+    });
+    binding["backupFile"] = serde_json::Value::String("/backups/prior.dump".to_owned());
+    let report = read_backup_binding_document("binding.json", &canonical(&binding))
+        .expect_err("the reader refuses the previous binding spelling");
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "config.removed-key"
+            && diagnostic.path == "/databaseId"
+            && diagnostic.suggested_action.contains("`database`")));
+}
+
+#[test]
+fn reviewed_descriptor_reformatted_by_hand_keeps_its_rehearsal_binding() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let mut source = artifacts.source();
+    let value = serde_json::to_value(&artifacts.descriptor).expect("descriptor serializes");
+    let pretty = serde_json::to_vec_pretty(&value).expect("descriptor pretty prints");
+    assert_ne!(
+        pretty, source.descriptor.bytes,
+        "the reformatted bytes differ"
+    );
+    source.descriptor.bytes = pretty;
+    prepare_reviewed_package(Variant::RequiredField, previous, vec![source])
+        .expect("the receipt binds the descriptor's canonical JSON, not its bytes");
 }
 
 #[test]
@@ -652,8 +726,8 @@ fn reviewed_encryption_flip_refuses_an_unknown_history_choice() {
     let mut source = artifacts.source();
     // The wire grammar is the two reviewed choices alone: a third word is
     // refused at parse, before any binding or digest is consulted.
-    let mut descriptor: serde_json::Value =
-        serde_json::from_slice(&source.descriptor.bytes).expect("the descriptor serializes");
+    let mut descriptor =
+        serde_json::to_value(&artifacts.descriptor).expect("the descriptor serializes");
     descriptor["history"] = serde_json::Value::String("scrub-everything".to_owned());
     source.descriptor.bytes = canonical(&descriptor);
     assert_refused(
@@ -1205,7 +1279,6 @@ fn receipt(row_assertions: Vec<RehearsalRowAssertion>) -> MigrationRehearsalRece
         postgres_major: 17,
         row_assertions,
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        proofs: None,
     }
 }
 

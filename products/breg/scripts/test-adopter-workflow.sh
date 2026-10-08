@@ -1075,18 +1075,22 @@ if {cover["code"] for cover in covers} != {"access_profile_changed", "query_inve
     raise SystemExit("reviewed successor did not have the expected permission changes")
 base = "modules/asset-site-placement-core/migrations/read-maintenance-note"
 descriptor = {
+    "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
+    "kind": "BRegMigrationDescriptor",
     "id": "read-maintenance-note", "changeClass": "access_or_disclosure_change",
-    "covers": covers, "recovery": "exact_target_resume", "lockTimeoutMs": 1000,
-    "statementTimeoutMs": 60000, "steps": [], "preAssertions": [], "postAssertions": [],
+    "covers": covers, "recovery": "exact_target_resume", "lockTimeoutMilliseconds": 1000,
+    "statementTimeoutMilliseconds": 60000, "steps": [], "preAssertions": [], "postAssertions": [],
     "rehearsalReceiptPath": f"{base}/rehearsal.json",
 }
 def canonical(document):
     return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
 descriptor_bytes = canonical(descriptor)
 receipt = {
+    "apiVersion": "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1",
+    "kind": "BRegMigrationRehearsalReceipt",
     "priorPackageDigest": sys.argv[2], "priorSchemaFingerprint": sys.argv[3],
-    "planSha256": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
-    "sqlSha256": [], "assertionSha256": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
+    "planDigest": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
+    "sqlDigests": [], "assertionDigests": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
     "rowAssertions": [], "finalSchemaFingerprint": sys.argv[4],
 }
 directory = root / "review-v3" / base

@@ -1399,14 +1399,13 @@ equalled what the descriptor already fixed.
 ### Enforcement and defaults
 
 - Before a migration's assertions and before each reviewed step, the rehearsal
-  sets the descriptor's `lockTimeoutMs` and `statementTimeoutMs`, or a
-  backfill step's own, through the same bounded setter activation uses, and
+  sets the descriptor's `lockTimeoutMilliseconds` and
+  `statementTimeoutMilliseconds`, or a backfill step's own, through the same bounded setter activation uses, and
   restores the compiler's bound for the generated statements.
-- A newly captured receipt that carries `proofs` is refused by `bregctl`
-  with `migration.review.receipt_proofs_retired`. A package the previous
-  release built with one keeps loading, with the member ignored, so an
-  active package survives the upgrade; nothing reads its values, and that
-  acceptance is removed in the next release.
+- A receipt that carries `proofs` is refused with `config.removed-key` at
+  that member, by `bregctl` when it captures the receipt and by the runtime
+  when it loads a package that carries one (see "Reviewed migration documents
+  read through the shared reader").
 - The mismatch refusal and the `--fingerprint-only` report carry schema
   fingerprints only, which are catalog digests and already appear in `test`
   reports and package manifests. `--fingerprint-only` takes no credentials,
@@ -1420,7 +1419,7 @@ equalled what the descriptor already fixed.
 `crates/registry-bregctl/tests/cli/reviewed_migrations.rs`:
 `reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
 `crates/registry-breg/tests/migration_plan.rs`:
-`reviewed_package_whose_receipt_carries_the_previous_release_proofs_still_loads`.
+`reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused`.
 `crates/registry-bregctl/src/lib.rs`:
 `review_fingerprint_mismatch_names_the_declared_and_the_measured_fingerprint`.
 `crates/registry-bregctl/tests/wasm_test_lifecycle.rs`:
@@ -2442,3 +2441,79 @@ tell which value to fix.
   a provider `secretProviders` does not enable is still refused by the
   product check, with the runtime's code, after the reader has accepted its
   shape.
+
+## Reviewed migration documents read through the shared reader
+
+The change reads the three reviewed migration documents, the descriptor, the
+rehearsal receipt, and the backup binding, through the shared configuration
+reader (`read_migration_descriptor`, `read_rehearsal_receipt`, and
+`read_backup_binding_document` in `crates/registry-breg/src/migration_plan.rs`;
+`read_backup_binding` in `crates/registry-breg/src/migration.rs`). Each now
+starts with its `apiVersion` and `kind`, uses the convention's spellings, and
+no longer has to be canonical JSON bytes. It touches the evidence a reviewed
+migration carries into a package and the backup evidence `plan` and `apply`
+require before a destructive step; the checks that evidence feeds are
+unchanged, so no security invariant row changes.
+
+### Threat
+
+1. Dropping the canonical-bytes rule must not let a descriptor change after
+   its rehearsal: the receipt's plan digest was the SHA-256 of the
+   descriptor's exact bytes.
+2. A document the reader cannot read must not reach the checks with a
+   member silently dropped or defaulted, and a refusal must not echo a digest,
+   path, or row count it was given.
+3. A receipt or binding written in the previous spelling must not be read as
+   an empty or partial one.
+
+### Enforcement and defaults
+
+- **Plan binding.** `planDigest` is the SHA-256 of the canonical JSON of the
+  decoded descriptor, header included, so whitespace and key order are free
+  while any member change, including its `apiVersion` or `kind`, breaks the
+  binding with the refusal it had. The SQL and assertion files stay bound by
+  their exact bytes. A package carries the descriptor bytes it was built
+  from, and loading the package revalidates the plan through the same
+  reader, so a package built from a descriptor in the previous spelling is
+  refused on load.
+- **Strict decode.** The binding keeps its 64 KiB cap and the descriptor and
+  receipt their 1 MiB one. Unknown, duplicate, missing, and renamed keys, a
+  wrong header, and a malformed digest are refused before any semantic check:
+  `bregctl` and `plan`/`apply` print the reader's code, JSON pointer, line,
+  and column, and the runtime's package load keeps its existing value-free
+  refusal. Renamed keys carry a removed-key entry naming their replacement,
+  and `proofs` is refused the same way.
+- **Unchanged checks.** The binding's absolute path, owner-only file, size,
+  age bound (`maximumAgeSeconds`, at most 31 days), prior package digest and
+  schema fingerprint, database identity, and backup digest checks run as
+  before, and so does every descriptor shape and step check.
+- **Value-free refusals.** Reader diagnostics name the key and the expected
+  shape, never the value; `bregctl` prints them unchanged under one sentence
+  naming the document.
+
+### Tests
+
+`crates/registry-breg/tests/migration_plan.rs`:
+`reviewed_migration_documents_refuse_their_previous_spellings_at_each_key`,
+`reviewed_descriptor_reformatted_by_hand_keeps_its_rehearsal_binding`, and
+`reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused`.
+`crates/registry-breg/src/migration.rs`:
+`a_written_backup_binding_reads_back_through_the_shared_reader` and
+`a_backup_binding_in_its_previous_spelling_is_refused_with_positioned_diagnostics`.
+`crates/registry-bregctl/src/lib.rs`:
+`a_refused_backup_binding_document_keeps_the_reader_diagnostics`.
+`crates/registry-bregctl/tests/cli/reviewed_migrations.rs`:
+`reviewed_successor_accepts_a_reformatted_descriptor_and_refuses_previous_spellings`,
+`reviewed_successor_refuses_a_malformed_receipt_digest_at_its_key_without_repeating_it`,
+`reviewed_successor_refuses_duplicate_keys_headerless_documents_and_extra_artifacts`,
+and `reviewed_successor_refuses_a_receipt_that_carries_retired_proofs`.
+
+### Accepted residuals
+
+- **Packages carrying reviewed migrations are rebuilt.** A package built by an
+  earlier release with a reviewed migration is refused on load after the
+  upgrade; rewrite its documents in the new spelling and rebuild it. Nobody
+  runs Base Registry Engine in production yet.
+- **The migration ledger keeps its own spelling.** The backup references the
+  ledger records (`sha256`, `byteLength`) are internal database state, not a
+  document an operator writes, and are unchanged.

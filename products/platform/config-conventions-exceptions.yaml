@@ -499,20 +499,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/backup-binding
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/breg/backup-binding/v1alpha1'
-- rule: CFG-ENV-1
-  format: breg/backup-binding
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegBackupBinding'
 - rule: CFG-SCHEMA-1
   format: breg/backup-binding
   location: products/platform/config-formats.yaml#/example
@@ -534,13 +520,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: breg/backup-binding
-  location: crates/registry-breg/src/migration.rs#read_backup_binding()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-EMBED-2
   format: breg/change-requests-explanation
   location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/fields/items/properties/schema
@@ -1605,20 +1584,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/migration-descriptor
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/breg/migration-descriptor/v1alpha1'
-- rule: CFG-ENV-1
-  format: breg/migration-descriptor
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegMigrationDescriptor'
 - rule: CFG-SCHEMA-1
   format: breg/migration-descriptor
   location: products/platform/config-formats.yaml#/example
@@ -1640,20 +1605,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: breg/migration-descriptor
-  location: crates/registry-breg/src/migration_plan.rs#ReviewedMigrationStepDescriptor
-  class: pending
-  wp: WP3
-  reason: ReviewedMigrationStepDescriptor derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-YAML-1
-  format: breg/migration-descriptor
-  location: crates/registry-breg/src/migration_plan.rs#parse_canonical()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/migration-rehearsal-receipt
   location: products/platform/config-formats.yaml#/check
@@ -1661,20 +1612,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/migration-rehearsal-receipt
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1'
-- rule: CFG-ENV-1
-  format: breg/migration-rehearsal-receipt
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegMigrationRehearsalReceipt'
 - rule: CFG-SCHEMA-1
   format: breg/migration-rehearsal-receipt
   location: products/platform/config-formats.yaml#/example
@@ -1682,13 +1619,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/migration-rehearsal-receipt
-  location: crates/registry-breg/src/migration_plan.rs#parse_canonical()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-2
   format: breg/model-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion

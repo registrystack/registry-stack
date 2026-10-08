@@ -602,14 +602,16 @@ formats:
   - id: breg/migration-descriptor
     product: breg
     title: Reviewed migration descriptor
-    files: ['*.migration.json']
+    files: [modules/*/migrations/*/descriptor.json]
     syntax: json
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/migration-descriptor/v1alpha1
+      kind: BRegMigrationDescriptor
+      checkedBy:
+        file: crates/registry-breg/src/migration_plan.rs
+        symbol: MIGRATION_DESCRIPTOR_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/migration-descriptor/v1alpha1
       kind: BRegMigrationDescriptor
@@ -617,7 +619,7 @@ formats:
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/migration_plan.rs
-      function: parse_canonical
+      function: read_migration_descriptor
       type: ReviewedMigrationDescriptor
     check: none
     example: none
@@ -631,14 +633,16 @@ formats:
   - id: breg/migration-rehearsal-receipt
     product: breg
     title: Migration rehearsal receipt
-    files: ['*.rehearsal.json']
+    files: [modules/*/migrations/*/rehearsal.json]
     syntax: json
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1
+      kind: BRegMigrationRehearsalReceipt
+      checkedBy:
+        file: crates/registry-breg/src/migration_plan.rs
+        symbol: MIGRATION_REHEARSAL_RECEIPT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1
       kind: BRegMigrationRehearsalReceipt
@@ -646,7 +650,7 @@ formats:
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/migration_plan.rs
-      function: parse_canonical
+      function: read_rehearsal_receipt
       type: MigrationRehearsalReceipt
     check: none
     example: none
@@ -660,22 +664,24 @@ formats:
   - id: breg/backup-binding
     product: breg
     title: External backup binding
-    files: ['*.backup.json']
+    files: ['*-binding.json']
     syntax: json
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/backup-binding/v1alpha1
+      kind: BRegBackupBinding
+      checkedBy:
+        file: crates/registry-breg/src/migration_plan.rs
+        symbol: BACKUP_BINDING_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/backup-binding/v1alpha1
       kind: BRegBackupBinding
     schema: none
     reader:
       crate: registry-breg
-      file: crates/registry-breg/src/migration.rs
-      function: read_backup_binding
+      file: crates/registry-breg/src/migration_plan.rs
+      function: read_backup_binding_document
       type: ExternalBackupBinding
     check: none
     example: none

@@ -2406,7 +2406,7 @@ where
         Command::Test(args) if args.fingerprint_only => {
             return match measure_schema_fingerprint(&args) {
                 Ok(report) => write_schema_fingerprint(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Test(args) => {
@@ -2418,13 +2418,13 @@ where
         Command::Apply(args) => {
             return match apply(&args) {
                 Ok(report) => write_apply_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Plan(args) => {
             return match plan(&args) {
                 Ok(report) => write_plan_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Status(args) => {
@@ -4932,7 +4932,7 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
 
 /// Measure the fresh-install schema fingerprint a reviewed migration declares
 /// as its target, without the fixture run or receipt of a full schema test.
-fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, FailureReport> {
+fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, Refusal> {
     let candidate = capture_candidate(&args.candidate, "test", false)?;
     let measurement =
         test_lifecycle::measure(candidate, &args.runtime_config).map_err(test_lifecycle_failure)?;
@@ -4995,17 +4995,17 @@ fn prepare_candidate(
     args: &PackageCandidateArgs,
     schema_fingerprint: String,
     command: &'static str,
-) -> Result<PreparedPackage, FailureReport> {
+) -> Result<PreparedPackage, Refusal> {
     capture_candidate(args, command, false)?
         .prepare(schema_fingerprint)
-        .map_err(|error| candidate_package_error(command, error))
+        .map_err(|error| candidate_package_error(command, error).into())
 }
 
 fn capture_candidate(
     args: &PackageCandidateArgs,
     command: &'static str,
     rehearse_successor: bool,
-) -> Result<CapturedPackageCandidate, FailureReport> {
+) -> Result<CapturedPackageCandidate, Refusal> {
     let source = capture_project_source(&args.project).map_err(|diagnostic| {
         source_failure(
             command,
@@ -5082,7 +5082,8 @@ fn capture_candidate(
                     "the baseline package belongs to another registry; name this registry's chain tip package directory with --baseline-package",
                     DiagnosticArtifact::VerifiedPackage,
                     SuggestedAction::CorrectPackageBuild,
-                ));
+                )
+                .into());
             }
             if rehearse_successor {
                 rehearsal_baseline = Some(capture_rehearsal_baseline(
@@ -5109,20 +5110,31 @@ fn capture_candidate(
                     ),
                     DiagnosticArtifact::DatabaseMigration,
                     SuggestedAction::CorrectPackageBuild,
-                ));
+                )
+                .into());
             }
             let reviewable = rendered_changes(&changes.changes, |change| {
                 change.class != CompiledRegistryChangeClass::CompatibleAdditive
             });
             let plan = if let Some(directory) = &args.reviewed_migrations {
-                let review = reviewed_migrations::capture(directory).map_err(|diagnostic| {
-                    source_failure(
-                        command,
-                        diagnostic,
-                        DiagnosticArtifact::DatabaseMigration,
-                        SuggestedAction::CorrectPackageBuild,
-                    )
-                })?;
+                let review =
+                    reviewed_migrations::capture(directory).map_err(|refusal| match refusal {
+                        reviewed_migrations::CaptureRefusal::Tool(diagnostic) => {
+                            Refusal::Tool(source_failure(
+                                command,
+                                diagnostic,
+                                DiagnosticArtifact::DatabaseMigration,
+                                SuggestedAction::CorrectPackageBuild,
+                            ))
+                        }
+                        reviewed_migrations::CaptureRefusal::Document { subject, report } => {
+                            Refusal::Document(DocumentRefusal {
+                                command,
+                                subject,
+                                report,
+                            })
+                        }
+                    })?;
                 prevalidation_schema_fingerprint = Some(review.declared_schema_fingerprint);
                 reviewed_changes = reviewable;
                 PackageMigrationPlanInput::ReviewedSuccessorFromBaseline {
@@ -5143,7 +5155,8 @@ fn capture_candidate(
                         ),
                         DiagnosticArtifact::DatabaseMigration,
                         SuggestedAction::CorrectPackageBuild,
-                    ));
+                    )
+                    .into());
                 }
                 PackageMigrationPlanInput::SuccessorFromBaseline {
                     prior_baseline: Box::new(baseline.migration_baseline().clone()),
@@ -5199,7 +5212,7 @@ fn capture_candidate(
                 code,
                 "reviewedMigrations",
                 &format!(
-                    "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, canonical JSON, artifact hashes, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
+                    "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, artifact digests, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
                 ),
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::CorrectPackageBuild,
@@ -5209,7 +5222,7 @@ fn capture_candidate(
     Ok(candidate)
 }
 
-fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
+fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, Refusal> {
     let outcome = apply_lifecycle::run(ApplyLifecycleRequest {
         runtime_config: &args.runtime_config,
         package: &args.package,
@@ -5218,7 +5231,7 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
         operator_reference: args.operator_reference.as_deref(),
         expected_digest: args.expected_digest.as_deref(),
     })
-    .map_err(apply_lifecycle_failure)?;
+    .map_err(|error| lifecycle_refusal("apply", error))?;
     Ok(ApplySuccessReport {
         ok: true,
         command: "apply",
@@ -5233,14 +5246,14 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, FailureReport> {
     })
 }
 
-fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, FailureReport> {
+fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, Refusal> {
     let outcome = apply_lifecycle::plan(PlanLifecycleRequest {
         runtime_config: &args.runtime_config,
         package: &args.package,
         backups: &args.backups,
         expected_digest: args.expected_digest.as_deref(),
     })
-    .map_err(|error| lifecycle_failure("plan", error))?;
+    .map_err(|error| lifecycle_refusal("plan", error))?;
     Ok(PlanSuccessReport {
         ok: true,
         command: "plan",
@@ -5762,8 +5775,25 @@ fn migration_rehearsal_failure(error: MigrationRehearsalError) -> FailureReport 
     }
 }
 
+#[cfg(test)]
 fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
     lifecycle_failure("apply", error)
+}
+
+/// An `apply` or `plan` refusal: a backup binding the shared reader refused
+/// keeps the reader's diagnostics, and every other failure is the command's
+/// own report.
+fn lifecycle_refusal(command: &'static str, error: ApplyLifecycleError) -> Refusal {
+    match error {
+        ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::BackupBindingDocument(report),
+        ) => Refusal::Document(DocumentRefusal {
+            command,
+            subject: "the backup binding",
+            report: *report,
+        }),
+        error => Refusal::Tool(lifecycle_failure(command, error)),
+    }
 }
 
 /// Maps an apply lifecycle refusal for `apply` or `plan`: a plan runs apply's
@@ -6022,7 +6052,8 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::VerifiedPackage,
                 SuggestedAction::VerifyPackageBinding,
             ),
-            registry_breg::migration::MigrationError::BackupEvidence => (
+            registry_breg::migration::MigrationError::BackupEvidence
+            | registry_breg::migration::MigrationError::BackupBindingDocument(_) => (
                 "apply.backup_evidence.refused",
                 "backup",
                 "the destructive backup evidence was refused",
@@ -15949,6 +15980,54 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
         assert!(diagnostic.message.contains("pinned in maintenance"));
         assert!(diagnostic.message.contains(repair));
         assert!(!diagnostic.message.contains("registry_data"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_refused_backup_binding_document_keeps_the_reader_diagnostics() {
+    let report = registry_breg::migration_plan::read_backup_binding_document(
+        "/backups/binding.json",
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/backup-binding/v1alpha1","kind":"BRegBackupBinding","databaseId":"private-database-canary"}"#,
+    )
+    .expect_err("the previous spelling is refused");
+    for command in ["apply", "plan"] {
+        let refusal = lifecycle_refusal(
+            command,
+            ApplyLifecycleError::Apply(
+                registry_breg::migration::MigrationError::BackupBindingDocument(Box::new(
+                    report.clone(),
+                )),
+            ),
+        );
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        write_refusal(&refusal, OutputFormat::Json, &mut stdout, &mut stderr);
+        let rendered = String::from_utf8(stdout).expect("the report is UTF-8");
+        assert!(!rendered.contains("private-database-canary"), "{rendered}");
+        let value: serde_json::Value = serde_json::from_str(&rendered).expect("the report is JSON");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["command"], command);
+        assert!(
+            value["diagnostics"]
+                .as_array()
+                .expect("diagnostics are a list")
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == "config.removed-key"
+                    && diagnostic["path"] == "/databaseId"
+                    && diagnostic["source"]["file"] == "/backups/binding.json"
+                    && diagnostic["source"]["line"] == 1),
+            "{rendered}"
+        );
+
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        write_refusal(&refusal, OutputFormat::Human, &mut stdout, &mut stderr);
+        let rendered = String::from_utf8(stderr).expect("the report is UTF-8");
+        assert!(
+            rendered.starts_with(&format!("bregctl {command} refused the backup binding.\n")),
+            "{rendered}"
+        );
+        assert!(rendered.contains("config.removed-key"), "{rendered}");
+        assert!(!rendered.contains("private-database-canary"), "{rendered}");
     }
 }
 

@@ -124,9 +124,11 @@ the release tag you operate. The review construction in
 `products/breg/scripts/test-adopter-workflow.sh` builds both documents for a
 metadata-only access change and passes them to `test`. The one in
 `products/breg/scripts/test-promotion.sh` builds a destructive field removal with a
-`transactional_sql` step, a pre-assertion and a post-assertion, a fixture, and a backup binding for
-each environment, then takes it through `test`, `package`, `plan`, and `apply`. JSON
-artifacts use canonical JSON: sorted keys, no extra whitespace. Keep only referenced files in the directory; symbolic links and
+`transactional-sql` step, a pre-assertion and a post-assertion, a fixture, and a backup binding for
+each environment, then takes it through `test`, `package`, `plan`, and `apply`. Each JSON
+document starts with its `apiVersion` and `kind` and is read strictly: an unknown, duplicate, or
+renamed key is refused with its line and column. Its layout and key order are yours to choose.
+Keep only referenced files in the directory; symbolic links and
 unrelated files are refused. A metadata-only change that needs review can declare empty steps and
 assertions and still needs rehearsal evidence. A field added as required is created without its constraint, your
 reviewed steps backfill it, and the plan constrains the column afterwards.
@@ -142,64 +144,77 @@ bregctl --format json test ./my-registry \
 
 ### Reviewed migration files
 
-Every file is canonical JSON or SQL, and every path inside a descriptor is relative to the
+Every file is a JSON document or SQL, and every path inside a descriptor is relative to the
 reviewed directory root, starting with `modules/<module-id>/migrations/<migration-id>/`.
 
-- `descriptor.json` holds `id`, `changeClass`, `covers` (each change `code` and `target`
+- `descriptor.json` starts with `apiVersion:
+  id.registrystack.org/formats/breg/migration-descriptor/v1alpha1` and `kind:
+  BRegMigrationDescriptor`, and holds `id`, `changeClass`, `covers` (each change `code` and `target`
   from `diff --format json` that is not compatible additive), `recovery` (`exact_target_resume`),
-  `lockTimeoutMs`, `statementTimeoutMs`, `steps`, `preAssertions`, `postAssertions`,
-  `rehearsalReceiptPath`, and, for a destructive change, `backupBindingPath`. A descriptor that
-  turns field encryption on, through a `field_encryption_changed` cover or a
-  `field_encryption_backfill` step, also holds `history` (`erase-and-rebaseline` or
+  `lockTimeoutMilliseconds`, `statementTimeoutMilliseconds`, `steps`, `preAssertions`,
+  `postAssertions`, `rehearsalReceiptPath`, and, for a destructive change, `backupBindingPath`. A
+  descriptor that turns field encryption on, through a `field_encryption_changed` cover or a
+  `field-encryption-backfill` step, also holds `history` (`erase-and-rebaseline` or
   `retain-plaintext-history`); any other descriptor that holds `history` is refused.
-- A step is one of three kinds, named by `kind`, and each has an `id`. Step keys are snake_case,
-  unlike the camelCase keys of the descriptor, its objects, and its assertions.
-  `transactional_sql` runs one statement from `sql_path` in its own
+- A step is one of three types, named by `type`, and each has an `id`.
+  `transactional-sql` runs one statement from `sqlPath` in its own
   transaction, which also records the step's ledger progress, so a later step or post-assertion
-  that fails does not roll it back and `apply` resumes after it; DML must declare `affected_rows`
-  bounds (`min` and `max`), and every row it changes gets a history revision. `chunked_backfill`
-  runs one `UPDATE` from `sql_path` of its declared entity (`entity_id`) once per chunk of
-  record identifiers, bound as a UUID array (`cursor`: `record_id_uuid_array`), within
-  `chunk_size` (at most 1,000) and `max_total_rows`, under its own `lock_timeout_ms` and
-  `statement_timeout_ms` no greater than the descriptor's, and with `exact_affected_rows` set to
-  `true`; each chunk commits on its own and appends one history revision for every row it
+  that fails does not roll it back and `apply` resumes after it; DML must declare `affectedRows`
+  bounds (`minimum` and `maximum`), and every row it changes gets a history revision.
+  `chunked-backfill` runs one `UPDATE` from `sqlPath` of its declared `entity` once per chunk of
+  record identifiers, bound as a UUID array (`cursor`: `record-id-uuid-array`), within
+  `chunkSize` (at most 1,000) and `maximumTotalRows`, under its own `lockTimeoutMilliseconds` and
+  `statementTimeoutMilliseconds` no greater than the descriptor's, and with `exactAffectedRows`
+  set to `true`; each chunk commits on its own and appends one history revision for every row it
   changed, in one history commit, so snapshot and as-of reads agree with the backfilled rows.
-  `field_encryption_backfill` takes the same keys without `sql_path` and `exact_affected_rows`,
+  `field-encryption-backfill` takes the same keys without `sqlPath` and `exactAffectedRows`,
   and carries no SQL; the engine seals the covered fields chunk by chunk
   and journals each chunk the same way. A journaled step is one `UPDATE`, after any leading
   comments, and may not name a record metadata column (`record_revision`, `record_lifecycle`,
   `active_package_revision`, `created_at`, `updated_at`) anywhere in the statement, even to read
   it. Outside comments and plain string literals, its text may not contain a second statement or
-  another statement word such as `drop` or `delete`, and a `transactional_sql` step may not name
+  another statement word such as `drop` or `delete`, and a `transactional-sql` step may not name
   `record_id`. A dollar-quoted body or a literal holding a backslash is read as written, so a
   statement word inside it refuses the step. A Unicode-escape identifier or string (`U&"..."`,
   `U&'...'`, with or without `UESCAPE`) refuses the step wherever it appears. The journal also
   refuses a step that changed any record metadata column.
-  Each step lists the `objects` (`schema`, `table`, `entityId`, `kind`, `memberId` for a member,
+  Each step lists the `objects` (`schema`, `table`, `entity`, `kind`, `member` for a member,
   and `physicalName`) its SQL may
   touch.
 - An assertion is one `SELECT` returning exactly one boolean column. Pre-assertions run against
   the predecessor tables before any step, post-assertions against the successor tables after
   every step, and activation stops on a false result.
-- `rehearsal.json` binds the prior package digest and schema fingerprint, the descriptor and SQL
-  digests, the fixture inventory, the PostgreSQL major version, the affected row counts your
-  rehearsal observed, and the final schema fingerprint. Measure that fingerprint with
+- `rehearsal.json` starts with `apiVersion:
+  id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1` and `kind:
+  BRegMigrationRehearsalReceipt`. It binds the prior package digest and schema fingerprint
+  (`priorPackageDigest`, `priorSchemaFingerprint`), the descriptor (`planDigest`, the `sha256:`
+  digest of the descriptor's RFC 8785 canonical JSON, header included, so reformatting the
+  descriptor keeps its rehearsal; `jq -jcS . descriptor.json | shasum -a 256` computes it for a
+  descriptor of ASCII text and integers), the SQL
+  digests (`sqlDigests` and `assertionDigests`, each item a `path` and its `digest`), the fixture
+  inventory (`fixtureInventory`, each item an `id`, `path`, `digest`, and `rowCount`), the
+  PostgreSQL major version (`postgresMajor`), the affected row counts your rehearsal observed
+  (`rowAssertions`, each item a `step` and its `affectedRows`), and the final schema fingerprint
+  (`finalSchemaFingerprint`). Measure that fingerprint with
   `bregctl test <project> --fingerprint-only --runtime-config <absolute file>`: it installs the
   candidate on the disposable database, reports `schemaFingerprint`, and rolls back, without
   running fixtures or writing a receipt. A receipt that still carries the retired `proofs` member
-  is refused with `migration.review.receipt_proofs_retired`; remove it and regenerate the receipt.
+  is refused with `config.removed-key` at that member; delete it.
 A destructive descriptor's `backupBindingPath` is `modules/<module-id>/migrations/<migration-id>/backup.json`,
 but that file is not part of the reviewed directory or the package. It names the backup binding
 each environment supplies at activation, because every environment takes its own backup of its
 own database. The binding is a JSON document you write beside the backup, outside the package,
-and pass to `plan` and `apply` as `--backup <backupBindingPath>=<absolute binding file>`. It holds
-exactly these keys: `databaseId`, `priorPackageDigest`, `priorSchemaFingerprint`, `backupFile`
-(the absolute path of the backup), `sha256` (`sha256:` and the hex digest of the backup), `byteLength`,
-`createdAt`, and `maxAgeSeconds` (at most 31 days).
+and pass to `plan` and `apply` as `--backup <backupBindingPath>=<absolute binding file>`. It starts
+with `apiVersion: id.registrystack.org/formats/breg/backup-binding/v1alpha1` and `kind:
+BRegBackupBinding`, and holds exactly these keys: `database`, `priorPackageDigest`,
+`priorSchemaFingerprint`, `backupFile` (the absolute path of the backup), `digest` (`sha256:` and
+the hex digest of the backup), `sizeBytes`, `createdAt`, and `maximumAgeSeconds` (at most 31 days).
+A binding that is not such a document is refused with the reader's diagnostics, each with its line
+and column, before any other check.
 
 `apply` accepts a backup only when all of these hold: the binding names the database, package
 digest, and schema fingerprint this database records as active; `createdAt` is no older than
-`maxAgeSeconds` and not in the future; `backupFile` is absolute and is a regular file rather than
+`maximumAgeSeconds` and not in the future; `backupFile` is absolute and is a regular file rather than
 a symbolic link, owned by the user running `apply`, with mode `0600` and exactly one hard link;
 its length and SHA-256 digest equal the binding. Take the backup with your PostgreSQL tooling
 immediately before `apply`, `chmod 600` it, and record its digest and length in the binding. A
@@ -225,7 +240,7 @@ message, because those can quote row values.
 
 The rehearsal runs over empty tables, so it proves that the SQL is valid, ordered, and reaches
 the target schema. It does not prove that your data satisfies a step or an assertion: a duplicate
-key, a row count outside `affected_rows`, or an assertion that is false over real rows is found
+key, a row count outside `affectedRows`, or an assertion that is false over real rows is found
 only by your own rehearsal on a restored copy of production and by `apply` itself. Field-encryption
 backfill steps are skipped, because they need key material and rows. Reviewed fixture files are
 bound by digest only; the rehearsal does not load them.
@@ -260,7 +275,8 @@ Reviewed artifacts cannot authorize a change the planner classifies as unsupport
     crates/registry-breg/src/postgres/interlock.rs, execute_reviewed_chunk();
     crates/registry-breg/tests/postgres_migration.rs, reviewed_migration_history();
     crates/registry-breg/src/migration.rs, open_bound_backup(), read_backup_binding(), and check_backup_binding();
-    crates/registry-breg/src/migration_plan.rs, ExternalBackupBinding and reviewed_artifact_kind();
+    crates/registry-breg/src/migration_plan.rs, ExternalBackupBinding, reviewed_artifact_kind(), read_migration_descriptor(), read_rehearsal_receipt(), and read_backup_binding_document();
+    crates/registry-breg/tests/migration_plan.rs, reviewed_migration_documents_refuse_their_previous_spellings_at_each_key;
     crates/registry-breg/tests/postgres_migration.rs, real_postgres_rehearsal_refuses_a_reviewed_plan_activation_would_refuse;
     products/breg/scripts/test-adopter-workflow.sh. */}
 
@@ -570,11 +586,12 @@ columns in a different order. The runtime verifies a package under that fingerpr
 | --- | --- |
 | `diff` reports the baseline as `integrity_only` | You passed `--package`. That is the reviewer's view; pass `--runtime-config` for the comparison against the activated package. |
 | `test` or `package` reports `migration.review.required` | The planner classified a change as needing review. Rehearse it, write the reviewed migration directory, and pass `--reviewed-migrations` to both commands. |
+| `test`, `package`, `plan`, or `apply` reports a `config.` or `yaml.` code for a descriptor, rehearsal receipt, or backup binding | The document could not be read: it lacks its `apiVersion` and `kind`, repeats a key, uses an unknown or renamed key, or holds a value of the wrong shape. Each diagnostic names the file, line, column, and key; `config.removed-key` names the key that replaces a previous spelling. Correct the document, then repeat the command. |
 | `test` or `package` reports `migration.review.descriptor_refused` | A descriptor is malformed, for example an empty or duplicate `covers` entry, a missing or unknown field-encryption history choice, a chunk size beyond the commit budget, or a plaintext drop ordered before its sealing backfill. Fix the descriptor, then repeat test and package. |
 | `test` or `package` reports `migration.review.coverage_refused` | The directory does not cover exactly the reviewed changes: a change is uncovered, a cover names a change the candidate does not make or the wrong change class, the directory holds a fixture the rehearsal receipt does not list, or the change is one reviewed artifacts cannot authorize. |
 | `test` or `package` reports `migration.review.sql_refused` | A step or assertion uses SQL outside the reviewed subset, for example more than one statement, transaction or role control, an unqualified or undeclared object, or DML without affected-row bounds. |
 | `test` or `package` reports `migration.review.evidence_refused` | The rehearsal receipt, external backup binding, or fixture bytes do not match this candidate, baseline, and database. Rehearse again and copy the new receipt. |
-| `test` or `package` reports `migration.review.evidence_refused` for a fixture | A migration with steps lists no fixture in `fixtureInventory`, or a listed fixture breaks a rule: its ids are not in ascending order, its `path` is not `fixtures/<id>.jsonl` in the migration directory, the file is missing, empty, over 16 MiB, or lacks a final newline, a line is blank, ends in a carriage return, or is not canonical JSON, the line count differs from `rowCount`, or the bytes differ from `sha256`. No command loads a fixture's rows, so these checks accept any canonical JSON value on each line. Correct the file or its inventory entry, then repeat test and package. |
+| `test` or `package` reports `migration.review.evidence_refused` for a fixture | A migration with steps lists no fixture in `fixtureInventory`, or a listed fixture breaks a rule: its ids are not in ascending order, its `path` is not `fixtures/<id>.jsonl` in the migration directory, the file is missing, empty, over 16 MiB, or lacks a final newline, a line is blank, ends in a carriage return, or is not canonical JSON, the line count differs from `rowCount`, or the bytes differ from `digest`. No command loads a fixture's rows, so these checks accept any canonical JSON value on each line. Correct the file or its inventory entry, then repeat test and package. |
 | `test` or `package` reports `migration.review.closure_refused` | The set of files does not close: a descriptor the directory names is missing, a path appears twice, or there are too many artifacts. |
 | `test` or `package` reports `migration.review.refused` | A precondition failed before the reviewed directory was read, such as the prior package digest or the baseline binding. Check the baseline arguments and the fingerprints in the rehearsal receipt. |
 | `test` reports `migration.review.fingerprint_mismatch` | The receipt's `finalSchemaFingerprint` was measured for a different candidate. The message names the declared and the measured fingerprint; measure the exact candidate with `test --fingerprint-only` and regenerate the receipt. |
@@ -593,7 +610,7 @@ columns in a different order. The runtime verifies a package under that fingerpr
 | `apply` or `plan` reports `apply.package.digest_mismatch` | The package at `--package` is not the one `--expected-digest` names: the directory was replaced or rebuilt after the review, or the digest belongs to another build. The message names the expected and the found digest. Run `plan` on the package you intend to activate and pass the `packageDigest` it reports. Nothing was changed and no database was contacted. |
 | `apply` or `plan` reports `apply.package.refused` at `package.root` with `package.expectedDigest is` | The runtime file's `package.expectedDigest` pins another package than the active package at `package.root`. The message names the pinned and the found digest. Deploy the pinned package or update `package.expectedDigest`, then run the command again. Nothing was changed. |
 | `apply` or `plan` reports `apply.database.identity_mismatch` | The database records another database id than the runtime file's `identity.databaseId`. Point `database.migrationUrlRef` at the database the file names, or correct `identity.databaseId`. Nothing was changed. |
-| `apply` or `plan` reports `apply.backup_evidence.refused` | A backup binding is missing, names another database, package, or schema fingerprint than the active one, is older than `maxAgeSeconds`, or its `backupFile` fails the file, owner, mode, length, or digest check. Take a fresh backup of this environment's database, write its binding, and pass it with `--backup`. Nothing was changed. |
+| `apply` or `plan` reports `apply.backup_evidence.refused` | A backup binding is missing, names another database, package, or schema fingerprint than the active one, is older than `maximumAgeSeconds`, or its `backupFile` fails the file, owner, mode, length, or digest check. Take a fresh backup of this environment's database, write its binding, and pass it with `--backup`. Nothing was changed. |
 | `apply` reports `apply.package.active_mismatch` | The runtime file's `package.root` names a package the database does not record as active and ready. Run `bregctl status` to read the active digest, set `package.root` to that package directory, and apply again. If the database has never been activated, apply with `--initial`. If the database is pinned in maintenance, run `migration reconcile`. Nothing was changed. |
 | `apply` reports `apply.history.coverage_incomplete` | Retained history coverage does not admit a successor: a `field-encryption erase-history` run has not finished, or an erasure reached the coverage baseline or left a gap the dedicated history-erasure coverage table does not record. Finish the erase-history run, or run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure), then apply the same package again. Maintenance state was not changed, so there is nothing to reconcile. |
 | `breg` refuses to start, or `doctor` reports `startup.instance_claim.mismatch` | The database is not the one the registry's instance claim names, as after a logical restore or a `pg_upgrade`. Stop the database the claim names for good, then run `instance-claim adopt` as [back up and restore the database](#back-up-and-restore-the-database) describes. |

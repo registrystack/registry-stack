@@ -123,8 +123,8 @@ representative data, and size
 `operationalTimeouts.migrationStatementMilliseconds` for lock acquisition and
 the full validation scan. `migrationLockMilliseconds` bounds each lock wait;
 keep it shorter than the statement timeout when a separate lock-wait limit is
-useful. Reviewed steps use their packaged `lockTimeoutMs` and
-`statementTimeoutMs` bounds. A timeout leaves the same maintenance and recovery
+useful. Reviewed steps use their packaged `lockTimeoutMilliseconds` and
+`statementTimeoutMilliseconds` bounds. A timeout leaves the same maintenance and recovery
 interlock. See PostgreSQL's [ALTER TABLE locking and validation](https://www.postgresql.org/docs/18/sql-altertable.html)
 and [statement and lock timeouts](https://www.postgresql.org/docs/18/runtime-config-client.html).
 

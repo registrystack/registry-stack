@@ -238,6 +238,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::FieldEncryptionRetainedRequestSnapshots { .. }
             | MigrationError::ActiveRequestProposals
             | MigrationError::BackupEvidence
+            | MigrationError::BackupBindingDocument(_)
             | MigrationError::ActivationAuditIncomplete
             | MigrationError::ActivationAuditUnavailable
             | MigrationError::UnrecognizedDatabase => Self::Unavailable,

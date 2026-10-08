@@ -2579,7 +2579,6 @@ fn metadata_only_source_between(
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        proofs: None,
     };
     ReviewedMigrationSource {
         module_id: "core".to_owned(),
@@ -2705,7 +2704,6 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
         postgres_major: 16,
         row_assertions: Vec::new(),
         final_schema_fingerprint: FINAL_FINGERPRINT.to_owned(),
-        proofs: None,
     };
     let mut files = vec![
         ReviewedMigrationFile {
@@ -2864,7 +2862,6 @@ fn reviewed_source_with_canaries(
         }],
         final_schema_fingerprint:
             "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-        proofs: None,
     };
     let mut files = vec![
         ReviewedMigrationFile {

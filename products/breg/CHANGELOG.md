@@ -110,10 +110,12 @@
   `https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json`
   and `https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json`.
 - BREAKING: the files `bregctl` reads and writes beside a registry project
-  (fixture journeys and the other tool formats) follow the Registry Stack
-  configuration conventions: a current header, kebab-case values, and the
-  shared reader's refusals. Every change and its migration step is in the
-  "BReg tool and output formats" section of
+  (fixture journeys, reviewed migration documents, backup bindings, and the
+  other tool formats) follow the Registry Stack configuration conventions: a
+  current header, kebab-case values, and the shared reader's refusals. A
+  package carrying a reviewed migration that an earlier release built no
+  longer loads; migrate its documents and rebuild it. Every change and its
+  migration step is in the "BReg tool and output formats" section of
   `release/notes/config-conventions/breg.md`.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
