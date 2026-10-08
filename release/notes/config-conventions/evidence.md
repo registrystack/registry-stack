@@ -682,3 +682,15 @@ Every report opens with `ok`, `command`, and `status`, then `apiVersion`
 unpromised. Migration: a script that compared a whole report for equality, or
 refused unknown members, accepts `apiVersion` and `kind`; a script that read
 members by name needs no change.
+
+### BREAKING: the development session state has an envelope
+
+`.evidence/dev/state.json` opens with `apiVersion:
+id.registrystack.org/formats/evidence/dev-state/v6` and `kind:
+EvidenceDevState`; the `schema` member is gone (`config.removed-key`), and a
+member that is unset (`caller`, `issuerProject`, `issuerOwner`, `failure`) is
+absent where it was `null`. The file is read by the shared configuration
+reader. `evidencectl dev` refuses a state file in the earlier shape without
+changing it. Migration: finish the session with the evidencectl that started
+it (`evidencectl dev stop`, then `evidencectl dev clean`), then run
+`evidencectl dev start` again.

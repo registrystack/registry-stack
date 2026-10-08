@@ -50,9 +50,29 @@ use crate::{
     keygen, OutputFormat,
 };
 use registry_evidence_authoring::model::{AccessPolicy, AccessTaskGrant};
-use registry_platform_yaml::LocalId;
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, LocalId, Reader, RemovedKey,
+};
 
-const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v6";
+const DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/evidence/dev-state/v6";
+const DEV_STATE_KIND: &str = "EvidenceDevState";
+/// The session state `evidencectl dev` retains in `.evidence/dev/state.json`
+/// (CFG-ENV-1). Only evidencectl writes it.
+const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: DEV_STATE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(DEV_STATE_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/schema",
+        replacement: "Remove schema; apiVersion and kind identify the file.",
+    }],
+};
+/// Refusal for retained state this evidencectl cannot read, including state
+/// an earlier evidencectl wrote. Nothing is changed, so the earlier
+/// evidencectl can still stop and remove what it started.
+const UNREADABLE_STATE: &str = "retained dev state is not readable by this evidencectl; preserve it for inspection, or, if an earlier evidencectl started this session, run evidencectl dev stop and evidencectl dev clean with that evidencectl, then start again";
 const CONTROL_SOCKET_NAME: &str = "control.sock";
 const CALLER_ID: &str = "local-tutorial-caller";
 const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
@@ -345,7 +365,8 @@ enum FailureKind {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DevState {
-    schema: String,
+    api_version: String,
+    kind: String,
     status: DevStatus,
     project: PathBuf,
     runtime_path: PathBuf,
@@ -353,13 +374,17 @@ struct DevState {
     issuer_origin: String,
     issuer_session_id: String,
     name_prefix: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_project: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_owner: Option<String>,
     token_url: String,
     access_token_audience: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     caller: Option<CallerState>,
     access_policies: Vec<AccessPolicyState>,
     questions: Vec<QuestionState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<FailureKind>,
 }
 
@@ -2549,7 +2574,8 @@ fn prepare_and_start(
     }
 
     let state = DevState {
-        schema: STATE_SCHEMA.to_owned(),
+        api_version: DEV_STATE_API_VERSION.to_owned(),
+        kind: DEV_STATE_KIND.to_owned(),
         status: DevStatus::Starting,
         project: project.to_path_buf(),
         runtime_path: compiled.runtime_path.clone(),
@@ -3481,12 +3507,10 @@ fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
 
 fn read_state(path: &Path) -> Result<DevState> {
     let bytes = read_owner_file(path, MAX_STATE_BYTES)?;
-    let shape: Value = serde_json::from_slice(&bytes).context("local state is invalid")?;
-    if shape.get("schema").and_then(Value::as_str) != Some(STATE_SCHEMA) {
-        bail!("local state schema is unsupported");
-    }
-    let state: DevState = serde_json::from_slice(&bytes).context("local state is invalid")?;
-    Ok(state)
+    let decoded = Reader::new(path.display().to_string())
+        .decode::<DevState>(&bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map_err(|_| anyhow!(UNREADABLE_STATE))?;
+    Ok(decoded.value)
 }
 
 fn validate_control_socket(path: &Path) -> Result<()> {
@@ -3634,7 +3658,8 @@ mod tests {
     #[test]
     fn a_retained_state_without_a_name_prefix_is_invalid() {
         let state: serde_json::Value = serde_json::json!({
-            "schema": STATE_SCHEMA,
+            "apiVersion": DEV_STATE_API_VERSION,
+            "kind": DEV_STATE_KIND,
             "status": "stopped",
             "project": "/project",
             "runtimePath": "/project/.evidence/dev/runtime.yaml",
@@ -3657,13 +3682,23 @@ mod tests {
     }
 
     #[test]
-    fn a_retained_state_under_another_schema_is_unsupported() {
+    fn the_registered_example_is_a_readable_state() {
+        let example = include_bytes!(
+            "../../../products/evidence/examples/formats/dev-session/.evidence/dev/state.json"
+        );
+        Reader::new("state.json")
+            .decode::<DevState>(example, &Expect::one(&DEV_STATE_FORMAT))
+            .expect("the example reads");
+    }
+
+    #[test]
+    fn a_retained_state_in_another_shape_is_unreadable() {
         let root = tempfile::tempdir().expect("tempdir");
         let private = root.path().join("private");
         create_private_directory(&private).expect("private directory");
         for (index, retained) in [
-            serde_json::json!({"schema": "registry.evidencectl.dev-state/v5", "mintOrigin": "http://127.0.0.1:8081"}),
-            serde_json::json!({"schema": "registry.evidencectl.dev-state/v7"}),
+            serde_json::json!({"schema": "registry.evidencectl.dev-state/v6", "status": "stopped"}),
+            serde_json::json!({"apiVersion": "id.registrystack.org/formats/evidence/dev-state/v7", "kind": "EvidenceDevState"}),
             serde_json::json!({"mintOrigin": "http://127.0.0.1:8081"}),
         ]
         .into_iter()
@@ -3675,8 +3710,8 @@ mod tests {
                 .expect("retained state file")
                 .write_all(&bytes)
                 .expect("retained state");
-            let error = read_state(&path).expect_err("another schema is refused");
-            assert_eq!(error.to_string(), "local state schema is unsupported");
+            let error = read_state(&path).expect_err("another shape is refused");
+            assert_eq!(error.to_string(), UNREADABLE_STATE);
             assert_eq!(fs::read(&path).expect("retained state stays"), bytes);
         }
     }
@@ -4055,7 +4090,8 @@ requirements:
         .expect("seal package sum file");
         fs::set_permissions(&bundle, fs::Permissions::from_mode(0o500)).expect("seal bundle");
         let mut state = DevState {
-            schema: STATE_SCHEMA.to_owned(),
+            api_version: DEV_STATE_API_VERSION.to_owned(),
+            kind: DEV_STATE_KIND.to_owned(),
             status: DevStatus::Ready,
             project: project.clone(),
             runtime_path: runtime.clone(),
@@ -4844,7 +4880,6 @@ requirements:
         let fields = state.as_object_mut().unwrap();
         fields.remove("apiVersion").unwrap();
         fields.remove("kind").unwrap();
-        fields.insert("version".to_owned(), json!(2));
         write(&state);
         assert!(load_breg_issuer(&project).is_err());
     }

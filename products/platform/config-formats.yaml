@@ -3560,17 +3560,16 @@ formats:
   - id: evidence/dev-state
     product: evidence
     title: evidencectl development state
-    files: [.evidencectl-dev/state.json]
+    files: [.evidence/dev/state.json]
     syntax: json
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'schema: registry.evidencectl.dev-state/v6'
+      apiVersion: id.registrystack.org/formats/evidence/dev-state/v6
+      kind: EvidenceDevState
       checkedBy:
         file: crates/registry-evidencectl/src/dev.rs
-        symbol: STATE_SCHEMA
+        symbol: DEV_STATE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/dev-state/v6
       kind: EvidenceDevState
@@ -3581,7 +3580,7 @@ formats:
       function: read_state
       type: DevState
     check: none
-    example: none
+    example: products/evidence/examples/formats/dev-session/.evidence/dev/state.json
     conformance:
       requiredText: none
       optionalText: none

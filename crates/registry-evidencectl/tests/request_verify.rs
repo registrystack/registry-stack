@@ -825,7 +825,8 @@ impl Fixture {
         let token_server = TokenServer::start();
         let issuer_origin = format!("http://{}", token_server.address());
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v6",
+            "apiVersion": "id.registrystack.org/formats/evidence/dev-state/v6",
+            "kind": "EvidenceDevState",
             "status": "ready",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
@@ -892,8 +893,7 @@ impl Fixture {
                         "form": "boolean"
                     }]
                 }
-            ],
-            "failure": null
+            ]
         });
         private_file(
             &root.join(".evidence/dev/state.json"),
@@ -1175,7 +1175,7 @@ impl Fixture {
     fn use_explicit_access(&self) {
         let path = self.root.join(".evidence/dev/state.json");
         let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        state["caller"] = Value::Null;
+        state.as_object_mut().unwrap().remove("caller");
         state["accessPolicies"] = json!([{
             "id": "age-checks",
             "requesterTag": AGE_CHECKS_TAG,

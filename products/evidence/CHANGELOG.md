@@ -25,6 +25,15 @@
 
 ### Evidence authoring tools
 
+- BREAKING: the session state `evidencectl dev` retains in
+  `.evidence/dev/state.json` opens with `apiVersion`
+  (`id.registrystack.org/formats/evidence/dev-state/v6`) and `kind`
+  (`EvidenceDevState`) in place of `schema`, and omits `caller`,
+  `issuerProject`, `issuerOwner`, and `failure` when unset where it wrote
+  `null`. `evidencectl` refuses state in the earlier shape with a message that
+  names the fix. Migration: see "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
+
 - BREAKING: every `evidencectl --format json` report carries `apiVersion`
   (`id.registrystack.org/formats/evidence/ctl-report/v1alpha1`) and `kind`
   (`EvidenceCtlReport`) after `ok`, `command`, and `status`. A consumer that

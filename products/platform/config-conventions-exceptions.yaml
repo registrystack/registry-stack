@@ -3399,27 +3399,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: evidence/dev-state
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/dev-state/v6'
-- rule: CFG-ENV-1
-  format: evidence/dev-state
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceDevState'
-- rule: CFG-SCHEMA-1
-  format: evidence/dev-state
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: evidence/fixture
   location: products/platform/config-formats.yaml#/schema

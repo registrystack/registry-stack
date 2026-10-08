@@ -103,7 +103,12 @@ fn real_issuer_lifecycle_issues_typed_service_claims_and_stops_cleanly() {
     );
 
     let state = read_json(&fixture.root.join(".evidence/dev/state.json"));
-    assert_eq!(state["schema"], "registry.evidencectl.dev-state/v6");
+    assert_eq!(
+        state["apiVersion"],
+        "id.registrystack.org/formats/evidence/dev-state/v6"
+    );
+    assert_eq!(state["kind"], "EvidenceDevState");
+    assert!(state.get("schema").is_none());
     assert_eq!(state["status"], "ready");
     assert_eq!(state["namePrefix"], name_prefix);
     assert_eq!(

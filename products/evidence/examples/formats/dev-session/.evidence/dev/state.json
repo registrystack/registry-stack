@@ -1,0 +1,15 @@
+{
+  "apiVersion": "id.registrystack.org/formats/evidence/dev-state/v6",
+  "kind": "EvidenceDevState",
+  "status": "stopped",
+  "project": "/home/operator/my-evidence",
+  "runtimePath": "/home/operator/my-evidence/.evidence/dev/runtime.yaml",
+  "evidenceOrigin": "http://127.0.0.1:8080",
+  "issuerOrigin": "http://127.0.0.1:8081",
+  "issuerSessionId": "0123456789abcdef0123456789abcdef0123456789abcdef",
+  "namePrefix": "evidence-dev",
+  "tokenUrl": "http://127.0.0.1:8081/oauth2/token",
+  "accessTokenAudience": "urn:registrystack:evidence:local:gateway",
+  "accessPolicies": [],
+  "questions": []
+}
