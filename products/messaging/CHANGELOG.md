@@ -26,6 +26,22 @@
   replaced by `RuntimeConfigError::pointer`. Migration steps and the
   old-to-new code table are in
   `release/notes/config-conventions/messaging.md`.
+- BREAKING: `messaging.yaml`, `template.yaml`, and `provider.yaml` follow
+  the Registry Stack configuration conventions. `messaging.yaml` declares
+  `apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1`,
+  `kind: MessagingProject`, and a `project` block with `id` and `version`;
+  every `template.yaml` and `provider.yaml` declares its own `apiVersion` and
+  `kind`. `providers[].kind` is `providers[].type`,
+  `accessProfiles[].dailyLimit` is `maximumMessagesPerDay`, and a provider's
+  `capabilities.concurrencyLimit` is `maximumConcurrentRequests`; each old
+  spelling is refused with its replacement. Identifiers, references, lists,
+  and limits are typed and bounded when the file is read, and an access
+  profile states its `requiredScopes` or writes `unrestricted`.
+  `messagingctl check --project`, `package`, and the runtime report every
+  finding at its file, line, and column with a `messaging.<area>.<condition>`
+  or shared code, where they reported one `config.refused` or
+  `package.project-refused`. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
 - BREAKING: every `messagingctl --format json` report names its format with
   `apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1`
   and `kind: MessagingCtlReport`, written after `ok`, `command`, and
