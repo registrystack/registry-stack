@@ -38,7 +38,7 @@ use registry_scheduling_core::{
     RETIRED_SCHEDULING_RUNTIME_API_VERSION, SCHEDULING_RUNTIME_API_VERSION,
     SCHEDULING_RUNTIME_KIND,
 };
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
 const MAXIMUM_POLICY_FILE_BYTES: usize = 1024 * 1024;
@@ -329,10 +329,11 @@ where
 {
     let hooks = BTreeMap::<LocalId, HookDestinationConfig>::deserialize(deserializer)?;
     if hooks.len() > MAX_HOOK_DESTINATIONS {
-        return Err(de::Error::custom(Invalid::expected(
+        return Err(Invalid::expected(
             "at most 128 hook destinations",
             "Remove hook destinations until at most 128 remain.",
-        )));
+        )
+        .into_error());
     }
     Ok(hooks
         .into_iter()
@@ -406,7 +407,7 @@ where
 {
     const MAX: u32 = MAX_HOOK_ATTEMPTS as u32;
     let attempts = bounded_u32::<D, 1, MAX>(deserializer)?;
-    u8::try_from(attempts).map_err(|_| de::Error::custom(Invalid::out_of_range(1, MAX)))
+    u8::try_from(attempts).map_err(|_| Invalid::out_of_range(1, MAX).into_error())
 }
 
 impl HookDestinationConfig {
