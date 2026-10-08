@@ -225,7 +225,8 @@ pub(super) fn parse_plan_reporting(file: &str, bytes: &[u8]) -> Result<(MockPlan
 pub(super) fn render_plan(plan: &MockPlan) -> Result<Vec<u8>> {
     validate_plan(plan)?;
     let mut rendered = envelope_lines(MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND);
-    rendered.push_str(&serde_norway::to_string(plan).context("failed to render mock plan")?);
+    rendered
+        .push_str(&crate::authored::to_indented_yaml(plan).context("failed to render mock plan")?);
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
@@ -514,6 +515,7 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first.ends_with(b"\n"));
+        assert!(String::from_utf8_lossy(&first).contains("operations:\n  - method:"));
         assert!(String::from_utf8(first)
             .expect("UTF-8")
             .contains("openapiDigest: sha256:aaaaaaaa"));

@@ -428,9 +428,74 @@ pub(crate) fn report_in(error: &anyhow::Error) -> Option<&Report> {
         .find_map(|cause| cause.downcast_ref::<Report>())
 }
 
+/// Render a value as block YAML with every sequence indented beneath its key,
+/// the form the convention's examples use. `serde_norway` writes a sequence
+/// at its key's column, so each such block is shifted two columns right,
+/// nested ones included.
+pub(crate) fn to_indented_yaml<T: serde::Serialize>(value: &T) -> Result<String> {
+    let compact = serde_norway::to_string(value).context("rendering YAML")?;
+    let lines: Vec<&str> = compact.lines().collect();
+    let column = |line: &str| line.len() - line.trim_start_matches(' ').len();
+    let mut open: Vec<usize> = Vec::new();
+    let mut rendered = String::with_capacity(compact.len() + compact.len() / 8);
+    for (index, line) in lines.iter().enumerate() {
+        if !line.trim().is_empty() {
+            let at = column(line);
+            let item = line.trim_start_matches(' ').starts_with("- ");
+            while open
+                .last()
+                .is_some_and(|&key| at < key || (at == key && !item))
+            {
+                open.pop();
+            }
+            for _ in 0..open.len() * 2 {
+                rendered.push(' ');
+            }
+            // The column the line's own key sits at: past any leading `- `.
+            let mut rest = line.trim_start_matches(' ');
+            let mut key = at;
+            while let Some(after) = rest.strip_prefix("- ") {
+                rest = after;
+                key += 2;
+            }
+            if line.ends_with(':') {
+                if let Some(next) = lines.get(index + 1) {
+                    if column(next) == key && next.trim_start_matches(' ').starts_with("- ") {
+                        open.push(key);
+                    }
+                }
+            }
+        }
+        rendered.push_str(line);
+        rendered.push('\n');
+    }
+    let reread = |text: &str| serde_norway::from_str::<serde_norway::Value>(text);
+    if reread(&compact).ok() != reread(&rendered).ok() {
+        bail!("indenting the rendered YAML changed its content");
+    }
+    Ok(rendered)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequences_are_indented_beneath_their_keys_at_every_depth() {
+        let value = serde_json::json!({
+            "a": ["x", "y"],
+            "b": [{"c": 1, "d": ["p", {"e": ["q"]}]}, {"c": 2}],
+            "f": {"g": [[1, 2]], "h": "text"},
+            "i": [],
+        });
+        let rendered = to_indented_yaml(&value).expect("render");
+        assert_eq!(
+            rendered,
+            "a:\n  - x\n  - y\nb:\n  - c: 1\n    d:\n      - p\n      - e:\n          - q\n  - c: 2\nf:\n  g:\n    - - 1\n      - 2\n  h: text\ni: []\n"
+        );
+        let back: serde_json::Value = serde_norway::from_str(&rendered).expect("parse");
+        assert_eq!(back, value);
+    }
 
     #[test]
     fn a_file_inside_the_project_is_named_from_the_project_path_given() {

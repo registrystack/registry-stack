@@ -975,7 +975,7 @@ fn write_new_yaml_atomic<T: Serialize>(
     reject_existing(path)?;
     let bytes = format!(
         "{envelope}{}",
-        serde_norway::to_string(value).context("rendering access document")?
+        crate::authored::to_indented_yaml(value).context("rendering access document")?
     );
     let parent = path.parent().context("access document has no parent")?;
     let mut temporary = tempfile::Builder::new()
@@ -1004,7 +1004,7 @@ fn replace_yaml_atomic<T: Serialize>(
     validate_path_mode(path, false, mode)?;
     let bytes = format!(
         "{envelope}{}",
-        serde_norway::to_string(value).context("rendering access document")?
+        crate::authored::to_indented_yaml(value).context("rendering access document")?
     );
     let parent = path.parent().context("access document has no parent")?;
     let mut temporary = tempfile::Builder::new()
