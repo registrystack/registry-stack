@@ -1055,7 +1055,7 @@ impl EvidenceRuntime {
                         )
                 })
                 .collect(),
-            reference_frameworks: requirement.reference_frameworks.clone(),
+            reference_frameworks: requirement.reference_frameworks.clone().into_vec(),
             subjects,
             concepts,
         })

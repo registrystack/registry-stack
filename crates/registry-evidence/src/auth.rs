@@ -14,6 +14,7 @@ use registry_platform_oidc::{
     GrantContextError, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
     TokenVerifierConfig, VerifiedToken,
 };
+use registry_platform_yaml::UniqueList;
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -294,8 +295,21 @@ impl Authenticator {
         .with_max_token_lifetime(Some(Duration::from_secs(
             config.maximum_token_lifetime_seconds.get(),
         )))
-        .with_allowed_clients(config.allowed_clients.clone().unwrap_or_default())
-        .with_assertion_issuers(config.assertion_issuers.clone().unwrap_or_default());
+        .with_allowed_clients(
+            config
+                .allowed_clients
+                .clone()
+                .map(UniqueList::into_vec)
+                .unwrap_or_default(),
+        )
+        .with_assertion_issuers(
+            config
+                .assertion_issuers
+                .iter()
+                .flatten()
+                .map(|(client, issuers)| (client.clone(), issuers.clone().into_vec()))
+                .collect(),
+        );
         let fetcher = Arc::new(JwksFetcher::new_trusting_additional_roots(
             config.jwks_uri().to_owned(),
             JwksFetcherConfig::defaults(),
@@ -311,7 +325,13 @@ impl Authenticator {
             actor_claim: config.actor_claim.clone(),
         };
         Self::new(verifier, claims)
-            .with_required_scopes(config.required_scopes.clone().unwrap_or_default())
+            .with_required_scopes(
+                config
+                    .required_scopes
+                    .clone()
+                    .map(UniqueList::into_vec)
+                    .unwrap_or_default(),
+            )
             .with_resources(vec![config.audience().to_owned()])
     }
 

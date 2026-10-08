@@ -5179,7 +5179,9 @@ fn validate_companion_rejection(
         .iter_mut()
         .find(|candidate| candidate.id == requirement.id)
         .ok_or(CliError("fixture requirement is missing"))?;
-    original.disclosure_guard.families = vec![shared_family.to_owned()];
+    original.disclosure_guard.families =
+        registry_platform_yaml::UniqueList::new(vec![shared_family.to_owned()])
+            .expect("a single family is distinct");
     for index in 1..definitions.len() {
         let suffix = format!(":fixture-companion-{index}");
         let handle_suffix = format!("-fixture-companion-{index}");
@@ -5187,7 +5189,9 @@ fn validate_companion_rejection(
         companion.handle.push_str(&handle_suffix);
         companion.id.push_str(&suffix);
         companion.evidence_type.push_str(&suffix);
-        companion.disclosure_guard.families = vec![shared_family.to_owned()];
+        companion.disclosure_guard.families =
+            registry_platform_yaml::UniqueList::new(vec![shared_family.to_owned()])
+                .expect("a single family is distinct");
         companion.derivation.script = registry_evidence::config::ArtifactPath::parse(&format!(
             "derivations/fixture-companion-{index}.rhai"
         ))

@@ -20,7 +20,7 @@ use registry_platform_config::{
 };
 use registry_platform_yaml::{
     BoundedU32, BoundedU64, Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
-    Report, ScalarHook, ScalarSite, Severity,
+    Report, ScalarHook, ScalarSite, Severity, UniqueList,
 };
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
@@ -2574,7 +2574,7 @@ pub struct OidcAuthenticationConfig {
     /// requires `iat`, requires `exp > iat`, and applies this bound.
     pub maximum_token_lifetime_seconds: BoundedU64<1, 86_400>,
     /// Emergency denylist applied before JWKS cache selection.
-    pub revoked_key_ids: Vec<String>,
+    pub revoked_key_ids: UniqueList<String>,
     /// Explicit machine-client admission, matched against the token's
     /// `client_id`/`azp` the platform verifier already reads. Absent keeps
     /// the issuer-vouched-client behavior; present requires a nonempty,
@@ -2586,7 +2586,7 @@ pub struct OidcAuthenticationConfig {
     /// while still emitting the client's attributes. `required_scopes` closes
     /// that gap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allowed_clients: Option<Vec<String>>,
+    pub allowed_clients: Option<UniqueList<String>>,
     /// Per-client assertion-authority admission for a token that carries the
     /// platform verifier's `registry_assertion_issuer` claim, keyed by the
     /// client (matched against the token's `azp`, falling back to
@@ -2598,13 +2598,13 @@ pub struct OidcAuthenticationConfig {
     /// carries no such claim, an ordinary client-credentials token, is never
     /// affected by this admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assertion_issuers: Option<BTreeMap<String, Vec<String>>>,
+    pub assertion_issuers: Option<BTreeMap<String, UniqueList<String>>>,
     /// Scopes every inbound token must carry, checked against the verified
     /// token's scope set after signature verification and before any authority
     /// claim is read. Absent keeps the no-scope-gate behavior; present
     /// requires a nonempty, bounded, unique list of RFC 6749 scope-tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_scopes: Option<Vec<String>>,
+    pub required_scopes: Option<UniqueList<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
     /// Logical name of the private certificate authority the runtime file
@@ -2698,7 +2698,7 @@ impl OidcAuthenticationConfig {
         }
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
-        validate_unique_strings(
+        validate_strings(
             &self.revoked_key_ids,
             0,
             32,
@@ -2711,17 +2711,17 @@ impl OidcAuthenticationConfig {
         // scope requirement gates nothing, and both are almost certainly a
         // mis-authored key rather than a deliberate posture.
         if let Some(clients) = &self.allowed_clients {
-            validate_unique_strings(clients, 1, 32, 1, 128, "authentication allowedClients")?;
+            validate_strings(clients, 1, 32, 1, 128, "authentication allowedClients")?;
         }
         if let Some(assertion_issuers) = &self.assertion_issuers {
             let clients: Vec<String> = assertion_issuers.keys().cloned().collect();
-            validate_unique_strings(&clients, 1, 32, 1, 128, "authentication assertionIssuers")?;
+            validate_strings(&clients, 1, 32, 1, 128, "authentication assertionIssuers")?;
             for issuers in assertion_issuers.values() {
-                validate_unique_strings(issuers, 1, 8, 1, 512, "authentication assertionIssuers")?;
+                validate_strings(issuers, 1, 8, 1, 512, "authentication assertionIssuers")?;
             }
         }
         if let Some(scopes) = &self.required_scopes {
-            validate_unique_strings(scopes, 1, 32, 1, 256, "authentication requiredScopes")?;
+            validate_strings(scopes, 1, 32, 1, 256, "authentication requiredScopes")?;
             if scopes
                 .iter()
                 .any(|scope| !registry_platform_httputil::valid_scope_token(scope))
@@ -2905,7 +2905,7 @@ pub struct SigningConfig {
     pub algorithm: SigningAlgorithm,
     pub active_public_jwk_file: PublicJwkPath,
     pub published_public_jwk_files: Vec<PublicJwkPath>,
-    pub revoked_key_ids: Vec<String>,
+    pub revoked_key_ids: UniqueList<String>,
     pub jwks_path: String,
     pub maximum_assertion_validity_seconds: BoundedU64<1, 31_536_000>,
     pub verifier_clock_skew_seconds: BoundedU64<0, 300>,
@@ -2950,7 +2950,7 @@ fn validate_key_identifiers(
     maximum: usize,
     label: &'static str,
 ) -> Result<(), ConfigError> {
-    validate_unique_strings(identifiers, 0, maximum, 43, 43, label)?;
+    validate_strings(identifiers, 0, maximum, 43, 43, label)?;
     if identifiers.iter().any(|identifier| {
         let alphabet_is_valid = identifier
             .bytes()
@@ -4016,7 +4016,7 @@ pub struct FixedRequest {
     pub adapter_parameters: OrderedMap<AdapterParameterValue>,
     pub adapter_parameters_schema: ArtifactPath,
     pub preparation_limits: PreparationLimits,
-    pub projection: Vec<String>,
+    pub projection: UniqueList<String>,
     pub redirects: RedirectPolicy,
     pub timeout_milliseconds: BoundedU64<1, 30_000>,
     pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
@@ -4032,7 +4032,7 @@ pub struct HttpBatchConfig {
     pub prepare_script: ArtifactPath,
     pub extract_script: ArtifactPath,
     pub response_schema: ArtifactPath,
-    pub projection: Vec<String>,
+    pub projection: UniqueList<String>,
 }
 
 impl HttpBatchConfig {
@@ -4145,7 +4145,7 @@ pub struct SqliteRequest {
     pub maximum_rows: BoundedU64<1, 256>,
     pub maximum_cell_bytes: BoundedU64<1, 65_536>,
     pub maximum_statement_steps: BoundedU64<1, 1_000_000>,
-    pub projection: Vec<String>,
+    pub projection: UniqueList<String>,
     pub timeout_milliseconds: BoundedU64<1, 30_000>,
     pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
     pub concurrency_limit: BoundedU32<1, 256>,
@@ -4373,7 +4373,7 @@ pub struct SelectorInput {
 #[serde(deny_unknown_fields)]
 pub struct SelectorInputAlternative {
     pub profile: String,
-    pub fields: Vec<String>,
+    pub fields: UniqueList<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -4579,12 +4579,12 @@ pub struct AuthorityProfile {
     /// exercising standing authority without an authenticated task grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<registry_platform_oidc::ActorKind>,
-    pub requester_tags: Vec<String>,
+    pub requester_tags: UniqueList<String>,
     /// Verified OAuth clients allowed to exercise a grant-bound authority
     /// path. Required only when one of this profile's subjects is sourced from
     /// an authenticated task grant.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requester_clients: Vec<String>,
+    #[serde(default, skip_serializing_if = "<[String]>::is_empty")]
+    pub requester_clients: UniqueList<String>,
     /// Trusted issuer that supplied the immutable grant context before token
     /// exchange. The resource server compares it exactly with the signed grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4603,11 +4603,11 @@ impl AuthorityProfile {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_unique_strings(&self.requester_tags, 1, 32, 1, 128, "requester tags")?;
+        validate_strings(&self.requester_tags, 1, 32, 1, 128, "requester tags")?;
         if self.requester_tags.iter().any(|tag| !valid_local_id(tag)) {
             return invalid("requester tag is invalid");
         }
-        validate_unique_strings(
+        validate_strings(
             &self.requester_clients,
             0,
             32,
@@ -5133,9 +5133,9 @@ pub struct RequirementConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_binding: Option<SubjectBindingMode>,
     pub acquisition: AcquisitionConfig,
-    pub purposes: Vec<String>,
+    pub purposes: UniqueList<String>,
     pub subject_roles: Vec<SubjectRole>,
-    pub reference_frameworks: Vec<String>,
+    pub reference_frameworks: UniqueList<String>,
     pub evidence_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_timezone: Option<String>,
@@ -5166,7 +5166,7 @@ impl RequirementConfig {
         }
         validate_uri(&self.id)?;
         self.acquisition.validate()?;
-        validate_unique_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
+        validate_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
         for purpose in &self.purposes {
             validate_purpose(purpose)?;
         }
@@ -5178,7 +5178,7 @@ impl RequirementConfig {
                 return invalid("requirement subject roles must be unique");
             }
         }
-        validate_unique_strings(
+        validate_strings(
             &self.reference_frameworks,
             1,
             16,
@@ -5235,7 +5235,7 @@ pub enum RequirementKind {
 pub struct SubjectRole {
     pub role: String,
     pub cardinality: SubjectCardinality,
-    pub selector_profiles: Vec<String>,
+    pub selector_profiles: UniqueList<String>,
 }
 
 impl SubjectRole {
@@ -5243,7 +5243,7 @@ impl SubjectRole {
         if self.role.len() > 64 || !valid_local_id(&self.role) {
             return invalid("subject role identifier is invalid");
         }
-        validate_unique_strings(
+        validate_strings(
             &self.selector_profiles,
             1,
             16,
@@ -5442,12 +5442,12 @@ pub enum ConceptForm {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisclosureGuard {
-    pub families: Vec<String>,
+    pub families: UniqueList<String>,
 }
 
 impl DisclosureGuard {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_unique_strings(&self.families, 1, 16, 1, 512, "disclosure families")?;
+        validate_strings(&self.families, 1, 16, 1, 512, "disclosure families")?;
         for family in &self.families {
             validate_uri(family)?;
         }
@@ -5558,7 +5558,7 @@ fn validate_derivation_input_shape(inputs: &[SelectorInput]) -> Result<(), Confi
             {
                 return invalid("selector-input profiles must be valid and unique per role");
             }
-            validate_unique_strings(&alternative.fields, 1, 16, 1, 64, "selector-input fields")?;
+            validate_strings(&alternative.fields, 1, 16, 1, 64, "selector-input fields")?;
             if alternative
                 .fields
                 .iter()
@@ -5842,7 +5842,7 @@ fn validate_path_template(
 }
 
 fn validate_projection(projection: &[String]) -> Result<(), ConfigError> {
-    validate_unique_strings(projection, 1, 64, 2, 256, "source projection")?;
+    validate_strings(projection, 1, 64, 2, 256, "source projection")?;
     let paths = projection
         .iter()
         .map(|path| parse_projection_pointer(path))
@@ -6655,7 +6655,7 @@ fn validate_unique<T: Ord>(
     Ok(())
 }
 
-fn validate_unique_strings(
+fn validate_strings(
     values: &[String],
     minimum_items: usize,
     maximum_items: usize,
@@ -6664,12 +6664,8 @@ fn validate_unique_strings(
     field: &'static str,
 ) -> Result<(), ConfigError> {
     validate_len(values.len(), minimum_items, maximum_items, field)?;
-    let mut seen = BTreeSet::new();
     for value in values {
         validate_string(value, minimum_bytes, maximum_bytes, field)?;
-        if !seen.insert(value.as_str()) {
-            return invalid("collection values must be unique");
-        }
     }
     Ok(())
 }
@@ -6681,6 +6677,33 @@ fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repeated_string_in_a_set_is_refused_at_the_repeated_item() {
+        let bytes = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("acceptance configuration is UTF-8")
+        .replace(
+            "requesterTags: [fixture-agency]",
+            "requesterTags: [fixture-agency, fixture-agency]",
+        );
+        let ConfigError::Refused(report) =
+            EvidenceConfig::parse_yaml(bytes.as_bytes()).expect_err("a repeated tag is refused")
+        else {
+            panic!("the refusal is a report");
+        };
+        let diagnostic = report.diagnostics().first().expect("a diagnostic");
+        assert_eq!(diagnostic.code, "config.duplicate-item");
+        assert!(
+            diagnostic.path.ends_with("/requesterTags/1"),
+            "{}",
+            diagnostic.path
+        );
+    }
 
     #[test]
     fn named_source_connections_reject_retargeting_and_preserve_authentication_defaults() {
@@ -7191,19 +7214,18 @@ mod tests {
             .validate()
             .expect("absent admission fields keep the existing behavior");
 
-        config.authentication.oidc.allowed_clients = Some(vec!["records-reader".to_owned()]);
-        config.authentication.oidc.required_scopes = Some(vec!["evidence:invoke".to_owned()]);
+        config.authentication.oidc.allowed_clients = Some(set(["records-reader".to_owned()]));
+        config.authentication.oidc.required_scopes = Some(set(["evidence:invoke".to_owned()]));
         config.validate().expect("stated admission validates");
 
         for clients in [
             Vec::new(),
             vec!["".to_owned()],
             vec!["a".repeat(129)],
-            vec!["reader".to_owned(); 33],
-            vec!["reader".to_owned(), "reader".to_owned()],
+            (0..33).map(|index| format!("reader-{index}")).collect(),
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.oidc.allowed_clients = Some(clients.clone());
+            candidate.authentication.oidc.allowed_clients = Some(set(clients.clone()));
             assert!(
                 candidate.validate().is_err(),
                 "accepted allowedClients {clients:?}"
@@ -7214,11 +7236,10 @@ mod tests {
             vec!["".to_owned()],
             vec!["a".repeat(257)],
             vec!["not a scope".to_owned()],
-            vec!["evidence:invoke".to_owned(); 33],
-            vec!["evidence:invoke".to_owned(), "evidence:invoke".to_owned()],
+            (0..33).map(|index| format!("scope:{index}")).collect(),
         ] {
             let mut candidate = config.clone();
-            candidate.authentication.oidc.required_scopes = Some(scopes.clone());
+            candidate.authentication.oidc.required_scopes = Some(set(scopes.clone()));
             assert!(
                 candidate.validate().is_err(),
                 "accepted requiredScopes {scopes:?}"
@@ -7242,14 +7263,14 @@ mod tests {
         config.authentication.oidc.assertion_issuers = Some(BTreeMap::from([
             (
                 "evidence-task-agent".to_owned(),
-                vec!["https://identity.invalid".to_owned()],
+                set(["https://identity.invalid".to_owned()]),
             ),
             (
                 "portal-exchange".to_owned(),
-                vec![
+                set([
                     "https://casework.invalid".to_owned(),
                     "https://portal.invalid".to_owned(),
-                ],
+                ]),
             ),
         ]));
         config
@@ -7258,13 +7279,13 @@ mod tests {
 
         for clients in [
             BTreeMap::new(),
-            BTreeMap::from([("".to_owned(), vec!["https://issuer.invalid".to_owned()])]),
-            BTreeMap::from([("a".repeat(129), vec!["https://issuer.invalid".to_owned()])]),
+            BTreeMap::from([("".to_owned(), set(["https://issuer.invalid".to_owned()]))]),
+            BTreeMap::from([("a".repeat(129), set(["https://issuer.invalid".to_owned()]))]),
             (0..33)
                 .map(|index| {
                     (
                         format!("client-{index}"),
-                        vec!["https://issuer.invalid".to_owned()],
+                        set(["https://issuer.invalid".to_owned()]),
                     )
                 })
                 .collect(),
@@ -7280,16 +7301,14 @@ mod tests {
             Vec::new(),
             vec!["".to_owned()],
             vec!["a".repeat(513)],
-            vec!["https://issuer.invalid".to_owned(); 9],
-            vec![
-                "https://issuer.invalid".to_owned(),
-                "https://issuer.invalid".to_owned(),
-            ],
+            (0..9)
+                .map(|index| format!("https://issuer-{index}.invalid"))
+                .collect(),
         ] {
             let mut candidate = config.clone();
             candidate.authentication.oidc.assertion_issuers = Some(BTreeMap::from([(
                 "evidence-task-agent".to_owned(),
-                issuers.clone(),
+                set(issuers.clone()),
             )]));
             assert!(
                 candidate.validate().is_err(),
@@ -7638,8 +7657,7 @@ mod tests {
         let mut no_profile_clients = config.clone();
         no_profile_clients.authority_profiles.0[0]
             .1
-            .requester_clients
-            .clear();
+            .requester_clients = UniqueList::default();
         assert!(no_profile_clients.validate().is_err());
 
         let mut no_source = config.clone();
@@ -7658,7 +7676,7 @@ mod tests {
 
         let mut client_not_admitted = config;
         client_not_admitted.authentication.oidc.allowed_clients =
-            Some(vec!["other-client".to_owned()]);
+            Some(set(["other-client".to_owned()]));
         assert_eq!(
             client_not_admitted.validate(),
             invalid(
@@ -7679,10 +7697,10 @@ mod tests {
 
         let mut requester_clients = config.clone();
         requester_clients.authentication.oidc.allowed_clients =
-            Some(vec!["evidence-cli".to_owned()]);
+            Some(set(["evidence-cli".to_owned()]));
         requester_clients.authority_profiles.0[0]
             .1
-            .requester_clients = vec!["evidence-cli".to_owned()];
+            .requester_clients = set(["evidence-cli".to_owned()]);
         assert_eq!(requester_clients.validate(), expected);
 
         let mut source_issuer = config;
@@ -8001,6 +8019,11 @@ mod tests {
             .split_once("authorityProfiles:\n")
             .expect("the fixture declares authority profiles after its sources");
         format!("{head}sources:\n{SQLITE_SOURCE}authorityProfiles:\n{tail}")
+    }
+
+    /// A set built from items the test knows to be distinct.
+    fn set<I: IntoIterator<Item = String>>(items: I) -> UniqueList<String> {
+        UniqueList::new(items.into_iter().collect()).expect("the items are distinct")
     }
 
     /// Replace exactly one line of a document, and prove the edit applied.
@@ -8845,7 +8868,7 @@ mod tests {
         let role = |length: usize| SubjectRole {
             role: format!("a{}", "b".repeat(length - 1)),
             cardinality: SubjectCardinality::One,
-            selector_profiles: vec!["person-demographics-v1".to_owned()],
+            selector_profiles: set(["person-demographics-v1".to_owned()]),
         };
         assert!(role(64).validate().is_ok());
         assert!(role(65).validate().is_err());
@@ -9233,7 +9256,7 @@ mod tests {
             .alternatives
             .push(SelectorInputAlternative {
                 profile: "person-reference-v1".to_owned(),
-                fields: vec!["person_reference".to_owned()],
+                fields: set(["person_reference".to_owned()]),
             });
         assert_eq!(
             config.validate(),
@@ -9262,8 +9285,8 @@ mod tests {
         alternative.concepts[0].id =
             "urn:example:fixture:concept:adult-status-alternative".to_owned();
         alternative.concepts[0].handle = "adult-status-alternative".to_owned();
-        alternative.disclosure_guard.families[0] =
-            "urn:example:fixture:disclosure-family:adult-status-alternative".to_owned();
+        alternative.disclosure_guard.families =
+            set(["urn:example:fixture:disclosure-family:adult-status-alternative".to_owned()]);
 
         let mut grant = config.authority_profiles.0[0].1.grants[0].clone();
         grant.requirement = alternative.id.clone();

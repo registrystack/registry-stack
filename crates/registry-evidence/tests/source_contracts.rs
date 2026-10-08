@@ -2183,9 +2183,12 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         *posture_mut(&mut source) = posture;
-        http_request_mut(&mut source).projection = std::iter::once("/total".to_owned())
-            .chain(declared_facts.iter().map(|fact| format!("/result/{fact}")))
-            .collect();
+        http_request_mut(&mut source).projection = registry_platform_yaml::UniqueList::new(
+            std::iter::once("/total".to_owned())
+                .chain(declared_facts.iter().map(|fact| format!("/result/{fact}")))
+                .collect(),
+        )
+        .expect("the projection paths are distinct");
         let prepared = runtime
             .prepare(
                 &preparation,
@@ -2795,7 +2798,9 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
             &server.uri(),
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
-        http_request_mut(&mut source).projection = vec!["/results/*/optional".into()];
+        http_request_mut(&mut source).projection =
+            registry_platform_yaml::UniqueList::new(vec!["/results/*/optional".into()])
+                .expect("a single path is distinct");
         let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
         assert_eq!(
             executor

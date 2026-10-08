@@ -158,7 +158,7 @@ pub async fn prepare_local_relying_procedure(
         configuration_revision,
         expected_subjects,
         expected_outputs: local_expected_outputs(requirement),
-        revoked_key_ids: bundle.config.signing.revoked_key_ids.clone(),
+        revoked_key_ids: bundle.config.signing.revoked_key_ids.clone().into_vec(),
         maximum_assertion_lifetime_seconds: requirement.validity_seconds.get(),
         clock_skew_seconds: bundle.config.signing.verifier_clock_skew_seconds.get(),
     })

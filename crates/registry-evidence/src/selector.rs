@@ -921,7 +921,7 @@ pub fn resolve_offline_fixture_authorization(
         )
     };
     let context = AuthenticatedContext::offline_fixture_context(
-        authority.requester_tags.clone(),
+        authority.requester_tags.clone().into_vec(),
         audience,
         actor_kind,
         client,
