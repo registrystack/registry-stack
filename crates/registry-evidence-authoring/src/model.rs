@@ -168,10 +168,11 @@ where
 {
     let profiles = Vec::<String>::deserialize(deserializer)?;
     if profiles.is_empty() {
-        return Err(serde::de::Error::custom(Invalid::expected(
+        return Err(Invalid::expected(
             "at least one selector profile",
             "Name the selector profiles the subject may be identified by, or remove `profiles`.",
-        )));
+        )
+        .into_error());
     }
     Ok(profiles)
 }
