@@ -3824,7 +3824,7 @@ mod tests {
             "secret:file/independent-secret".into();
         document["sources"]["independent"]["authentication"]["clientSecretRef"] =
             "secret:file/independent-secret".into();
-        config = serde_json::from_value(document).unwrap();
+        config = EvidenceConfig::decode_without_rules(&serde_json::to_vec(&document).unwrap());
         let executors = connection_test_executors(&config, Arc::clone(&secrets));
         let request = prepared_batch_request();
         let (first, second) = tokio::join!(

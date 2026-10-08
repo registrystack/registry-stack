@@ -3359,9 +3359,7 @@ mod tests {
         let source_id = requirement.acquisition.initial_source().to_owned();
         let mut document = serde_json::to_value(&config).unwrap();
         let project = |document: &JsonValue| {
-            let candidate: EvidenceConfig = serde_json::from_value(document.clone()).unwrap();
-            candidate
-                .validate()
+            let candidate = EvidenceConfig::parse_yaml(&serde_json::to_vec(document).unwrap())
                 .expect("each compared candidate is valid");
             canonical_projection(&candidate, &requirement).unwrap()
         };
@@ -5289,13 +5287,15 @@ outboundTls:
         let self_enabling = format!("{ACCEPTANCE}secretProviders:\n  environment: {{}}\n");
         let error = EvidenceConfig::parse_yaml(self_enabling.as_bytes())
             .expect_err("a bundle may not declare a secret provider");
+        let ConfigError::Refused(report) = error else {
+            panic!("the reader did not refuse the bundle: {error}");
+        };
         let appended_line = ACCEPTANCE.lines().count() + 1;
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("unknown field (line {appended_line} column 1)")),
-            "{error}"
-        );
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.unknown-key");
+        assert_eq!(diagnostic.path, "/secretProviders");
+        let source = diagnostic.source.as_ref().expect("a position");
+        assert_eq!((source.line, source.column), (Some(appended_line), Some(1)));
     }
 
     /// A deployment that does not opt into a capability must not acquire one

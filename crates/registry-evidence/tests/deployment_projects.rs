@@ -1210,11 +1210,9 @@ fn execute_parameter_mutation(
         );
         parameters.insert(name.clone(), value.clone());
     }
-    disposable.config = serde_json::from_value(config)
-        .unwrap_or_else(|_| panic!("{label}: parameter mutation is not typed"));
-    disposable
-        .config
-        .validate()
+    let mutated = serde_json::to_vec(&config)
+        .unwrap_or_else(|_| panic!("{label}: parameter mutation is not representable"));
+    disposable.config = registry_evidence::config::EvidenceConfig::parse_yaml(&mutated)
         .unwrap_or_else(|_| panic!("{label}: parameter mutation broke startup validation"));
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))

@@ -2166,12 +2166,12 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.append("bundle/evidence.yaml", &format!("trailing: [{CANARY}\n"));
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: document is not well-formed YAML (line ",
-            suffix: ")\n",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[yaml.unexpected-end] ",
+            suffix: ", which needs a closing `]`\n  next: Complete or remove the unfinished item.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-configuration",
-                "document is not well-formed YAML",
+                "yaml.unexpected-end",
+                "the document ends inside the list or mapping opened with `[` on line 323, which needs a closing `]`",
             ),
         },
         FailureCase {
@@ -2184,12 +2184,12 @@ fn failure_cases() -> Vec<FailureCase> {
                     &format!("    principalClaim: sub\n    unknownField: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: unknown field at authentication.oidc (line ",
-            suffix: ")\n",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[config.unknown-key] ",
+            suffix: " /authentication/oidc/unknownField\n  `unknownField` is not a member of this mapping\n  next: Remove `unknownField`; the accepted keys are `issuer`, `audience`, `jwksSource`, `tokenTypes`, `algorithms`, `principalClaim`, `requesterTagsClaim`, `evidenceAudienceClaim`, `claims`, `maximumTokenLifetimeSeconds`, `revokedKeyIds`, `allowedClients`, `assertionIssuers`, `requiredScopes`, `actorClaim`, `tlsTrustProfile`.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-configuration",
-                "unknown field",
+                "config.unknown-key",
+                "`unknownField` is not a member of this mapping",
             ),
         },
         FailureCase {
@@ -2202,12 +2202,12 @@ fn failure_cases() -> Vec<FailureCase> {
                     &format!("version: \"{CANARY}\"\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field has the wrong type at version (line ",
-            suffix: ")\n",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[config.expected-integer] ",
+            suffix: " /version\n  expected a whole number from 0 to 255, not quoted text\n  next: Write a whole number from 0 to 255.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-configuration",
-                "field has the wrong type",
+                "config.expected-integer",
+                "expected a whole number from 0 to 255, not quoted text",
             ),
         },
         FailureCase {
@@ -2220,12 +2220,12 @@ fn failure_cases() -> Vec<FailureCase> {
                     &format!("  format: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field value is not one of the accepted variants at signing.format (line ",
-            suffix: ")\n",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[config.unknown-variant] ",
+            suffix: " /signing/format\n  expected one of `flattened-jws-json`\n  next: Use one of `flattened-jws-json`.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-configuration",
-                "field value is not one of the accepted variants",
+                "config.unknown-variant",
+                "expected one of `flattened-jws-json`",
             ),
         },
         FailureCase {
@@ -2238,11 +2238,11 @@ fn failure_cases() -> Vec<FailureCase> {
                     &format!("      source: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: requirement acquisition references an unknown source\n",
-            suffix: "",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[evidence.bundle.invalid-requirement] ",
+            suffix: " /requirements/0/acquisition\n  requirement acquisition references an unknown source\n  next: Change this member so it meets the rule the message states.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-configuration",
+                "evidence.bundle.invalid-requirement",
                 "requirement acquisition references an unknown source",
             ),
         },
@@ -2456,12 +2456,12 @@ fn failure_cases() -> Vec<FailureCase> {
                     &format!("    principalClaim: sub\n    audiences: [{CANARY}]\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: key is no longer accepted at authentication.oidc.audiences; Declare the one accepted audience as authentication.oidc.audience.\n",
-            suffix: "",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[config.removed-key] ",
+            suffix: " /authentication/oidc/audiences\n  `audiences` is no longer accepted\n  next: Declare the one accepted audience as authentication.oidc.audience.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-configuration",
-                "key is no longer accepted",
+                "config.removed-key",
+                "`audiences` is no longer accepted",
             ),
         },
         // Nothing is broken here: an operator runtime file that says nothing

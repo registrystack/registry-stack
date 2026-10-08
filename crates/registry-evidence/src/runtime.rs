@@ -1147,7 +1147,7 @@ impl EvidenceRuntime {
                 minimum_bytes: *minimum_bytes,
                 maximum_bytes: *maximum_bytes,
             },
-            SelectorField::Date => EvidenceSelectorField::Date {
+            SelectorField::Date {} => EvidenceSelectorField::Date {
                 name: name.to_owned(),
             },
             SelectorField::Integer { minimum, maximum } => EvidenceSelectorField::Integer {
@@ -1155,7 +1155,7 @@ impl EvidenceRuntime {
                 minimum: *minimum,
                 maximum: *maximum,
             },
-            SelectorField::Boolean => EvidenceSelectorField::Boolean {
+            SelectorField::Boolean {} => EvidenceSelectorField::Boolean {
                 name: name.to_owned(),
             },
             SelectorField::ControlledCode {

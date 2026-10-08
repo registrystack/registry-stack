@@ -1274,7 +1274,7 @@ fn validate_value(
         ) if bounded(value.len(), *minimum_bytes, *maximum_bytes) => {
             Ok(ResolvedSelectorValue::String(value.clone()))
         }
-        (ConfiguredField::Date, SelectorValue::String(value))
+        (ConfiguredField::Date {}, SelectorValue::String(value))
             if canonical_date(value).is_some() =>
         {
             Ok(ResolvedSelectorValue::Date(value.clone()))
@@ -1286,7 +1286,7 @@ fn validate_value(
         {
             Ok(ResolvedSelectorValue::Integer(*value))
         }
-        (ConfiguredField::Boolean, SelectorValue::Boolean(value)) => {
+        (ConfiguredField::Boolean {}, SelectorValue::Boolean(value)) => {
             Ok(ResolvedSelectorValue::Boolean(*value))
         }
         (

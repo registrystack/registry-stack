@@ -1686,7 +1686,7 @@ fn assert_invalid_bundle(mutate: impl FnOnce(&mut String)) {
     make_read_only(&bundle_root);
     assert!(matches!(
         Bundle::load(&bundle_root),
-        Err(BundleError::Config(_))
+        Err(BundleError::Refused(_))
     ));
 }
 

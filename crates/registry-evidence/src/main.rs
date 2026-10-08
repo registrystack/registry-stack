@@ -4291,11 +4291,9 @@ fn validate_reference_parameter_mutation(
         }
         parameters.insert(name.clone(), value.clone());
     }
-    disposable.config = serde_json::from_value(config)
+    let mutated = serde_json::to_vec(&config)
         .map_err(|_| CliError("reference parameter mutation is invalid"))?;
-    disposable
-        .config
-        .validate()
+    disposable.config = registry_evidence::config::EvidenceConfig::parse_yaml(&mutated)
         .map_err(|_| CliError("reference parameter mutation broke configuration"))?;
     let disposable = Arc::new(disposable);
     let kernel = OfflineKernel::compile(Arc::clone(&disposable))
@@ -5570,14 +5568,18 @@ mod tests {
     #[tokio::test]
     async fn render_discovery_description_reports_an_invalid_configuration() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        for (name, document) in [
+        for (name, document, expected_code, expected_line) in [
             (
                 "unparsable-publication.yaml",
                 "version: 1\nservice: [parcel-owner-lookup\n",
+                "yaml.unexpected-end",
+                3,
             ),
             (
                 "foreign-publication.yaml",
                 "version: 1\nunknownSetting: parcel-owner-lookup\n",
+                "config.unknown-key",
+                2,
             ),
         ] {
             let path = directory.path().join(name);
@@ -5587,15 +5589,19 @@ mod tests {
                 .await
                 .expect_err("a document that is not Evidence configuration is refused");
 
-            let CommandError::Deployment(message, artifact) = &error else {
-                panic!("an invalid configuration reports its class: {error}");
+            let CommandError::Refused(report) = &error else {
+                panic!("an invalid configuration reports the reader's diagnostics: {error}");
             };
-            assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
-            assert_eq!(artifact.artifact(), "evidence.yaml");
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == expected_code)
+                .unwrap_or_else(|| panic!("{name}: no {expected_code}"));
+            let source = diagnostic.source.as_ref().expect("a position");
+            assert_eq!(source.file, path.display().to_string());
+            assert_eq!(source.line, Some(expected_line), "{name}");
             let rendered = error.to_string();
-            for content in [name, "unknownSetting", "parcel-owner-lookup"] {
-                assert!(!rendered.contains(content), "{rendered}");
-            }
+            assert!(!rendered.contains("parcel-owner-lookup"), "{rendered}");
         }
     }
 
@@ -5637,7 +5643,14 @@ mod tests {
             .expect("the acceptance configuration is accepted as written");
         let refusal = EvidenceConfig::parse_yaml(document.as_bytes())
             .expect_err("an unprojectable publication is not accepted as configuration");
-        assert_eq!(refusal.fault().cause(), "URI is invalid");
+        let ConfigError::Refused(report) = &refusal else {
+            panic!("the reader did not refuse the publication: {refusal}");
+        };
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "evidence.bundle.invalid-issuer"
+        );
+        assert_eq!(report.diagnostics()[0].path, "/issuer/id");
 
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("unprojectable-publication.yaml");
@@ -5647,12 +5660,15 @@ mod tests {
             .await
             .expect_err("a publication the shared profile refuses is not compiled");
 
-        let CommandError::Deployment(message, artifact) = &error else {
-            panic!("an unprojectable publication reports its class: {error}");
+        let CommandError::Refused(report) = &error else {
+            panic!("an unprojectable publication reports the reader's diagnostics: {error}");
         };
-        assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
-        assert_eq!(artifact.artifact(), "evidence.yaml");
-        assert_eq!(artifact.fault().cause(), "URI is invalid");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "evidence.bundle.invalid-issuer");
+        assert_eq!(diagnostic.path, "/issuer/id");
+        let source = diagnostic.source.as_ref().expect("a position");
+        assert_eq!(source.file, path.display().to_string());
+        assert_eq!(source.line, Some(7));
     }
 
     #[test]
@@ -6237,7 +6253,9 @@ mod tests {
             "type": "https://id.example.invalid/problems/fixture-canary",
             "code": "fixture.canary"
         });
-        bundle.config = serde_json::from_value(config).expect("declared config parses");
+        bundle.config =
+            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
+                .expect("declared config parses");
         bundle.config.validate().expect("declared config validates");
 
         let bundle = Arc::new(bundle);
@@ -6493,7 +6511,9 @@ mod tests {
             "search": REFERENCE_CHAINED_SEARCH,
             "fetch": REFERENCE_CHAINED_FETCH,
         });
-        bundle.config = serde_json::from_value(config).expect("chained config parses");
+        bundle.config =
+            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
+                .expect("chained config parses");
         bundle.config.validate().expect("chained config validates");
         set_tree_mode(directory.path(), 0o755, 0o444);
         (Arc::new(bundle), fixture)
@@ -6517,15 +6537,17 @@ mod tests {
             .acquisition;
         assert_eq!(refuse_replayed_statement_stages(&statement, single), Ok(()));
 
-        let mut chained =
-            serde_json::to_value(&statement).expect("the statement config is representable");
-        let fetch = chained["sources"][STATEMENT_SOURCE].clone();
-        chained["sources"]
-            .as_object_mut()
-            .expect("sources are an object")
+        // The duplicated source is reached by no grant, which the bundle
+        // rules refuse, so it is added to the typed configuration.
+        let mut chained = statement.clone();
+        let fetch = chained
+            .sources
+            .get(STATEMENT_SOURCE)
+            .expect("the statement source is declared")
+            .clone();
+        chained
+            .sources
             .insert(format!("{STATEMENT_SOURCE}-fetch"), fetch);
-        let chained: EvidenceConfig =
-            serde_json::from_value(chained).expect("the duplicated config parses");
         assert_eq!(
             refuse_replayed_statement_stages(
                 &chained,
@@ -6594,7 +6616,9 @@ mod tests {
             "search": STATEMENT_SOURCE,
             "fetch": format!("{STATEMENT_SOURCE}-fetch"),
         });
-        bundle.config = serde_json::from_value(config).expect("the chained config parses");
+        bundle.config =
+            EvidenceConfig::parse_yaml(&serde_json::to_vec(&config).expect("JSON serializes"))
+                .expect("the chained config parses");
         bundle
             .config
             .validate()
@@ -6788,10 +6812,19 @@ mod tests {
             Ok(valid_config.sources.len())
         );
 
-        let invalid = valid.replacen("timeoutMilliseconds: 3000", "timeoutMilliseconds: 0", 1);
-        assert_ne!(invalid, valid, "fixture mutation must remain effective");
-        let invalid_config: EvidenceConfig =
-            serde_norway::from_str(&invalid).expect("closed typed shape deserializes");
+        // A timeout of zero is refused when the bundle is read, so the
+        // typed configuration is changed after reading to prove source plan
+        // compilation refuses it too.
+        let mut invalid_config = valid_config.clone();
+        let registry_evidence::config::SourceConfig::HttpJson { request, .. } = invalid_config
+            .sources
+            .values_mut()
+            .next()
+            .expect("the fixture declares a source")
+        else {
+            panic!("the fixture's first source is an HTTP source");
+        };
+        request.timeout_milliseconds = 0;
         assert_eq!(
             compile_source_plans_with_runtime(
                 &invalid_config,

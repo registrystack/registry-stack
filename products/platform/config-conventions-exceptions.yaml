@@ -3912,76 +3912,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map products/evidence/contracts/bundle.schema.yaml in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#AcquisitionConfig
-  class: pending
-  wp: WP3
-  reason: AcquisitionConfig derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#AdapterParameterValue
-  class: pending
-  wp: WP3
-  reason: AdapterParameterValue derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#ParameterValue
-  class: pending
-  wp: WP3
-  reason: ParameterValue derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#PathBindingConfig
-  class: pending
-  wp: WP3
-  reason: PathBindingConfig derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#SelectorField
-  class: pending
-  wp: WP3
-  reason: SelectorField derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#SelectorField/Boolean
-  class: pending
-  wp: WP3
-  reason: SelectorField/Boolean is a unit variant of a tagged union
-  resolution: Make it a struct variant (Boolean {})
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#SelectorField/Date
-  class: pending
-  wp: WP3
-  reason: SelectorField/Date is a unit variant of a tagged union
-  resolution: Make it a struct variant (Date {})
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#SourceAuthentication
-  class: pending
-  wp: WP3
-  reason: SourceAuthentication derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#SourceConfig
-  class: pending
-  wp: WP3
-  reason: SourceConfig derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: evidence/bundle
-  location: crates/registry-evidence/src/config.rs#SqliteParameterBinding
-  class: pending
-  wp: WP3
-  reason: SqliteParameterBinding derives serde's tag
-  resolution: Decode it with the shared reader's union helper
 - rule: CFG-SEC-1
   format: evidence/bundle
   location: products/evidence/contracts/bundle.schema.yaml#/$defs/audit/properties/hashKeyRef
@@ -4423,13 +4353,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map products/evidence/contracts/runtime.schema.yaml in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: evidence/runtime
-  location: crates/registry-evidence/src/config.rs#RuntimeSignerConfig
-  class: pending
-  wp: WP3
-  reason: RuntimeSignerConfig derives serde's tag
-  resolution: Decode it with the shared reader's union helper
 - rule: CFG-SEC-1
   format: evidence/runtime
   location: products/evidence/contracts/runtime.schema.yaml#/properties/signer/oneOf/0/properties/privateKeyRef
