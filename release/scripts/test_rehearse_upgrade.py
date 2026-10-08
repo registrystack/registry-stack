@@ -659,7 +659,12 @@ class BregLedgerTest(unittest.TestCase):
                 current["active"] = state["active"]
             return {"epoch": 1}
 
+        def journeys(side):
+            self.assertIs(side, new)
+            events.append(("journeys",))
+
         breg.package.side_effect = package
+        breg.adopt_journeys.side_effect = journeys
         breg.write_runtime.side_effect = runtime
         breg.seed.side_effect = seed
         breg.views.return_value = {"records/1": {"domainData": {"code": "a"}}}
@@ -691,6 +696,16 @@ class BregLedgerTest(unittest.TestCase):
         self.assertEqual(current["active"], "sha256:" + "b" * 64,
                          "a changed package must be applied before current reads")
         self.assertIn(("package", "build-successor", packages["upgraded"]), events)
+
+    def test_the_rebuild_tests_journeys_this_source_wrote(self) -> None:
+        # Journeys are an authored test file, not state, so this source need
+        # not read the format the previous release wrote them in.
+        with tempfile.TemporaryDirectory() as directory:
+            events, _ledger, _report, _current, packages = self.rehearse_ledger_upgrade(
+                Path(directory), None)
+        self.assertEqual(events.count(("journeys",)), 1)
+        self.assertLess(events.index(("journeys",)),
+                        events.index(("package", "build-upgraded", packages["old"])))
 
     def test_a_rebuild_with_nothing_to_apply_keeps_the_predecessor_package(self) -> None:
         # Rebuilding against the predecessor always records fromPackageDigest,
@@ -747,6 +762,8 @@ class BregLedgerTest(unittest.TestCase):
             package, digest = breg.package(side, root / "build-2", baseline=baseline)
             self.assertEqual((package, digest), (root / "build-2" / "out" / "package", self.DIGEST))
             breg.create_database.assert_called_once_with("schematest")
+            breg.credentials.assert_called_once_with(root / "build-2" / "credentials.json",
+                                                     side)
             tested, packaged = (call.args for call in side.run_json.call_args_list)
             self.assertEqual(tested[3], "test")
             self.assertEqual(packaged[3], "package")
@@ -767,6 +784,60 @@ class BregLedgerTest(unittest.TestCase):
             side.run_json.side_effect = [{"ok": True}, {"ok": True}]
             with self.assertRaisesRegex(Error, "packageDigest"):
                 breg.package(side, Path(directory) / "build")
+
+    def test_schema_test_credentials_carry_the_envelope_each_side_reads(self) -> None:
+        envelopes = {
+            "from": {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
+                     "kind": "SchemaTestCredentials"},
+            "to": {"apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+                   "kind": "BRegSchemaTestCredentials"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root)
+            breg.keys = unittest.mock.Mock()
+            breg.keys.mint.return_value = "minted"
+            (breg.project / "tests").mkdir(parents=True)
+            dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": [
+                {"id": "j", "steps": [{"id": "open"},
+                                      {"id": "held", "claims": {"principal": "p"}}]}]})
+            for label, envelope in envelopes.items():
+                with self.subTest(side=label):
+                    side = unittest.mock.Mock()
+                    side.label = label
+                    breg.credentials(root / f"{label}.json", side)
+                    written = load_json(root / f"{label}.json")
+                    self.assertEqual(written, {**envelope, "bindings": [
+                        {"journeyId": "j", "stepId": "open",
+                         "credential": {"type": "anonymous"}},
+                        {"journeyId": "j", "stepId": "held",
+                         "credential": {"type": "bearer",
+                                        "tokenRef": "secret:file/journey-token-j-held"}}]})
+
+    def test_a_side_s_starter_journeys_replace_the_project_s_and_nothing_else(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            breg = self.breg(root)
+            (breg.project / "tests").mkdir(parents=True)
+            dump_json(breg.project / "registry.yaml", {"package": {"sourceRevision": "authored"}})
+            dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": ["previous"]})
+
+            def run(binary: str, *arguments: str) -> object:
+                starter = Path(arguments[1])
+                (starter / "tests").mkdir(parents=True)
+                dump_json(starter / "registry.yaml", {"package": {"sourceRevision": "starter"}})
+                dump_json(starter / "tests" / "journeys.yaml", {"journeys": ["current"]})
+                return unittest.mock.Mock(stdout="")
+
+            side = unittest.mock.Mock()
+            side.label = "to"
+            side.run.side_effect = run
+            breg.adopt_journeys(side)
+            side.run.assert_called_once_with("bregctl", "init", str(root / "starter-to"))
+            self.assertEqual(load_json(breg.project / "tests" / "journeys.yaml"),
+                             {"journeys": ["current"]})
+            self.assertEqual(load_json(breg.project / "registry.yaml"),
+                             {"package": {"sourceRevision": "authored"}})
 
     def author(self, root: Path, package: dict[str, Any]) -> dict[str, Any]:
         breg = self.breg(root)

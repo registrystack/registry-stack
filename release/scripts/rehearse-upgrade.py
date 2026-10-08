@@ -904,6 +904,15 @@ BREG_AUDIENCE = "breg"
 BREG_CLIENT = "upgrade-rehearsal"
 BREG_KID = "upgrade-rehearsal-issuer"
 BREG_DATABASE_ID = "upgrade-rehearsal-db"
+# The schema-test credentials envelope each side reads. `from` is the envelope
+# the release at FORWARD_PATH_FLOOR reads; `to` is the one the format registry
+# (products/platform/config-formats.yaml) records for this source.
+BREG_CREDENTIALS_ENVELOPE = {
+    "from": {"apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
+             "kind": "SchemaTestCredentials"},
+    "to": {"apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+           "kind": "BRegSchemaTestCredentials"},
+}
 BREG_ENVIRONMENT = "staging"
 BREG_INSTANCE_ID = "upgrade-rehearsal-instance"
 BREG_EMPTY_PLAN = "apply.package.empty_plan"
@@ -1018,6 +1027,20 @@ class Breg:
             for journey in journeys["journeys"] for step in journey["steps"]
             if "requesterClient" in (step.get("claims") or {})})
 
+    def adopt_journeys(self, side: Side) -> None:
+        """Replace the project's journeys with the starter journeys `side` writes.
+
+        Journeys are an authored test file, not state: a release may read them
+        in a format its predecessor did not write, and an operator brings
+        them forward by hand. The registry the project describes is left as
+        the previous release authored it.
+        """
+
+        starter = self.work / f"starter-{side.label}"
+        side.run("bregctl", "init", str(starter))
+        shutil.copyfile(starter / "tests" / "journeys.yaml",
+                        self.project / "tests" / "journeys.yaml")
+
     @staticmethod
     def claims(claims: dict[str, Any]) -> dict[str, Any]:
         """Turn a journey step's claims into the access token that carries them."""
@@ -1065,7 +1088,7 @@ class Breg:
             "cursor": {"secretRef": "secret:file/cursor-key"},
         })
 
-    def credentials(self, path: Path) -> None:
+    def credentials(self, path: Path, side: Side) -> None:
         journeys = load_yaml(self.project / "tests" / "journeys.yaml")
         bindings = []
         for journey in journeys["journeys"]:
@@ -1080,11 +1103,10 @@ class Breg:
                     credential = {"type": "bearer", "tokenRef": f"secret:file/{name}"}
                 bindings.append({"journeyId": journey["id"], "stepId": step["id"],
                                  "credential": credential})
-        path.write_text(json.dumps({
-            "apiVersion": "registry.registrystack.org/breg-schema-test-credentials/v1",
-            "kind": "SchemaTestCredentials", "bindings": bindings}, indent=1))
+        path.write_text(json.dumps({**BREG_CREDENTIALS_ENVELOPE[side.label],
+                                    "bindings": bindings}, indent=1))
 
-    def test_runtime(self, build: Path) -> tuple[Path, Path]:
+    def test_runtime(self, side: Side, build: Path) -> tuple[Path, Path]:
         """Prepare an empty schema-test database; return its runtime and credentials."""
 
         private_directory(build)
@@ -1093,7 +1115,7 @@ class Breg:
         test_runtime = build / "runtime-test.yaml"
         self.write_runtime(test_runtime, "schematest", empty, free_port())
         credentials = build / "credentials.json"
-        self.credentials(credentials)
+        self.credentials(credentials, side)
         return test_runtime, credentials
 
     def package(self, side: Side, build: Path, baseline: Path | None = None) -> tuple[Path, str]:
@@ -1102,7 +1124,7 @@ class Breg:
         `baseline` is the active package this one succeeds.
         """
 
-        test_runtime, credentials = self.test_runtime(build)
+        test_runtime, credentials = self.test_runtime(side, build)
         baseline_args = ["--baseline-package", str(baseline)] if baseline else []
         side.run_json("bregctl", "--format", "json", "test", str(self.project),
                       "--runtime-config", str(test_runtime), "--credentials",
@@ -1234,6 +1256,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     # digest, so an unchanged registry shows only as bregctl refusing the
     # rebuild as an empty plan; the operator then keeps the active package.
     predecessor_activation = "initial"
+    breg.adopt_journeys(new)
     upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
     if breg_rebuild_changes(new, breg.runtime, upgraded):
         apply(upgraded, upgraded_digest)
