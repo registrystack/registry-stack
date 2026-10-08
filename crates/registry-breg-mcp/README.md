@@ -110,42 +110,56 @@ breg-mcp --runtime-config /etc/breg-mcp/runtime.yaml check
 breg-mcp --runtime-config /etc/breg-mcp/runtime.yaml serve
 ```
 
-`check` validates the document and resolves every secret without opening a
-socket or the audit log. `serve` answers until `SIGINT` or `SIGTERM`. Logs are
-JSON lines on standard output from the gateway alone, at the level
-`BREG_MCP_LOG` names: `error`, `warn`, or `info` (the default). Any other value,
-including a filter directive, is refused on standard error with exit status 2
-before any work.
+`check` reads the document offline, as `serve` reads it, and reports its
+findings in the shared diagnostic shape: human lines by default, or one
+`BRegMcpCtlReport` JSON document with `--format json`. It resolves no secret,
+opens no socket, and writes no audit file. It exits 0 when the file is
+accepted, 1 when something is refused (or a warning is reported under
+`--deny-warnings`), 2 on a usage error, and 3 when the file cannot be read. A
+`${NAME}` expression is checked by syntax and position only, unless
+`--environment` substitutes it from the environment first.
+
+`serve` refuses a file `check` would refuse, with the same lines on standard
+error, then resolves every secret before it listens, and answers until
+`SIGINT` or `SIGTERM`. Logs are JSON lines on standard output from the gateway
+alone, at the level `BREG_MCP_LOG` names: `error`, `warn`, or `info` (the
+default). Any other value, including a filter directive, is refused on
+standard error with exit status 2 before any work.
+
+The runtime file below is
+[`products/breg/examples/mcp-runtime/runtime.yaml`](../../products/breg/examples/mcp-runtime/runtime.yaml);
+its JSON Schema is
+[`products/breg/generated/mcp-runtime/mcp-runtime.schema.json`](../../products/breg/generated/mcp-runtime/mcp-runtime.schema.json).
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-mcp-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/breg/mcp-runtime/v1alpha1
 kind: BRegMcpRuntimeConfig
 listener:
-  bind: 0.0.0.0:8110
+  bind: 127.0.0.1:8110
   tlsTermination: operator-controlled-upstream
-  networkExposure: container-private
 secretProviders:
   file:
     root: /run/secrets/breg-mcp
 resourceServer:
-  resource: https://gateway.example/mcp
-  issuer: https://login.example
+  resource: https://gateway.example.test/mcp
+  issuer: https://login.example.test
   jwksSource:
     kind: uri
-    uri: https://login.example/jwks.json
-  algorithms: [ES256]
+    uri: https://login.example.test/jwks.json
+  algorithms: [EdDSA, ES256]
   allowedClients: [chat-host]
   requiredScopes: [address-correction:self]
+  maximumTokenLifetimeSeconds: 3600
 registry:
-  baseUrl: https://registry.example/
+  baseUrl: https://registry.example.test/
   accessProfile: citizen-agent
-  audience: urn:registry:address-correction
+  audience: urn:breg:citizen-address-correction
   scopes: [address-correction:self]
-  requestTimeoutMilliseconds: 5000
 exchange:
-  tokenEndpoint: https://login.example/token
+  tokenEndpoint: https://login.example.test/token
   clientId: citizen-gateway
   privateKeyRef: secret:file/gateway-key
+  assertionAudience: https://login.example.test
 service:
   name: Address correction
   description: Correct the postal address the registry holds for you.
@@ -156,13 +170,11 @@ service:
     entity: address-correction-request
     targetField: address
     ownerField: owner
-  reviewBaseUrl: https://review.example/
+  reviewBaseUrl: https://review.example.test
 audit:
   hashKeyRef: secret:file/audit-key
   destination: file
-  path: /var/lib/breg-mcp/audit.jsonl
-  rotateBytes: 104857600
-  retainDays: 90
+  path: /var/lib/breg-mcp/audit/audit.jsonl
 rateLimits:
   perCitizen:
     requestsPerMinute: 30
@@ -170,11 +182,18 @@ rateLimits:
   perClient:
     requestsPerMinute: 600
     burst: 100
+limits:
+  maximumRequestBytes: 65536
 ```
 
 Secrets are references (`secret:file/<name>` or `secret:env/<name>`), never
-inline values; a secret file others can read is refused. The gateway's private
-key is a private JWK. Plain HTTP is accepted only with
+inline values; `serve` refuses a secret file others can read. The gateway's
+private key is a private JWK. Every list (`algorithms`, `allowedClients`,
+`requiredScopes`, `registry.scopes`) holds 1 to 128 distinct items, and every
+number has the bound its schema states: `maximumTokenLifetimeSeconds` 1 to
+86400 (default 3600), `attemptTimeoutMilliseconds` 100 to 120000 (default
+10000), `requestsPerMinute` and `burst` 1 to 1000000, and `limits.maximumRequestBytes` 1 to 1048576
+(default 65536). Plain HTTP is accepted only with
 `tlsTermination: development-loopback` on a loopback address. `jwksSource`
 defaults to OIDC discovery; `kind: uri` fetches the configured key set and
 `kind: static` resolves a `documentRef` secret. Network key sources use the

@@ -1,0 +1,659 @@
+{
+  "$defs": {
+    "AccessTokenAlgorithm": {
+      "description": "An asymmetric access-token signature algorithm.",
+      "enum": [
+        "RS256",
+        "RS384",
+        "ES256",
+        "ES384",
+        "EdDSA"
+      ],
+      "type": "string"
+    },
+    "ApplicationConfig": {
+      "additionalProperties": false,
+      "description": "The application entity and the two fields the gateway, never the chat\nhost, writes.",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "ownerField": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The field identifier of the field that records the citizen's\nprincipal. It names a different field than `targetField`."
+        },
+        "targetField": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The field identifier of the field that references the citizen's own\nrecord."
+        }
+      },
+      "required": [
+        "entity",
+        "targetField",
+        "ownerField"
+      ],
+      "type": "object"
+    },
+    "AuditConfig": {
+      "additionalProperties": false,
+      "description": "The audit block every Registry Stack product shares: the hash key, then a\n`file` (the default) or `stdout` destination, with rotation and retention\nfor a file.",
+      "else": {
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file",
+          "description": "Where audit lines go: `file` or `stdout`."
+        },
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
+        },
+        "path": {
+          "default": null,
+          "description": "The absolute path of the active audit file, for a `file` destination.",
+          "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
+          "type": "string"
+        },
+        "retentionDays": {
+          "default": null,
+          "description": "Days a rotated file is kept, for a `file` destination. Default: 90.",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "default": null,
+          "description": "Size at which the active file rotates, in bytes, for a `file`\ndestination. Default: 100 MiB.",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hashKeyRef"
+      ],
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "required": [
+                "retentionDays"
+              ]
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "DetailsConfig": {
+      "additionalProperties": false,
+      "description": "The entity holding the citizen's own record, found through the agent\nprofile's linked lookup.",
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExchangeConfig": {
+      "additionalProperties": false,
+      "description": "The gateway's own client identity, used only to exchange a verified\ninbound token for a delegated registry token.",
+      "properties": {
+        "assertionAudience": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExternalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The client-assertion audience, when the authorization server expects\none other than its token endpoint."
+        },
+        "clientId": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The gateway's client identifier at the authorization server. It may\nnot also be one of `resourceServer.allowedClients`."
+        },
+        "privateKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the private JWK the gateway signs its client\nassertions with, under a declared provider."
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url",
+          "description": "The authorization server's token endpoint. An https URL with no query\nor fragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientId",
+        "privateKeyRef"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "JwksSource": {
+      "description": "Where a runtime obtains the OIDC issuer's signing keys.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
+          "properties": {
+            "kind": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "properties": {
+            "kind": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "pattern": "^https?://",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
+          "properties": {
+            "documentRef": {
+              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LimitsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumRequestBytes": {
+          "default": 65536,
+          "description": "Largest request body the MCP endpoint reads, in bytes.",
+          "format": "uint64",
+          "maximum": 1048576,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of an HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PrivateListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares its TLS termination and network\nexposure.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "bind",
+        "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "RateLimitConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "burst": {
+          "description": "Requests admitted at once before the average applies.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requestsPerMinute": {
+          "description": "Requests admitted per minute, on average.",
+          "format": "uint32",
+          "maximum": 1000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestsPerMinute",
+        "burst"
+      ],
+      "type": "object"
+    },
+    "RateLimitsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "perCitizen": {
+          "$ref": "#/$defs/RateLimitConfig",
+          "description": "The limit each citizen's requests share."
+        },
+        "perClient": {
+          "$ref": "#/$defs/RateLimitConfig",
+          "description": "The limit each chat-host client's requests share."
+        }
+      },
+      "required": [
+        "perCitizen",
+        "perClient"
+      ],
+      "type": "object"
+    },
+    "RegistryConfig": {
+      "additionalProperties": false,
+      "description": "The outbound half: the registry the gateway acts on.",
+      "properties": {
+        "accessProfile": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The standing agent access profile every call names."
+        },
+        "attemptTimeoutMilliseconds": {
+          "default": 10000,
+          "description": "How long one registry call may take before it is abandoned, in\nmilliseconds.",
+          "format": "uint64",
+          "maximum": 120000,
+          "minimum": 100,
+          "type": "integer"
+        },
+        "audience": {
+          "$ref": "#/$defs/ResourceUri",
+          "description": "The registry's token audience, requested as the exchange resource."
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+        },
+        "scopes": {
+          "description": "The scopes requested for the delegated registry token.",
+          "items": {
+            "$ref": "#/$defs/ScopeToken"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "baseUrl",
+        "accessProfile",
+        "audience",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "ResourceServerConfig": {
+      "additionalProperties": false,
+      "description": "The inbound half: how a chat host's access token is verified.",
+      "properties": {
+        "algorithms": {
+          "description": "The asymmetric signature algorithms an accepted token may use.",
+          "items": {
+            "$ref": "#/$defs/AccessTokenAlgorithm"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowedClients": {
+          "description": "The chat-host clients whose tokens the gateway accepts.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "The exact issuer accepted in access-token `iss` claims. An https URL\nwith no query or fragment; plain http is accepted only on a loopback\nhost under `development-loopback`."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "kind": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Omitted, they are read\nthrough the issuer's OpenID Connect discovery document."
+        },
+        "maximumTokenLifetimeSeconds": {
+          "default": 3600,
+          "description": "The longest lifetime an accepted access token may declare, from its\n`iat` to its `exp`, in seconds.",
+          "format": "uint64",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requiredScopes": {
+          "description": "Scopes every accepted token must carry. There is no sentinel for\n\"any scope\": a gateway that acts for a citizen always names the\nscope that consent was given for.",
+          "items": {
+            "$ref": "#/$defs/ScopeToken"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "resource": {
+          "$ref": "#/$defs/Url",
+          "description": "This gateway's resource identifier: the exact URL of its MCP endpoint,\nwhich every accepted token must name as its audience. An https URL\nwhose path is `/mcp`, with no query or fragment; plain http is\naccepted only on a loopback host under `development-loopback`."
+        },
+        "scopeClaim": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "scope",
+          "description": "The access-token claim that carries the granted scopes."
+        }
+      },
+      "required": [
+        "resource",
+        "issuer",
+        "algorithms",
+        "allowedClients",
+        "requiredScopes"
+      ],
+      "type": "object"
+    },
+    "ResourceUri": {
+      "description": "An RFC 8707 resource indicator: an absolute URI without a fragment. The reader also refuses user information and a URI it cannot parse.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$",
+      "type": "string"
+    },
+    "ScopeToken": {
+      "description": "An RFC 6749 scope token: printable ASCII other than space, `\"`, and `\\`.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[!#-\\[\\]-~]+$",
+      "type": "string"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "ServiceConfig": {
+      "additionalProperties": false,
+      "description": "The authored service a citizen is told about, and the registry entities\nits tools work over.",
+      "properties": {
+        "application": {
+          "$ref": "#/$defs/ApplicationConfig"
+        },
+        "description": {
+          "$ref": "#/$defs/ServiceText"
+        },
+        "details": {
+          "$ref": "#/$defs/DetailsConfig"
+        },
+        "disclosure": {
+          "$ref": "#/$defs/ServiceText",
+          "description": "What the citizen is told about the data the chat host will see."
+        },
+        "name": {
+          "$ref": "#/$defs/ServiceText"
+        },
+        "reviewBaseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "The citizen-facing review page; an application is reviewed and\nsubmitted there, never through the chat host. The review page's\n`publicOrigin`, with no path, query, or fragment."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "disclosure",
+        "details",
+        "application",
+        "reviewBaseUrl"
+      ],
+      "type": "object"
+    },
+    "ServiceText": {
+      "description": "Text a citizen reads: not blank, at most 4096 characters.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "TlsTermination": {
+      "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
+      "enum": [
+        "operator-controlled-upstream",
+        "development-loopback"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/mcp-runtime/mcp-runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The operator runtime configuration document.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/mcp-runtime/v1alpha1",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditConfig"
+    },
+    "exchange": {
+      "$ref": "#/$defs/ExchangeConfig",
+      "description": "The gateway's own client identity at the authorization server."
+    },
+    "kind": {
+      "const": "BRegMcpRuntimeConfig",
+      "type": "string"
+    },
+    "limits": {
+      "$ref": "#/$defs/LimitsConfig"
+    },
+    "listener": {
+      "$ref": "#/$defs/PrivateListenerConfig"
+    },
+    "rateLimits": {
+      "$ref": "#/$defs/RateLimitsConfig"
+    },
+    "registry": {
+      "$ref": "#/$defs/RegistryConfig",
+      "description": "The one registry deployment and access profile the gateway acts on."
+    },
+    "resourceServer": {
+      "$ref": "#/$defs/ResourceServerConfig",
+      "description": "Who may call the gateway: the chat hosts' authorization server."
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "service": {
+      "$ref": "#/$defs/ServiceConfig"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "listener",
+    "secretProviders",
+    "resourceServer",
+    "registry",
+    "exchange",
+    "service",
+    "audit",
+    "rateLimits"
+  ],
+  "title": "Base Registry Engine MCP gateway runtime configuration",
+  "type": "object"
+}

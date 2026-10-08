@@ -175,34 +175,34 @@ impl ResourceServer {
         hasher: AuditKeyHasher,
         limits: RateLimitsConfig,
     ) -> Result<Self, ResourceServerError> {
-        let resource = Url::parse(&config.resource).map_err(|_| ResourceServerError::Resource)?;
+        let resource = config.resource.to_url();
         let metadata_url = metadata_url(&resource).ok_or(ResourceServerError::Resource)?;
         let challenge = format!("Bearer resource_metadata=\"{metadata_url}\"");
         let scope_challenge = format!(
             "Bearer error=\"insufficient_scope\", scope=\"{}\", resource_metadata=\"{metadata_url}\"",
-            config.required_scopes.join(" ")
+            scope_list(config).join(" ")
         );
         let per_citizen = TokenBucketLimiter::new(TokenBucketConfig {
-            requests_per_minute: limits.per_citizen.requests_per_minute,
-            burst: limits.per_citizen.burst,
+            requests_per_minute: limits.per_citizen.requests_per_minute.get(),
+            burst: limits.per_citizen.burst.get(),
         })
         .map_err(|_| ResourceServerError::RateLimit("perCitizen"))?;
         let per_client = TokenBucketLimiter::new(TokenBucketConfig {
-            requests_per_minute: limits.per_client.requests_per_minute,
-            burst: limits.per_client.burst,
+            requests_per_minute: limits.per_client.requests_per_minute.get(),
+            burst: limits.per_client.burst.get(),
         })
         .map_err(|_| ResourceServerError::RateLimit("perClient"))?;
         let metadata = json!({
-            "resource": config.resource,
-            "authorization_servers": [config.issuer],
+            "resource": config.resource.as_str(),
+            "authorization_servers": [config.issuer.as_str()],
             "bearer_methods_supported": ["header"],
-            "scopes_supported": config.required_scopes,
+            "scopes_supported": scope_list(config),
             "resource_name": resource_name,
         });
         Ok(Self {
             verifier,
-            issuer: config.issuer.clone(),
-            required_scopes: config.required_scopes.clone(),
+            issuer: config.issuer.to_string(),
+            required_scopes: scope_list(config),
             hasher,
             per_citizen,
             per_client,
@@ -412,8 +412,8 @@ pub(crate) fn metadata_url(resource: &Url) -> Option<Url> {
 /// The access-token profile inbound tokens are verified under.
 pub(crate) fn verifier_config(config: &ResourceServerConfig) -> TokenVerifierConfig {
     TokenVerifierConfig::access_token_profile(
-        config.issuer.clone(),
-        vec![config.resource.clone()],
+        config.issuer.to_string(),
+        vec![config.resource.to_string()],
         config
             .algorithms
             .iter()
@@ -422,9 +422,26 @@ pub(crate) fn verifier_config(config: &ResourceServerConfig) -> TokenVerifierCon
         // The two spellings RFC 9068 permits for a JWT access token.
         access_token_typ_set("at+jwt"),
     )
-    .with_scope_claim(config.scope_claim.clone())
-    .with_allowed_clients(config.allowed_clients.clone())
-    .with_max_token_lifetime(Some(Duration::from_secs(config.max_token_lifetime_seconds)))
+    .with_scope_claim(config.scope_claim.to_string())
+    .with_allowed_clients(
+        config
+            .allowed_clients
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+    )
+    .with_max_token_lifetime(Some(Duration::from_secs(
+        config.maximum_token_lifetime_seconds.get(),
+    )))
+}
+
+/// The scopes every accepted token must carry, as written.
+fn scope_list(config: &ResourceServerConfig) -> Vec<String> {
+    config
+        .required_scopes
+        .iter()
+        .map(|scope| scope.as_str().to_owned())
+        .collect()
 }
 
 /// Build a verifier over an already constructed key source.
@@ -480,7 +497,11 @@ mod tests {
     use super::*;
     use registry_platform_config::JwksSource;
 
-    use crate::config::{AccessTokenAlgorithm, RateLimitConfig};
+    use registry_platform_yaml::{
+        BoundedU32, BoundedU64, ExternalId, UniqueList, Url as ConfigUrl,
+    };
+
+    use crate::config::{AccessTokenAlgorithm, RateLimitConfig, ScopeToken};
 
     const RESOURCE: &str = "https://gateway.example.test/mcp";
     const CHAT_HOST: &str = "chat-host";
@@ -489,28 +510,30 @@ mod tests {
 
     fn config(issuer: &str, jwks: &str) -> ResourceServerConfig {
         ResourceServerConfig {
-            resource: RESOURCE.to_owned(),
-            issuer: issuer.to_owned(),
+            resource: ConfigUrl::new(RESOURCE).expect("resource"),
+            issuer: ConfigUrl::new(issuer).expect("issuer"),
             jwks_source: JwksSource::Uri {
                 uri: jwks.to_owned(),
             },
-            algorithms: vec![AccessTokenAlgorithm::EdDSA],
-            allowed_clients: vec![CHAT_HOST.to_owned()],
-            required_scopes: vec![SCOPE.to_owned()],
-            scope_claim: "scope".to_owned(),
-            max_token_lifetime_seconds: 3600,
+            algorithms: UniqueList::new(vec![AccessTokenAlgorithm::EdDSA]).expect("algorithms"),
+            allowed_clients: UniqueList::new(vec![ExternalId::new(CHAT_HOST).expect("client")])
+                .expect("clients"),
+            required_scopes: UniqueList::new(vec![ScopeToken::new(SCOPE).expect("scope")])
+                .expect("scopes"),
+            scope_claim: ExternalId::new("scope").expect("claim"),
+            maximum_token_lifetime_seconds: BoundedU64::new(3600).expect("lifetime"),
         }
     }
 
     fn limits(citizen_burst: u32, client_burst: u32) -> RateLimitsConfig {
         RateLimitsConfig {
             per_citizen: RateLimitConfig {
-                requests_per_minute: 1,
-                burst: citizen_burst,
+                requests_per_minute: BoundedU32::new(1).expect("rate"),
+                burst: BoundedU32::new(citizen_burst).expect("burst"),
             },
             per_client: RateLimitConfig {
-                requests_per_minute: 1,
-                burst: client_burst,
+                requests_per_minute: BoundedU32::new(1).expect("rate"),
+                burst: BoundedU32::new(client_burst).expect("burst"),
             },
         }
     }

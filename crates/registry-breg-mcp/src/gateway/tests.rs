@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 use super::*;
 use crate::{
     audit::AuditCapture,
-    config::{ExchangeConfig, RegistryConfig},
+    config::tests::outbound_sections,
     contract::tests::spec,
     inbound::VerifiedCaller,
     mock_registry::{draft_request, MockRegistry, Seen},
@@ -62,24 +62,10 @@ impl Fixture {
         let registry = MockRegistry::start().await;
         registry.add_address(CITIZEN_A, ADDRESS_A, "1 Harbour Road");
         registry.add_address(CITIZEN_B, ADDRESS_B, "4 Mill Street");
-        let outbound = Outbound::new(
-            &RegistryConfig {
-                base_url: registry.base_url.clone(),
-                access_profile: "citizen-agent".to_owned(),
-                audience: AUDIENCE.to_owned(),
-                scopes: vec![SCOPE.to_owned()],
-                request_timeout_milliseconds: 5_000,
-            },
-            &ExchangeConfig {
-                token_endpoint: server.token_endpoint(),
-                client_id: GATEWAY.to_owned(),
-                private_key_ref: "secret:file/unused".to_owned(),
-                assertion_audience: None,
-            },
-            RESOURCE,
-            key,
-        )
-        .expect("outbound configures");
+        let (registry_config, exchange) =
+            outbound_sections(&registry.base_url, &server.token_endpoint());
+        let outbound =
+            Outbound::new(&registry_config, &exchange, RESOURCE, key).expect("outbound configures");
         let directory = tempfile::tempdir().expect("temporary directory");
         let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![9; 32]))
             .expect("audit profile");
