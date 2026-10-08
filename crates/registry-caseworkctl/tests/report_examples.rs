@@ -149,13 +149,33 @@ fn examples() -> Vec<(&'static str, Vec<&'static str>)> {
     ]
 }
 
+/// Copies the tracked example projects into a temporary directory at the
+/// same relative path, leaving out any `.casework` development state a local
+/// session wrote beside them, so the commands see only tracked files.
+fn stage_examples(repository: &Path, staging: &Path) {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).expect("the staging directory is created");
+        for entry in std::fs::read_dir(from).expect("the example directory reads") {
+            let entry = entry.expect("the example entry reads");
+            if entry.file_name() == ".casework" {
+                continue;
+            }
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("the entry type reads").is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).expect("the example file is copied");
+            }
+        }
+    }
+    let examples = "products/casework/examples";
+    copy(&repository.join(examples), &staging.join(examples));
+}
+
 fn output(root: &Path, arguments: &[&str]) -> Vec<u8> {
     let scratch = tempfile::tempdir().expect("temporary directory");
-    let directory = if arguments.first() == Some(&"init") {
-        scratch.path()
-    } else {
-        root
-    };
+    stage_examples(root, scratch.path());
+    let directory = scratch.path();
     let output = Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
         .arg("--format")
         .arg("json")
@@ -169,7 +189,12 @@ fn output(root: &Path, arguments: &[&str]) -> Vec<u8> {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout).expect("the report is UTF-8");
-    text.replace(&format!("\"{}/", root.display()), "\"")
+    let staged = scratch
+        .path()
+        .canonicalize()
+        .expect("staging path resolves");
+    text.replace(&format!("\"{}/", staged.display()), "\"")
+        .replace(&format!("\"{}/", scratch.path().display()), "\"")
         .into_bytes()
 }
 
