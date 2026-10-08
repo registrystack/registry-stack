@@ -169,6 +169,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Configuration conformance corpus runner tests",
         "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py",
     ),
+    (
+        "BReg citizen service runtime schema drift",
+        "run: cargo test --locked -p registry-breg-mcp -p registry-breg-review --features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests",
+    ),
     ("Secret scan job", "secrets:"),
     ("Gitleaks version pin", 'GITLEAKS_VERSION: "8.30.1"'),
     ("Gitleaks archive checksum", "GITLEAKS_LINUX_X64_SHA256:"),

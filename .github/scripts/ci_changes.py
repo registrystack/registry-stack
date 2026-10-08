@@ -154,6 +154,8 @@ CONFIG_CONFORMANCE_INPUTS = (
     "products/platform/scripts/*config_conformance*",
     "products/platform/conformance/*",
     "products/breg/generated/runtime/*",
+    "products/breg/generated/mcp-runtime/*",
+    "products/breg/generated/review-runtime/*",
     "products/casework/generated/runtime/*",
     "products/scheduling/generated/runtime/*",
     "products/messaging/generated/runtime/*",

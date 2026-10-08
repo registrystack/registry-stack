@@ -632,6 +632,8 @@ class CiChangesTest(unittest.TestCase):
             "products/platform/generated/runtime-config-blocks.schema.json",
             "products/platform/scripts/check-config-conformance.py",
             "products/breg/generated/runtime/runtime.schema.json",
+            "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
+            "products/breg/generated/review-runtime/review-runtime.schema.json",
             "products/casework/generated/runtime/runtime.schema.json",
             "products/scheduling/generated/runtime/runtime.schema.json",
         ):

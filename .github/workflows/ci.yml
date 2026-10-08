@@ -1373,6 +1373,8 @@ jobs:
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.config_conformance == 'true' }}
     runs-on: ubuntu-24.04
+    # The check commands and the BReg citizen service schema check compile
+    # their crates cold.
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -1396,6 +1398,9 @@ jobs:
 
       - name: Check runtime configuration conformance
         run: products/platform/scripts/check-config-conformance.py --check-generated
+
+      - name: Check BReg citizen service runtime schemas
+        run: cargo test --locked -p registry-breg-mcp -p registry-breg-review --features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0

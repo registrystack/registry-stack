@@ -1542,6 +1542,17 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(text),
         )
 
+    def test_missing_breg_service_schema_drift_check_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "--features registry-breg-mcp/schema,registry-breg-review/schema --lib schema::tests",
+            "--lib",
+        )
+        self.assertNotEqual(text, self.workflow)
+        self.assertIn(
+            "BReg citizen service runtime schema drift",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_platform_fuzz_runner_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: products/platform/scripts/run-fuzz-smoke.sh",
