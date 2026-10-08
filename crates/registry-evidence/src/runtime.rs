@@ -305,7 +305,7 @@ pub async fn validate_verification_material(
         .map_err(|_| RuntimeInitializationError::Secrets)?;
     validate_subject_binding_key(
         subject_binding_secret.expose_secret(),
-        bundle.config.subject_binding.key_version,
+        bundle.config.subject_binding.key_version.get(),
         &bundle.config.service.trust_domain,
     )
     .map_err(|_| RuntimeInitializationError::Secrets)?;
@@ -571,16 +571,13 @@ fn issuer_trust_roots(
 fn rate_limiter(bundle: &Bundle) -> Result<EvidenceRateLimiter, RuntimeInitializationError> {
     let configured_limits = &bundle.config.rate_limits;
     EvidenceRateLimiter::new(RateLimitConfig {
-        requests_per_principal_per_minute: u32::try_from(
-            configured_limits.requests_per_principal_per_minute,
-        )
-        .map_err(|_| RuntimeInitializationError::RateLimit)?,
-        burst_per_principal: u32::try_from(configured_limits.burst_per_principal)
-            .map_err(|_| RuntimeInitializationError::RateLimit)?,
-        failed_selector_attempts_per_principal_authority_per_minute: u32::try_from(
-            configured_limits.failed_selector_attempts_per_principal_authority_per_minute,
-        )
-        .map_err(|_| RuntimeInitializationError::RateLimit)?,
+        requests_per_principal_per_minute: configured_limits
+            .requests_per_principal_per_minute
+            .get(),
+        burst_per_principal: configured_limits.burst_per_principal.get(),
+        failed_selector_attempts_per_principal_authority_per_minute: configured_limits
+            .failed_selector_attempts_per_principal_authority_per_minute
+            .get(),
     })
     .map_err(|_| RuntimeInitializationError::RateLimit)
 }
@@ -633,7 +630,7 @@ async fn assemble<A>(
     let audit = audit_step(
         destination,
         material.audit_secret.expose_secret().to_vec(),
-        bundle.config.audit.hash_key_version,
+        bundle.config.audit.hash_key_version.get(),
     )
     .await?;
 
@@ -676,7 +673,7 @@ async fn dependencies_ready(
 ) -> bool {
     if validate_subject_binding_key(
         subject_binding_secret.expose_secret(),
-        bundle.config.subject_binding.key_version,
+        bundle.config.subject_binding.key_version.get(),
         &bundle.config.service.trust_domain,
     )
     .is_err()
@@ -1144,8 +1141,8 @@ impl EvidenceRuntime {
                 maximum_bytes,
             } => EvidenceSelectorField::String {
                 name: name.to_owned(),
-                minimum_bytes: *minimum_bytes,
-                maximum_bytes: *maximum_bytes,
+                minimum_bytes: minimum_bytes.get(),
+                maximum_bytes: maximum_bytes.get(),
             },
             SelectorField::Date {} => EvidenceSelectorField::Date {
                 name: name.to_owned(),
@@ -1170,7 +1167,7 @@ impl EvidenceRuntime {
                     name: name.to_owned(),
                     scheme: list.id().to_owned(),
                     version: codelist_version.clone(),
-                    maximum_bytes: *maximum_bytes,
+                    maximum_bytes: maximum_bytes.get(),
                 }
             }
         })
@@ -2303,7 +2300,7 @@ impl EvidenceRuntime {
             ValueProjection {
                 scope: evidence_scope(&resolved.subject_scope, &request.request_nonce),
                 binding_key: self.subject_binding_secret.expose_secret(),
-                binding_key_version: self.bundle().config.subject_binding.key_version,
+                binding_key_version: self.bundle().config.subject_binding.key_version.get(),
             },
         ) {
             Ok(values) => values,
@@ -2790,7 +2787,7 @@ impl EvidenceRuntime {
             ValueProjection {
                 scope: evidence_scope(&item.resolved.subject_scope, &item.request.request_nonce),
                 binding_key: self.subject_binding_secret.expose_secret(),
-                binding_key_version: self.bundle().config.subject_binding.key_version,
+                binding_key_version: self.bundle().config.subject_binding.key_version.get(),
             },
         ) {
             Ok(values) => values,
@@ -3598,7 +3595,7 @@ impl EvidenceRuntime {
                 subject
                     .binding(
                         self.subject_binding_secret.expose_secret(),
-                        self.bundle().config.subject_binding.key_version,
+                        self.bundle().config.subject_binding.key_version.get(),
                         &self.bundle().config.service.trust_domain,
                         subject_scope.as_binding_scope(),
                         &resolved.purpose,

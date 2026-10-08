@@ -24,9 +24,9 @@ use registry_evidence::{
     },
     check::{check_runtime_file, OfflineCheck},
     config::{
-        AcquisitionConfig, ArtifactPath, AssuranceProfile, ConceptForm, ConfigError,
-        EvidenceConfig, OutboundTlsConfig, RequirementConfig, SchemaFault, SelectorInput,
-        StageRole,
+        AcquisitionConfig, ArtifactPath, AssuranceProfile, BurstShortfall, ConceptForm,
+        ConfigError, EvidenceConfig, OutboundTlsConfig, RequirementConfig, SchemaFault,
+        SelectorInput, StageRole,
     },
     kernel::{
         EvidenceConstruction, EvidenceScope, KernelError, KernelOutcome, OfflineKernel,
@@ -35,7 +35,7 @@ use registry_evidence::{
     local_verification::{prepare_local_relying_procedure, LocalRelyingProcedureInput},
     model::{
         JwksDocument, LookupResult, PublicValue, ScalarOrEntityReference, SelectorValue,
-        SubjectBinding,
+        SubjectBinding, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     problem::ProblemCode,
     rhai_runtime::{DerivedConceptValue, DerivedValue},
@@ -533,22 +533,27 @@ async fn run_check(request: CheckRequest) -> ExitCode {
             compiled = false;
         }
         // A warning, not a refusal: a burst below the largest batch is a
-        // deliberate cap on some deployments. It names the bound and the key
-        // to change, never a configured value.
+        // deliberate cap on some deployments. It names the ceiling and the
+        // key to change, never a configured value.
         if let Some(shortfall) = bundle.config.burst_shortfall() {
-            let cost = shortfall.largest_request_cost;
+            let ceiling = match shortfall {
+                BurstShortfall::RequestBatch => {
+                    format!("{EVIDENCE_REQUEST_BATCH_MAX_ITEMS}, the request batch item ceiling")
+                }
+                BurstShortfall::HolderBoundBatch => "holderBoundBatchMaxSize".to_owned(),
+            };
             check.push_bundle_member(
                 Severity::Warning,
                 "evidence.bundle.burst-below-largest-request",
                 "/rateLimits/burstPerPrincipal",
                 format!(
-                    "the burst is below {cost}, the largest request cost this bundle admits: a \
-                     request batch or holder-bound release that costs more than the burst is \
+                    "the burst is below {ceiling}, the largest request cost this bundle admits: \
+                     a request batch or holder-bound release that costs more than the burst is \
                      always refused as evidence.invalid_request"
                 ),
                 format!(
-                    "Raise rateLimits.burstPerPrincipal to at least {cost}, unless capping those \
-                     requests is intended."
+                    "Raise rateLimits.burstPerPrincipal to at least {ceiling}, unless capping \
+                     those requests is intended."
                 ),
             );
         }
@@ -6812,11 +6817,11 @@ mod tests {
             Ok(valid_config.sources.len())
         );
 
-        // A timeout of zero is refused when the bundle is read, so the
-        // typed configuration is changed after reading to prove source plan
-        // compilation refuses it too.
+        // A base URL carrying a path is refused when the bundle is read, so
+        // the typed configuration is changed after reading to prove source
+        // plan compilation refuses it too.
         let mut invalid_config = valid_config.clone();
-        let registry_evidence::config::SourceConfig::HttpJson { request, .. } = invalid_config
+        let registry_evidence::config::SourceConfig::HttpJson { base_url, .. } = invalid_config
             .sources
             .values_mut()
             .next()
@@ -6824,7 +6829,7 @@ mod tests {
         else {
             panic!("the fixture's first source is an HTTP source");
         };
-        request.timeout_milliseconds = 0;
+        *base_url = "https://registry.example.invalid/records".to_owned();
         assert_eq!(
             compile_source_plans_with_runtime(
                 &invalid_config,

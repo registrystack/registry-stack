@@ -486,14 +486,11 @@ pub const EVIDENCE_BUNDLE_REMOVED_KEYS: &[registry_platform_yaml::RemovedKey<'st
 /// block of the bundle.
 fn bundle_rule_code(pointer: &str) -> &'static str {
     match pointer.split('/').nth(1).unwrap_or_default() {
-        "version" => "evidence.bundle.invalid-version",
         "service" => "evidence.bundle.invalid-service",
         "issuer" => "evidence.bundle.invalid-issuer",
         "publication" => "evidence.bundle.invalid-publication",
         "authentication" => "evidence.bundle.invalid-authentication",
-        "audit" => "evidence.bundle.invalid-audit",
         "subjectBinding" => "evidence.bundle.invalid-subject-binding",
-        "rateLimits" => "evidence.bundle.invalid-rate-limits",
         "signing" => "evidence.bundle.invalid-signing",
         "responseFormats" => "evidence.bundle.invalid-response-formats",
         "selectorProfiles" => "evidence.bundle.invalid-selector-profile",
@@ -501,7 +498,6 @@ fn bundle_rule_code(pointer: &str) -> &'static str {
         "sourceConnections" => "evidence.bundle.invalid-source-connection",
         "authorityProfiles" => "evidence.bundle.invalid-authority-profile",
         "acquisitionCapabilities" => "evidence.bundle.invalid-acquisition-capabilities",
-        "holderBoundBatchMaxSize" => "evidence.bundle.invalid-holder-bound-batch-size",
         "requirements" => "evidence.bundle.invalid-requirement",
         _ => "evidence.bundle.invalid-configuration",
     }
@@ -690,7 +686,7 @@ impl<T: Serialize> Serialize for OrderedMap<T> {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceConfig {
-    pub version: u8,
+    pub version: BoundedU32<1, 1>,
     /// The governed assurance boundary for this immutable bundle.
     pub assurance_profile: AssuranceProfile,
     pub service: ServiceConfig,
@@ -726,7 +722,8 @@ pub struct EvidenceConfig {
     /// serve a batch, and the key is omitted when absent because the projected
     /// configuration is what a requirement's `configurationRevision` digests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub holder_bound_batch_max_size: Option<u16>,
+    pub holder_bound_batch_max_size:
+        Option<BoundedU32<1, { MAXIMUM_HOLDER_BOUND_BATCH_SIZE as u32 }>>,
     pub requirements: Vec<RequirementConfig>,
 }
 
@@ -791,36 +788,24 @@ pub fn subject_binding_permits_response_format(
 /// A principal's bucket never holds more than the burst, so a request that
 /// costs more is refused however long its caller waits. That can be deliberate,
 /// a way to cap how much one principal asks for at once, so it is reported as
-/// a warning rather than refused. It carries configured numbers only, never a
-/// request value.
+/// a warning rather than refused. It names which ceiling sets the cost, never
+/// a configured value.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct BurstShortfall {
-    pub burst: u64,
-    pub largest_request_cost: u16,
-}
-
-impl fmt::Display for BurstShortfall {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            burst,
-            largest_request_cost: cost,
-        } = self;
-        write!(
-            formatter,
-            "rateLimits.burstPerPrincipal is {burst}, below {cost}, the largest request cost \
-             this bundle admits: a request batch or holder-bound release that costs more than \
-             the burst is always refused as evidence.invalid_request. Raise \
-             rateLimits.burstPerPrincipal to at least {cost} unless capping those requests \
-             below {cost} is intended"
-        )
-    }
+pub enum BurstShortfall {
+    /// The request-batch route's item ceiling, a product constant, sets the
+    /// cost.
+    RequestBatch,
+    /// The declared `holderBoundBatchMaxSize` sets the cost.
+    HolderBoundBatch,
 }
 
 impl EvidenceConfig {
     /// The declared holder-bound batch ceiling, or one when none is declared.
     pub fn holder_bound_batch_ceiling(&self) -> u16 {
         self.holder_bound_batch_max_size
-            .unwrap_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE)
+            .map_or(DEFAULT_HOLDER_BOUND_BATCH_SIZE, |size| {
+                u16::try_from(size.get()).unwrap_or(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
+            })
     }
 
     /// The largest request-rate cost a request this bundle can serve charges.
@@ -833,6 +818,13 @@ impl EvidenceConfig {
     /// bundle both enables the batch container and declares a holder-bound
     /// requirement, up to the declared ceiling. Every other request costs one.
     pub fn largest_request_cost(&self) -> u16 {
+        let (request_batch, holder_bound_release) = self.request_costs();
+        request_batch.max(holder_bound_release).max(1)
+    }
+
+    /// The largest request-batch cost and the largest holder-bound release
+    /// cost, as [`Self::largest_request_cost`] describes them.
+    fn request_costs(&self) -> (u16, u16) {
         let request_batch = if self.requirements.iter().any(|requirement| {
             requirement.subject_binding_mode() == SubjectBindingMode::AudienceScoped
         }) {
@@ -850,19 +842,20 @@ impl EvidenceConfig {
         } else {
             1
         };
-        request_batch.max(holder_bound_release).max(1)
+        (request_batch, holder_bound_release)
     }
 
-    /// The shortfall when the configured burst cannot hold the largest request
-    /// cost this bundle admits, so some requests could never be admitted.
+    /// The ceiling that sets the largest request cost when the configured
+    /// burst cannot hold it, so some requests could never be admitted.
     pub fn burst_shortfall(&self) -> Option<BurstShortfall> {
-        let largest_request_cost = self.largest_request_cost();
-        (self.rate_limits.burst_per_principal < u64::from(largest_request_cost)).then_some(
-            BurstShortfall {
-                burst: self.rate_limits.burst_per_principal,
-                largest_request_cost,
-            },
-        )
+        let (request_batch, holder_bound_release) = self.request_costs();
+        let bound = if holder_bound_release > request_batch {
+            BurstShortfall::HolderBoundBatch
+        } else {
+            BurstShortfall::RequestBatch
+        };
+        (self.rate_limits.burst_per_principal.get() < u32::from(self.largest_request_cost()))
+            .then_some(bound)
     }
 
     pub fn requirement_acquisition_posture(
@@ -946,9 +939,6 @@ impl EvidenceConfig {
     /// The first rule this decoded bundle breaks, with the member it
     /// concerns, in the order startup checks them.
     pub(crate) fn check_rules(&self) -> Result<(), Violation> {
-        if self.version != 1 {
-            return invalid("version must equal 1").at("/version");
-        }
         validate_uri(&self.service.provider_id).at("/service/providerId")?;
         validate_uri(&self.service.trust_domain).at("/service/trustDomain")?;
         validate_public_origin(&self.service.public_origin, self.assurance_profile)
@@ -962,13 +952,10 @@ impl EvidenceConfig {
         self.authentication
             .validate(self.assurance_profile)
             .at("/authentication/oidc")?;
-        self.audit.validate().at("/audit")?;
-        self.subject_binding.validate().at("/subjectBinding")?;
         if self.audit.key.hash_key_ref == self.subject_binding.secret_ref {
             return invalid("audit and subject-binding secret references must be distinct")
                 .at("/subjectBinding/secretRef");
         }
-        self.rate_limits.validate().at("/rateLimits")?;
         self.signing.validate().at("/signing")?;
         validate_response_formats(&self.response_formats, "bundle response formats")
             .at("/responseFormats")?;
@@ -1134,13 +1121,6 @@ impl EvidenceConfig {
     /// declares or does not start. Each cause names the rule and no configured
     /// value.
     fn validate_holder_bound_requirements(&self) -> Result<(), Violation> {
-        if self
-            .holder_bound_batch_max_size
-            .is_some_and(|size| size == 0 || size > MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
-        {
-            return invalid("holder-bound batch size is outside the permitted range")
-                .at("/holderBoundBatchMaxSize");
-        }
         for (index, requirement) in self.requirements.iter().enumerate() {
             if requirement.subject_binding_mode() != SubjectBindingMode::HolderBound {
                 continue;
@@ -1316,7 +1296,8 @@ impl EvidenceConfig {
         };
         if request.path.is_none()
             || request.path_template.is_some()
-            || item_count > usize::from(batch.maximum_items)
+            || u64::try_from(item_count)
+                .map_or(true, |count| count > u64::from(batch.maximum_items.get()))
         {
             return SourceBatchPlan::Sequential;
         }
@@ -2223,9 +2204,11 @@ pub struct RuntimeAuditConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rotate_bytes: Option<u64>,
+    pub rotate_bytes: Option<
+        BoundedU64<{ registry_platform_audit::MIN_AUDIT_ROTATE_BYTES }, { u32::MAX as u64 }>,
+    >,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retain_days: Option<u32>,
+    pub retain_days: Option<BoundedU32<1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>>,
 }
 
 impl RuntimeAuditConfig {
@@ -2255,8 +2238,8 @@ impl RuntimeAuditConfig {
         AuditDestination::from_settings(
             self.destination,
             self.path.as_deref().map(PathBuf::from),
-            self.rotate_bytes,
-            self.retain_days,
+            self.rotate_bytes.map(BoundedU64::get),
+            self.retain_days.map(BoundedU32::get),
         )
     }
 
@@ -2588,7 +2571,7 @@ pub struct OidcAuthenticationConfig {
     pub claims: registry_platform_oidc::ClaimNames,
     /// Maximum lifetime accepted for inbound access tokens. The verifier
     /// requires `iat`, requires `exp > iat`, and applies this bound.
-    pub maximum_token_lifetime_seconds: u64,
+    pub maximum_token_lifetime_seconds: BoundedU64<1, 86_400>,
     /// Emergency denylist applied before JWKS cache selection.
     pub revoked_key_ids: Vec<String>,
     /// Explicit machine-client admission, matched against the token's
@@ -2714,12 +2697,6 @@ impl OidcAuthenticationConfig {
         }
         validate_unique(&self.token_types, 1, 4, "authentication tokenTypes")?;
         validate_unique(&self.algorithms, 1, 3, "authentication algorithms")?;
-        validate_range(
-            self.maximum_token_lifetime_seconds,
-            1,
-            86_400,
-            "authentication maximumTokenLifetimeSeconds",
-        )?;
         validate_unique_strings(
             &self.revoked_key_ids,
             0,
@@ -2896,60 +2873,24 @@ pub struct AuditConfig {
     pub key: AuditKeyConfig,
     /// Labels the pseudonym key generation, so a rotated key is told apart
     /// from the one it replaced.
-    pub hash_key_version: u32,
+    pub hash_key_version: BoundedU32<1, { u32::MAX }>,
 }
 
 shared_block_host!(AuditConfig, block = "key");
-
-impl AuditConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.hash_key_version == 0 {
-            return invalid("audit hash key must be versioned");
-        }
-        Ok(())
-    }
-}
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubjectBindingConfig {
     pub secret_ref: SecretReference,
-    pub key_version: u32,
-}
-
-impl SubjectBindingConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.key_version == 0 {
-            return invalid("subject binding keyVersion must be positive");
-        }
-        Ok(())
-    }
+    pub key_version: BoundedU32<1, { u32::MAX }>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RateLimitConfig {
-    pub requests_per_principal_per_minute: u64,
-    pub burst_per_principal: u64,
-    pub failed_selector_attempts_per_principal_authority_per_minute: u64,
-}
-
-impl RateLimitConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(
-            self.requests_per_principal_per_minute,
-            1,
-            1_000_000,
-            "request rate limit",
-        )?;
-        validate_range(self.burst_per_principal, 1, 100_000, "burst rate limit")?;
-        validate_range(
-            self.failed_selector_attempts_per_principal_authority_per_minute,
-            1,
-            100_000,
-            "failed-selector rate limit",
-        )
-    }
+    pub requests_per_principal_per_minute: BoundedU32<1, 1_000_000>,
+    pub burst_per_principal: BoundedU32<1, 100_000>,
+    pub failed_selector_attempts_per_principal_authority_per_minute: BoundedU32<1, 100_000>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -2961,8 +2902,8 @@ pub struct SigningConfig {
     pub published_public_jwk_files: Vec<PublicJwkPath>,
     pub revoked_key_ids: Vec<String>,
     pub jwks_path: String,
-    pub maximum_assertion_validity_seconds: u64,
-    pub verifier_clock_skew_seconds: u64,
+    pub maximum_assertion_validity_seconds: BoundedU64<1, 31_536_000>,
+    pub verifier_clock_skew_seconds: BoundedU64<0, 300>,
 }
 
 impl SigningConfig {
@@ -2984,21 +2925,7 @@ impl SigningConfig {
         if self.jwks_path != "/.well-known/evidence/jwks.json" {
             return invalid("JWKS path is not the Version 1 discovery path");
         }
-        validate_range(
-            self.maximum_assertion_validity_seconds,
-            1,
-            31_536_000,
-            "maximum assertion validity",
-        )?;
-        // The same bound the relying party's `clockSkewSeconds` carries: an
-        // advertised skew a conformant verification policy cannot express would
-        // be unusable advice. Widening either one alone is a contract change.
-        validate_range(
-            self.verifier_clock_skew_seconds,
-            0,
-            300,
-            "verifier clock skew",
-        )
+        Ok(())
     }
 }
 
@@ -3093,24 +3020,18 @@ fn is_public_jwk_path(value: &str) -> bool {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectorProfile {
-    pub maximum_aggregate_bytes: u64,
+    pub maximum_aggregate_bytes: BoundedU64<1, 8_192>,
     pub fields: OrderedMap<SelectorField>,
 }
 
 impl SelectorProfile {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(
-            self.maximum_aggregate_bytes,
-            1,
-            8_192,
-            "selector maximumAggregateBytes",
-        )?;
         validate_len(self.fields.len(), 1, 16, "selector fields")?;
         for (name, field) in self.fields.iter() {
             if !valid_field_name(name) {
                 return invalid("selector field name is invalid");
             }
-            field.validate(self.maximum_aggregate_bytes)?;
+            field.validate(self.maximum_aggregate_bytes.get())?;
         }
         Ok(())
     }
@@ -3121,9 +3042,9 @@ impl SelectorProfile {
 pub enum SelectorField {
     String {
         #[serde(rename = "minimumBytes")]
-        minimum_bytes: u64,
+        minimum_bytes: BoundedU64<1, 8_192>,
         #[serde(rename = "maximumBytes")]
-        maximum_bytes: u64,
+        maximum_bytes: BoundedU64<1, 8_192>,
     },
     Date {},
     Integer {
@@ -3136,7 +3057,7 @@ pub enum SelectorField {
         #[serde(rename = "codelistVersion")]
         codelist_version: String,
         #[serde(rename = "maximumBytes")]
-        maximum_bytes: u64,
+        maximum_bytes: BoundedU64<1, 8_192>,
     },
 }
 
@@ -3150,9 +3071,7 @@ impl SelectorField {
                 minimum_bytes,
                 maximum_bytes,
             } => {
-                validate_range(*minimum_bytes, 1, 8_192, "selector string minimumBytes")?;
-                validate_range(*maximum_bytes, 1, 8_192, "selector string maximumBytes")?;
-                if minimum_bytes > maximum_bytes || maximum_bytes > &aggregate_maximum {
+                if minimum_bytes > maximum_bytes || maximum_bytes.get() > aggregate_maximum {
                     return invalid("selector string byte bounds are inconsistent");
                 }
             }
@@ -3169,8 +3088,7 @@ impl SelectorField {
             } => {
                 require_artifact_prefix(codelist, "codelists/")?;
                 validate_string(codelist_version, 1, 128, "selector codelist version")?;
-                validate_range(*maximum_bytes, 1, 8_192, "selector code maximumBytes")?;
-                if maximum_bytes > &aggregate_maximum {
+                if maximum_bytes.get() > aggregate_maximum {
                     return invalid("selector code exceeds aggregate byte bound");
                 }
             }
@@ -3260,18 +3178,18 @@ pub struct SourceConnectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
     #[serde(default = "default_connection_concurrency")]
-    pub concurrency_limit: u16,
+    pub concurrency_limit: BoundedU32<1, 256>,
     #[serde(default = "default_connection_timeout")]
-    pub admission_timeout_milliseconds: u64,
+    pub admission_timeout_milliseconds: BoundedU64<1, 30_000>,
     #[serde(default = "default_connection_timeout")]
-    pub token_timeout_milliseconds: u64,
+    pub token_timeout_milliseconds: BoundedU64<1, 30_000>,
 }
 
-fn default_connection_concurrency() -> u16 {
-    4
+fn default_connection_concurrency() -> BoundedU32<1, 256> {
+    BoundedU32::new(4).expect("the default connection concurrency is in range")
 }
-fn default_connection_timeout() -> u64 {
-    5_000
+fn default_connection_timeout() -> BoundedU64<1, 30_000> {
+    BoundedU64::new(5_000).expect("the default connection timeout is in range")
 }
 
 impl SourceConnectionConfig {
@@ -3296,24 +3214,7 @@ impl SourceConnectionConfig {
                 );
             }
         }
-        validate_range(
-            u64::from(self.concurrency_limit),
-            1,
-            256,
-            "connection concurrency",
-        )?;
-        validate_range(
-            self.admission_timeout_milliseconds,
-            1,
-            30_000,
-            "connection admission timeout",
-        )?;
-        validate_range(
-            self.token_timeout_milliseconds,
-            1,
-            30_000,
-            "connection token timeout",
-        )
+        Ok(())
     }
 
     pub(crate) fn matches_source(&self, source: &SourceConfig) -> bool {
@@ -3397,7 +3298,7 @@ pub enum SourceConfig {
         request: Box<SqliteRequest>,
         /// Oldest extract this source accepts, so a stale file is refused
         /// rather than answered from.
-        maximum_extract_age_seconds: u64,
+        maximum_extract_age_seconds: BoundedU64<1, 2_592_000>,
         /// Shape contract for the projected result, validated by Rust before
         /// extraction runs, so the script maps a result it can rely on.
         response_schema: ArtifactPath,
@@ -3493,19 +3394,12 @@ impl SourceConfig {
             Self::SqliteExtract {
                 extract_profile,
                 request,
-                maximum_extract_age_seconds,
                 ..
             } => {
                 if !valid_local_id(extract_profile) {
                     return invalid("source extract profile identifier is invalid");
                 }
                 request.validate()?;
-                validate_range(
-                    *maximum_extract_age_seconds,
-                    1,
-                    2_592_000,
-                    "source extract age",
-                )?;
             }
         }
         let extract_script = self.extract_script();
@@ -3753,22 +3647,22 @@ impl SourceConfig {
 
     pub fn timeout_milliseconds(&self) -> u64 {
         match self {
-            Self::HttpJson { request, .. } => request.timeout_milliseconds,
-            Self::SqliteExtract { request, .. } => request.timeout_milliseconds,
+            Self::HttpJson { request, .. } => request.timeout_milliseconds.get(),
+            Self::SqliteExtract { request, .. } => request.timeout_milliseconds.get(),
         }
     }
 
     pub fn maximum_response_bytes(&self) -> u64 {
         match self {
-            Self::HttpJson { request, .. } => request.maximum_response_bytes,
-            Self::SqliteExtract { request, .. } => request.maximum_response_bytes,
+            Self::HttpJson { request, .. } => request.maximum_response_bytes.get(),
+            Self::SqliteExtract { request, .. } => request.maximum_response_bytes.get(),
         }
     }
 
-    pub fn concurrency_limit(&self) -> u16 {
+    pub fn concurrency_limit(&self) -> u32 {
         match self {
-            Self::HttpJson { request, .. } => request.concurrency_limit,
-            Self::SqliteExtract { request, .. } => request.concurrency_limit,
+            Self::HttpJson { request, .. } => request.concurrency_limit.get(),
+            Self::SqliteExtract { request, .. } => request.concurrency_limit.get(),
         }
     }
 }
@@ -3778,7 +3672,7 @@ impl SourceConfig {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeclaredUnresolvedProblem {
-    pub status: u16,
+    pub status: BoundedU32<404, 404>,
     #[serde(rename = "type")]
     pub type_uri: String,
     pub code: String,
@@ -3786,9 +3680,6 @@ pub struct DeclaredUnresolvedProblem {
 
 impl DeclaredUnresolvedProblem {
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.status != 404 {
-            return invalid("declared unresolved problem status must be 404");
-        }
         if self.type_uri.chars().count() > 512 {
             return invalid("declared unresolved problem type is too long");
         }
@@ -3941,7 +3832,7 @@ pub enum SourceAuthentication {
         )]
         credential_placement: Option<CredentialPlacement>,
         #[serde(rename = "maximumCacheSeconds")]
-        maximum_cache_seconds: u64,
+        maximum_cache_seconds: BoundedU64<0, 86_400>,
         /// Lifetime assumed when the provider omits `expires_in`.
         ///
         /// RFC 6749 section 5.1 makes `expires_in` recommended rather than
@@ -3954,7 +3845,7 @@ pub enum SourceAuthentication {
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        assumed_lifetime_seconds: Option<u64>,
+        assumed_lifetime_seconds: Option<BoundedU64<1, 86_400>>,
     },
 }
 
@@ -3991,8 +3882,6 @@ impl SourceAuthentication {
                 audience,
                 resource,
                 credential_placement,
-                maximum_cache_seconds,
-                assumed_lifetime_seconds,
                 ..
             } => {
                 let token_endpoint = validate_source_url(token_endpoint, false)?;
@@ -4046,20 +3935,7 @@ impl SourceAuthentication {
                 if let Some(resource) = resource {
                     validate_oauth_resource(resource)?;
                 }
-                if let Some(assumed_lifetime_seconds) = assumed_lifetime_seconds {
-                    validate_range(
-                        *assumed_lifetime_seconds,
-                        1,
-                        86_400,
-                        "OAuth assumed token lifetime",
-                    )?;
-                }
-                validate_range(
-                    *maximum_cache_seconds,
-                    0,
-                    86_400,
-                    "OAuth maximum cache lifetime",
-                )
+                Ok(())
             }
         }
     }
@@ -4135,9 +4011,9 @@ pub struct FixedRequest {
     pub preparation_limits: PreparationLimits,
     pub projection: Vec<String>,
     pub redirects: RedirectPolicy,
-    pub timeout_milliseconds: u64,
-    pub maximum_response_bytes: u64,
-    pub concurrency_limit: u16,
+    pub timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
+    pub concurrency_limit: BoundedU32<1, 256>,
 }
 
 /// Reviewed scripts and response contract for one physical HTTP call serving
@@ -4145,7 +4021,7 @@ pub struct FixedRequest {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpBatchConfig {
-    pub maximum_items: u16,
+    pub maximum_items: BoundedU32<1, { MAXIMUM_SOURCE_BATCH_ITEMS as u32 }>,
     pub prepare_script: ArtifactPath,
     pub extract_script: ArtifactPath,
     pub response_schema: ArtifactPath,
@@ -4154,12 +4030,6 @@ pub struct HttpBatchConfig {
 
 impl HttpBatchConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(
-            u64::from(self.maximum_items),
-            1,
-            u64::from(MAXIMUM_SOURCE_BATCH_ITEMS),
-            "source batch items",
-        )?;
         for script in [&self.prepare_script, &self.extract_script] {
             require_artifact_prefix(script, "adapters/")?;
             if !script.as_str().ends_with(".rhai") {
@@ -4214,19 +4084,6 @@ impl FixedRequest {
             return invalid("GET source requests must forbid the JSON body channel");
         }
         validate_projection(&self.projection)?;
-        validate_range(self.timeout_milliseconds, 1, 30_000, "source timeout")?;
-        validate_range(
-            self.maximum_response_bytes,
-            1,
-            1_048_576,
-            "source response size",
-        )?;
-        validate_range(
-            u64::from(self.concurrency_limit),
-            1,
-            256,
-            "source concurrency",
-        )?;
 
         Ok(())
     }
@@ -4278,13 +4135,13 @@ pub struct SqliteRequest {
     /// a preparation script to bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preparation_limits: Option<SqlitePreparationLimits>,
-    pub maximum_rows: u64,
-    pub maximum_cell_bytes: u64,
-    pub maximum_statement_steps: u64,
+    pub maximum_rows: BoundedU64<1, 256>,
+    pub maximum_cell_bytes: BoundedU64<1, 65_536>,
+    pub maximum_statement_steps: BoundedU64<1, 1_000_000>,
     pub projection: Vec<String>,
-    pub timeout_milliseconds: u64,
-    pub maximum_response_bytes: u64,
-    pub concurrency_limit: u16,
+    pub timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub maximum_response_bytes: BoundedU64<1, 1_048_576>,
+    pub concurrency_limit: BoundedU32<1, 256>,
 }
 
 impl SqliteRequest {
@@ -4366,11 +4223,10 @@ impl SqliteRequest {
         // together or not at all.
         match (&self.prepare_script, &self.preparation_limits) {
             (Some(_), Some(limits)) => {
-                limits.validate()?;
                 // A script allowed to return fewer parameters than the source
                 // declares prepared can never fill them all, so the bound is
                 // read against the work it has to admit.
-                if limits.maximum_parameters < prepared_parameters {
+                if limits.maximum_parameters.get() < prepared_parameters {
                     return invalid(
                         "statement preparation limits must admit every prepared parameter",
                     );
@@ -4388,27 +4244,6 @@ impl SqliteRequest {
         if !statement_projection_preserves_columns(&self.projection, &self.columns) {
             return invalid("statement projection must preserve every declared result column");
         }
-        validate_range(self.maximum_rows, 1, 256, "statement rows")?;
-        validate_range(self.maximum_cell_bytes, 1, 65_536, "statement cell size")?;
-        validate_range(
-            self.maximum_statement_steps,
-            1,
-            1_000_000,
-            "statement steps",
-        )?;
-        validate_range(self.timeout_milliseconds, 1, 30_000, "source timeout")?;
-        validate_range(
-            self.maximum_response_bytes,
-            1,
-            1_048_576,
-            "source response size",
-        )?;
-        validate_range(
-            u64::from(self.concurrency_limit),
-            1,
-            256,
-            "source concurrency",
-        )?;
 
         Ok(())
     }
@@ -4496,21 +4331,9 @@ impl SqliteParameterBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SqlitePreparationLimits {
     /// Entries the returned `parameters` map may carry.
-    pub maximum_parameters: u64,
+    pub maximum_parameters: BoundedU64<1, 64>,
     /// Bytes one returned parameter value may carry.
-    pub maximum_parameter_value_bytes: u64,
-}
-
-impl SqlitePreparationLimits {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_range(self.maximum_parameters, 1, 64, "prepared parameters")?;
-        validate_range(
-            self.maximum_parameter_value_bytes,
-            1,
-            4_096,
-            "prepared parameter value size",
-        )
-    }
+    pub maximum_parameter_value_bytes: BoundedU64<1, 4_096>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
@@ -4707,19 +4530,19 @@ pub struct PreparationLimits {
     pub query: PreparationChannelPolicy,
     pub json_body: PreparationChannelPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_pairs: Option<u64>,
+    pub maximum_query_pairs: Option<BoundedU64<1, 64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_name_bytes: Option<u64>,
+    pub maximum_query_name_bytes: Option<BoundedU64<1, 64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_query_value_bytes: Option<u64>,
+    pub maximum_query_value_bytes: Option<BoundedU64<1, 4_096>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_json_depth: Option<u64>,
+    pub maximum_json_depth: Option<BoundedU64<1, 32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_collection_items: Option<u64>,
+    pub maximum_collection_items: Option<BoundedU64<1, 256>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_string_bytes: Option<u64>,
+    pub maximum_string_bytes: Option<BoundedU64<1, 16_384>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum_normalized_bytes: Option<u64>,
+    pub maximum_normalized_bytes: Option<BoundedU64<1, 65_536>>,
 }
 
 impl PreparationLimits {
@@ -4729,13 +4552,7 @@ impl PreparationLimits {
         {
             return invalid("at least one preparation output channel must be usable");
         }
-        validate_optional_range(self.maximum_query_pairs, 1, 64)?;
-        validate_optional_range(self.maximum_query_name_bytes, 1, 64)?;
-        validate_optional_range(self.maximum_query_value_bytes, 1, 4_096)?;
-        validate_optional_range(self.maximum_json_depth, 1, 32)?;
-        validate_optional_range(self.maximum_collection_items, 1, 256)?;
-        validate_optional_range(self.maximum_string_bytes, 1, 16_384)?;
-        validate_optional_range(self.maximum_normalized_bytes, 1, 65_536)
+        Ok(())
     }
 }
 
@@ -5060,7 +4877,7 @@ pub enum AcquisitionConfig {
         search: String,
         fetch: Vec<FetchSetMember>,
         #[serde(rename = "maximumAcquisitionMilliseconds")]
-        maximum_acquisition_milliseconds: u64,
+        maximum_acquisition_milliseconds: BoundedU64<1, MAXIMUM_ACQUISITION_MILLISECONDS>,
     },
 }
 
@@ -5080,11 +4897,7 @@ impl AcquisitionConfig {
                     return invalid("search-then-fetch source identifiers are invalid");
                 }
             }
-            Self::SearchThenFetchSet {
-                search,
-                fetch,
-                maximum_acquisition_milliseconds,
-            } => {
+            Self::SearchThenFetchSet { search, fetch, .. } => {
                 if fetch.len() < MINIMUM_FETCH_SET_MEMBERS {
                     return invalid("requirement acquisition declares too few fetch members");
                 }
@@ -5107,11 +4920,6 @@ impl AcquisitionConfig {
                         );
                     }
                     member.validate()?;
-                }
-                if !(1..=MAXIMUM_ACQUISITION_MILLISECONDS)
-                    .contains(maximum_acquisition_milliseconds)
-                {
-                    return invalid("requirement acquisition budget is outside Version 1 bounds");
                 }
             }
         }
@@ -5192,7 +5000,7 @@ impl AcquisitionConfig {
                         )
                     }))
                     .collect(),
-                budget_milliseconds: Some(*maximum_acquisition_milliseconds),
+                budget_milliseconds: Some(maximum_acquisition_milliseconds.get()),
             },
         }
     }
@@ -5324,7 +5132,7 @@ pub struct RequirementConfig {
     pub evidence_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_timezone: Option<String>,
-    pub validity_seconds: u64,
+    pub validity_seconds: BoundedU64<1, 31_536_000>,
     pub derivation: DerivationConfig,
     pub concepts: Vec<ConceptConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5381,7 +5189,6 @@ impl RequirementConfig {
                 ConfigError::Invalid("observation timezone is not an IANA timezone")
             })?;
         }
-        validate_range(self.validity_seconds, 1, 31_536_000, "requirement validity")?;
         self.derivation.validate()?;
         validate_len(self.concepts.len(), 1, 16, "requirement concepts")?;
         let mut concepts = BTreeSet::new();
@@ -6089,16 +5896,6 @@ fn projection_paths_overlap(left: &[ProjectionSegment], right: &[ProjectionSegme
         left == right
             || matches!(left, ProjectionSegment::Wildcard)
             || matches!(right, ProjectionSegment::Wildcard)
-    })
-}
-
-fn validate_optional_range(
-    value: Option<u64>,
-    minimum: u64,
-    maximum: u64,
-) -> Result<(), ConfigError> {
-    value.map_or(Ok(()), |value| {
-        validate_range(value, minimum, maximum, "optional bound")
     })
 }
 
@@ -6899,9 +6696,9 @@ mod tests {
             "tlsTrustProfile": "private-ca"
         }))
         .expect("the complete authentication union parses");
-        assert_eq!(connection.concurrency_limit, 4);
-        assert_eq!(connection.admission_timeout_milliseconds, 5000);
-        assert_eq!(connection.token_timeout_milliseconds, 5000);
+        assert_eq!(connection.concurrency_limit.get(), 4);
+        assert_eq!(connection.admission_timeout_milliseconds.get(), 5000);
+        assert_eq!(connection.token_timeout_milliseconds.get(), 5000);
         if let SourceConfig::HttpJson {
             base_url,
             authentication,
@@ -6959,7 +6756,10 @@ mod tests {
                         }
                     }
                     "tlsTrustProfile" => *tls_trust_profile = None,
-                    _ => request.concurrency_limit = 2,
+                    _ => {
+                        request.concurrency_limit =
+                            BoundedU32::new(2).expect("two is a valid concurrency limit");
+                    }
                 }
             }
             assert!(
@@ -8160,7 +7960,7 @@ mod tests {
         };
         assert_eq!(extract_profile, "residence-register");
         assert_eq!(request.statement.as_str(), "queries/residence-region.sql");
-        assert_eq!(*maximum_extract_age_seconds, 86_400);
+        assert_eq!(maximum_extract_age_seconds.get(), 86_400);
         assert_eq!(config.sources.0[0].1.prepare_script(), None);
         assert_eq!(config.sources.0[0].1.adapter_parameters_schema(), None);
         assert!(config.sources.0[0].1.fixed_headers().is_empty());
@@ -8422,8 +8222,8 @@ mod tests {
                 .expect("every bound is declared as a mapping entry");
             for value in [0, maximum + 1] {
                 assert_eq!(
-                    invalid_reason(&edited(&document, declared, &format!("{key}: {value}"))),
-                    "numeric value is outside Version 1 bounds",
+                    decode_cause(&edited(&document, declared, &format!("{key}: {value}"))),
+                    "config.out-of-range",
                     "{key} accepted {value}",
                 );
             }
@@ -8615,8 +8415,8 @@ mod tests {
             };
             for value in [0, maximum + 1] {
                 assert_eq!(
-                    invalid_reason(&prepared_statement_document(true, Some(&limits(value)))),
-                    "numeric value is outside Version 1 bounds",
+                    decode_cause(&prepared_statement_document(true, Some(&limits(value)))),
+                    "config.out-of-range",
                     "{key} accepted {value}",
                 );
             }
@@ -8688,7 +8488,14 @@ mod tests {
             Option<&'static str>,
             Option<usize>,
         );
-        let cases: [Case; 6] = [
+        let out_of_range = reference.replacen(
+            "      timeoutMilliseconds: 3000",
+            "      timeoutMilliseconds: 987654321",
+            1,
+        );
+        assert_ne!(out_of_range, reference, "range mutation applies");
+        let out_of_range_line = line_of(&out_of_range, "timeoutMilliseconds: 987654321");
+        let cases: [Case; 7] = [
             (
                 "malformed YAML",
                 format!("version: 1\nbroken: [{}\n", CANARY_VALUES[0]),
@@ -8719,6 +8526,13 @@ mod tests {
                 "config.expected-integer",
                 Some("/version"),
                 Some(1),
+            ),
+            (
+                "integer outside its bound",
+                out_of_range,
+                "config.out-of-range",
+                None,
+                Some(out_of_range_line),
             ),
             (
                 "missing field",
@@ -8752,7 +8566,10 @@ mod tests {
                 );
             }
             let rendered = serde_json::to_string(&diagnostics).expect("diagnostics serialize");
-            for canary in CANARY_VALUES.iter().chain(["s3cr3t-selector-value"].iter()) {
+            for canary in CANARY_VALUES
+                .iter()
+                .chain(["s3cr3t-selector-value", "987654321"].iter())
+            {
                 assert!(
                     !rendered.contains(canary),
                     "{label} diagnostic leaked a document value: {rendered}"
@@ -9517,7 +9334,7 @@ mod tests {
                 audience: None,
                 resource: None,
                 credential_placement: Some(CredentialPlacement::FormBody),
-                maximum_cache_seconds: 60,
+                maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
                 assumed_lifetime_seconds: None,
             };
             assert_eq!(
@@ -9571,25 +9388,20 @@ mod tests {
         ))
         .expect("fixture is UTF-8");
 
-        for (assumed_lifetime_seconds, expected) in [
-            (
-                Some(0),
-                Err(ConfigError::InvalidField(
-                    "numeric value is outside Version 1 bounds",
-                    "OAuth assumed token lifetime",
-                )),
-            ),
-            (Some(1), Ok(())),
-            (Some(86_400), Ok(())),
-            (
-                Some(86_401),
-                Err(ConfigError::InvalidField(
-                    "numeric value is outside Version 1 bounds",
-                    "OAuth assumed token lifetime",
-                )),
-            ),
-            (None, Ok(())),
+        for (assumed_lifetime_seconds, accepted) in [
+            (Some(0), false),
+            (Some(1), true),
+            (Some(86_400), true),
+            (Some(86_401), false),
+            (None, true),
         ] {
+            // The bound is the member's own type, so a value outside it
+            // cannot be constructed, let alone validated.
+            let Ok(assumed) = assumed_lifetime_seconds.map(BoundedU64::new).transpose() else {
+                assert!(!accepted, "{assumed_lifetime_seconds:?} was refused");
+                continue;
+            };
+            assert!(accepted, "{assumed_lifetime_seconds:?} was constructed");
             let mut oauth =
                 EvidenceConfig::parse_yaml(valid.as_bytes()).expect("fixture validates");
             *http_authentication(&mut oauth) = SourceAuthentication::Oauth2ClientCredentials {
@@ -9605,10 +9417,10 @@ mod tests {
                 audience: None,
                 resource: None,
                 credential_placement: Some(CredentialPlacement::FormBody),
-                maximum_cache_seconds: 60,
-                assumed_lifetime_seconds,
+                maximum_cache_seconds: BoundedU64::new(60).expect("a valid cache bound"),
+                assumed_lifetime_seconds: assumed,
             };
-            assert_eq!(oauth.validate(), expected, "{assumed_lifetime_seconds:?}");
+            assert_eq!(oauth.validate(), Ok(()), "{assumed_lifetime_seconds:?}");
         }
     }
 
@@ -10665,7 +10477,7 @@ outboundTls:
     #[test]
     fn declared_unresolved_problem_tuple_is_closed_and_bounded() {
         DeclaredUnresolvedProblem {
-            status: 404,
+            status: BoundedU32::new(404).expect("404 is the declared status"),
             type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
             code: "consultation.unresolved".to_owned(),
         }
@@ -10674,17 +10486,9 @@ outboundTls:
 
         for (label, problem) in [
             (
-                "status",
-                DeclaredUnresolvedProblem {
-                    status: 403,
-                    type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
-                    code: "consultation.unresolved".to_owned(),
-                },
-            ),
-            (
                 "type",
                 DeclaredUnresolvedProblem {
-                    status: 404,
+                    status: BoundedU32::new(404).expect("404 is the declared status"),
                     type_uri: "http://id.example.invalid/problems/unresolved".to_owned(),
                     code: "consultation.unresolved".to_owned(),
                 },
@@ -10692,7 +10496,7 @@ outboundTls:
             (
                 "code",
                 DeclaredUnresolvedProblem {
-                    status: 404,
+                    status: BoundedU32::new(404).expect("404 is the declared status"),
                     type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
                     code: "Consultation Unresolved".to_owned(),
                 },
@@ -10700,6 +10504,20 @@ outboundTls:
         ] {
             assert!(problem.validate().is_err(), "{label}");
         }
+
+        // Only 404 is representable, so another status is refused as the
+        // bundle is read rather than by the tuple's own rule.
+        let other_status = acceptance_fixture().replacen(
+            "    posture: field-projected\n",
+            "    posture: field-projected\n    unresolvedProblem: {status: 403, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
+            1,
+        );
+        assert!(
+            bundle_refusal(&other_status)
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.out-of-range"),
+            "a status other than 404 is out of range"
+        );
 
         let overlong_type = format!("https://id.example.invalid/problems/{}", "a".repeat(513));
         let candidate = acceptance_fixture().replacen(
@@ -10719,7 +10537,7 @@ outboundTls:
 
         assert!(
             DeclaredUnresolvedProblem {
-                status: 404,
+                status: BoundedU32::new(404).expect("404 is the declared status"),
                 type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
                 code: format!("a{}", "x".repeat(63)),
             }
@@ -10729,7 +10547,7 @@ outboundTls:
         );
         assert!(
             DeclaredUnresolvedProblem {
-                status: 404,
+                status: BoundedU32::new(404).expect("404 is the declared status"),
                 type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
                 code: format!("a{}", "x".repeat(64)),
             }
@@ -11506,15 +11324,22 @@ outboundTls:
     #[test]
     fn a_bundle_rule_violation_is_placed_at_the_member_it_concerns() {
         let valid = acceptance_bundle();
-        let candidate = valid.replacen("hashKeyVersion: 1", "hashKeyVersion: 0", 1);
-        assert_ne!(candidate, valid, "the fixture versions its audit key");
+        let candidate = valid.replacen(
+            "subjectBinding: {secretRef: secret:file/subject-binding-key,",
+            "subjectBinding: {secretRef: secret:file/audit-hash-key,",
+            1,
+        );
+        assert_ne!(
+            candidate, valid,
+            "the fixture binds subjects with its own key"
+        );
         let diagnostics = bundle_refusal(&candidate);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         let refusal = &diagnostics[0];
-        assert_eq!(refusal.code, "evidence.bundle.invalid-audit");
-        assert_eq!(refusal.path, "/audit");
+        assert_eq!(refusal.code, "evidence.bundle.invalid-subject-binding");
+        assert_eq!(refusal.path, "/subjectBinding/secretRef");
         let source = refusal.source.as_ref().expect("a position");
-        assert_eq!(source.line, Some(line_of(&candidate, "audit:")));
+        assert_eq!(source.line, Some(line_of(&candidate, "subjectBinding:")));
     }
 
     #[test]
@@ -11743,17 +11568,11 @@ outboundTls:
                 &format!("      maximumAcquisitionMilliseconds: {budget}\n"),
             );
             assert_ne!(mutated, yaml, "{budget}");
-            let parsed = EvidenceConfig::parse_yaml_reporting_rule(mutated.as_bytes());
             if accepted {
-                parsed.unwrap_or_else(|_| panic!("the budget {budget} is inside the range"));
+                EvidenceConfig::parse_yaml(mutated.as_bytes())
+                    .unwrap_or_else(|_| panic!("the budget {budget} is inside the range"));
             } else {
-                assert_eq!(
-                    parsed.err(),
-                    Some(ConfigError::Invalid(
-                        "requirement acquisition budget is outside Version 1 bounds"
-                    )),
-                    "{budget}"
-                );
+                assert_eq!(decode_cause(&mutated), "config.out-of-range", "{budget}");
             }
             assert_eq!(
                 validator.is_valid(&bundle_contract_instance(mutated.as_bytes())),
@@ -12332,20 +12151,7 @@ outboundTls:
         let shortfall = audience_scoped
             .burst_shortfall()
             .expect("a burst of ten cannot hold a sixteen-item request batch");
-        assert_eq!(
-            shortfall,
-            BurstShortfall {
-                burst: 10,
-                largest_request_cost: 16
-            }
-        );
-        assert_eq!(
-            shortfall.to_string(),
-            "rateLimits.burstPerPrincipal is 10, below 16, the largest request cost this bundle \
-             admits: a request batch or holder-bound release that costs more than the burst is \
-             always refused as evidence.invalid_request. Raise rateLimits.burstPerPrincipal to at \
-             least 16 unless capping those requests below 16 is intended"
-        );
+        assert_eq!(shortfall, BurstShortfall::RequestBatch);
 
         let raised = all_definitions.replace("burstPerPrincipal: 10", "burstPerPrincipal: 16");
         assert_ne!(raised, all_definitions, "the burst mutation applies");
@@ -12367,10 +12173,7 @@ outboundTls:
             EvidenceConfig::parse_yaml(narrow.as_bytes())
                 .expect("fixture parses")
                 .burst_shortfall(),
-            Some(BurstShortfall {
-                burst: 3,
-                largest_request_cost: 4
-            })
+            Some(BurstShortfall::HolderBoundBatch)
         );
     }
 

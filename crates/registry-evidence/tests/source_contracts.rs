@@ -38,6 +38,7 @@ use registry_evidence::source::{
 };
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
+use registry_platform_yaml::{BoundedU32, BoundedU64};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -322,23 +323,32 @@ fn request_limits(config: &PreparationLimits) -> RequestPartsLimits {
         channel(config.query),
         channel(config.json_body),
         RequestPartsBounds {
-            maximum_query_pairs: configured(config.maximum_query_pairs, MAXIMUM_QUERY_PAIRS),
+            maximum_query_pairs: configured(
+                config.maximum_query_pairs.map(|value| value.get()),
+                MAXIMUM_QUERY_PAIRS,
+            ),
             maximum_query_name_bytes: configured(
-                config.maximum_query_name_bytes,
+                config.maximum_query_name_bytes.map(|value| value.get()),
                 MAXIMUM_QUERY_NAME_BYTES,
             ),
             maximum_query_value_bytes: configured(
-                config.maximum_query_value_bytes,
+                config.maximum_query_value_bytes.map(|value| value.get()),
                 MAXIMUM_QUERY_VALUE_BYTES,
             ),
-            maximum_json_depth: configured(config.maximum_json_depth, MAXIMUM_JSON_BODY_DEPTH),
+            maximum_json_depth: configured(
+                config.maximum_json_depth.map(|value| value.get()),
+                MAXIMUM_JSON_BODY_DEPTH,
+            ),
             maximum_collection_items: configured(
-                config.maximum_collection_items,
+                config.maximum_collection_items.map(|value| value.get()),
                 MAXIMUM_ARRAY_ITEMS,
             ),
-            maximum_string_bytes: configured(config.maximum_string_bytes, MAXIMUM_STRING_BYTES),
+            maximum_string_bytes: configured(
+                config.maximum_string_bytes.map(|value| value.get()),
+                MAXIMUM_STRING_BYTES,
+            ),
             maximum_normalized_bytes: configured(
-                config.maximum_normalized_bytes,
+                config.maximum_normalized_bytes.map(|value| value.get()),
                 MAXIMUM_REQUEST_PARTS_BYTES,
             ),
         },
@@ -1062,7 +1072,7 @@ async fn sec_declared_unresolved_problem_is_exact_and_source_neutral() {
         let (_root, secrets) = resolver(&[]);
         let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
         *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
-            status: 404,
+            status: BoundedU32::new(404).expect("404 is the declared status"),
             type_uri: TYPE_URI.into(),
             code: "consultation.unresolved".into(),
         });
@@ -1105,11 +1115,12 @@ async fn undeclared_and_oversized_unresolved_problems_remain_dependency_failures
 
     let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
     *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
-        status: 404,
+        status: BoundedU32::new(404).expect("404 is the declared status"),
         type_uri: "https://id.example.invalid/problems/consultation/unresolved".into(),
         code: "consultation.unresolved".into(),
     });
-    http_request_mut(&mut source).maximum_response_bytes = 32;
+    http_request_mut(&mut source).maximum_response_bytes =
+        BoundedU64::new(32).expect("a valid response bound");
     let executor = SourceExecutor::new(&source, secrets).expect("bounded executor builds");
     assert_eq!(
         executor
@@ -2668,7 +2679,8 @@ async fn oauth_credential_redaction_fixture_fails_closed_without_data_requests()
             assumed_lifetime_seconds,
         );
         if case_id == "transport-timeout" {
-            http_request_mut(&mut source).timeout_milliseconds = 20;
+            http_request_mut(&mut source).timeout_milliseconds =
+                BoundedU64::new(20).expect("a valid timeout");
         }
         let executor = SourceExecutor::new(&source, secrets).expect("OAuth executor builds");
         let result = executor
@@ -2863,10 +2875,12 @@ async fn source_executor_failure_matrix_is_exact_single_request_and_value_free()
             json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
         );
         if case_id == "timeout" {
-            http_request_mut(&mut source).timeout_milliseconds = 20;
+            http_request_mut(&mut source).timeout_milliseconds =
+                BoundedU64::new(20).expect("a valid timeout");
         }
         if case_id == "raw-oversized-before-projection" {
-            http_request_mut(&mut source).maximum_response_bytes = 64;
+            http_request_mut(&mut source).maximum_response_bytes =
+                BoundedU64::new(64).expect("a valid response bound");
         }
         let error = SourceExecutor::new(&source, secrets)
             .expect("failure-matrix source compiles")

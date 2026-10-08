@@ -292,7 +292,7 @@ impl Authenticator {
         )
         .with_denied_kids(config.revoked_key_ids.iter().cloned().collect())
         .with_max_token_lifetime(Some(Duration::from_secs(
-            config.maximum_token_lifetime_seconds,
+            config.maximum_token_lifetime_seconds.get(),
         )))
         .with_allowed_clients(config.allowed_clients.clone().unwrap_or_default())
         .with_assertion_issuers(config.assertion_issuers.clone().unwrap_or_default());

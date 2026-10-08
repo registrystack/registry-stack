@@ -1253,7 +1253,7 @@ fn validate_values(
             value: resolved,
         });
     }
-    if aggregate_bytes > profile.maximum_aggregate_bytes {
+    if aggregate_bytes > profile.maximum_aggregate_bytes.get() {
         return Err(AuthorizationError::Selector);
     }
     Ok(output)
@@ -1271,7 +1271,7 @@ fn validate_value(
                 maximum_bytes,
             },
             SelectorValue::String(value),
-        ) if bounded(value.len(), *minimum_bytes, *maximum_bytes) => {
+        ) if bounded(value.len(), minimum_bytes.get(), maximum_bytes.get()) => {
             Ok(ResolvedSelectorValue::String(value.clone()))
         }
         (ConfiguredField::Date {}, SelectorValue::String(value))
@@ -1296,7 +1296,7 @@ fn validate_value(
                 maximum_bytes,
             },
             SelectorValue::String(value),
-        ) if bounded(value.len(), 1, *maximum_bytes) => {
+        ) if bounded(value.len(), 1, maximum_bytes.get()) => {
             let list = bundle
                 .codelist(codelist)
                 .ok_or(AuthorizationError::Selector)?;

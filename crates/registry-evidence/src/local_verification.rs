@@ -138,7 +138,7 @@ pub async fn prepare_local_relying_procedure(
     let expected_subjects = expected_subjects(
         &resolved,
         subject_binding_secret.expose_secret(),
-        bundle.config.subject_binding.key_version,
+        bundle.config.subject_binding.key_version.get(),
         &bundle.config.service.trust_domain,
         &input.audience,
         &input.purpose,
@@ -159,8 +159,8 @@ pub async fn prepare_local_relying_procedure(
         expected_subjects,
         expected_outputs: local_expected_outputs(requirement),
         revoked_key_ids: bundle.config.signing.revoked_key_ids.clone(),
-        maximum_assertion_lifetime_seconds: requirement.validity_seconds,
-        clock_skew_seconds: bundle.config.signing.verifier_clock_skew_seconds,
+        maximum_assertion_lifetime_seconds: requirement.validity_seconds.get(),
+        clock_skew_seconds: bundle.config.signing.verifier_clock_skew_seconds.get(),
     })
 }
 

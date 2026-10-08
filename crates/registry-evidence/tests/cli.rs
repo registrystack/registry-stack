@@ -318,7 +318,7 @@ fn set_burst(project: &ReferenceProject, burst: u32) {
 }
 
 /// A burst below the largest request cost the bundle admits makes some
-/// requests permanently unadmittable. `check` says so, naming both numbers and
+/// requests permanently unadmittable. `check` says so, naming the ceiling and
 /// the key to change, and still passes: a smaller burst is a legitimate way to
 /// cap batch size, so it is a warning rather than a refusal, and
 /// `--deny-warnings` turns it into one.
@@ -343,14 +343,14 @@ fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
     );
     assert_eq!(
         lines[1],
-        "  the burst is below 16, the largest request cost this bundle admits: a request batch \
-         or holder-bound release that costs more than the burst is always refused as \
-         evidence.invalid_request"
+        "  the burst is below 16, the request batch item ceiling, the largest request cost this \
+         bundle admits: a request batch or holder-bound release that costs more than the burst \
+         is always refused as evidence.invalid_request"
     );
     assert_eq!(
         lines[2],
-        "  next: Raise rateLimits.burstPerPrincipal to at least 16, unless capping those \
-         requests is intended."
+        "  next: Raise rateLimits.burstPerPrincipal to at least 16, the request batch item \
+         ceiling, unless capping those requests is intended."
     );
     assert!(lines[3].starts_with("0 errors, 1 warning in "), "{stderr}");
 
@@ -2203,11 +2203,11 @@ fn failure_cases() -> Vec<FailureCase> {
                 );
             },
             prefix: "evidence: the configuration reader refused the configuration\nerror[config.expected-integer] ",
-            suffix: " /version\n  expected a whole number from 0 to 255, not quoted text\n  next: Write a whole number from 0 to 255.\n1 error, 0 warnings in 1 file\n",
+            suffix: " /version\n  expected a whole number from 1 to 1, not quoted text\n  next: Write a whole number from 1 to 1.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
                 "config.expected-integer",
-                "expected a whole number from 0 to 255, not quoted text",
+                "expected a whole number from 1 to 1, not quoted text",
             ),
         },
         FailureCase {
