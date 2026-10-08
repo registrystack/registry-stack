@@ -384,8 +384,46 @@ function inlineCode(value) {
   return value.includes('`') ? `\`\`${value}\`\`` : `\`${value}\``;
 }
 
+// MDX reads `{` and `}` as expression delimiters and `<` as the start of JSX,
+// so help text escapes them, and the backslash first so a backslash already in
+// the text stays literal. A code span renders its contents verbatim, so it
+// passes through unchanged: its opening run of backticks closes at the next run
+// of the same length, and a run that never closes is ordinary text.
+function mdxText(value) {
+  const escape = (text) => text.replace(/[\\{}<]/gu, (character) => `\\${character}`);
+  let rendered = '';
+  let index = 0;
+  while (index < value.length) {
+    const open = value.indexOf('`', index);
+    if (open === -1) break;
+    let afterOpen = open;
+    while (value[afterOpen] === '`') afterOpen += 1;
+    const ticks = afterOpen - open;
+    let close = value.indexOf('`', afterOpen);
+    while (close !== -1) {
+      let afterClose = close;
+      while (value[afterClose] === '`') afterClose += 1;
+      if (afterClose - close === ticks) break;
+      close = value.indexOf('`', afterClose);
+    }
+    rendered += escape(value.slice(index, open));
+    if (close === -1) {
+      rendered += value.slice(open, afterOpen);
+      index = afterOpen;
+    } else {
+      rendered += value.slice(open, close + ticks);
+      index = close + ticks;
+    }
+  }
+  return rendered + escape(value.slice(index));
+}
+
+function proseText(value) {
+  return mdxText(sentence(value));
+}
+
 function tableText(value) {
-  return value.replaceAll('|', '\\|').replaceAll('\n', ' ');
+  return mdxText(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
 }
 
 function values(values) {
@@ -500,14 +538,14 @@ function renderCommand(command, catalog, reviewMetadata, sourceDigest) {
     '',
     '{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}',
     '',
-    sentence(command.about),
+    proseText(command.about),
     '',
     '## Contract status',
     '',
     `This page is generated from the public Clap command tree for Registry Stack source version ${inlineCode(catalog.source_version)} and catalog SHA-256 ${inlineCode(sourceDigest)}. Hidden implementation commands are omitted.`,
   ];
   if (command.long_about !== null) {
-    lines.push('', '## Description', '', sentence(command.long_about));
+    lines.push('', '## Description', '', proseText(command.long_about));
   }
   lines.push('', '## Usage', '', '```text', command.usage, '```');
   lines.push(constraintTable(command.constraints));
