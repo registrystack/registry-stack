@@ -93,6 +93,116 @@ fn cfg_val_1_an_integer_outside_its_type_is_out_of_range() {
 }
 
 #[test]
+fn cfg_val_2_an_unrepresentable_number_in_a_text_member_is_told_to_quote_it() {
+    let report = refusal::<Settings>("name: 123456789012345678901234567890\n");
+    assert_diagnostic(
+        only(&report),
+        "config.expected-string",
+        "/name",
+        (3, 7),
+        "expected text, not an integer",
+        "Quote the value to make it text.",
+    );
+    let report = refusal::<Settings>("tags: [-123456789012345678901234567890]\n");
+    assert_diagnostic(
+        only(&report),
+        "config.expected-string",
+        "/tags/0",
+        (3, 8),
+        "expected text, not an integer",
+        "Quote the value to make it text.",
+    );
+    let report = refusal::<Settings>("name: 1e999\n");
+    assert_diagnostic(
+        only(&report),
+        "config.expected-string",
+        "/name",
+        (3, 7),
+        "expected text, not a number",
+        "Quote the value to make it text.",
+    );
+}
+
+#[test]
+fn cfg_val_1_an_unrepresentable_integer_in_an_integer_member_names_its_bounds() {
+    let report = refusal::<Settings>("port: 123456789012345678901234567890\n");
+    assert_diagnostic(
+        only(&report),
+        "config.out-of-range",
+        "/port",
+        (3, 7),
+        "the value is outside its bounds; expected a whole number from 0 to 65535",
+        "Write a whole number from 0 to 65535.",
+    );
+    let report = refusal::<Settings>("port: -123456789012345678901234567890\n");
+    assert_diagnostic(
+        only(&report),
+        "config.out-of-range",
+        "/port",
+        (3, 7),
+        "the value is outside its bounds; expected a whole number of 0 or more",
+        "Write a whole number of 0 or more.",
+    );
+    let report = refusal::<Settings>("timeoutSeconds: 123456789012345678901234567890\n");
+    assert_diagnostic(
+        only(&report),
+        "config.out-of-range",
+        "/timeoutSeconds",
+        (3, 17),
+        "the value is outside its bounds; expected a whole number of seconds from 1 to 3600",
+        "Write a whole number of seconds from 1 to 3600.",
+    );
+}
+
+#[test]
+fn cfg_val_1_an_unrepresentable_literal_is_out_of_range_where_text_is_not_read() {
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Literal {
+        value: DataLiteral,
+    }
+    // A number position, a member that takes any literal, and an unknown key
+    // refuse it as out of the reader's range.
+    for (body, path, column, integer) in [
+        ("ratio: 123456789012345678901234567890\n", "/ratio", 8, true),
+        ("ratio: 1e999\n", "/ratio", 8, false),
+        ("other: 123456789012345678901234567890\n", "/other", 8, true),
+    ] {
+        let report = refusal::<Settings>(body);
+        let diagnostic = only(&report);
+        assert_eq!(diagnostic.code, "config.out-of-range", "{body}");
+        assert_eq!(diagnostic.path, path, "{body}");
+        assert_eq!(at(diagnostic), (3, column), "{body}");
+        let start = if integer {
+            "this integer is outside the range"
+        } else {
+            "this number is outside the range"
+        };
+        assert!(diagnostic.message.starts_with(start), "{body}");
+    }
+    let report = refusal::<Literal>("value: 123456789012345678901234567890\n");
+    assert_eq!(codes(&report), ["config.out-of-range"]);
+    assert_eq!(only(&report).path, "/value");
+    // A union's tag is a name, never text to quote.
+    let report = refusal::<Sources>("source:\n  type: 123456789012345678901234567890\n");
+    assert_eq!(codes(&report), ["config.out-of-range"]);
+    assert_eq!(only(&report).path, "/source/type");
+
+    // Each literal is reported, in the words of the member that read it or
+    // out of range where none did; as with a structural problem, the
+    // decode's other problems are not.
+    let report = refusal::<Settings>(
+        "name: 123456789012345678901234567890\nother: 123456789012345678901234567890\n",
+    );
+    assert_eq!(
+        codes(&report),
+        ["config.expected-string", "config.out-of-range"]
+    );
+    let report = refusal::<Settings>("other: 1\nname: 123456789012345678901234567890\n");
+    assert_eq!(codes(&report), ["config.expected-string"]);
+}
+
+#[test]
 fn cfg_val_1_signed_zero_reads_as_zero() {
     #[derive(Debug, Deserialize)]
     struct Offset {

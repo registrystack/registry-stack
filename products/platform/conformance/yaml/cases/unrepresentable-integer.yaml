@@ -1,6 +1,6 @@
 id: unrepresentable-integer
 rules: [CFG-VAL-1]
-summary: An integer the reader cannot represent is refused in every position, before decoding.
+summary: An integer the reader cannot represent is out of range where no text member reads it, such as under an unknown key.
 mutation:
   append: |
     conformanceNumber: 18446744073709551616

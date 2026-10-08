@@ -3,6 +3,8 @@
 
 use serde_json::{Map, Number, Value};
 
+use crate::scalar::{resolve_plain, Resolved};
+
 /// A position in the source text.
 ///
 /// `line` and `column` are 1-based. `column` counts Unicode scalar values from
@@ -162,6 +164,26 @@ impl Node {
         }
     }
 
+    /// An unquoted integer or number no value of the tree can represent.
+    /// The tree keeps it as its text only until decoding, which refuses it
+    /// in the words of the member that reads it; every other read refuses
+    /// it before then (CFG-VAL-1).
+    pub(crate) fn unrepresentable(&self) -> Option<Unrepresentable> {
+        let NodeValue::String(text) = &self.value else {
+            return None;
+        };
+        if text.style != ScalarStyle::Plain || text.substituted {
+            return None;
+        }
+        match resolve_plain(&text.text) {
+            Resolved::IntegerOutOfRange => Some(Unrepresentable::Integer {
+                negative: text.text.starts_with('-'),
+            }),
+            Resolved::FloatOutOfRange => Some(Unrepresentable::Number),
+            _ => None,
+        }
+    }
+
     /// The node's kind in words, for messages. Never the value.
     pub(crate) fn kind_phrase(&self) -> &'static str {
         match &self.value {
@@ -176,6 +198,15 @@ impl Node {
             NodeValue::Mapping(_) => "a mapping",
         }
     }
+}
+
+/// See [`Node::unrepresentable`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unrepresentable {
+    /// An integer outside `i64::MIN..=u64::MAX`.
+    Integer { negative: bool },
+    /// A number that overflows binary64.
+    Number,
 }
 
 /// Escape one JSON pointer segment (RFC 6901).

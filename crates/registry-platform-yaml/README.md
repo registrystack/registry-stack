@@ -201,6 +201,15 @@ the number of seconds as digits." with the member's own unit, `1_000` and
 `1e6` in an integer position get "Write digits only.", and `yes` in a
 boolean position says that `yes`, `no`, `on`, and `off` are text.
 
+An unquoted integer outside `i64::MIN..=u64::MAX`, or a number past
+binary64, is refused by the member that reads it: a text member says to
+quote it (`config.expected-string`), an integer member states its bounds,
+and anywhere else, including under an unknown key, it is
+`config.out-of-range` for the reader's range. Such a number fails the read
+as a structural problem does, so the decode's other problems are not
+reported with it. `Reader::scan` and `Reader::read`, which know no member
+types, refuse it as out of the reader's range.
+
 A whole number's message states the bounds a format declares and leaves out
 a bound that is only its type's extreme: a `u64` member reads "a whole
 number of 0 or more", an `i32` member "a whole number", and a

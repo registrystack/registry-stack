@@ -344,7 +344,7 @@ fn text_member<'n>(
             ));
             None
         }
-        NodeValue::String(text) => Some(&text.text),
+        NodeValue::String(text) if node.unrepresentable().is_none() => Some(&text.text),
         _ => {
             problems.push(Problem::error(
                 "config.expected-string",

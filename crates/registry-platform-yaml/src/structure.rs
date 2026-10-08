@@ -65,6 +65,21 @@ pub(crate) struct Built {
     /// stopped the build.
     pub root: Option<Node>,
     pub problems: Vec<Problem>,
+    /// Unquoted numbers no tree value can represent, kept in the tree as
+    /// their text (see `Node::unrepresentable`). A read that does not decode
+    /// reports these with `problems`.
+    pub unrepresentable: Vec<Problem>,
+}
+
+impl Built {
+    /// A read refused before the tree was built.
+    pub(crate) fn refused(problem: Problem) -> Built {
+        Built {
+            root: None,
+            problems: vec![problem],
+            unrepresentable: Vec::new(),
+        }
+    }
 }
 
 pub(crate) fn build(text: &str, hook: Option<&mut dyn ScalarHook>) -> Built {
@@ -72,6 +87,7 @@ pub(crate) fn build(text: &str, hook: Option<&mut dyn ScalarHook>) -> Built {
         text,
         stack: Vec::new(),
         problems: Vec::new(),
+        unrepresentable: Vec::new(),
         hook,
         root: None,
         documents: 0,
@@ -82,6 +98,7 @@ pub(crate) fn build(text: &str, hook: Option<&mut dyn ScalarHook>) -> Built {
     Built {
         root: if fatal { None } else { builder.root },
         problems: builder.problems,
+        unrepresentable: builder.unrepresentable,
     }
 }
 
@@ -115,6 +132,7 @@ struct Builder<'t, 'h> {
     text: &'t str,
     stack: Vec<Frame>,
     problems: Vec<Problem>,
+    unrepresentable: Vec<Problem>,
     hook: Option<&'h mut dyn ScalarHook>,
     root: Option<Node>,
     documents: usize,
@@ -549,21 +567,21 @@ impl Builder<'_, '_> {
                 );
                 NodeValue::Null
             }
-            Resolved::IntegerOutOfRange => {
-                self.problem_here(
+            Resolved::IntegerOutOfRange | Resolved::FloatOutOfRange => {
+                // Kept as its text: decoding refuses it in the words of the
+                // member that reads it, such as "quote it" in a text member.
+                let integer = resolved == Resolved::IntegerOutOfRange;
+                self.unrepresentable.push(Problem::error(
                     "config.out-of-range",
-                    span.start,
-                    messages::literal_out_of_range(true),
-                );
-                NodeValue::Null
-            }
-            Resolved::FloatOutOfRange => {
-                self.problem_here(
-                    "config.out-of-range",
-                    span.start,
-                    messages::literal_out_of_range(false),
-                );
-                NodeValue::Null
+                    self.pointer(),
+                    Some(span.start),
+                    messages::literal_out_of_range(integer),
+                ));
+                NodeValue::String(Text {
+                    text: value,
+                    style,
+                    substituted: false,
+                })
             }
             Resolved::String => {
                 let pointer = self.pointer();

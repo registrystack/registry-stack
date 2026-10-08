@@ -19,7 +19,7 @@ use crate::diagnostic::{Diagnostic, Report, Severity};
 use crate::envelope::{self, Envelope, Expect, RemovedKey};
 use crate::messages::{self, Problem};
 use crate::node::{escape_pointer_segment, unescape_segment, Node, NodeValue, Position, Span};
-use crate::structure::{self, ScalarHook};
+use crate::structure::{self, Built, ScalarHook};
 
 /// The largest document the reader accepts, in bytes, before any other
 /// check (CFG-YAML-6).
@@ -64,9 +64,11 @@ impl<'h> Reader<'h> {
     /// structural problem. `None` is an empty or comment-only stream.
     pub fn scan(self, bytes: &[u8]) -> Result<Option<Node>, Report> {
         let file = self.file;
-        let (root, problems) = tree(bytes, self.hook);
+        let built = tree(bytes, self.hook);
+        let mut problems = built.problems;
+        problems.extend(built.unrepresentable);
         if problems.is_empty() {
-            return Ok(root);
+            return Ok(built.root);
         }
         Err(report(&file, None, problems, Vec::new()))
     }
@@ -76,7 +78,7 @@ impl<'h> Reader<'h> {
     /// [`Document::decode`].
     pub fn read(self, bytes: &[u8], expect: &Expect<'_>) -> Result<Document, Report> {
         let file = self.file.clone();
-        let (document, removed) = self.read_stages(bytes, expect)?;
+        let (document, removed, _) = self.read_stages(bytes, expect, false)?;
         if removed.is_empty() {
             return Ok(document);
         }
@@ -91,21 +93,33 @@ impl<'h> Reader<'h> {
         bytes: &[u8],
         expect: &Expect<'_>,
     ) -> Result<Decoded<T>, Report> {
-        let (document, removed) = self.read_stages(bytes, expect)?;
-        let value = document.decode_with::<T>("", removed)?;
+        let (document, removed, unrepresentable) = self.read_stages(bytes, expect, true)?;
+        let value = document.decode_with::<T>("", removed, unrepresentable)?;
         Ok(Decoded { value, document })
     }
 
+    /// The document, its removed keys, and, when `decoding`, the unquoted
+    /// numbers the tree cannot represent, which decoding refuses in the
+    /// words of the member that reads each. Otherwise they are refused here.
     fn read_stages(
         self,
         bytes: &[u8],
         expect: &Expect<'_>,
-    ) -> Result<(Document, Vec<Problem>), Report> {
+        decoding: bool,
+    ) -> Result<(Document, Vec<Problem>, Vec<Problem>), Report> {
         let file = self.file;
-        let (root, mut problems) = tree(bytes, self.hook);
+        let Built {
+            root,
+            mut problems,
+            mut unrepresentable,
+        } = tree(bytes, self.hook);
+        if !decoding {
+            problems.append(&mut unrepresentable);
+        }
         if root.is_none() && !problems.is_empty() {
             // The read stopped before the tree was built (size, encoding,
             // or syntax): there is no envelope to check.
+            problems.append(&mut unrepresentable);
             return Err(report(
                 &file,
                 expect.default_artifact(),
@@ -129,6 +143,7 @@ impl<'h> Reader<'h> {
         let (Some(root), Some((index, envelope)), true) =
             (root, outcome.matched, problems.is_empty())
         else {
+            problems.append(&mut unrepresentable);
             return Err(report(&file, artifact.as_deref(), problems, warnings));
         };
         let removed = removed_keys(&root, expect.formats()[index].removed_keys);
@@ -140,6 +155,7 @@ impl<'h> Reader<'h> {
                 warnings,
             },
             removed,
+            unrepresentable,
         ))
     }
 }
@@ -207,7 +223,7 @@ impl Document {
 
     /// Decode the whole document into `T`.
     pub fn decode<T: DeserializeOwned>(&self) -> Result<T, Report> {
-        self.decode_with("", Vec::new())
+        self.decode_with("", Vec::new(), Vec::new())
     }
 
     /// Decode the node at an RFC 6901 pointer into `T`. Diagnostics carry
@@ -222,13 +238,14 @@ impl Document {
             );
             return Err(self.report(vec![problem]));
         }
-        self.decode_with(pointer, Vec::new())
+        self.decode_with(pointer, Vec::new(), Vec::new())
     }
 
     fn decode_with<T: DeserializeOwned>(
         &self,
         pointer: &str,
         removed: Vec<Problem>,
+        unrepresentable: Vec<Problem>,
     ) -> Result<T, Report> {
         let (node, key_span) = self
             .root
@@ -252,6 +269,24 @@ impl Document {
             &ctx,
         );
         let result = T::deserialize(de);
+        if !unrepresentable.is_empty() {
+            // An unrepresentable number fails the read as a structural
+            // problem does, so it alone is reported: in the words of the
+            // member that read it, or out of range where none did.
+            drop(result);
+            let claims = ctx.take_claims();
+            let problems = unrepresentable
+                .into_iter()
+                .map(|problem| {
+                    claims
+                        .iter()
+                        .find(|claim| claim.pointer == problem.pointer)
+                        .cloned()
+                        .unwrap_or(problem)
+                })
+                .collect();
+            return Err(self.report(problems));
+        }
         let mut problems = Vec::new();
         let value = match result {
             Ok(value) => Some(value),
@@ -344,7 +379,7 @@ impl Document {
 }
 
 /// The size cap, the encoding, and the YAML subset.
-fn tree(bytes: &[u8], hook: Option<&mut dyn ScalarHook>) -> (Option<Node>, Vec<Problem>) {
+fn tree(bytes: &[u8], hook: Option<&mut dyn ScalarHook>) -> Built {
     if bytes.len() > MAXIMUM_DOCUMENT_BYTES {
         let problem = Problem::error(
             "yaml.too-large",
@@ -352,7 +387,7 @@ fn tree(bytes: &[u8], hook: Option<&mut dyn ScalarHook>) -> (Option<Node>, Vec<P
             None,
             messages::too_large(MAXIMUM_DOCUMENT_BYTES),
         );
-        return (None, vec![problem]);
+        return Built::refused(problem);
     }
     let text = match std::str::from_utf8(bytes) {
         Ok(text) => text,
@@ -365,12 +400,11 @@ fn tree(bytes: &[u8], hook: Option<&mut dyn ScalarHook>) -> (Option<Node>, Vec<P
                 Some(position_after(valid)),
                 messages::not_utf8(),
             );
-            return (None, vec![problem]);
+            return Built::refused(problem);
         }
     };
     let text = text.strip_prefix(BYTE_ORDER_MARK).unwrap_or(text);
-    let built = structure::build(text, hook);
-    (built.root, built.problems)
+    structure::build(text, hook)
 }
 
 /// The position of the character after `text`, which may start with a

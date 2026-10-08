@@ -17,7 +17,9 @@ use serde::de::{self, DeserializeSeed, Visitor};
 use serde::forward_to_deserialize_any;
 
 use crate::messages::{self, Found, NullPlace, Problem, EXPECT_DATA_LITERAL};
-use crate::node::{escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span};
+use crate::node::{
+    escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span, Unrepresentable,
+};
 use crate::scalar::{resolve_plain, Resolved};
 
 /// The newtype name an internally tagged union asks for, followed by its tag
@@ -330,6 +332,9 @@ pub(crate) struct Ctx {
     /// whole. An error that arrives after one did may concern any node
     /// inside it.
     buffered: Cell<u64>,
+    /// How members refused the unrepresentable numbers they read, in their
+    /// own words (see `Node::unrepresentable`).
+    claims: RefCell<Vec<Problem>>,
 }
 
 impl Ctx {
@@ -341,7 +346,12 @@ impl Ctx {
                 .collect(),
             sink: RefCell::new(removed),
             buffered: Cell::new(0),
+            claims: RefCell::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn take_claims(&self) -> Vec<Problem> {
+        self.claims.take()
     }
 
     pub(crate) fn into_problems(self) -> Vec<Problem> {
@@ -541,6 +551,13 @@ impl<'a> NodeDe<'a> {
         Error::located(self.site.problem(code, text))
     }
 
+    /// Refuse an unrepresentable number this member read, in its words.
+    fn claim(&self, code: &str, text: messages::Text) -> Error {
+        let problem = self.site.problem(code, text);
+        self.ctx.claims.borrow_mut().push(problem.clone());
+        Error::located(problem)
+    }
+
     fn null_error(&self, block: bool) -> Error {
         let place = match self.site.place {
             Place::Item => NullPlace::Item,
@@ -579,10 +596,22 @@ impl<'a> NodeDe<'a> {
             }
             NodeValue::Integer(value) => Ok(*value),
             NodeValue::Null => Err(self.null_error(false)),
-            _ => Err(self.fail(
-                "config.expected-integer",
-                messages::expected_integer(self.found(), self.unit(), &bounds),
-            )),
+            _ => match self.site.node.unrepresentable() {
+                Some(Unrepresentable::Integer { negative }) => {
+                    let bounds = messages::Bounds {
+                        minimum: bounds.minimum.or(negative.then_some(minimum)),
+                        maximum: bounds.maximum.or((!negative).then_some(maximum)),
+                    };
+                    Err(self.claim(
+                        "config.out-of-range",
+                        messages::integer_out_of_range(self.unit(), &bounds),
+                    ))
+                }
+                _ => Err(self.fail(
+                    "config.expected-integer",
+                    messages::expected_integer(self.found(), self.unit(), &bounds),
+                )),
+            },
         }
     }
 
@@ -600,7 +629,16 @@ impl<'a> NodeDe<'a> {
 
     fn text(&self) -> Result<&'a str, Error> {
         match &self.site.node.value {
-            NodeValue::String(text) => Ok(&text.text),
+            NodeValue::String(text) => match self.site.node.unrepresentable() {
+                None => Ok(&text.text),
+                Some(literal) => {
+                    let found = match literal {
+                        Unrepresentable::Integer { .. } => Found::Integer,
+                        Unrepresentable::Number => Found::Number,
+                    };
+                    Err(self.claim("config.expected-string", messages::expected_string(found)))
+                }
+            },
             NodeValue::Null => Err(self.null_error(false)),
             _ => Err(self.fail(
                 "config.expected-string",
@@ -1877,7 +1915,8 @@ impl<'de, 'a> de::EnumAccess<'de> for TaggedAccess<'a> {
         };
         let tag = self.de.child(entry);
         match &entry.value.value {
-            NodeValue::String(_) => {}
+            // A tag is a name, so a number is not told to become text.
+            NodeValue::String(_) if entry.value.unrepresentable().is_none() => {}
             NodeValue::Null => {
                 let variants = probe_variants(seed);
                 return Err(tag.fail("config.null-value", messages::null_tag(variants)));
