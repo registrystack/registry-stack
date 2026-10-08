@@ -10,6 +10,7 @@
 
 pub mod blocks;
 mod loader;
+mod offline;
 pub mod package;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -32,6 +33,7 @@ pub use loader::{
     RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
     MAX_RUNTIME_CONFIG_PATH_BYTES, REMOVED_OIDC_JWKS_URI,
 };
+pub use offline::{RuntimeFileCheck, DEFAULT_STAND_IN};
 pub use package::{
     plan_package, verify_package, write_package, write_sum_file, PackageError, PackageErrorKind,
     PackageLimits, VerifiedPackage, REVISION_FILE, SUM_FILE,

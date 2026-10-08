@@ -2,19 +2,13 @@
 //! The Discovery runtime configuration: its types, the shared loader that
 //! reads it, and the offline check `discoveryctl check --runtime-config` runs.
 
-use std::collections::BTreeMap;
-use std::fs;
-use std::io::Read as _;
 use std::path::Path;
 
 use registry_platform_config::{
-    contains_environment_expression, ConfigBlockError, ConfigBlockErrorKind, ListenerConfig,
-    PackageConfig, RemovedKey, RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope,
+    ConfigBlockError, ConfigBlockErrorKind, ListenerConfig, PackageConfig, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope,
 };
-use registry_platform_yaml::{
-    escape_pointer_segment, BoundedU64, Diagnostic, Node, NodeValue, Reader, Source,
-    MAXIMUM_DOCUMENT_BYTES,
-};
+use registry_platform_yaml::{escape_pointer_segment, BoundedU64, Diagnostic};
 use serde::Deserialize;
 
 use crate::model::{
@@ -152,154 +146,51 @@ pub struct RuntimeCheck {
 /// holds one are skipped, because they need the substituted text.
 #[must_use]
 pub fn check_runtime(path: &Path, substitute: bool) -> RuntimeCheck {
-    let tree = scan(path);
-    let deferred = match (&tree, substitute) {
-        (Some(root), false) => Deferred::collect(root),
-        _ => Deferred::default(),
-    };
-    let loaded = if substitute {
-        runtime_loader().load::<RuntimeConfig>(path)
-    } else {
-        runtime_loader()
-            .load_with::<RuntimeConfig>(path, |name| Some(deferred.stand_in(name).to_owned()))
-    };
-    match loaded {
-        Ok(loaded) => {
-            let mut diagnostics = Vec::new();
-            if let Err(error) = loaded.config.package.check() {
-                let pointer = pointer_of(error.field());
-                if !deferred.covers(&pointer) {
-                    diagnostics.push(package_diagnostic(path, tree.as_ref(), &pointer, &error));
-                }
-            }
-            RuntimeCheck {
-                diagnostics,
-                unavailable: false,
-            }
-        }
-        Err(error) => RuntimeCheck {
-            diagnostics: error
-                .diagnostics()
-                .iter()
-                .filter(|diagnostic| !deferred.hides(diagnostic))
-                .cloned()
-                .collect(),
-            unavailable: error.kind() == RuntimeConfigErrorKind::Unavailable,
-        },
-    }
+    read_runtime(path, substitute).1
 }
 
 /// Read the runtime file at `path` with the process environment, as the
 /// service does at startup. A refusal is every finding, each positioned in
 /// the file and naming its fix.
 pub fn load_runtime_config(path: &Path) -> Result<RuntimeConfig, Vec<Diagnostic>> {
-    let config = runtime_loader()
-        .load::<RuntimeConfig>(path)
-        .map_err(|error| error.diagnostics().to_vec())?
-        .config;
-    if let Err(error) = config.package.check() {
-        let pointer = pointer_of(error.field());
-        return Err(vec![package_diagnostic(
-            path,
-            scan(path).as_ref(),
-            &pointer,
-            &error,
-        )]);
+    match read_runtime(path, true) {
+        (Some(config), _) => Ok(config),
+        (None, check) => Err(check.diagnostics),
     }
-    Ok(config)
 }
 
-/// The file's tree, for positions and expression sites. A file the reader
-/// cannot scan yields none; the loader then reports why.
-fn scan(path: &Path) -> Option<Node> {
-    let file = fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(MAXIMUM_DOCUMENT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    Reader::new(path.display().to_string())
-        .scan(&bytes)
-        .ok()
-        .flatten()
-}
-
-/// The members that hold a `${NAME}` expression, and a stand-in value for
-/// each name that satisfies the member it fills, so the members around it
-/// are still decoded and checked.
-#[derive(Debug, Default)]
-struct Deferred {
-    pointers: Vec<String>,
-    stand_ins: BTreeMap<String, &'static str>,
-}
-
-/// The codes whose finding depends on a member's value rather than its
-/// position or type.
-const VALUE_CODES: &[&str] = &[
-    "config.invalid-value",
-    "config.invalid-length",
-    "config.unknown-variant",
-    "config.out-of-range",
-];
-
-impl Deferred {
-    fn collect(root: &Node) -> Deferred {
-        let mut deferred = Deferred::default();
-        deferred.walk(root, &mut String::new());
-        deferred
-    }
-
-    fn walk(&mut self, node: &Node, pointer: &mut String) {
-        match &node.value {
-            NodeValue::String(text) if contains_environment_expression(&text.text) => {
-                let stand_in = stand_in_for(pointer);
-                for name in expression_names(&text.text) {
-                    self.stand_ins.entry(name.to_owned()).or_insert(stand_in);
-                }
-                self.pointers.push(pointer.clone());
+/// The file read by the shared loader, then its package block checked. The
+/// configuration is returned only when nothing was found.
+fn read_runtime(path: &Path, substitute: bool) -> (Option<RuntimeConfig>, RuntimeCheck) {
+    let check = runtime_loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+    let mut diagnostics = check.diagnostics.clone();
+    if let Some(loaded) = &check.loaded {
+        if let Err(error) = loaded.config.package.check() {
+            let pointer = pointer_of(error.field());
+            if !check.defers(&pointer) {
+                let (code, action) = package_finding(&error);
+                diagnostics.push(check.error_at(
+                    RUNTIME_KIND,
+                    code,
+                    &pointer,
+                    error.to_string(),
+                    action,
+                ));
             }
-            NodeValue::Sequence(items) => {
-                for (index, item) in items.iter().enumerate() {
-                    let length = pointer.len();
-                    pointer.push_str(&format!("/{index}"));
-                    self.walk(item, pointer);
-                    pointer.truncate(length);
-                }
-            }
-            NodeValue::Mapping(entries) => {
-                for entry in entries {
-                    let length = pointer.len();
-                    pointer.push('/');
-                    pointer.push_str(&escape_pointer_segment(&entry.key));
-                    self.walk(&entry.value, pointer);
-                    pointer.truncate(length);
-                }
-            }
-            _ => {}
         }
     }
-
-    fn stand_in(&self, name: &str) -> &'static str {
-        self.stand_ins
-            .get(name)
-            .copied()
-            .unwrap_or(DEFAULT_STAND_IN)
-    }
-
-    fn covers(&self, path: &str) -> bool {
-        self.pointers.iter().any(|pointer| {
-            path == pointer
-                || path
-                    .strip_prefix(pointer.as_str())
-                    .is_some_and(|rest| rest.starts_with('/'))
-        })
-    }
-
-    fn hides(&self, diagnostic: &Diagnostic) -> bool {
-        VALUE_CODES.contains(&diagnostic.code.as_str()) && self.covers(&diagnostic.path)
-    }
+    let config = check
+        .loaded
+        .map(|loaded| loaded.config)
+        .filter(|_| diagnostics.is_empty());
+    (
+        config,
+        RuntimeCheck {
+            diagnostics,
+            unavailable: check.unavailable,
+        },
+    )
 }
-
-const DEFAULT_STAND_IN: &str = "deferred";
 
 /// A value that satisfies the member at `pointer`, so a deferred expression
 /// never decides whether its neighbours decode.
@@ -311,29 +202,8 @@ fn stand_in_for(pointer: &str) -> &'static str {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         }
         "/logLevel" => "info",
-        _ => DEFAULT_STAND_IN,
+        _ => registry_platform_config::DEFAULT_STAND_IN,
     }
-}
-
-/// The variable names of the `${NAME}`, `${NAME:-...}` and `${NAME:?...}`
-/// expressions in `text`.
-fn expression_names(text: &str) -> Vec<&str> {
-    let mut names = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("${") {
-        let after = &rest[start + 2..];
-        let end = after
-            .find(|character: char| character != '_' && !character.is_ascii_alphanumeric())
-            .unwrap_or(after.len());
-        let (name, tail) = after.split_at(end);
-        if !name.is_empty()
-            && (tail.starts_with('}') || tail.starts_with(":-") || tail.starts_with(":?"))
-        {
-            names.push(name);
-        }
-        rest = after;
-    }
-    names
 }
 
 fn pointer_of(dotted: &str) -> String {
@@ -343,14 +213,9 @@ fn pointer_of(dotted: &str) -> String {
         .collect()
 }
 
-/// A shared package block refusal as a positioned Discovery diagnostic.
-fn package_diagnostic(
-    path: &Path,
-    tree: Option<&Node>,
-    pointer: &str,
-    error: &ConfigBlockError,
-) -> Diagnostic {
-    let (code, action) = match error.kind() {
+/// The code and fix for a shared package block refusal.
+fn package_finding(error: &ConfigBlockError) -> (&'static str, &'static str) {
+    match error.kind() {
         ConfigBlockErrorKind::RelativePath => (
             "discovery.runtime.relative-package-root",
             "Write package.root as an absolute path with no `.` or `..` segment.",
@@ -364,23 +229,13 @@ fn package_diagnostic(
             "discovery.runtime.invalid-package",
             "Correct the package block as the message describes.",
         ),
-    };
-    let mut diagnostic = Diagnostic::error(code, pointer, error.to_string(), action);
-    diagnostic.artifact = Some(RUNTIME_KIND.to_owned());
-    let position = tree
-        .and_then(|root| root.pointer(pointer))
-        .map(|node| node.span.start);
-    diagnostic.source = Some(Source {
-        file: path.display().to_string(),
-        line: position.map(|position| position.line),
-        column: position.map(|position| position.column),
-    });
-    diagnostic
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     const RUNTIME: &str = "\
 apiVersion: registry.registrystack.org/discovery-runtime/v1alpha1
@@ -485,13 +340,5 @@ logLevel: info
         let check = check_runtime(&temporary.path().join("missing.yaml"), false);
         assert!(check.unavailable);
         assert_eq!(check.diagnostics.len(), 1);
-    }
-
-    #[test]
-    fn expression_names_are_read_from_every_expression_form() {
-        assert_eq!(
-            expression_names("${A}:${B:-x}/${C:?set C}${ not}${}"),
-            ["A", "B", "C"]
-        );
     }
 }
