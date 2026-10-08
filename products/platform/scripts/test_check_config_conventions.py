@@ -924,6 +924,24 @@ class IdentifierTests(ConventionsTestCase):
         self.union([plain, other], "anyOf")
         self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/source"))
 
+    def test_cfg_id_7_accepts_an_any_of_that_only_requires_one_of_its_members(self) -> None:
+        self.repo.project["properties"]["tls"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"caBundleRef": {"type": "string"}, "clientIdentityRef": {"type": "string"}},
+            "anyOf": [{"required": ["caBundleRef"]}, {"required": ["clientIdentityRef"]}],
+        }
+        self.assertNoFinding(self.repo.run(), "CFG-ID-7")
+
+    def test_cfg_id_7_reports_an_exclusive_choice_told_apart_by_which_member_is_present(self) -> None:
+        self.repo.project["properties"]["credential"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"tokenRef": {"type": "string"}, "privateKeyJwt": {"type": "string"}},
+            "oneOf": [{"required": ["tokenRef"]}, {"required": ["privateKeyJwt"]}],
+        }
+        self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/properties/credential"))
+
     def test_cfg_id_7_accepts_an_untagged_union_of_distinct_node_kinds_and_nullables(self) -> None:
         self.union([{"type": "string"}, {"type": "array", "uniqueItems": True, "items": {"type": "string"}}])
         self.repo.project["properties"]["note"] = {"anyOf": [{"type": "string"}, {"type": "null"}]}

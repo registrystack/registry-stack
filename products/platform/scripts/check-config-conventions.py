@@ -1713,6 +1713,10 @@ class Lint:
             branches = node.get(keyword)
             if not isinstance(branches, list):
                 continue
+            # anyOf branches that only require members may all hold at once:
+            # they state "at least one of these members", not a choice of variant.
+            if keyword == "anyOf" and all(isinstance(branch, dict) and set(branch) == {"required"} for branch in branches):
+                continue
             resolved = []
             for branch in branches:
                 parts = expand(root, branch)
