@@ -10,5 +10,7 @@ secretProviders:
     root: /run/secrets/registry-render
 auth:
   apiKeyRef: secret:file/render-api-key
+limits:
+  renderTimeoutSeconds: 20
 audit:
   path: /var/lib/registry-render/audit/render.jsonl

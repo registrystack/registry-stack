@@ -58,6 +58,9 @@ pub struct Bundle {
     /// Immutable bytes read once and, for a deployment package, bound to the
     /// shared package envelope before any consumer parses or renders them.
     pub(crate) snapshot: BundleSnapshot,
+    /// The warnings the manifest and label tables were accepted with, for
+    /// `registry-render check` to report.
+    pub(crate) warnings: Vec<Diagnostic>,
 }
 
 /// The name diagnostics give the bundle file at `relative`: the bundle
@@ -165,7 +168,7 @@ impl BundleSnapshot {
         self.files.keys().any(|key| key.starts_with(&prefix))
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&String, &Bytes)> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&String, &Bytes)> {
         self.files.iter()
     }
 
@@ -461,6 +464,7 @@ impl Bundle {
             document: manifest_document,
         } = read;
         let mut findings = Findings::default();
+        findings.manifest.extend(manifest_document.warnings());
         let mut tables: BTreeMap<String, Option<Value>> = BTreeMap::new();
         let mut label_documents = BTreeMap::new();
         let mut documents = BTreeMap::new();
@@ -549,9 +553,7 @@ impl Bundle {
             );
         }
         let fonts = load_fonts(root, &snapshot, &mut findings.fonts);
-        if let Some(problem) = findings.into_problem(root) {
-            return Err(problem);
-        }
+        let warnings = findings.into_result(root)?;
         Ok(Self {
             root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
             manifest,
@@ -561,6 +563,7 @@ impl Bundle {
             label_sources: label_documents,
             fonts,
             snapshot,
+            warnings,
         })
     }
 
@@ -641,25 +644,30 @@ struct Findings {
 }
 
 impl Findings {
-    /// One problem carrying every finding, named by the first kind that
-    /// has an error: the manifest, then the label tables, then the fonts.
-    fn into_problem(self, root: &Path) -> Option<RenderProblem> {
+    /// The warnings when nothing was refused; otherwise one problem
+    /// carrying every finding, named by the first kind that has an error:
+    /// the manifest, then the label tables, then the fonts.
+    fn into_result(self, root: &Path) -> Result<Vec<Diagnostic>, RenderProblem> {
         let kind = if self.manifest.has_errors() {
-            ProblemKind::ManifestInvalid
+            Some(ProblemKind::ManifestInvalid)
         } else if self.labels.has_errors() {
-            ProblemKind::LabelsInvalid
+            Some(ProblemKind::LabelsInvalid)
         } else if self.fonts.has_errors() {
-            ProblemKind::FontInvalid
+            Some(ProblemKind::FontInvalid)
         } else {
-            return None;
+            None
         };
         let mut diagnostics = self.manifest.into_diagnostics();
         diagnostics.extend(self.labels.into_diagnostics());
         diagnostics.extend(self.fonts.into_diagnostics());
-        Some(
-            RenderProblem::new(kind, format!("the bundle {} was refused", root.display()))
-                .with_diagnostics(diagnostics),
-        )
+        match kind {
+            None => Ok(diagnostics),
+            Some(kind) => Err(RenderProblem::new(
+                kind,
+                format!("the bundle {} was refused", root.display()),
+            )
+            .with_diagnostics(diagnostics)),
+        }
     }
 }
 

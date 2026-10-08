@@ -10,15 +10,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use registry_platform_audit::{
-    AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
-    MIN_AUDIT_ROTATE_BYTES,
+    AuditDestination, AuditDestinationError, AuditDestinationKind, PersistentRootFault,
+    MAX_AUDIT_RETAIN_DAYS, MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
     ConfigBlockError, ConfigBlockErrorKind, ListenerBind, LoadedRuntimeConfig, PackageConfig,
-    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
+    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig,
 };
 use registry_platform_yaml::{
-    escape_pointer_segment, BoundedU32, BoundedU64, Diagnostic, RetiredApiVersion,
+    escape_pointer_segment, BoundedU32, BoundedU64, Diagnostic, RetiredApiVersion, Source,
 };
 use serde::Deserialize;
 
@@ -367,9 +367,13 @@ pub struct RuntimeCheck {
 /// environment and every value is checked. Without it, each expression is
 /// checked by syntax and position only: the value checks of a member that
 /// holds one are skipped, because they need the substituted text.
+///
+/// With `audit_root`, the check also proves that the audit file resolves
+/// under that directory, the one the deployment mounts as persistent
+/// storage (the container preflight proof).
 #[must_use]
-pub fn check_runtime(path: &Path, substitute: bool) -> RuntimeCheck {
-    read_runtime(path, substitute).1
+pub fn check_runtime(path: &Path, substitute: bool, audit_root: Option<&Path>) -> RuntimeCheck {
+    read_runtime(path, substitute, audit_root).1
 }
 
 /// Load and validate a runtime file through the shared loader, with the
@@ -377,7 +381,7 @@ pub fn check_runtime(path: &Path, substitute: bool) -> RuntimeCheck {
 /// the `sha256:` digest of its effective configuration; a refusal carries
 /// every finding, each positioned in the file and naming its fix.
 pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
-    match read_runtime(path, true) {
+    match read_runtime(path, true, None) {
         (Some(loaded), _) => Ok((loaded.config, loaded.effective_digest)),
         (None, check) => {
             let detail = if check.unavailable {
@@ -393,19 +397,24 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
 
 /// The file read by the shared loader, then the members the loader cannot
 /// judge checked: the bind, the package and secret provider blocks, the
-/// caller key reference, and the audit destination. The configuration is
-/// returned only when nothing was found.
+/// caller key reference, and the audit destination, and, with `audit_root`,
+/// the audit containment proof. The configuration is returned only when
+/// nothing was found.
 fn read_runtime(
     path: &Path,
     substitute: bool,
+    audit_root: Option<&Path>,
 ) -> (Option<LoadedRuntimeConfig<RenderRuntime>>, RuntimeCheck) {
     let check = runtime_loader().check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
+    let mut unavailable = check.unavailable;
     if let Some(loaded) = &check.loaded {
+        let mut audit_refused = false;
         for finding in findings(&loaded.config) {
             let audit_deferred =
                 finding.pointer.starts_with("/audit") && check.defers("/audit/destination");
             if !check.defers(&finding.pointer) && !audit_deferred {
+                audit_refused |= finding.pointer.starts_with("/audit");
                 diagnostics.push(check.error_at(
                     RUNTIME_KIND,
                     finding.code,
@@ -415,8 +424,35 @@ fn read_runtime(
                 ));
             }
         }
+        if let (Some(root), false) = (audit_root, audit_refused) {
+            match prove_audit_under(&check, &loaded.config.audit, root) {
+                Proof::Held => {}
+                Proof::Refused(finding) => diagnostics.push(check.error_at(
+                    RUNTIME_KIND,
+                    finding.code,
+                    &finding.pointer,
+                    finding.message,
+                    finding.action,
+                )),
+                Proof::RootUnreadable => {
+                    unavailable = true;
+                    let mut diagnostic = Diagnostic::error(
+                        "render.check.audit-root-unreadable",
+                        "",
+                        "the --require-audit-under directory could not be read as a directory",
+                        "Check that the directory exists and that this user may read it, then \
+                         run the check again.",
+                    );
+                    diagnostic.source = Some(Source {
+                        file: root.display().to_string(),
+                        line: None,
+                        column: None,
+                    });
+                    diagnostics.push(diagnostic);
+                }
+            }
+        }
     }
-    let unavailable = check.unavailable;
     let loaded = check.loaded.filter(|_| diagnostics.is_empty());
     (
         loaded,
@@ -425,6 +461,79 @@ fn read_runtime(
             unavailable,
         },
     )
+}
+
+/// What the audit containment proof found.
+enum Proof {
+    Held,
+    Refused(Finding),
+    /// The directory the proof was asked for could not be read.
+    RootUnreadable,
+}
+
+/// Prove that the audit file resolves under `root` once both are resolved
+/// through the filesystem. A destination that holds an unsubstituted
+/// expression has no value to prove, and a stdout destination no path.
+fn prove_audit_under(
+    check: &RuntimeFileCheck<RenderRuntime>,
+    audit: &AuditRuntime,
+    root: &Path,
+) -> Proof {
+    let deferred = ["/audit/destination", "/audit/path"]
+        .into_iter()
+        .find(|pointer| check.defers(pointer));
+    if let Some(pointer) = deferred {
+        return Proof::Refused(Finding {
+            code: "render.runtime.audit-proof-needs-environment",
+            pointer: pointer.to_owned(),
+            message: "the member holds a substitution expression, so the audit containment \
+                      proof has no value to prove"
+                .to_owned(),
+            action: "Run the check with --environment, in the environment the service runs in."
+                .to_owned(),
+        });
+    }
+    let file = match audit.settings() {
+        Ok(AuditDestination::File(file)) => file,
+        Ok(_) => {
+            return Proof::Refused(Finding {
+                code: "render.runtime.audit-stdout-unprovable",
+                pointer: "/audit/destination".to_owned(),
+                message: "audit.destination is stdout, which has no path to prove under the \
+                          --require-audit-under directory"
+                    .to_owned(),
+                action: "Write audit to a file under that directory, or run the check without \
+                         --require-audit-under."
+                    .to_owned(),
+            })
+        }
+        // The audit block's own refusal is already reported.
+        Err(_) => return Proof::Held,
+    };
+    let refused = |code, message: &str, action: &str| {
+        Proof::Refused(Finding {
+            code,
+            pointer: "/audit/path".to_owned(),
+            message: message.to_owned(),
+            action: action.to_owned(),
+        })
+    };
+    match registry_platform_audit::require_audit_under(file.path(), root) {
+        Ok(()) => Proof::Held,
+        Err(PersistentRootFault::Root) => Proof::RootUnreadable,
+        Err(PersistentRootFault::Destination) => refused(
+            "render.runtime.audit-path-unresolved",
+            "the audit file could not be resolved through the directories that exist",
+            "Make the existing directories above the audit file readable by this user, and \
+             replace any broken link among them.",
+        ),
+        Err(PersistentRootFault::Outside) => refused(
+            "render.runtime.audit-outside-root",
+            "the audit file resolves outside the --require-audit-under directory",
+            "Move audit.path under that directory, or mount the directory that holds the audit \
+             file as persistent storage and name it instead.",
+        ),
+    }
 }
 
 /// One refusal of a member the shared loader accepted.
@@ -1223,13 +1332,13 @@ mod tests {
                 ),
         )
         .expect("runtime file");
-        let offline = check_runtime(&file, false);
+        let offline = check_runtime(&file, false, None);
         assert!(offline.diagnostics.is_empty(), "{:?}", offline.diagnostics);
         assert!(!offline.unavailable);
 
         // Substituting from the environment checks the values, and an unset
         // variable is reported where it is written.
-        let substituted = check_runtime(&file, true);
+        let substituted = check_runtime(&file, true, None);
         assert_eq!(
             substituted
                 .diagnostics
@@ -1242,7 +1351,7 @@ mod tests {
     #[test]
     fn cfg_check_1_an_unreadable_file_is_an_operational_failure() {
         let (_dir, home) = home();
-        let check = check_runtime(&home.join("missing.yaml"), false);
+        let check = check_runtime(&home.join("missing.yaml"), false, None);
         assert!(check.unavailable);
         assert_eq!(check.diagnostics.len(), 1);
 

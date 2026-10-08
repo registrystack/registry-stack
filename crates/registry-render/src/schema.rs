@@ -366,7 +366,7 @@ mod tests {
         assert!(checked > 0, "the bundles carry label tables");
 
         let example = Path::new(PRODUCT).join("examples/runtime.yaml");
-        let check = check_runtime(&example.canonicalize().unwrap(), false);
+        let check = check_runtime(&example.canonicalize().unwrap(), false, None);
         assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
         let bytes = std::fs::read(&example).unwrap();
         assert!(validator(RUNTIME_SCHEMA_FILE).is_valid(&as_json("runtime.yaml", &bytes)));
@@ -550,7 +550,7 @@ mod tests {
             );
         for (document, accepted) in documents {
             std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
-            let check = check_runtime(&path, false);
+            let check = check_runtime(&path, false, None);
             assert_eq!(
                 check.diagnostics.is_empty(),
                 accepted,
@@ -594,7 +594,7 @@ mod tests {
             let document = with(&example, pointer, Some(json!(value)));
             assert!(validator.is_valid(&document), "schema: {document}");
             std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
-            let codes = check_runtime(&path, false)
+            let codes = check_runtime(&path, false, None)
                 .diagnostics
                 .into_iter()
                 .map(|diagnostic| diagnostic.code)

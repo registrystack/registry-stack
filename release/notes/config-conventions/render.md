@@ -84,12 +84,13 @@ rather than held for the stable release.
    `maxRequestBodyBytes` 0, which refused every render and every request.
    Migration: write a value within the range; omit the member for its
    default.
-9. **A refused runtime file prints the shared diagnostics.** `serve`,
-   `healthcheck`, and `check --runtime-config` print
+9. **A refused runtime file prints the shared diagnostics.** `serve` and
+   `healthcheck` print
    `registry-render: runtime-invalid: the runtime configuration was refused`
    (or `could not be read`), then every finding in the shared shape on
    standard error, each at its line and column, and a summary line; they
-   printed the first failure as one sentence. Exit code 20 is unchanged. No
+   printed the first failure as one sentence. Exit code 20 is unchanged;
+   `check` reports the same findings as item 11 describes. No
    message repeats a configured value (CFG-SEC-3). A public or
    all-interfaces `listener.bind` is refused with
    `render.runtime.public-bind` by every command that reads the file; it was
@@ -99,6 +100,59 @@ rather than held for the stable release.
     document's `version` are 1 to 4294967295; 0 was accepted and is now
     refused with `config.out-of-range` at the member. Migration: a bundle or
     document at version 0 moves to 1, and the next change to 2.
+
+11. **`check` is the offline check, with the shared report and exit
+    codes** (CFG-CHECK-1, CFG-CHECK-2, CFG-DIAG-1, CFG-DIAG-4).
+    `registry-render check` reads a bundle or package, a runtime file, or
+    both, offline and without secret material, and reports every finding in
+    the shared shape, then a summary line; with `--format json` it writes
+    one `RenderCtlReport` document on standard output instead
+    (`products/render/examples/ctl-report/check.json`). The changes:
+
+    - **Exit codes.** Check exits 0 when nothing is refused, 1 when
+      something is (or a warning is reported under `--deny-warnings`), 2 on
+      a usage error, and 3 when an input cannot be read. It exited with the
+      problem kind's code: 3 `manifest-invalid`, 4 `bundle-tampered`, 7
+      `labels-invalid`, 8 `font-invalid`, and 20 `runtime-invalid`. Exit 3
+      changes meaning: it was a refused manifest and is now an input check
+      could not read, such as a missing bundle directory. Migration: treat
+      exit 1 as refused and read the diagnostic codes (table below) for the
+      reason.
+    - **Output.** A clean check prints the document and bundle lines and
+      then `0 errors, 0 warnings in N files` on standard output. A refused
+      check prints `registry-render check refused the input.` (or `could not
+      read all of its input.`), every diagnostic, and the summary on
+      standard error, where it printed one problem sentence. Migration: a
+      script that compares the whole standard output accepts the summary
+      line; a script that matched the problem sentence matches the
+      diagnostic code instead.
+    - **A runtime file is checked on its own.** `--runtime-config <file>`
+      checks the runtime file as `serve` reads it, with no package, secret,
+      or listener; it was read only together with `--require-audit-under`.
+      Without `--bundle`, a check given `--runtime-config` reads no bundle;
+      it read the current directory. A `${VAR}` expression is checked by
+      syntax and position unless `--environment` substitutes it from the
+      current environment. Migration: a preflight that checked the bundle
+      in the current directory and the runtime file in one command adds
+      `--bundle .`.
+    - **The audit proof.** `--require-audit-under` takes an absolute
+      directory and needs `--runtime-config`; a relative directory, or the
+      flag without a runtime file (which was silently ignored), is a usage
+      error, exit 2. An audit path written as `${VAR}` is proven only with
+      `--environment`. The success line is `audit file resolves under
+      <root>`; it also printed the audit file's path. Migration: pass the
+      root as an absolute path, add `--environment` in the container where
+      the variable is set, and match the line without the audit path.
+    - **Every YAML file in a bundle is identified by its envelope.** A
+      `RenderLabels` table no document lists is a warning
+      (`render.bundle.unused-labels`), and a YAML file without both `kind`
+      and `apiVersion` is a warning (`render.bundle.unread-file`), since a
+      template may read it as data. A file of another kind, such as a
+      runtime file kept in the bundle, is refused with
+      `render.bundle.foreign-kind`, by `check` and by `package`, which
+      exits 3 (`manifest-invalid`) without writing output. Migration: keep
+      runtime files and other Registry Stack configuration outside the
+      bundle directory.
 
 ## Other changes
 
@@ -150,3 +204,12 @@ findings now ride in `diagnostics` with these codes.
 | `runtime-invalid`, `audit.<member> applies only when audit.destination is file` | `render.runtime.file-only-audit-member` |
 | `runtime-invalid`, `audit.path must be absolute`, `... must not contain a . or .. component`, `... must end in a file name ...`, `audit.path names the ... of an audit stream ...` | `render.runtime.invalid-audit-path` |
 | `runtime-invalid`, any other audit block refusal | `render.runtime.invalid-audit` |
+| `runtime-invalid`, `audit.destination is stdout, which has no path to prove` (check `--require-audit-under`) | `render.runtime.audit-stdout-unprovable` |
+| `runtime-invalid`, `audit file fails the containment proof: ...` (check `--require-audit-under`) | `render.runtime.audit-outside-root`, `render.runtime.audit-path-unresolved`, or `render.check.audit-root-unreadable` |
+| none: an audit path written as `${VAR}` was resolved from the environment before the proof | `render.runtime.audit-proof-needs-environment` |
+| `bundle-tampered` or `bundle-unsealed`, the package does not match its `SHA256SUMS` (check) | `render.bundle.package-mismatch` |
+| `invalid-argument`, `SHA256SUMS` or `REVISION` in a source bundle (check) | `render.bundle.envelope-in-source` |
+| `manifest-invalid`, a link, a non-regular file, or a repeated or non-UTF-8 name in the bundle (check) | `render.bundle.refused-entry` |
+| `manifest-invalid`, the bundle directory or its `manifest.yaml` cannot be opened (check) | `render.bundle.unreadable` |
+| none: a runtime file path check cannot make absolute | `render.check.runtime-unreadable` |
+| none: a YAML file no document reads | `render.bundle.unread-file`, `render.bundle.unused-labels` (warnings), `render.bundle.foreign-kind` |

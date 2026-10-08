@@ -2649,12 +2649,12 @@ formats:
       file: crates/registry-render/src/runtime.rs
       function: load
       type: RenderRuntime
-    check: registry-render check --bundle {project} --runtime-config {file}
+    check: registry-render check --runtime-config {file}
     example: products/render/examples/runtime.yaml
     conformance:
       requiredText: /package/root
-      optionalText: none
-      integer: none
+      optionalText: /audit/path
+      integer: /limits/renderTimeoutSeconds
       boolean: none
     securityMembers:
       - pointer: /listener/bind
@@ -2690,6 +2690,32 @@ formats:
       optionalText: none
       integer: none
       boolean: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: render/ctl-report
+    product: render
+    title: registry-render check --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/render/ctl-report/v1alpha1
+      kind: RenderCtlReport
+      checkedBy:
+        file: crates/registry-render/src/check.rs
+        symbol: CTL_REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/render/ctl-report/v1alpha1
+      kind: RenderCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-render/src/check.rs
+      symbol: run
+    check: none
+    example: products/render/examples/ctl-report/check.json
+    conformance: none
     securityMembers: []
     restrictingMembers: []
 

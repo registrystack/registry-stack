@@ -173,8 +173,16 @@ error[render.runtime.public-bind] /etc/registry-render/runtime.yaml:4:9 /listene
 1 error, 0 warnings in 1 file
 ```
 
+Check the file before you deploy it with `registry-render check --runtime-config <file>`. It runs
+offline and reads no secret, so it reports the same findings without the package, the secret
+files, or the audit directory present. A `${VAR}` expression is left for the deployment to supply
+unless you add `--environment`, which substitutes it from the current environment first. Check
+exits 0 when the file is accepted, 1 when it is refused, 2 on a usage error, and 3 when it cannot
+read the file.
+
 {/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime, AuditRuntime, and validate_bind;
-    crates/registry-render/src/server.rs, serve. */}
+    crates/registry-render/src/server.rs, serve;
+    crates/registry-render/src/check.rs, run and check_runtime_file. */}
 
 ## Start and verify
 
@@ -259,14 +267,15 @@ files, or the `stdout` stream, to append-only storage before retention deletes t
 that held the older chained ledger is not an audit path to reuse: archive its segments first and
 point `audit.path` at a fresh directory.
 
-`registry-render check --bundle <dir> --runtime-config <file> --require-audit-under <root>` proves the
-audit file resolves under a persistent root, as a container preflight, and refuses a `stdout`
-destination.
+`registry-render check --runtime-config <file> --require-audit-under <absolute directory>` proves
+the audit file resolves under a persistent root, as a container preflight, and refuses a `stdout`
+destination. An audit path written as `${VAR}` is proven only with `--environment`, once the
+container's environment supplies it.
 
 {/* Evidence: crates/registry-render/src/audit.rs, AUDIT_SCHEMA, RenderAuditEvent, and correlation;
     crates/registry-render/src/audit.rs, RenderAudit::request writes unfinished when dropped;
     crates/registry-render/src/server.rs, the_request_entry_is_accepted_before_the_render_starts;
-    crates/registry-render/src/cli.rs, require_audit_under;
+    crates/registry-render/src/runtime.rs, prove_audit_under;
     crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and DEFAULT_AUDIT_RETAIN_DAYS. */}
 
 ## Upgrade discipline

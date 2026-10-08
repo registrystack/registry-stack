@@ -523,15 +523,16 @@ fn check_names_a_locale_missing_a_label_key() {
     let out = run(&["check", "--bundle", dir.to_str().unwrap()]);
     assert_eq!(
         out.status.code(),
-        Some(registry_render::ProblemKind::LabelsInvalid.exit_code()),
+        Some(1),
         "stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[render.labels.missing-key]")
-            && stderr.contains("labels/fr.yaml:4:1 /labels")
+        stderr.starts_with(
+            "registry-render check refused the input.\nerror[render.labels.missing-key]"
+        ) && stderr.contains("labels/fr.yaml:4:1 /labels")
             && stderr.contains("the table has no label reference, which labels/en.yaml defines"),
         "the missing key and locale are named: {stderr}"
     );
@@ -654,24 +655,23 @@ fn check_proves_the_audit_file_resolves_under_the_root() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        stdout.contains(&format!(
-            "audit file {} resolves under {}",
-            home.join("audit/render.jsonl").display(),
-            home.display()
-        )),
+        stdout.contains(&format!("audit file resolves under {}\n", home.display())),
         "{stdout}"
+    );
+    assert!(
+        !stdout.contains("render.jsonl"),
+        "the proof never repeats the audit path the file holds (CFG-SEC-3): {stdout}"
     );
     let elsewhere = tempdir();
     let out = check_audit_under(&runtime, &home.join("bundle"), &elsewhere);
-    assert_ne!(
-        out.status.code(),
-        Some(0),
-        "an audit file outside the root fails the proof"
-    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("audit file fails the containment proof"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        stderr.contains(&format!(
+            "error[render.runtime.audit-outside-root] {}:",
+            runtime.display()
+        )) && stderr.contains("/audit/path\n"),
+        "{stderr}"
     );
 }
 
@@ -687,11 +687,320 @@ fn check_refuses_to_prove_a_stdout_audit_destination() {
     std::fs::write(&runtime, text).unwrap();
     let out = check_audit_under(&runtime, &home.join("bundle"), &home);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_ne!(out.status.code(), Some(0), "{stderr}");
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("audit.destination is stdout, which has no path to prove"),
+        stderr.contains("error[render.runtime.audit-stdout-unprovable]")
+            && stderr.contains("audit.destination is stdout, which has no path to prove"),
         "{stderr}"
     );
+}
+
+#[test]
+fn check_defers_the_audit_proof_of_an_expression_to_the_environment() {
+    let (home, runtime, _) = serve_deployment();
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    let text = text.replace(
+        &format!("  path: {}\n", home.join("audit/render.jsonl").display()),
+        "  path: ${RENDER_TEST_AUDIT_PATH}\n",
+    );
+    std::fs::write(&runtime, text).unwrap();
+    let out = check_audit_under(&runtime, &home.join("bundle"), &home);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error[render.runtime.audit-proof-needs-environment]")
+            && stderr.contains("/audit/path\n"),
+        "{stderr}"
+    );
+    let out = render_bin()
+        .args([
+            "check",
+            "--runtime-config",
+            runtime.to_str().unwrap(),
+            "--environment",
+            "--require-audit-under",
+            home.to_str().unwrap(),
+        ])
+        .env(
+            "RENDER_TEST_AUDIT_PATH",
+            home.join("audit/render.jsonl").as_os_str(),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn check_reports_an_audit_root_it_cannot_read_as_unavailable() {
+    let (home, runtime, _) = serve_deployment();
+    let out = check_audit_under(&runtime, &home.join("bundle"), &home.join("absent"));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.starts_with("registry-render check could not read all of its input.\n")
+            && stderr.contains("error[render.check.audit-root-unreadable]"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn check_refuses_a_relative_audit_root_and_an_audit_root_without_a_runtime_file() {
+    let (home, runtime, _) = serve_deployment();
+    let relative = run(&[
+        "check",
+        "--runtime-config",
+        runtime.to_str().unwrap(),
+        "--require-audit-under",
+        "audit",
+    ]);
+    assert_eq!(relative.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&relative.stderr)
+        .contains("--require-audit-under needs an absolute directory path"));
+    for flags in [
+        vec!["--require-audit-under", home.to_str().unwrap()],
+        vec!["--environment"],
+    ] {
+        let mut args = vec!["check", "--bundle", "."];
+        args.extend(flags);
+        let alone = run(&args);
+        assert_eq!(
+            alone.status.code(),
+            Some(2),
+            "{args:?} needs --runtime-config"
+        );
+    }
+}
+
+#[test]
+fn check_reads_a_runtime_file_alone_and_names_it_as_given() {
+    let (home, runtime, _) = serve_deployment();
+    // The working directory is not a bundle: a runtime-only check reads no
+    // bundle.
+    let alone = render_bin()
+        .current_dir(&home)
+        .args(["check", "--runtime-config", "runtime.yaml"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        alone.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&alone.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&alone.stdout),
+        "0 errors, 0 warnings in 1 file\n"
+    );
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(&runtime, format!("{text}unknownMember: 1\n")).unwrap();
+    let refused = render_bin()
+        .current_dir(&home)
+        .args(["check", "--runtime-config", "./runtime.yaml"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("] ./runtime.yaml:") && !stderr.contains(&home.display().to_string()),
+        "the runtime file is named as it was given: {stderr}"
+    );
+}
+
+#[test]
+fn check_reports_a_missing_bundle_as_unavailable() {
+    let missing = tempdir().join("absent");
+    let out = run(&["check", "--bundle", missing.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error[render.bundle.unreadable] {}\n",
+            missing.display()
+        )),
+        "{stderr}"
+    );
+    let empty = tempdir();
+    let out = run(&["check", "--bundle", empty.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error[render.bundle.unreadable] {}\n",
+            empty.join("manifest.yaml").display()
+        )),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn cfg_check_2_check_identifies_every_yaml_file_of_the_bundle_by_its_envelope() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    // A label table no document declares, and a data file a template may
+    // read with yaml(): both are reported, neither refuses the bundle.
+    std::fs::write(
+        dir.join("labels/de.yaml"),
+        "apiVersion: id.registrystack.org/formats/render/labels/v1alpha1\nkind: RenderLabels\nlabels:\n  title: Titel\n",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data/rows.yml"), "rows:\n  - one\n").unwrap();
+    let out = run(&["check", "--bundle", dir.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains(&format!(
+            "warning[render.bundle.unused-labels] {}:2:7 /kind\n",
+            dir.join("labels/de.yaml").display()
+        )) && stdout.contains(&format!(
+            "warning[render.bundle.unread-file] {}\n",
+            dir.join("data/rows.yml").display()
+        )) && stdout.ends_with("0 errors, 2 warnings in 5 files\n"),
+        "{stdout}"
+    );
+    let denied = run(&[
+        "check",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--deny-warnings",
+    ]);
+    let stderr = String::from_utf8_lossy(&denied.stderr);
+    assert_eq!(denied.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.starts_with("registry-render check refused the input.\nwarning["),
+        "{stderr}"
+    );
+
+    // A runtime file inside the bundle would be packaged and deployed with
+    // it: check and package both refuse it.
+    std::fs::write(
+        dir.join("runtime.yaml"),
+        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\n",
+    )
+    .unwrap();
+    let out = run(&["check", "--bundle", dir.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error[render.bundle.foreign-kind] {}:2:7 /kind\n",
+            dir.join("runtime.yaml").display()
+        )) && stderr
+            .contains("next: Move it out of the bundle and check it with --runtime-config."),
+        "{stderr}"
+    );
+    let output = tempdir().join("package");
+    let packaged = run(&[
+        "package",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        packaged.status.code(),
+        Some(registry_render::ProblemKind::ManifestInvalid.exit_code()),
+        "{}",
+        String::from_utf8_lossy(&packaged.stderr)
+    );
+    assert!(String::from_utf8_lossy(&packaged.stderr).contains("error[render.bundle.foreign-kind]"));
+    assert!(!output.exists(), "a refused package writes nothing");
+}
+
+#[test]
+fn cfg_diag_1_check_writes_one_report_with_every_diagnostic() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    std::fs::write(dir.join("notes.yaml"), "todo: true\n").unwrap();
+    let out = run(&[
+        "check",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.starts_with(
+            "{\n  \"ok\": true,\n  \"command\": \"check\",\n  \"status\": \"complete\",\n  \
+             \"apiVersion\": \"id.registrystack.org/formats/render/ctl-report/v1alpha1\",\n  \
+             \"kind\": \"RenderCtlReport\",\n"
+        ),
+        "the envelope members open the report: {text}"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one report");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["kind"], "RenderCtlReport");
+    assert_eq!(report["warnings"], 1);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "render.bundle.unread-file"
+    );
+    assert_eq!(report["bundle"]["documents"][0]["id"], "letter");
+
+    let denied = run(&[
+        "check",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--format",
+        "json",
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(denied.stderr.is_empty(), "the report is the only output");
+    let report: serde_json::Value = serde_json::from_slice(&denied.stdout).expect("one report");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "domain-refusal");
+
+    let missing = run(&[
+        "check",
+        "--bundle",
+        dir.join("absent").to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert_eq!(missing.status.code(), Some(3));
+    let report: serde_json::Value = serde_json::from_slice(&missing.stdout).expect("one report");
+    assert_eq!(report["status"], "operational-failure");
+    assert_eq!(report["diagnostics"][0]["code"], "render.bundle.unreadable");
+    assert!(report.get("bundle").is_none(), "{report}");
+}
+
+#[test]
+fn cfg_schema_1_the_report_example_is_the_check_output() {
+    let out = render_bin()
+        .current_dir(repo_root())
+        .args([
+            "check",
+            "--bundle",
+            "products/render/bundles/receipt",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let example =
+        std::fs::read_to_string(repo_root().join("products/render/examples/ctl-report/check.json"))
+            .expect("the registered report example");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), example);
 }
 
 // ---------- tiny serve helpers shared with the serve suite ----------

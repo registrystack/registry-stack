@@ -33,6 +33,17 @@
   starts.
 - BREAKING: `bundleVersion` and each document's `version` count from 1; 0 is
   refused with `config.out-of-range`.
+- BREAKING: `registry-render check` is the offline check. It reports every
+  finding in the shared diagnostic shape with a summary line, writes one
+  `RenderCtlReport` document under `--format json`, takes
+  `--deny-warnings`, and exits 0, 1 (refused), 2 (usage), or 3 (unreadable
+  input) in place of the problem kind's code (3, 4, 7, 8, or 20).
+  `--runtime-config` alone checks the runtime file without a package or
+  secret, and `--environment` substitutes `${VAR}` from the current
+  environment. `--require-audit-under` takes an absolute directory and
+  needs `--runtime-config`. Every YAML file in a bundle is identified by its
+  envelope: a file of another kind is refused by `check` and `package`, and
+  an unused label table or a file without an envelope is a warning.
 - JSON Schemas for the bundle manifest, label tables, and runtime file are
   generated from the reader types under `products/render/schemas`, and
   `editors/configure.py render` maps them.
