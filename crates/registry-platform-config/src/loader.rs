@@ -39,7 +39,8 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_platform_yaml::{
     escape_pointer_segment, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader,
-    Refusal, RemovedKey as RemovedPointer, Report, ScalarHook, ScalarSite, Severity, Source,
+    Refusal, RemovedKey as RemovedPointer, Report, RetiredApiVersion, ScalarHook, ScalarSite,
+    Severity, Source,
 };
 use serde::de::DeserializeOwned;
 
@@ -435,6 +436,7 @@ pub struct LoadedRuntimeConfig<T> {
 pub struct RuntimeConfigLoader {
     envelope: RuntimeEnvelope,
     removed_keys: &'static [RemovedKey],
+    retired_api_versions: &'static [RetiredApiVersion<'static>],
     max_bytes: u64,
     trusted_ownership: bool,
 }
@@ -445,6 +447,7 @@ impl RuntimeConfigLoader {
         Self {
             envelope,
             removed_keys: &[],
+            retired_api_versions: &[],
             max_bytes: DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
             trusted_ownership: false,
         }
@@ -454,6 +457,18 @@ impl RuntimeConfigLoader {
     #[must_use]
     pub const fn removed_keys(mut self, removed_keys: &'static [RemovedKey]) -> Self {
         self.removed_keys = removed_keys;
+        self
+    }
+
+    /// Refuse each of these `apiVersion` values with
+    /// `config.retired-api-version` and the sentence naming what to write
+    /// instead (CFG-CHANGE-2).
+    #[must_use]
+    pub const fn retired_api_versions(
+        mut self,
+        retired_api_versions: &'static [RetiredApiVersion<'static>],
+    ) -> Self {
+        self.retired_api_versions = retired_api_versions;
         self
     }
 
@@ -536,7 +551,7 @@ impl RuntimeConfigLoader {
             kind: self.envelope.kind,
             envelope: EnvelopeRule::ApiVersionKind {
                 api_versions: &api_versions,
-                retired_api_versions: &[],
+                retired_api_versions: self.retired_api_versions,
             },
             removed_keys: &removed,
         };

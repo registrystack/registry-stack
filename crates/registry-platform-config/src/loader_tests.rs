@@ -376,6 +376,37 @@ fn the_deciding_diagnostic_is_the_one_the_kind_and_field_come_from() {
 }
 
 #[test]
+fn a_retired_api_version_is_refused_with_its_replacement() {
+    const RETIRED: &[RetiredApiVersion<'static>] = &[RetiredApiVersion {
+        api_version: "registry.registrystack.org/example-runtime/v0",
+        replacement: "Write the current apiVersion.",
+    }];
+    let error = loader()
+        .retired_api_versions(RETIRED)
+        .parse_str::<Example>(
+            "apiVersion: registry.registrystack.org/example-runtime/v0\nkind: ExampleRuntimeConfig\n",
+            env(&[]),
+        )
+        .expect_err("retired apiVersion refuses");
+    assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope);
+    let diagnostic = &error.diagnostics()[0];
+    assert_eq!(diagnostic.code, "config.retired-api-version");
+    assert_eq!(diagnostic.path, "/apiVersion");
+    assert!(diagnostic.message.contains(ENVELOPE.api_version));
+
+    let error = loader()
+        .parse_str::<Example>(
+            "apiVersion: registry.registrystack.org/example-runtime/v0\nkind: ExampleRuntimeConfig\n",
+            env(&[]),
+        )
+        .expect_err("an undeclared apiVersion refuses");
+    assert_eq!(
+        error.diagnostics()[0].code,
+        "config.unsupported-api-version"
+    );
+}
+
+#[test]
 fn the_envelope_must_be_literal() {
     for text in [
         "kind: ExampleRuntimeConfig\n".to_owned(),
