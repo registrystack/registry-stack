@@ -5693,6 +5693,7 @@ dependencies = [
  "registry-thunderid-tooling",
  "rhai",
  "rustix 1.1.5",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",

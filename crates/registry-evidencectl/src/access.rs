@@ -132,9 +132,16 @@ pub struct ClientRevokeArgs {
     project: PathBuf,
 }
 
+/// The derived JSON Schema of one local access client document.
+#[cfg(feature = "schema")]
+pub(crate) fn client_document_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(ClientDocument)).expect("a derived schema is JSON")
+}
+
 type AccessPolicyDocument = registry_evidence_authoring::model::AccessPolicy;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 enum ClientStatus {
     Active,
@@ -142,6 +149,7 @@ enum ClientStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClientDocument {
     client_id: String,
@@ -157,6 +165,7 @@ struct ClientDocument {
 /// Local issuer wiring for a client whose Evidence authority comes from a task
 /// assertion. This does not grant access or change the governed task policy.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ActiveClientExchange {
     pub(crate) kind: ActiveClientExchangeKind,
@@ -165,10 +174,11 @@ pub(crate) struct ActiveClientExchange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) bootstrap_resource: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) source_issuer: Option<String>,
+    pub(crate) source_issuer: Option<registry_platform_yaml::Url>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ActiveClientExchangeKind {
     InstitutionalGrant,
@@ -343,12 +353,23 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
     } else {
         args.first_party_bootstrap_scope
             .as_ref()
-            .map(|scope| ActiveClientExchange {
-                kind: ActiveClientExchangeKind::FirstParty,
-                bootstrap_scope: scope.clone(),
-                bootstrap_resource: args.first_party_bootstrap_resource.clone(),
-                source_issuer: args.first_party_issuer.clone(),
+            .map(|scope| {
+                let source_issuer = args
+                    .first_party_issuer
+                    .as_ref()
+                    .map(|issuer| registry_platform_yaml::Url::new(issuer.clone()))
+                    .transpose()
+                    .map_err(|_| {
+                        anyhow!("first-party issuer must be an absolute http or https URL")
+                    })?;
+                Ok::<_, anyhow::Error>(ActiveClientExchange {
+                    kind: ActiveClientExchangeKind::FirstParty,
+                    bootstrap_scope: scope.clone(),
+                    bootstrap_resource: args.first_party_bootstrap_resource.clone(),
+                    source_issuer,
+                })
             })
+            .transpose()?
     };
     if let Some(exchange) = &exchange {
         exchange.validate()?;

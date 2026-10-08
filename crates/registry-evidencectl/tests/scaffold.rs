@@ -901,6 +901,7 @@ fn assert_editor_schema_mappings(project: &Path) {
     assert_eq!(
         entries(&project.join(".evidence-editor/schemas")),
         vec![
+            "access-client.schema.json",
             "access-policy.schema.json",
             "project-marker.schema.json",
             "question.schema.json"
@@ -915,6 +916,10 @@ fn assert_editor_schema_mappings(project: &Path) {
     // The schemas an editor reads must be the committed generated artifact,
     // byte for byte, or the drift gate is guarding nothing an adopter sees.
     for (relative, committed) in [
+        (
+            ".evidence-editor/schemas/access-client.schema.json",
+            include_str!("../schemas/authoring/access-client.schema.json"),
+        ),
         (
             ".evidence-editor/schemas/access-policy.schema.json",
             include_str!("../schemas/authoring/access-policy.schema.json"),

@@ -88,10 +88,27 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
     entries
         .into_iter()
         .map(|(file, title, schema_id, envelope, derived)| {
-            let enveloped = with_envelope(type_map_keys(derived)?, envelope);
-            Ok((file, render(published(enveloped, title, schema_id))?))
+            Ok((file, publish(derived, title, schema_id, envelope)?))
         })
         .collect()
+}
+
+/// Turn one derived schema into the document committed for its format: map
+/// keys stated as identifiers, the envelope, then the dialect, `$id`, and
+/// title, rendered the one canonical way. Tooling that owns a document type
+/// of its own calls this so every committed schema is shaped alike.
+///
+/// # Errors
+///
+/// Returns the `serde_json` error if the schema cannot be rendered.
+pub fn publish(
+    derived: Value,
+    title: &str,
+    schema_id: &str,
+    envelope: (&str, &str),
+) -> Result<String, serde_json::Error> {
+    let enveloped = with_envelope(type_map_keys(derived)?, envelope);
+    render(published(enveloped, title, schema_id))
 }
 
 /// Schemars writes a map keyed by `LocalId` as `patternProperties` under the

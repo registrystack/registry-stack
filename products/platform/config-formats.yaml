@@ -3251,7 +3251,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1
       kind: EvidenceAccessClient
-    schema: none
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/access-client.schema.json
+      id: https://id.registrystack.org/schemas/evidence/access-client/access-client.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
       crate: registry-evidencectl
       file: crates/registry-evidencectl/src/access.rs

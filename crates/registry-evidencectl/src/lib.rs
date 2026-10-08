@@ -39,6 +39,9 @@ mod tooling;
 mod tooling_editor;
 mod verify;
 
+#[cfg(feature = "schema")]
+pub mod schema;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "evidencectl",

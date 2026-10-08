@@ -919,7 +919,11 @@ fn verify_borrowed_registrations(
                         (source_issuers.clone(), "institutional_grant")
                     }
                     access::ActiveClientExchangeKind::FirstParty => (
-                        binding.source_issuer.iter().cloned().collect(),
+                        binding
+                            .source_issuer
+                            .iter()
+                            .map(|issuer| issuer.as_str().to_owned())
+                            .collect(),
                         "first_party",
                     ),
                 };
@@ -4574,7 +4578,9 @@ requirements:
             kind: access::ActiveClientExchangeKind::FirstParty,
             bootstrap_scope: "evidence:invoke".into(),
             bootstrap_resource: Some(LOCAL_ACCESS_TOKEN_AUDIENCE.into()),
-            source_issuer: Some("http://127.0.0.1:4494".into()),
+            source_issuer: Some(
+                registry_platform_yaml::Url::new("http://127.0.0.1:4494").expect("a URL"),
+            ),
         };
         let exchanges =
             BTreeMap::from([("evidence-client".to_owned(), (first_party, BTreeSet::new()))]);
@@ -4717,7 +4723,7 @@ requirements:
             bootstrap_scope: "tasks:assert".into(),
             bootstrap_resource: None,
             source_issuer: (kind == access::ActiveClientExchangeKind::FirstParty)
-                .then(|| "http://127.0.0.1:4494".to_owned()),
+                .then(|| registry_platform_yaml::Url::new("http://127.0.0.1:4494").expect("a URL")),
         };
         let registration = |client: &str, tag: &str, binding| access::ActiveClientRegistration {
             client_id: client.into(),

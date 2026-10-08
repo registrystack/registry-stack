@@ -49,6 +49,9 @@ pub const ACCESS_POLICY_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/access-policy/v1alpha1";
 /// The `kind` of a local access policy.
 pub const ACCESS_POLICY_KIND: &str = "EvidenceAccessPolicy";
+/// The published `$id` of a local access client's JSON Schema.
+pub const ACCESS_CLIENT_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/access-client/access-client.v1alpha1.schema.json";
 /// The `apiVersion` of a local access client under `access/clients/`.
 pub const ACCESS_CLIENT_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/access-client/v1alpha1";
@@ -64,6 +67,9 @@ pub const TARGET_SETTINGS_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/target-settings/v1alpha1";
 /// The `kind` of a target's settings.
 pub const TARGET_SETTINGS_KIND: &str = "EvidenceTargetSettings";
+/// The published `$id` of a materialized source mock plan's JSON Schema.
+pub const MOCK_PLAN_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/mock-plan/mock-plan.v1alpha1.schema.json";
 /// The `apiVersion` of a materialized source mock plan.
 pub const MOCK_PLAN_API_VERSION: &str = "id.registrystack.org/formats/evidence/mock-plan/v1alpha1";
 /// The `kind` of a materialized source mock plan.

@@ -100,7 +100,13 @@ struct EditorSchema {
 // other authored parts of a project (sources, selectors, derivations, answer
 // schemas, fixtures) get no mapping, because a schema written
 // by hand for one of them would drift from the checks the moment either moved.
-const EDITOR_SCHEMA_CATALOG: [EditorSchema; 3] = [
+const EDITOR_SCHEMA_CATALOG: [EditorSchema; 4] = [
+    EditorSchema {
+        name: "access-client",
+        filename: "access-client.schema.json",
+        file_glob: "access/clients/*.yaml",
+        document: include_str!("../schemas/authoring/access-client.schema.json"),
+    },
     EditorSchema {
         name: "access-policy",
         filename: "access-policy.schema.json",
@@ -1178,8 +1184,9 @@ mod tests {
     use registry_evidence_authoring::default_project_marker_document;
 
     /// The complete set of files one run owns, as an author would list them.
-    const MANAGED_FILES: [&str; 7] = [
+    const MANAGED_FILES: [&str; 8] = [
         ".evidence-editor/manifest.json",
+        ".evidence-editor/schemas/access-client.schema.json",
         ".evidence-editor/schemas/access-policy.schema.json",
         ".evidence-editor/schemas/project-marker.schema.json",
         ".evidence-editor/schemas/question.schema.json",
