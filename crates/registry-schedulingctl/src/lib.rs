@@ -220,12 +220,16 @@ where
         Err(error) => {
             let message = report::usage_message(&error);
             if machine_mode {
-                write_failure(
+                if write_failure(
                     &usage_failure(message, USAGE_ACTION),
                     OutputFormat::Json,
                     stdout,
                     stderr,
-                );
+                )
+                .is_err()
+                {
+                    return output_failed(stderr);
+                }
             } else {
                 let _ = writeln!(stderr, "error: {message}\n  next: {USAGE_ACTION}");
             }
@@ -239,12 +243,16 @@ where
                 activation::MAX_BACKUP_REFERENCES
             );
             if machine_mode {
-                write_failure(
+                if write_failure(
                     &usage_failure(message, "Correct the command arguments and retry."),
                     OutputFormat::Json,
                     stdout,
                     stderr,
-                );
+                )
+                .is_err()
+                {
+                    return output_failed(stderr);
+                }
             } else {
                 let _ = writeln!(stderr, "error: {message}");
             }
@@ -277,16 +285,24 @@ where
         Err(error) => {
             if let Some(configuration) = configuration_report(&error) {
                 let exit = configuration_exit(&error);
-                write_configuration_report(configuration, format, command, exit, stdout, stderr);
+                if write_configuration_report(configuration, format, command, exit, stdout, stderr)
+                    .is_err()
+                {
+                    return output_failed(stderr);
+                }
                 return ExitCode::from(exit);
             }
             let (exit, diagnostic) = classify_failure(&error);
-            write_failure(
+            if write_failure(
                 &report::failure(command, exit, vec![diagnostic]),
                 format,
                 stdout,
                 stderr,
-            );
+            )
+            .is_err()
+            {
+                return output_failed(stderr);
+            }
             ExitCode::from(exit)
         }
     }
@@ -475,7 +491,7 @@ fn write_configuration_report(
     exit: u8,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
-) {
+) -> io::Result<()> {
     if format == OutputFormat::Json {
         let mut envelope = json!({
             "ok": false,
@@ -486,9 +502,10 @@ fn write_configuration_report(
         if let Some(files) = report.files_checked() {
             envelope["filesChecked"] = json!(files);
         }
-        let _ = report::write(&envelope, stdout);
+        report::write(&envelope, stdout)
     } else {
         let _ = write!(stderr, "{}", report.render_human());
+        Ok(())
     }
 }
 
@@ -640,9 +657,14 @@ fn write_success(
     if result.is_ok() {
         ExitCode::SUCCESS
     } else {
-        let _ = writeln!(stderr, "schedulingctl: output could not be written");
-        ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        output_failed(stderr)
     }
+}
+
+/// The exit for a report that could not be written to standard output.
+fn output_failed(stderr: &mut dyn io::Write) -> ExitCode {
+    let _ = writeln!(stderr, "schedulingctl: output could not be written");
+    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
 }
 
 fn write_failure(
@@ -650,10 +672,9 @@ fn write_failure(
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
-) {
+) -> io::Result<()> {
     if format == OutputFormat::Json {
-        let _ = report::write(report, stdout);
-        return;
+        return report::write(report, stdout);
     }
     if let Some(diagnostics) = report["diagnostics"].as_array() {
         for finding in diagnostics {
@@ -670,6 +691,7 @@ fn write_failure(
             }
         }
     }
+    Ok(())
 }
 
 fn human_lead(report: &Value) -> String {
@@ -1110,6 +1132,50 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("`schedulingctl status --runtime-config FILE`"));
+    }
+
+    /// A failure report that cannot be written is an operational failure that
+    /// says so on standard error, not a refusal whose report silently vanished.
+    #[test]
+    fn a_failure_report_that_cannot_be_written_is_an_operational_failure() {
+        struct ClosedStdout;
+        impl io::Write for ClosedStdout {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        for arguments in [
+            vec!["schedulingctl", "--format=json", "no-such-command"],
+            vec![
+                "schedulingctl",
+                "--format=json",
+                "check",
+                "/nonexistent/schedulingctl-project",
+            ],
+            vec![
+                "schedulingctl",
+                "--format=json",
+                "check",
+                "--runtime-config",
+                "/nonexistent/runtime.yaml",
+            ],
+        ] {
+            let mut stderr = Vec::new();
+            let exit = main_entry_from(arguments.clone(), &mut ClosedStdout, &mut stderr);
+            assert_eq!(
+                exit,
+                ExitCode::from(OPERATIONAL_FAILURE_EXIT),
+                "{arguments:?}"
+            );
+            assert!(
+                String::from_utf8_lossy(&stderr).contains("output could not be written"),
+                "{arguments:?}: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+        }
     }
 
     fn initialized(template: &str) -> (tempfile::TempDir, PathBuf) {
