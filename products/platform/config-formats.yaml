@@ -90,7 +90,7 @@ formats:
       function: parse_project_yaml
       type: RegistryProject
     check: bregctl check {project}
-    example: products/breg/acceptance/asset-site-placement/registry.yaml
+    example: products/breg/examples/minimal/registry.yaml
     conformance:
       requiredText: /registry/id
       optionalText: /manifestProjection/catalog/description
@@ -137,7 +137,7 @@ formats:
       function: parse_module_yaml
       type: RegistryModule
     check: bregctl check {project}
-    example: products/breg/acceptance/asset-site-placement/modules/asset-site-placement-core/module.yaml
+    example: products/breg/examples/minimal/modules/minimal-core/module.yaml
     conformance:
       requiredText: /id
       optionalText: none
@@ -172,12 +172,12 @@ formats:
       file: crates/registry-breg/src/runtime_config.rs
       function: load_runtime_config
       type: RuntimeConfig
-    check: none
-    example: none
+    check: bregctl check {project} --runtime-config {file}
+    example: products/breg/examples/minimal/runtime.yaml
     conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
+      requiredText: /identity/instanceId
+      optionalText: /authentication/authorityClaims/purpose
+      integer: /database/pool/maxSize
       boolean: none
     securityMembers:
       - pointer: /listener/bind
@@ -195,7 +195,6 @@ formats:
       - pointer: /package/expectedDigest
         whenOmitted: open
     restrictingMembers: [/authentication/oidc/assertionIssuers]
-    notes: 'No committed example file: runtime examples live only inside scripts and tests.'
   - id: breg/mcp-runtime
     product: breg
     title: Citizen MCP gateway runtime configuration

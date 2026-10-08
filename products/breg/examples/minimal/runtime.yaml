@@ -1,0 +1,48 @@
+# A runtime configuration for the minimal example project. Check it offline,
+# beside the project, with:
+#
+#   bregctl check products/breg/examples/minimal --runtime-config products/breg/examples/minimal/runtime.yaml
+#
+# The check reads no package, database, network endpoint, or secret, so the
+# absolute paths below need not exist where it runs.
+apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
+kind: BRegRuntimeConfig
+listener:
+  bind: 127.0.0.1:8080
+identity:
+  environment: example
+  instanceId: minimal-example
+  databaseId: minimal-example-db
+  databaseInitializationEnvironment: example
+secretProviders:
+  file:
+    root: /var/lib/breg/secrets
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  pool:
+    maxSize: 4
+  roles:
+    migration: breg_migration
+    runtime: breg_runtime
+package:
+  root: /var/lib/breg/package
+authentication:
+  oidc:
+    issuer: https://issuer.example.com
+    audience: urn:breg:minimal
+    allowedAlgorithm: EdDSA
+    accessTokenType: JWT
+    scopeClaim: scope
+    scopeSeparator: " "
+    allowedClients: [minimal-client]
+    maxTokenLifetimeSeconds: 3600
+    leewayMilliseconds: 60000
+  authorityClaims:
+    principal: registry_principal
+    purpose: registry_purpose
+audit:
+  hashKeyRef: secret:file/audit-key
+  path: /var/log/breg/audit.jsonl
+cursor:
+  secretRef: secret:file/cursor-key
