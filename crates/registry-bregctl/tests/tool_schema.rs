@@ -172,15 +172,24 @@ fn a_wrong_header_a_missing_header_and_an_explicit_null_are_refused() {
     assert!(!schema.is_valid(&headerless));
 }
 
+/// The identifiers the catalog records, in file-name order.
+const IDENTIFIERS: [&str; 5] = [
+    "https://id.registrystack.org/schemas/breg/backup-binding/backup-binding.v1alpha1.schema.json",
+    "https://id.registrystack.org/schemas/breg/example-scenarios/example-scenarios.v1alpha1.schema.json",
+    "https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json",
+    "https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json",
+    "https://id.registrystack.org/schemas/breg/schema-test-credentials/schema-test-credentials.v1.schema.json",
+];
+
 #[test]
 fn each_identifier_names_the_format_and_its_version() {
-    for (file, document) in documents().expect("the tool schemas generate") {
-        let value: Value = serde_json::from_str(&document).expect("a generated schema is JSON");
+    let documents = documents().expect("the tool schemas generate");
+    assert_eq!(documents.len(), IDENTIFIERS.len());
+    for ((file, document), identifier) in documents.iter().zip(IDENTIFIERS) {
+        let value: Value = serde_json::from_str(document).expect("a generated schema is JSON");
         let format = file.split('.').next().expect("a file name has a stem");
-        assert_eq!(
-            value["$id"],
-            format!("https://id.registrystack.org/schemas/breg/{format}/{file}")
-        );
+        assert!(identifier.ends_with(&format!("/{format}/{file}")));
+        assert_eq!(value["$id"], identifier);
         assert_eq!(
             value["$schema"],
             "https://json-schema.org/draft/2020-12/schema"

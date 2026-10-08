@@ -1499,9 +1499,9 @@ warning, 2 for a usage error, and 3 when the file cannot be read.
 
 The fixture journeys, schema-test credentials, model selection, example
 scenarios, and backup binding each publish a JSON Schema generated from the
-types `bregctl` decodes, under `products/breg/generated/tools/`, with the
-identifier
-`https://id.registrystack.org/schemas/breg/<format>/<format>.<version>.schema.json`.
+types `bregctl` decodes, under `products/breg/generated/tools/`. Each
+identifier names the format and its version, for example
+`https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json`.
 `editors/configure.py` maps the three YAML formats (`tests/journeys.yaml`,
 `credentials.yaml`, `model/selection.yaml`) for editors. The schema is an
 editing aid: `bregctl check --file` remains the check, and it also refuses

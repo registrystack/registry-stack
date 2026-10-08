@@ -2945,7 +2945,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "2c784da2884bdec67eb303f2cf94e094be68911dea5e8e67e0d62acc48f2ddf1"
+        "sha256": "bf6c748fe1784c483da28fd482aad1a1ce8b587c624099cd540a35bca58620db"
       },
       "artifact": {
         "path": "products/breg/generated/tools/backup-binding.v1alpha1.schema.json",
@@ -2963,7 +2963,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "2c784da2884bdec67eb303f2cf94e094be68911dea5e8e67e0d62acc48f2ddf1"
+        "sha256": "bf6c748fe1784c483da28fd482aad1a1ce8b587c624099cd540a35bca58620db"
       },
       "artifact": {
         "path": "products/breg/generated/tools/example-scenarios.v1alpha1.schema.json",
@@ -2981,7 +2981,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "2c784da2884bdec67eb303f2cf94e094be68911dea5e8e67e0d62acc48f2ddf1"
+        "sha256": "bf6c748fe1784c483da28fd482aad1a1ce8b587c624099cd540a35bca58620db"
       },
       "artifact": {
         "path": "products/breg/generated/tools/journeys.v1.schema.json",
@@ -2999,7 +2999,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "2c784da2884bdec67eb303f2cf94e094be68911dea5e8e67e0d62acc48f2ddf1"
+        "sha256": "bf6c748fe1784c483da28fd482aad1a1ce8b587c624099cd540a35bca58620db"
       },
       "artifact": {
         "path": "products/breg/generated/tools/model-selection.v1alpha1.schema.json",
@@ -3035,7 +3035,7 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1.",
       "source": {
         "path": "crates/registry-bregctl/src/tool_schema.rs",
-        "sha256": "2c784da2884bdec67eb303f2cf94e094be68911dea5e8e67e0d62acc48f2ddf1"
+        "sha256": "bf6c748fe1784c483da28fd482aad1a1ce8b587c624099cd540a35bca58620db"
       },
       "artifact": {
         "path": "products/breg/generated/tools/schema-test-credentials.v1.schema.json",

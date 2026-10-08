@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::{dev, init_from_model, test_lifecycle};
 
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
-const SCHEMA_ID_PREFIX: &str = "https://id.registrystack.org/schemas/breg/";
+const SCHEMA_ID_BASE: &str = "https://id.registrystack.org/schemas/";
 
 /// One published tool schema.
 struct Tool {
@@ -71,7 +71,7 @@ pub fn documents() -> Result<BTreeMap<String, String>, serde_json::Error> {
             let api_version = current_api_version(&tool.spec);
             let version = api_version.rsplit('/').next().unwrap_or(api_version);
             let file = format!("{}.{version}.schema.json", tool.format);
-            let identifier = format!("{SCHEMA_ID_PREFIX}{}/{file}", tool.format);
+            let identifier = format!("{SCHEMA_ID_BASE}breg/{}/{file}", tool.format);
             let mut derived = serde_json::to_value((tool.members)())?;
             refuse_null(&mut derived);
             let published = published(
