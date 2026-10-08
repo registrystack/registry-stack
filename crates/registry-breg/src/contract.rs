@@ -7,8 +7,8 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::contains_environment_expression;
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
-    ApiVersion, DataLiteral, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
-    ScalarHook, ScalarSite, Severity,
+    ApiVersion, DataLiteral, Digest, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
+    ScalarHook, ScalarSite, Severity, Url,
 };
 pub use registry_platform_yaml::{Decoded, Report};
 use serde::{
@@ -228,6 +228,8 @@ pub enum ManifestProjectionTextSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ManifestProjectionCatalogSource {
+    #[serde(deserialize_with = "url_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub base_url: String,
     pub title: ManifestProjectionTextSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,6 +323,8 @@ pub struct ManifestProjectionDataServiceSource {
     pub title: ManifestProjectionTextSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<ManifestProjectionTextSource>,
+    #[serde(deserialize_with = "url_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub endpoint_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_description: Option<String>,
@@ -337,9 +341,19 @@ pub struct ManifestProjectionDistributionSource {
     pub dataset: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access_service: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_url_text"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Url>"))]
     pub access_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_url_text"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Url>"))]
     pub download_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
@@ -437,7 +451,8 @@ pub enum ManifestProjectionDatasetStatus {
 pub struct ModuleLockSource {
     pub id: String,
     pub version: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_digest_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<Digest>"))]
     pub digest: Option<String>,
 }
 
@@ -3173,6 +3188,8 @@ pub struct ProjectAccessProfileSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TaskGrantSource {
+    #[serde(deserialize_with = "url_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub source_issuer: String,
 }
 
@@ -3813,6 +3830,25 @@ fn skip_quoted(bytes: &[u8], open: usize, delimiter: u8) -> usize {
         }
     }
     bytes.len()
+}
+
+// A member the published schema types as `Url` (CFG-VAL-7) or `Digest`
+// (CFG-VAL-6) is checked by the shared type and kept as the text written, so
+// the serialized source a digest covers is unchanged.
+fn url_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Url::deserialize(deserializer).map(Url::into_string)
+}
+
+fn optional_url_text<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    url_text(deserializer).map(Some)
+}
+
+fn optional_digest_text<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Digest::deserialize(deserializer).map(|digest| Some(digest.into_string()))
 }
 
 // An omitted predicate differs from an explicit JSON null equality literal.

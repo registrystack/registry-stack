@@ -68,6 +68,29 @@ types the reader decodes, and now say what it refuses:
   one `editors/configure.py` writes, needs no change; a tool that names the
   schema by its `$id` should name the new one.
 
+### BREAKING: project URLs and module digests are typed by the shared reader
+
+The reader types the URL members of `registry.yaml` as `Url` (an absolute
+`http` or `https` URL with a host, no user information, and at most 2048
+characters) and a module lock's `digest` as `Digest` (`sha256:` followed by
+64 lowercase hex digits). The published project schema references
+`$defs/Url` and `$defs/Digest` at the same members. A value that was refused
+when the project compiled is now refused when it is read, and a value that
+was only required to be non-empty is now refused unless it is a URL.
+
+| A file that writes | was | is refused as | Migrate by |
+|---|---|---|---|
+| a module lock `digest` that is not `sha256:` and 64 lowercase hex digits | refused at compile as `module.lock.digest_invalid` | `config.invalid-value` at `/modules/<index>/digest` | Deleting the `digest` member and running `bregctl project lock`, which writes the canonical digest. |
+| a `manifestProjection.catalog.baseUrl` or `dataServices[].endpointUrl` that is not an absolute `http` or `https` URL | accepted when not empty; refused at compile when empty as `manifest_projection.catalog.base_url.empty` or `manifest_projection.data_service.endpoint_url_empty` | `config.invalid-value` at the member | Writing the absolute URL the catalog or service is published at, such as `https://registry.example/`. |
+| a `manifestProjection.distributions[].accessUrl` or `downloadUrl` that is not an absolute `http` or `https` URL | accepted | `config.invalid-value` at the member | Writing the absolute URL, or deleting the optional member. |
+| an access profile `taskGrant.sourceIssuer` that is not an absolute `http` or `https` URL, such as `urn:casework:issuer` | refused at compile as `access_profile.task_grant.invalid` | `config.invalid-value` at `/accessProfiles/<index>/taskGrant/sourceIssuer` | Writing the Casework task authority's issuer as Casework states it, an `https` URL. An `http` issuer is still refused at compile as `access_profile.task_grant.invalid`. |
+
+A URL with user information (`https://user@host/`) was accepted in every
+manifest member above and is now refused: the catalog is public, and a
+credential has no place in it. A package whose sealed project carries one of
+these values no longer loads; correct the source project and rebuild the
+package as described above.
+
 ### BREAKING: `runtime.yaml` is decoded by the shared reader
 
 `breg` and every `bregctl` command that takes `--runtime-config` decode

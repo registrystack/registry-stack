@@ -3785,6 +3785,88 @@ entities:
 }
 
 #[test]
+fn project_urls_and_module_digests_are_read_as_url_and_digest() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/asset-site-placement/registry.yaml");
+    let fixture: Value =
+        serde_norway::from_slice(&fs::read(path).expect("the fixture is readable"))
+            .expect("the fixture is YAML");
+    let distribution = |member: &str, written: &str| {
+        let mut distribution = json!({"id": "bulk", "dataset": "asset-site-placement"});
+        distribution[member] = json!(written);
+        json!([distribution])
+    };
+    let cases: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+        (
+            "project.manifestProjection.catalog.baseUrl",
+            Box::new(|source| {
+                source["manifestProjection"]["catalog"]["baseUrl"] =
+                    json!("asset-site-placement.example.gov");
+            }),
+        ),
+        (
+            "project.manifestProjection.dataServices[0].endpointUrl",
+            Box::new(|source| {
+                source["manifestProjection"]["dataServices"][0]["endpointUrl"] = json!("");
+            }),
+        ),
+        (
+            "project.manifestProjection.distributions[0].accessUrl",
+            Box::new(move |source| {
+                source["manifestProjection"]["distributions"] =
+                    distribution("accessUrl", "ftp://files.example.gov/bulk");
+            }),
+        ),
+        (
+            "project.manifestProjection.distributions[0].downloadUrl",
+            Box::new(move |source| {
+                source["manifestProjection"]["distributions"] =
+                    distribution("downloadUrl", "https://user@files.example.gov/bulk.csv");
+            }),
+        ),
+        (
+            "project.modules[0].digest",
+            Box::new(|source| {
+                source["modules"][0]["digest"] = json!("sha256:MARKER");
+            }),
+        ),
+        (
+            "project.accessProfiles[0].taskGrant.sourceIssuer",
+            Box::new(|source| {
+                source["accessProfiles"][0]["taskGrant"] =
+                    json!({"sourceIssuer": "urn:casework:issuer"});
+            }),
+        ),
+    ];
+    for (refused_at, mutate) in cases {
+        let mut source = fixture.clone();
+        mutate(&mut source);
+        let failure = parse_project_yaml(
+            serde_norway::to_string(&source)
+                .expect("the project serializes")
+                .as_bytes(),
+        )
+        .expect_err("a member that is not a URL or a digest is refused");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            refused,
+            vec![("config.invalid-value", refused_at)],
+            "{failure:?}"
+        );
+        for written in ["MARKER", "files.example.gov", "casework:issuer"] {
+            assert!(
+                !failure.diagnostics()[0].message.contains(written),
+                "{failure:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn source_parse_diagnostics_name_the_member_the_alternatives_and_the_location() {
     let unknown_yaml_member = parse_project_yaml(
         br#"

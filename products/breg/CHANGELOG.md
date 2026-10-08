@@ -32,6 +32,15 @@
   `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
   apply no assertion-issuer rule. Migration steps are in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: `registry.yaml` URLs and module digests are typed by the shared
+  reader. A module lock `digest` that is not `sha256:` and 64 lowercase hex
+  digits, and a `taskGrant.sourceIssuer` that is not an absolute URL, are
+  refused at read as `config.invalid-value` rather than at compile as
+  `module.lock.digest_invalid` and `access_profile.task_grant.invalid`. A
+  Manifest projection `baseUrl`, `endpointUrl`, `accessUrl`, or `downloadUrl`
+  that is not an absolute `http` or `https` URL without user information, or
+  that is empty, is refused as `config.invalid-value`. The code table is in
+  `release/notes/config-conventions/breg.md`.
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded

@@ -4385,48 +4385,6 @@ exceptions:
   class: stable-move
   reason: externalRef ends in Ref but is not a SecretReference
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the member so it does not end in Ref; it holds a vocabulary reference, not a secret'
-- rule: CFG-VAL-6
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ModuleLockSource/properties/digest
-  class: pending
-  wp: WP3
-  reason: digest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-7
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionCatalogSource/properties/baseUrl
-  class: pending
-  wp: WP3
-  reason: baseUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionDataServiceSource/properties/endpointUrl
-  class: pending
-  wp: WP3
-  reason: endpointUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionDistributionSource/properties/accessUrl
-  class: pending
-  wp: WP3
-  reason: accessUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionDistributionSource/properties/downloadUrl
-  class: pending
-  wp: WP3
-  reason: downloadUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/TaskGrantSource/properties/sourceIssuer
-  class: pending
-  wp: WP3
-  reason: sourceIssuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-ENV-2
   format: breg/queries-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion

@@ -3726,13 +3726,13 @@ mod schema_tests {
             json!({"hashKeyRef": key, "destination": "file", "path": "/audit.jsonl",
                 "rotateBytes": 1_048_576, "retainDays": 1}),
             json!({"hashKeyRef": key, "destination": "stdout"}),
-            json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
         ] {
             assert!(validator.is_valid(&accepted), "{accepted}");
         }
         for refused in [
             json!({"hashKeyRef": key}),
             json!({"hashKeyRef": key, "path": null}),
+            json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
             json!({"hashKeyRef": key, "path": "audit.jsonl"}),
             json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
             json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),

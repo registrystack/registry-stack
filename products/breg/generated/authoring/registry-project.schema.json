@@ -2057,6 +2057,11 @@
       ],
       "type": "object"
     },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
     "EntityAccessPermissionSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -2735,7 +2740,7 @@
           "type": "array"
         },
         "baseUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "conformsTo": {
           "default": [],
@@ -2781,7 +2786,7 @@
           "type": "string"
         },
         "endpointUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "id": {
           "type": "string"
@@ -2878,7 +2883,7 @@
           "type": "string"
         },
         "accessUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "dataset": {
           "type": "string"
@@ -2887,7 +2892,7 @@
           "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "downloadUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "format": {
           "type": "string"
@@ -3197,7 +3202,7 @@
       "additionalProperties": false,
       "properties": {
         "digest": {
-          "type": "string"
+          "$ref": "#/$defs/Digest"
         },
         "id": {
           "type": "string"
@@ -3938,7 +3943,7 @@
       "additionalProperties": false,
       "properties": {
         "sourceIssuer": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         }
       },
       "required": [
@@ -4126,6 +4131,13 @@
           "type": "object"
         }
       ]
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
     },
     "UuidFieldKindSchema": {
       "enum": [
