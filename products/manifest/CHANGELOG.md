@@ -51,8 +51,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   | `metadata.profile.claim_missing`, `required_concept_missing`, `identifier_missing`, `cardinality_mismatch`, `codelist_mismatch` | `manifest.profile.claim-missing`, `required-concept-missing`, `identifier-missing`, `cardinality-mismatch`, `codelist-mismatch` |
 
   `manifest.profile.fixture-path-escapes` and `manifest.profile.invalid-range`
-  are new refusals of a fixture path outside the profile directory and a
-  cardinality whose minimum exceeds its maximum. Migration: match the codes
+  are new refusals of a fixture path outside the profile directory (written
+  with `..` segments, or reached through a link that resolves outside it) and
+  a cardinality whose minimum exceeds its maximum. Migration: match the codes
   in the right-hand column.
 - BREAKING: exit codes follow the shared check contract. `validate` and
   `validate-profiles` exit 0 when nothing is refused, 1 when something is (or

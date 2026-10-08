@@ -408,6 +408,28 @@ fn contained(path: &str) -> Option<&Path> {
         .then_some(path)
 }
 
+/// Where a listed fixture leads once every link is followed.
+enum Resolved {
+    /// Inside the descriptor's directory: the path with no link left in it.
+    Inside(PathBuf),
+    /// Outside the descriptor's directory (CFG-VAL-8).
+    Outside,
+    /// Nothing at the path; reading it reports the file as missing or
+    /// unreadable.
+    Unresolved,
+}
+
+/// Follow every link in `path` and say whether it ends inside `directory`.
+/// The fixture is then read at the resolved path, so a link changed after
+/// this check cannot lead the read elsewhere.
+fn resolved_inside(directory: &Path, path: &Path) -> Resolved {
+    match (fs::canonicalize(directory), fs::canonicalize(path)) {
+        (Ok(directory), Ok(path)) if path.starts_with(&directory) => Resolved::Inside(path),
+        (Ok(_), Ok(_)) => Resolved::Outside,
+        _ => Resolved::Unresolved,
+    }
+}
+
 /// A path with its `.` segments removed, for comparing listed fixtures.
 fn normalized(path: &Path) -> PathBuf {
     path.components()
@@ -424,7 +446,23 @@ fn check_fixture(
     fixture: &ProfileFixture,
 ) {
     let path = directory.join(&fixture.path);
-    let bytes = match contents(&path) {
+    let resolved = match resolved_inside(directory, &path) {
+        Resolved::Inside(resolved) => resolved,
+        Resolved::Unresolved => path.clone(),
+        Resolved::Outside => {
+            findings.push(document.diagnostic_at_value(
+                Severity::Error,
+                "manifest.profile.fixture-path-escapes",
+                &format!("/fixtures/{index}/path"),
+                "the fixture path leads through a link to a file outside the descriptor's \
+                 directory",
+                "Put the fixture itself at the listed path, or point the link at a file inside \
+                 the descriptor's directory.",
+            ));
+            return;
+        }
+    };
+    let bytes = match contents(&resolved) {
         Contents::Bytes(bytes) => bytes,
         Contents::Missing => {
             findings.push(document.diagnostic_at_value(

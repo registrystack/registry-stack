@@ -41,7 +41,8 @@ them and how it reports what it finds.
    `profile.id` is a local identifier, `upstream_url` a URL, each
    cardinality bound 0 or 1 with `min` at most `max`, a conformance check's
    `severity` `error` or `warning`, and a fixture's `expect` `valid`. A
-   fixture path outside the profile's directory is refused. Migration:
+   fixture path outside the profile's directory is refused, and so is one
+   whose link resolves outside it. Migration:
    delete `generator_command: null` from each `profile.yaml`, and correct
    each member a diagnostic names.
 5. **Each file holds at most 1 MiB** (`yaml.too-large`); the bound was

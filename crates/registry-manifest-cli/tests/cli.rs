@@ -2161,6 +2161,50 @@ fn validate_profiles_refuses_a_fixture_path_outside_its_profile() {
 }
 
 #[test]
+fn validate_profiles_refuses_a_fixture_link_that_resolves_outside_its_profile() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_dir("profile-fixture-link");
+    let profile_dir = write_profile(&root, "linked", "", "  - path: fixtures/metadata.yaml\n");
+    let outside = temp_dir("profile-fixture-link-outside").join("metadata.yaml");
+    write_minimal_manifest(
+        &outside,
+        "profiles:\n  - id: linked\n    version: \"1\"\ndatasets: []\n",
+    );
+    symlink(&outside, profile_dir.join("fixtures/metadata.yaml")).expect("fixture symlink");
+
+    let output = Command::new(bin())
+        .args(["validate-profiles", "--format", "json"])
+        .arg(&root)
+        .output()
+        .expect("run cli");
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    let found = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic["code"].as_str().expect("code"),
+                diagnostic["path"].as_str().expect("path"),
+                diagnostic["source"]["line"].as_u64(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        found,
+        [(
+            "manifest.profile.fixture-path-escapes",
+            "/fixtures/0/path",
+            Some(10)
+        )]
+    );
+    let text = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(!text.contains("profile-fixture-link-outside"), "{text}");
+}
+
+#[test]
 fn validate_profiles_warns_on_an_unlisted_file_and_deny_warnings_refuses_it() {
     let root = temp_dir("profile-unlisted");
     let profile_dir = write_profile(&root, "unlisted", "", "  - path: fixtures/metadata.yaml\n");
