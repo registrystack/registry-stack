@@ -2959,8 +2959,8 @@ formats:
     schema: none
     reader:
       crate: registry-evidence
-      file: crates/registry-evidence/src/bundle.rs
-      function: load_codelist
+      file: crates/registry-evidence/src/codelist.rs
+      function: read_codelist
       type: CodelistDocument
     check: evidence check --runtime-config {runtime}
     example: none
@@ -2979,18 +2979,19 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'fixture: registry.evidence.reference.<name>/v1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+      kind: EvidenceFixture
+      checkedBy:
+        file: crates/registry-evidence/src/fixture.rs
+        symbol: EVIDENCE_FIXTURE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
       kind: EvidenceFixture
     schema: none
     reader:
       crate: registry-evidence
-      file: crates/registry-evidence/src/bundle.rs
-      function: load_fixture
+      file: crates/registry-evidence/src/fixture.rs
+      function: read_fixture
       type: untyped
     check: evidencectl test {project}
     example: crates/registry-evidencectl/templates/sqlite-extract/fixtures/record-status.yaml

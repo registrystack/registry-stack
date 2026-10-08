@@ -537,7 +537,7 @@ impl Violation {
 ///
 /// Substitution applies to `runtime.yaml` only, so the reviewed bundle is the
 /// one that runs. There is no escape for a literal `${NAME}` in the bundle.
-struct BundleExpressions;
+pub(crate) struct BundleExpressions;
 
 impl BundleExpressions {
     fn check(text: &str) -> Result<(), Refusal> {

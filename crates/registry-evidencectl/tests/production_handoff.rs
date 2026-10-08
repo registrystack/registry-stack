@@ -996,7 +996,8 @@ governance:
 }
 "#;
         let fixture = format!(
-            r#"fixture: registry.evidence.acceptance.production-handoff/v1
+            r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -1382,7 +1383,8 @@ governance:
         fs::write(
             self.project.join("fixtures/age-bracket.yaml"),
             format!(
-                r#"fixture: registry.evidence.acceptance.production-age-bracket/v1
+                r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -1419,7 +1421,8 @@ privacy_expectation:
         fs::write(
             self.project.join("fixtures/immunization-summary.yaml"),
             format!(
-                r#"fixture: registry.evidence.acceptance.production-immunization-summary/v1
+                r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:
@@ -1474,7 +1477,8 @@ privacy_expectation:
         fs::write(
             self.project.join("fixtures/parent-relationship.yaml"),
             format!(
-                r#"fixture: registry.evidence.acceptance.production-parent-relationship/v1
+                r#"apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
 coequal_acceptance_definition: true
 synthetic_only: true
 common:

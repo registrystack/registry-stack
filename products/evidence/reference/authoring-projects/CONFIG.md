@@ -585,7 +585,7 @@ disposable local identifier anywhere in `requirement`, `referenceFrameworks`,
 `governance.fixtures` is the widest deferral on this table.
 `validate_production_inputs` confirms the two path components, the `yaml`
 extension, and that the file is there, and never opens it.
-`validate_fixture_coverage` in `crates/registry-evidence/src/bundle.rs`, which
+`read_fixture` in `crates/registry-evidence/src/fixture.rs`, which
 `Bundle::load` reaches for every requirement naming a fixture, is what states
 the contract: the file declares `synthetic_only: true` and a `cases` sequence
 of 1 to 256 entries, each carrying a unique string `id` of 1 to 128 bytes, and
@@ -701,18 +701,14 @@ Give every question a `governance` block and every answer a stable `id`, and
 replace the disposable `urn:registrystack:evidence:local:` identifiers a local
 generation issues. A project that only ever ran locally satisfies none of this.
 
-**A fixture identifier stays in the reserved namespace.** A fixture is approved
-when its own `fixture` identifier begins `registry.evidence.reference.` and ends
-`/v1`, or when the document declares `coequal_acceptance_definition: true`.
-Nothing else is approved, so renaming that identifier into an adopter's own
-namespace stops the evaluation:
+**A fixture declares the fixture envelope.** A fixture opens with
+`apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and
+`kind: EvidenceFixture`. A document without them is refused with
+`config.missing-envelope` before any case runs, and one that still carries the
+retired `fixture` identifier key is refused with `config.removed-key`.
 
-```text
-fixture is not an approved synthetic acceptance definition
-```
-
-The identifier `evidencectl init` writes is already approved. Replace the example
-requirement, concepts, schema, and rows around it and leave that one key as
+The envelope `evidencectl init` writes is already correct. Replace the example
+requirement, concepts, schema, and rows around it and leave those two keys as
 generated. A document that does not declare `synthetic_only: true` is refused
 for that alone.
 

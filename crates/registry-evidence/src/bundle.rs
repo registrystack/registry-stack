@@ -24,7 +24,6 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_norway::Value as YamlValue;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use url::Url;
 
 use crate::config::{
     ArtifactPath, ConceptConfig, ConceptForm, ConfigError, EvidenceConfig, OrderedMap,
@@ -316,7 +315,7 @@ pub struct Bundle {
     pub scripts: BTreeMap<String, CompiledScript>,
     pub fact_schemas: BTreeMap<String, JsonValue>,
     pub codelists: BTreeMap<String, Codelist>,
-    pub fixtures: BTreeMap<String, YamlValue>,
+    pub fixtures: BTreeMap<String, JsonValue>,
     pub active_public_jwk: PublicJwk,
     pub published_public_jwks: BTreeMap<String, PublicJwk>,
 }
@@ -591,9 +590,9 @@ impl Bundle {
         let scripts = load_scripts(&config, &files)?;
         let fact_schemas = load_fact_schemas(&config, &files)?;
         validate_prior_fact_bindings(&config, &fact_schemas)?;
-        let codelists = load_codelists(&config, &files)?;
+        let codelists = load_codelists(root, &config, &files)?;
         validate_codelist_references(&config, &codelists)?;
-        let fixtures = load_fixtures(&config, &files)?;
+        let fixtures = load_fixtures(root, &config, &files)?;
         let (active_public_jwk, published_public_jwks) = load_public_jwks(&config, &files)?;
         let requirement_revisions = compute_requirement_revisions(&config, &files)?;
 
@@ -660,7 +659,7 @@ impl Bundle {
         self.codelists.get(path.as_str())
     }
 
-    pub fn fixture(&self, path: &ArtifactPath) -> Option<&YamlValue> {
+    pub fn fixture(&self, path: &ArtifactPath) -> Option<&JsonValue> {
         self.fixtures.get(path.as_str())
     }
 }
@@ -1246,13 +1245,8 @@ fn reviewed_bucket_codelist_paths<'a>(
             .iter()
             .filter(|(path, _)| path.starts_with("codelists/"))
             .filter_map(|(path, bytes)| {
-                let document = std::str::from_utf8(bytes)
-                    .ok()
-                    .and_then(|text| serde_norway::from_str::<YamlValue>(text).ok())?;
-                let mapping = document.as_mapping()?;
-                (mapping.get("id").and_then(YamlValue::as_str) == Some(identifier)
-                    && mapping.get("version").and_then(YamlValue::as_str) == Some(version))
-                .then(|| path.clone())
+                let (declared_id, declared_version) = crate::codelist::declared_identity(bytes)?;
+                (declared_id == identifier && declared_version == version).then(|| path.clone())
             })
             .collect::<Vec<_>>();
         if matches.len() != 1 {
@@ -2092,6 +2086,7 @@ fn schema_const_is_bounded(value: &JsonValue) -> bool {
 }
 
 fn load_codelists(
+    root: &Path,
     config: &EvidenceConfig,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<BTreeMap<String, Codelist>, BundleError> {
@@ -2118,128 +2113,25 @@ fn load_codelists(
     paths.extend(reviewed_bucket_codelist_paths(all_concepts(config), files)?);
     let mut codelists = BTreeMap::new();
     for path in paths {
-        let codelist = load_codelist(&path, files).map_err(|error| error.in_artifact(&path))?;
+        let codelist =
+            load_codelist(root, &path, files).map_err(|error| error.in_artifact(&path))?;
         codelists.insert(path, codelist);
     }
     Ok(codelists)
 }
 
-fn load_codelist(path: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Codelist, BundleError> {
+/// Read one codelist the configuration references. A refusal names the file
+/// as it sits under the bundle root.
+fn load_codelist(
+    root: &Path,
+    path: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<Codelist, BundleError> {
     let bytes = files
         .get(path)
         .ok_or(invalid_artifact("missing codelist"))?;
-    let text = std::str::from_utf8(bytes).map_err(|_| invalid_artifact("codelist is not UTF-8"))?;
-    let document: CodelistDocument =
-        serde_norway::from_str(text).map_err(|_| invalid_artifact("codelist YAML is invalid"))?;
-    document.validate()
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum CodelistDocument {
-    Codes(CodeCodelistDocument),
-    Mapping(MappingCodelistDocument),
-}
-
-impl CodelistDocument {
-    fn validate(self) -> Result<Codelist, BundleError> {
-        match self {
-            Self::Codes(document) => document.validate(),
-            Self::Mapping(document) => document.validate(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CodeCodelistDocument {
-    id: String,
-    version: String,
-    codes: Vec<String>,
-}
-
-impl CodeCodelistDocument {
-    fn validate(self) -> Result<Codelist, BundleError> {
-        validate_codelist_header(&self.id, &self.version)?;
-        validate_code_collection(&self.codes)?;
-        Ok(Codelist::Codes {
-            id: self.id,
-            version: self.version,
-            codes: self.codes,
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MappingCodelistDocument {
-    id: String,
-    version: String,
-    entries: BTreeMap<String, String>,
-    allowed_outputs: Vec<String>,
-}
-
-impl MappingCodelistDocument {
-    fn validate(self) -> Result<Codelist, BundleError> {
-        validate_codelist_header(&self.id, &self.version)?;
-        if self.entries.is_empty() || self.entries.len() > 4_096 {
-            return Err(invalid_artifact("codelist entry count is invalid"));
-        }
-        validate_code_collection(&self.allowed_outputs)?;
-        for (input, output) in &self.entries {
-            validate_code(input)?;
-            validate_code(output)?;
-            if !self.allowed_outputs.contains(output) {
-                return Err(invalid_artifact("codelist mapping output is not allowed"));
-            }
-        }
-        Ok(Codelist::Mapping {
-            id: self.id,
-            version: self.version,
-            entries: self.entries,
-            allowed_outputs: self.allowed_outputs,
-        })
-    }
-}
-
-fn validate_codelist_header(id: &str, version: &str) -> Result<(), BundleError> {
-    if id.len() > 512
-        || Url::parse(id).is_err()
-        || version.is_empty()
-        || version.len() > 128
-        || version.contains('\0')
-    {
-        return Err(invalid_artifact("codelist identity is invalid"));
-    }
-    Ok(())
-}
-
-fn validate_code_collection(codes: &[String]) -> Result<(), BundleError> {
-    if codes.is_empty() || codes.len() > 4_096 {
-        return Err(invalid_artifact("codelist code count is invalid"));
-    }
-    let mut seen = BTreeSet::new();
-    for code in codes {
-        validate_code(code)?;
-        if !seen.insert(code.as_str()) {
-            return Err(invalid_artifact("codelist code is duplicated"));
-        }
-    }
-    Ok(())
-}
-
-fn validate_code(code: &str) -> Result<(), BundleError> {
-    let bytes = code.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > 128
-        || !bytes[0].is_ascii_alphanumeric()
-        || !bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
-    {
-        return Err(invalid_artifact("codelist code is invalid"));
-    }
-    Ok(())
+    crate::codelist::read_codelist(&root.join(path).display().to_string(), bytes)
+        .map_err(|report| BundleError::Refused(Box::new(report)))
 }
 
 fn validate_codelist_references(
@@ -2299,9 +2191,10 @@ fn validate_codelist_references(
 }
 
 fn load_fixtures(
+    root: &Path,
     config: &EvidenceConfig,
     files: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, YamlValue>, BundleError> {
+) -> Result<BTreeMap<String, JsonValue>, BundleError> {
     let mut fixtures = BTreeMap::new();
     for requirement in &config.requirements {
         let Some(fixture_path) = &requirement.fixtures else {
@@ -2315,122 +2208,27 @@ fn load_fixtures(
             .sources
             .get(requirement.initial_source())
             .is_some_and(|source| source.unresolved_problem().is_some());
-        let fixture = load_fixture(path, files, declared_unresolved)
-            .map_err(|error| error.in_artifact(path))?;
+        let fixture = load_fixture(root, path, files, declared_unresolved)?;
         fixtures.insert(path.to_owned(), fixture);
     }
     Ok(fixtures)
 }
 
 fn load_fixture(
+    root: &Path,
     path: &str,
     files: &BTreeMap<String, Vec<u8>>,
     declared_unresolved: bool,
-) -> Result<YamlValue, BundleError> {
+) -> Result<JsonValue, BundleError> {
     let bytes = files
         .get(path)
         .ok_or(invalid_artifact("fixture file is missing"))?;
-    let text =
-        std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fixture file is not UTF-8"))?;
-    let fixture: YamlValue =
-        serde_norway::from_str(text).map_err(|_| invalid_artifact("fixture YAML is invalid"))?;
-    validate_fixture_coverage(&fixture, declared_unresolved)?;
-    Ok(fixture)
-}
-
-fn validate_fixture_coverage(
-    fixture: &YamlValue,
-    declared_unresolved: bool,
-) -> Result<(), BundleError> {
-    let root = fixture
-        .as_mapping()
-        .ok_or(invalid_artifact("fixture root must be a mapping"))?;
-    if root.get("synthetic_only").and_then(YamlValue::as_bool) != Some(true) {
-        return Err(invalid_artifact("fixtures must be synthetic-only"));
-    }
-    let cases = root
-        .get("cases")
-        .and_then(YamlValue::as_sequence)
-        .ok_or(invalid_artifact("fixture cases are missing"))?;
-    if cases.is_empty() || cases.len() > 256 {
-        return Err(invalid_artifact("fixture case count is invalid"));
-    }
-    let mut ids = BTreeSet::new();
-    let mut categories = FixtureCategories::default();
-    for case in cases {
-        let id = case
-            .as_mapping()
-            .and_then(|mapping| mapping.get("id"))
-            .and_then(YamlValue::as_str)
-            .ok_or(invalid_artifact("fixture case id is missing"))?;
-        if id.is_empty() || id.len() > 128 || !ids.insert(id) {
-            return Err(invalid_artifact("fixture case id is invalid or duplicated"));
-        }
-        let mapping = case
-            .as_mapping()
-            .ok_or(invalid_artifact("fixture case must be a mapping"))?;
-        let fixture_declares_unresolved = match mapping.get("declaredUnresolved") {
-            Some(YamlValue::Bool(true)) if declared_unresolved => true,
-            Some(YamlValue::Bool(true)) => {
-                return Err(invalid_artifact(
-                    "fixture declared unresolved without a source declaration",
-                ));
-            }
-            Some(_) => {
-                return Err(invalid_artifact(
-                    "fixture declared-unresolved marker must be true",
-                ));
-            }
-            None => false,
-        };
-        categories.observe(id, fixture_declares_unresolved);
-    }
-    if !categories.complete() {
-        return Err(invalid_artifact("fixture category coverage is incomplete"));
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct FixtureCategories {
-    positive: bool,
-    negative: bool,
-    boundary: bool,
-    missing: bool,
-    no_match: bool,
-    ambiguous: bool,
-    source_failure: bool,
-    anti_reconstruction: bool,
-}
-
-impl FixtureCategories {
-    fn observe(&mut self, id: &str, declared_unresolved: bool) {
-        self.positive |= id == "positive";
-        self.negative |= id.starts_with("negative");
-        self.boundary |= id.starts_with("boundary");
-        self.missing |= id.starts_with("missing");
-        self.no_match |= id == "no-match";
-        self.ambiguous |= id.starts_with("ambiguous");
-        // The configured source has already collapsed its hidden no-match and
-        // ambiguous states into one exact transport outcome. Evidence cannot
-        // truthfully label the fixture as either branch, so the neutral case
-        // proves the public behavior shared by both completeness categories.
-        self.no_match |= declared_unresolved;
-        self.ambiguous |= declared_unresolved;
-        self.source_failure |= id == "source-failure";
-        self.anti_reconstruction |= id == "anti-reconstruction";
-    }
-
-    fn complete(&self) -> bool {
-        self.positive
-            && self.negative
-            && self.boundary
-            && self.missing
-            && self.no_match
-            && self.ambiguous
-            && self.source_failure
-            && self.anti_reconstruction
-    }
+    crate::fixture::read_fixture(
+        &root.join(path).display().to_string(),
+        bytes,
+        declared_unresolved,
+    )
+    .map_err(|report| BundleError::Refused(Box::new(report)))
 }
 
 fn load_public_jwks(
@@ -4068,36 +3866,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fixture_coverage_is_case_neutral_but_complete() {
-        let fixture: YamlValue = serde_norway::from_str(
-            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: no-match}\n  - {id: ambiguous}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
-        )
-        .expect("fixture parses");
-        assert!(validate_fixture_coverage(&fixture, false).is_ok());
-    }
-
-    /// A provider that deliberately collapses hidden no-match and ambiguity
-    /// into one configured wire outcome leaves Evidence no truthful basis for
-    /// inventing two extraction responses. The one neutral, data-free case is
-    /// therefore sufficient for both public-collapse coverage categories.
-    #[test]
-    fn declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories() {
-        let fixture: YamlValue = serde_norway::from_str(
-            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: unresolved, declaredUnresolved: true}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
-        )
-        .expect("fixture parses");
-
-        assert!(validate_fixture_coverage(&fixture, true).is_ok());
-        assert!(validate_fixture_coverage(&fixture, false).is_err());
-
-        let false_marker: YamlValue = serde_norway::from_str(
-            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: unresolved, declaredUnresolved: false}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
-        )
-        .expect("fixture parses");
-        assert!(validate_fixture_coverage(&false_marker, true).is_err());
-    }
-
     #[cfg(unix)]
     #[test]
     fn local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete() {
@@ -4183,11 +3951,17 @@ mod tests {
             let error = Bundle::load(directory.path()).expect_err(&format!(
                 "{profile} bundle loaded with incomplete fixture coverage"
             ));
-            assert!(
-                error
-                    .to_string()
-                    .contains("fixture category coverage is incomplete"),
-                "{profile} failed for an unexpected reason: {error}"
+            let BundleError::Refused(report) = &error else {
+                panic!("{profile} failed for an unexpected reason: {error}");
+            };
+            assert_eq!(
+                report
+                    .diagnostics()
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.as_str())
+                    .collect::<Vec<_>>(),
+                ["evidence.fixture.incomplete-coverage"],
+                "{profile} failed for an unexpected reason"
             );
         }
     }

@@ -12,9 +12,11 @@ pub mod bundle;
 pub mod check;
 #[doc(hidden)]
 pub mod cli;
+pub mod codelist;
 pub mod config;
 pub mod contracts;
 pub mod discovery;
+pub mod fixture;
 pub mod kernel;
 pub mod local_verification;
 pub mod model;

@@ -2352,15 +2352,15 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.write(
                     "bundle/codelists/residence-region-map.yaml",
-                    &format!("id: broken\nversion: \"1\"\nentries: {CANARY}\n"),
+                    &format!("id: urn:example:broken\nversion: \"1\"\nentries: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment artifact is invalid: artifact codelists/residence-region-map.yaml: codelist YAML is invalid\n",
-            suffix: "",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[config.invalid-type] ",
+            suffix: "codelists/residence-region-map.yaml:3:10 /entries\n  expected a mapping, not unquoted text\n  next: Write the members as a mapping (`{}` when there are none).\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-artifact",
-                "codelist YAML is invalid",
+                "config.invalid-type",
+                "expected a mapping, not unquoted text",
             ),
         },
         FailureCase {
@@ -2369,15 +2369,15 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.write(
                     "bundle/fixtures/adult-status-cases.yaml",
-                    &format!("synthetic_only: true\ncases: {CANARY}\n"),
+                    &format!("apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsynthetic_only: true\ncases: {CANARY}\n"),
                 );
             },
-            prefix: "evidence: deployment artifact is invalid: artifact fixtures/adult-status-cases.yaml: fixture cases are missing\n",
-            suffix: "",
+            prefix: "evidence: the configuration reader refused the configuration\nerror[evidence.fixture.missing-cases] ",
+            suffix: "fixtures/adult-status-cases.yaml:4:8 /cases\n  a fixture declares its cases as a list\n  next: Declare `cases` as a list of cases, each with an `id`.\n1 error, 0 warnings in 1 file\n",
             needs_runtime: false,
             check: (
-                "evidence.bundle.invalid-artifact",
-                "fixture cases are missing",
+                "evidence.fixture.missing-cases",
+                "a fixture declares its cases as a list",
             ),
         },
         FailureCase {

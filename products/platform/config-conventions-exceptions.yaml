@@ -4092,20 +4092,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: evidence/codelist
-  location: crates/registry-evidence/src/bundle.rs#CodelistDocument
-  class: pending
-  wp: WP3
-  reason: CodelistDocument derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-YAML-1
-  format: evidence/codelist
-  location: crates/registry-evidence/src/bundle.rs#load_codelist()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: evidence/ctl-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4155,20 +4141,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-ENV-1
-  format: evidence/fixture
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/fixture
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceFixture'
 - rule: CFG-SCHEMA-2
   format: evidence/fixture
   location: products/platform/config-formats.yaml#/schema
@@ -4183,13 +4155,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/fixture
-  location: crates/registry-evidence/src/bundle.rs#load_fixture()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: evidence/holder-bound-verification-policy
   location: products/platform/config-formats.yaml#/check

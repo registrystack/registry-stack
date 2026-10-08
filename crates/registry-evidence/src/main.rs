@@ -1602,34 +1602,25 @@ async fn evaluate_fixture(
         .fixtures
         .get(fixture_name)
         .ok_or(CliError("fixture artifact is not captured by the bundle"))?;
-    let fixture = serde_json::to_value(fixture)
-        .map_err(|_| CliError("fixture contract is not representable"))?;
     let object = fixture
         .as_object()
         .ok_or(CliError("fixture contract must be an object"))?;
     if object.get("synthetic_only") != Some(&Value::Bool(true)) {
         return Err(CliError("fixture is not an approved synthetic definition"));
     }
+    // A fixture that declares itself a coequal acceptance definition is run
+    // as one; every other fixture is a reference fixture.
     if object.get("coequal_acceptance_definition") != Some(&Value::Bool(true)) {
-        if object
-            .get("fixture")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id.starts_with("registry.evidence.reference.") && id.ends_with("/v1"))
-        {
-            return evaluate_reference_fixture(
-                bundle,
-                kernel,
-                source_plans,
-                signer.as_ref(),
-                requirement,
-                (object, selected_case),
-                trace,
-            )
-            .await;
-        }
-        return Err(CliError(
-            "fixture is not an approved synthetic acceptance definition",
-        ));
+        return evaluate_reference_fixture(
+            bundle,
+            kernel,
+            source_plans,
+            signer.as_ref(),
+            requirement,
+            (object, selected_case),
+            trace,
+        )
+        .await;
     }
     trace.declare_canaries(declared_canaries(
         object,
@@ -2560,13 +2551,7 @@ async fn evaluate_reference_fixture(
     refuse_replayed_statement_stages(&bundle.config, &requirement.acquisition)?;
     require_exact_keys(
         fixture,
-        &[
-            "fixture",
-            "synthetic_only",
-            "common",
-            "cases",
-            "privacyExpectation",
-        ],
+        &["synthetic_only", "common", "cases", "privacyExpectation"],
     )?;
     trace.declare_canaries(declared_canaries(
         fixture,
@@ -6881,7 +6866,7 @@ mod tests {
         );
         let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
             .get("cases")
-            .and_then(serde_norway::Value::as_sequence)
+            .and_then(Value::as_array)
             .expect("cases")
             .len();
         assert_eq!(
@@ -7042,7 +7027,7 @@ mod tests {
             );
             let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
                 .get("cases")
-                .and_then(serde_norway::Value::as_sequence)
+                .and_then(Value::as_array)
                 .expect("cases")
                 .len();
             assert_eq!(
@@ -7236,7 +7221,7 @@ mod tests {
             );
             let expected_cases = bundle.fixtures[fixture.to_str().expect("fixture path")]
                 .get("cases")
-                .and_then(serde_norway::Value::as_sequence)
+                .and_then(Value::as_array)
                 .expect("cases")
                 .len();
             assert_eq!(
@@ -7317,7 +7302,7 @@ mod tests {
                 let fixture = Path::new(fixture_path.as_str());
                 let expected_cases = bundle.fixtures[fixture_path.as_str()]
                     .get("cases")
-                    .and_then(serde_norway::Value::as_sequence)
+                    .and_then(Value::as_array)
                     .expect("cases")
                     .len();
                 assert_eq!(
