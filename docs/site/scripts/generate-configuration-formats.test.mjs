@@ -52,7 +52,7 @@ test('states each header, schema, check, and stability as the registry records i
     apiVersion: 'registry.registrystack.org/v1alpha1',
     kind: 'RegistryProject',
     exceptionClass: null,
-    schemaId: 'https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json',
+    schemaId: 'https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json',
     schemaPath: 'products/breg/generated/authoring/registry-project.schema.json',
     check: 'bregctl check <project>',
     stability: 'promised',
