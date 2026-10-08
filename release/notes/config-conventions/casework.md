@@ -582,6 +582,7 @@ The members still left open are listed in
 `products/casework/contracts/cli/README.md`.
 
 ## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
+<!-- upgrade: casework-runtime-empty-assertion-issuers -->
 
 | Before | Now | Migration |
 |---|---|---|

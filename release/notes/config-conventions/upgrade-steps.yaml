@@ -58,6 +58,10 @@ steps:
     caseworkctl dev stop --remove with the caseworkctl that started the session, remove .casework/dev,
     and start again; if that caseworkctl is gone, docker rm -fv the casework-dev-<owner> database container
     first.'}
+- {id: casework-runtime-empty-assertion-issuers, product: casework, kind: manual, file: runtime.yaml, instruction: Delete
+    authentication.oidc.assertionIssuers when it is an empty mapping; omitting it applies no assertion-issuer rule.}
+- {id: messaging-runtime-empty-assertion-issuers, product: messaging, kind: manual, file: runtime.yaml, instruction: Delete
+    authentication.oidc.assertionIssuers when it is an empty mapping; omitting it applies no assertion-issuer rule.}
 - id: evidence-project-envelope
   product: evidence
   kind: edit

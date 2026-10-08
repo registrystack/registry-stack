@@ -278,6 +278,7 @@ meant.
   two new members; a script that reads members by name needs no change.
 
 ## BREAKING: the `check` and `package` reports name the project like the flag
+<!-- upgrade: no-file -->
 
 | Old member | New member | Migration |
 |---|---|---|
@@ -291,6 +292,7 @@ names the package a runtime activated, as the HTTP contract does.
 Human output is unchanged.
 
 ## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
+<!-- upgrade: messaging-runtime-empty-assertion-issuers -->
 
 | Before | Now | Migration |
 |---|---|---|
