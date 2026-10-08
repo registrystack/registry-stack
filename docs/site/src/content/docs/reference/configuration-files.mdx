@@ -81,8 +81,7 @@ or No kind does not carry that member.
 ## How a runtime reads its file
 
 A runtime reads its configuration file only from an absolute path with no `.` or `..` segment and
-no symbolic link anywhere along it, and only when that path names a regular file of at most 1 MiB
-(64 KiB for the BReg runtime file).
+no symbolic link anywhere along it, and only when that path names a regular file of at most 1 MiB.
 The file is one YAML document in a strict subset of YAML 1.2, in UTF-8, nested at most 128 levels
 deep. Write block mappings and lists, indent with spaces, and add comments wherever they help. The
 reader refuses these constructs, each with its own code:
@@ -103,7 +102,7 @@ the note as a comment.
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, RuntimeConfigLoader and
     DEFAULT_MAX_RUNTIME_CONFIG_BYTES;
-    crates/registry-breg/src/runtime_config.rs, MAX_RUNTIME_CONFIG_BYTES;
+    crates/registry-breg/src/runtime_config.rs, runtime_config_loader();
     crates/registry-platform-yaml/src/document.rs, MAXIMUM_DOCUMENT_BYTES;
     crates/registry-platform-yaml/src/structure.rs, MAXIMUM_DEPTH;
     crates/registry-platform-yaml/src/messages.rs, CODES and extension_key(). */}
@@ -336,13 +335,13 @@ A runtime prints the diagnostics inside its own startup error, and the surroundi
 product. Some runtimes print the lines as shown on this page, some restate a refusal in their own
 words, and Registry Discovery writes the lines inside a JSON log record.
 
-The BReg runtime differs most. It reads the YAML, the header, and substitution through the reader,
-then checks the keys and values itself. It reports one problem per run, on one line, without the
-reader's code, line, or column.
+The BReg runtime prints the least. It reads the file through the reader, then applies its own rules
+to the decoded values. It reports one problem per run, on one line: the deciding diagnostic's
+pointer, message, and suggested action, without its code, line, or column.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, load();
-    crates/registry-breg/src/runtime_config.rs, parse_runtime_config_with_env(),
-    runtime_config_from_substituted(), and runtime_config_error_from_loader();
+    crates/registry-breg/src/runtime_config.rs, parse_runtime_config_with_env() and
+    ReaderRefusal;
     crates/registry-platform-config/src/loader.rs, message();
     crates/registry-evidence/src/config.rs, runtime_fault();
     crates/registry-discovery/src/startup.rs, RuntimeConfigLoader. */}
@@ -354,12 +353,17 @@ checks each format without starting the service. Run it in your pipeline before 
 the project directory or runtime file it names. A format marked None has no check command of its
 own; the program that reads it refuses it when it starts.
 
-The BReg runtime file is one of these. `bregctl doctor --runtime-config <absolute-file>` reads it,
-and also connects to the database and the other dependencies the file names, so it is a deployment
-preflight rather than an offline check.
+`bregctl check <project> --runtime-config <file>` checks the BReg runtime file offline, as `breg`
+reads it at startup, and prints each diagnostic in full. It reads no package, database, network
+endpoint, or secret. Add `--environment` to fill `${NAME}` expressions from the process environment;
+without it, each expression is checked by syntax and position only. `bregctl doctor --runtime-config
+<absolute-file>` also connects to the database and the other dependencies the file names, so it is a
+deployment preflight rather than an offline check.
 
 {/* Evidence: products/platform/config-formats.yaml;
-    crates/registry-bregctl/src/lib.rs, DoctorArgs;
+    crates/registry-bregctl/src/lib.rs, CheckArgs and DoctorArgs;
+    crates/registry-bregctl/src/check.rs, check_runtime_file();
+    crates/registry-breg/src/runtime_config.rs, check_runtime_config();
     crates/registry-bregctl/src/doctor.rs, run(). */}
 
 ### Check as you type
