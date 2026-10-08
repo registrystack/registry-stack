@@ -2813,6 +2813,7 @@ version = "0.40.0"
 dependencies = [
  "oxiri",
  "registry-platform-canonical-json",
+ "registry-platform-yaml",
  "serde",
  "serde_json",
  "serde_path_to_error",
