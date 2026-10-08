@@ -735,16 +735,16 @@ exceptions:
   format: breg/migration-descriptor
   location: products/platform/config-formats.yaml#/schema
   class: pending
-  wp: WP6
+  wp: WP11
   reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
+  resolution: published with the kebab-case respelling of the change class, change code, target kind, and recovery values, which move together with the promised `bregctl plan` JSON output
 - rule: CFG-SCHEMA-6
   format: breg/migration-descriptor
   location: editors/configure.py#/SCHEMAS/breg
   class: pending
-  wp: WP6
+  wp: WP11
   reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
+  resolution: published with the kebab-case respelling of the change class, change code, target kind, and recovery values, which move together with the promised `bregctl plan` JSON output
 - rule: CFG-ENV-2
   format: breg/model-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
