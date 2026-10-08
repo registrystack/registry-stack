@@ -3393,13 +3393,6 @@ exceptions:
   class: protocol-constant
   reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
-- rule: CFG-ID-1
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/id
-  class: pending
-  wp: WP8
-  reason: id is not typed as $defs/LocalId
-  resolution: 'Type the member with $ref: #/$defs/LocalId'
 - rule: CFG-ENV-2
   format: evidence/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion

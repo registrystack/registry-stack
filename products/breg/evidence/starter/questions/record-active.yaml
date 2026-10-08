@@ -13,7 +13,7 @@ source:
   ref: registry-status
 answers:
 - concept: active
-  id: urn:example:concept:record-active:active
+  uri: urn:example:concept:record-active:active
   type: boolean
 derivation: derivations/record-active.rhai
 disclosure:

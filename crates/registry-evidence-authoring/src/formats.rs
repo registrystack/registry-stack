@@ -103,7 +103,10 @@ pub const QUESTION: FormatSpec<'static> = FormatSpec {
         api_versions: &[ApiVersion::current(QUESTION_API_VERSION)],
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &[RemovedKey {
+        pointer: "/answers/*/id",
+        replacement: "Rename `answers[].id` to `answers[].uri`.",
+    }],
 };
 
 /// One local access policy.
@@ -556,6 +559,26 @@ mod tests {
         )
         .expect_err("removed keys are refused");
         assert_eq!(codes(&report), ["config.removed-key", "config.removed-key"]);
+    }
+
+    #[test]
+    fn the_retired_answer_id_is_refused_with_its_replacement() {
+        let text = format!(
+            "apiVersion: {QUESTION_API_VERSION}\nkind: {QUESTION_KIND}\nanswers:\n  - concept: is_adult\n    id: urn:example:concept:is-adult\n    type: boolean\n"
+        );
+        let report = read_authored("question.yaml", text.as_bytes(), &QUESTION)
+            .expect_err("the removed key is refused");
+        let removed: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.removed-key")
+            .collect();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].path, "/answers/0/id");
+        assert!(
+            removed[0].suggested_action.contains("answers[].uri"),
+            "the refusal names the replacement"
+        );
     }
 
     #[test]

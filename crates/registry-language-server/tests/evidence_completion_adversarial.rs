@@ -993,12 +993,12 @@ fn a_source_artifact_is_never_offered_at_an_answer_schema() {
 
     const BOOLEAN_ANSWER: &str = concat!(
         "  - concept: <|concept|>is_adult\n",
-        "    id: urn:example:concepts:is-adult\n",
+        "    uri: urn:example:concepts:is-adult\n",
         "    type: boolean\n",
     );
     const STRUCTURED_ANSWER: &str = concat!(
         "  - concept: <|concept|>is_adult\n",
-        "    id: urn:example:concepts:is-adult\n",
+        "    uri: urn:example:concepts:is-adult\n",
         "    type: reviewed-structured-value\n",
         "    schema: <|answer-schema|>schemas/adult-status.yaml\n",
         "    maximumSerializedBytes: 4096\n",

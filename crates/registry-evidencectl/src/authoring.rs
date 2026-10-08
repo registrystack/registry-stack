@@ -25,7 +25,7 @@ use url::{Host, Url};
 use registry_evidence_authoring::formats::{
     check_access_policy, check_question, diagnostic_near, scan_authored,
 };
-use registry_platform_yaml::{Document, LocalId, Node, NodeValue, Severity};
+use registry_platform_yaml::{Document, ExternalId, LocalId, Node, NodeValue, Severity};
 
 use crate::authored::{self, Gathered};
 use crate::evidence_binary::{EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND};
@@ -1282,8 +1282,8 @@ fn validate_deployment_inputs(
             .governance
             .as_ref()
             .ok_or_else(|| anyhow!("every production question requires governance"))?;
-        if question.answers.iter().any(|answer| answer.id.is_none()) {
-            bail!("every production answer requires one stable concept id");
+        if question.answers.iter().any(|answer| answer.uri.is_none()) {
+            bail!("every production answer requires one stable concept uri");
         }
         for uri in std::iter::once(governance.requirement.as_str())
             .chain(governance.reference_frameworks.iter().map(String::as_str))
@@ -1293,7 +1293,7 @@ fn validate_deployment_inputs(
                 question
                     .answers
                     .iter()
-                    .filter_map(|answer| answer.id.as_deref()),
+                    .filter_map(|answer| answer.uri.as_ref().map(ExternalId::as_str)),
             )
         {
             if production && uri.starts_with(LOCAL_URI_PREFIX) {
@@ -2829,8 +2829,9 @@ fn compile_concept(
     schemas: &BTreeMap<String, Value>,
 ) -> Result<ConceptPlan> {
     let concept_uri = answer
-        .id
-        .clone()
+        .uri
+        .as_ref()
+        .map(|uri| uri.as_str().to_owned())
         .unwrap_or_else(|| local_uri(&format!("concept:{question_id}:{}", answer.concept)));
     Ok(match answer.answer_type {
         AnswerType::Boolean => ConceptPlan {
@@ -2843,7 +2844,7 @@ fn compile_concept(
             sd_jwt_vc: None,
         },
         AnswerType::ControlledCategory => {
-            let scheme = answer.id.as_ref().map_or_else(
+            let scheme = answer.uri.as_ref().map(ExternalId::as_str).map_or_else(
                 || local_uri(&format!("category-scheme:{question_id}:{}", answer.concept)),
                 // Version 1 requires a distinct category-scheme identifier,
                 // while the compact production question contract authors
@@ -6202,7 +6203,7 @@ properties:
     fn production_controlled_category_keeps_the_stable_concept_and_distinct_scheme_ids() {
         let answer: QuestionAnswer = serde_norway::from_str(
             r#"concept: age_bracket
-id: urn:authority:concept:age-bracket:v1
+uri: urn:authority:concept:age-bracket:v1
 type: controlled-category
 values: [under-18, adult]
 "#,
@@ -6230,7 +6231,7 @@ values: [under-18, adult]
 
     #[test]
     fn bounded_identifier_compiles_to_governed_string_constraints_without_a_codelist() {
-        let answer: QuestionAnswer = serde_norway::from_str("concept: report\nid: urn:example:concept:report\ntype: bounded-identifier\nprefix: 'urn:example:report:'\nminimumBytes: 20\nmaximumBytes: 64\n").expect("identifier answer parses");
+        let answer: QuestionAnswer = serde_norway::from_str("concept: report\nuri: urn:example:concept:report\ntype: bounded-identifier\nprefix: 'urn:example:report:'\nminimumBytes: 20\nmaximumBytes: 64\n").expect("identifier answer parses");
         assert!(registry_evidence_authoring::validate_answer(&answer).is_empty());
         let concept = compile_concept("report-question", &answer, &BTreeMap::new())
             .expect("identifier compiles");
@@ -6290,7 +6291,7 @@ values: [under-18, adult]
             for (alias, identifier) in answers {
                 question = question.replace(
                     &format!("  - concept: {alias}\n"),
-                    &format!("  - concept: {alias}\n    id: {identifier}\n"),
+                    &format!("  - concept: {alias}\n    uri: {identifier}\n"),
                 );
             }
             question.push_str(&format!(
@@ -6651,7 +6652,7 @@ factSchema: schemas/source-facts.schema.yaml
     fn local_compiler_uses_exact_optional_governance_but_keeps_local_assurance() {
         let question = QUESTION.replace(
             "  - concept: is_adult\n",
-            "  - concept: is_adult\n    id: urn:authority:concept:is-adult:v1\n",
+            "  - concept: is_adult\n    uri: urn:authority:concept:is-adult:v1\n",
         ) + r#"governance:
   requirement: urn:authority:requirement:adult-status:v1
   kind: criterion
@@ -6709,7 +6710,7 @@ factSchema: schemas/source-facts.schema.yaml
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         let question = write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
         let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
@@ -6913,7 +6914,7 @@ factSchema: schemas/source-facts.schema.yaml
     fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
         let question = write_referenced_people_project(fixture, authentication);
         let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
@@ -6939,7 +6940,7 @@ factSchema: schemas/source-facts.schema.yaml
     /// name one of.
     fn add_governed_age_bracket_question(fixture: &Fixture) {
         let mut question: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:age-bracket:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:age-bracket:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:age-bracket:v1",
             "kind": "information-requirement",
@@ -7093,7 +7094,7 @@ factSchema: schemas/source-facts.schema.yaml
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         let question = write_referenced_people_project(&fixture, source_authentication);
         let mut question: Value = serde_norway::from_str(&question).unwrap();
-        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["answers"][0]["uri"] = json!("urn:authority:concept:is-adult:v1");
         question["governance"] = json!({
             "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
             "referenceFrameworks":["urn:authority:framework:adult-status:v1"],

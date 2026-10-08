@@ -3086,7 +3086,7 @@ formats:
       optionalText: /subject/role
       integer: /governance/validitySeconds
       boolean: none
-      idList: /answers
+      idList: none
     securityMembers: []
     restrictingMembers: []
   - id: evidence/source

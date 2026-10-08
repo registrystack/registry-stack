@@ -436,7 +436,7 @@ both are named. A question whose facts visit no collection therefore writes
 | Key | Required | Meaning |
 |---|---|---|
 | `answers[].concept` | yes | The concept's local name. Lowercase local identifier, unique within the question. |
-| `answers[].id` | for production | The stable URI a relying party matches on. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. Bounded as a URI by the bundle check, not by the form. |
+| `answers[].uri` | for production | The stable URI a relying party matches on, an identifier of 1 to 512 characters with no control characters. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. The bundle check then requires it to parse as a URI. The key was `answers[].id`; a file that still writes `id` under an answer is refused with `config.removed-key`. |
 | `answers[].type` | yes | `boolean`, `controlled-category`, `bounded-identifier`, `bounded-integer`, or `reviewed-structured-value`. |
 | `answers[].values` | for `controlled-category` | 2 to 32 unique values, each non-empty, at most 64 bytes, no control characters, and each spelled as a codelist code. |
 | `answers[].prefix` | for `bounded-identifier` | Exact ASCII namespace prefix, 1 to 512 bytes, using letters, digits, `.`, `_`, `-`, `:`, `/`, or `#`, and ending in one of those six separators. |
@@ -470,12 +470,12 @@ constructing or signing Evidence.
 Four URIs an authoring project writes are bounded only after the form has
 accepted them. `validate_uri` in `crates/registry-evidence/src/config.rs` holds
 a URI to 1 through 512 bytes and then requires it to parse, and it is what
-reads an answer `id`, the `$id` of the file `answers[].schema` names,
+reads an answer `uri`, the `$id` of the file `answers[].schema` names,
 `governance.requirement`, and `governance.evidenceType`. The form reads none of
-the four: `validate_answer` never looks at `answer.id`, and `validate_question`
-never opens `governance` at all. A `controlled-category` answer's `id` is
+the four: `validate_answer` never looks at `answer.uri`, and `validate_question`
+never opens `governance` at all. A `controlled-category` answer's `uri` is
 measured twice over, because the compile derives that concept's category scheme
-as `{id}:categories` and holds the derived URI to the same 512 bytes.
+as `{uri}:categories` and holds the derived URI to the same 512 bytes.
 
 ### Disclosure
 
@@ -578,9 +578,9 @@ becomes `requirements[].id`, and `governance.disclosureFamilies` becomes
 | `governance.fixtures` | with `governance` | Exactly one project-relative `fixtures/<name>.yaml` file, which must exist. Its content is a contract the compile never reads. |
 | `governance.disclosureFamilies` | with `governance` | The disclosure family URIs this question's concepts belong to. `DisclosureGuard::validate` bounds this list exactly as `RequirementConfig::validate` bounds `referenceFrameworks`. |
 
-A production compile also requires a stable `id` on every answer, and refuses a
+A production compile also requires a stable `uri` on every answer, and refuses a
 disposable local identifier anywhere in `requirement`, `referenceFrameworks`,
-`evidenceType`, `disclosureFamilies`, or an answer `id`.
+`evidenceType`, `disclosureFamilies`, or an answer `uri`.
 
 `governance.fixtures` is the widest deferral on this table.
 `validate_production_inputs` confirms the two path components, the `yaml`
@@ -693,11 +693,11 @@ it, so a fixture run is already held to the production rules
 
 ```text
 every production question requires governance
-every production answer requires one stable concept id
+every production answer requires one stable concept uri
 deployment governance must not use disposable local identifiers
 ```
 
-Give every question a `governance` block and every answer a stable `id`, and
+Give every question a `governance` block and every answer a stable `uri`, and
 replace the disposable `urn:registrystack:evidence:local:` identifiers a local
 generation issues. A project that only ever ran locally satisfies none of this.
 
@@ -780,7 +780,6 @@ contract.
 answers
 answers[]
 answers[].concept
-answers[].id
 answers[].maximum
 answers[].maximumBytes
 answers[].maximumSerializedBytes
@@ -792,6 +791,7 @@ answers[].sdJwtVc
 answers[].sdJwtVc.claim
 answers[].sdJwtVc.disclosure
 answers[].type
+answers[].uri
 answers[].values
 answers[].values[]
 apiVersion

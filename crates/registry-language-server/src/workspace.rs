@@ -1506,7 +1506,7 @@ source:
   ref: people
 answers:
   - concept: is_adult
-    id: urn:example:concepts:is-adult
+    uri: urn:example:concepts:is-adult
     type: boolean
 derivation: derivations/{name}.rhai
 disclosure:

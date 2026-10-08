@@ -38,12 +38,6 @@
         "concept": {
           "type": "string"
         },
-        "id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "maximum": {
           "format": "int64",
           "maximum": 9007199254740991,
@@ -113,6 +107,16 @@
         },
         "type": {
           "$ref": "#/$defs/AnswerType"
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExternalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "values": {
           "default": [],

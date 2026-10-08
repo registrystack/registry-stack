@@ -596,7 +596,7 @@ fn production_metadata_and_fixture_completeness_fail_before_runtime_delegation()
         match label {
             "missing-governance" => fixture.remove_governance(),
             "missing-stable-concept" => {
-                fixture.replace_in_question("    id: urn:example:concepts:allowed\n", "")
+                fixture.replace_in_question("    uri: urn:example:concepts:allowed\n", "")
             }
             "missing-fixture" => fs::remove_file(fixture.project.join("fixtures/answer.yaml"))
                 .expect("remove fixture"),
@@ -1265,7 +1265,7 @@ source:
   ref: registry
 answers:
   - concept: allowed
-    id: urn:example:concepts:allowed
+    uri: urn:example:concepts:allowed
     type: boolean
 derivation: derivations/{id}.rhai
 disclosure:

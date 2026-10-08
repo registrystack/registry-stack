@@ -258,7 +258,7 @@ source:
     <|collection-bound|>/records: 16
 answers:
   - concept: <|concept|>is_adult
-    id: urn:example:concepts:is-adult
+    uri: urn:example:concepts:is-adult
     type: boolean
 derivation: <|derivation|>derivations/adult-status.rhai
 disclosure:
@@ -278,7 +278,7 @@ source:
   ref: <|source-ref|>people
 answers:
   - concept: <|concept|>is_adult
-    id: urn:example:concepts:is-adult
+    uri: urn:example:concepts:is-adult
     type: boolean
 derivation: <|derivation|>derivations/adult-status.rhai
 disclosure:

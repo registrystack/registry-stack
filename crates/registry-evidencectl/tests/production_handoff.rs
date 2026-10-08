@@ -674,7 +674,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     let governed_question = fs::read_to_string(fixture.project.join("questions/adult-status.yaml"))
         .expect("governed question");
     assert!(governed_question.contains(&format!("  requirement: {REQUIREMENT}")));
-    assert!(governed_question.contains(&format!("    id: {CONCEPT}")));
+    assert!(governed_question.contains(&format!("    uri: {CONCEPT}")));
     assert!(fixture.project.join("fixtures/adult-status.yaml").is_file());
 
     let local_source_token =
@@ -974,7 +974,7 @@ source:
   ref: people
 answers:
   - concept: is_adult
-    id: {CONCEPT}
+    uri: {CONCEPT}
     type: boolean
 derivation: derivations/adult-status.rhai
 disclosure:
@@ -1052,7 +1052,7 @@ privacy_expectation:
         let governance = question
             .find("governance:\n")
             .expect("adult question governance block");
-        let question = question[..governance].replace(&format!("    id: {CONCEPT}\n"), "");
+        let question = question[..governance].replace(&format!("    uri: {CONCEPT}\n"), "");
         fs::write(&question_path, question).expect("governance-free local question");
         fs::remove_file(self.project.join("fixtures/adult-status.yaml"))
             .expect("withhold production fixture during local dev");
@@ -1251,7 +1251,7 @@ source:
   ref: people
 answers:
   - concept: age_bracket
-    id: {AGE_CONCEPT}
+    uri: {AGE_CONCEPT}
     type: controlled-category
     values: [under-18, 18-to-24, 25-to-64, 65-or-older]
 derivation: derivations/age-bracket.rhai
@@ -1283,10 +1283,10 @@ source:
   ref: immunizations
 answers:
   - concept: schedule_complete
-    id: {SCHEDULE_CONCEPT}
+    uri: {SCHEDULE_CONCEPT}
     type: boolean
   - concept: dose_count
-    id: {DOSE_COUNT_CONCEPT}
+    uri: {DOSE_COUNT_CONCEPT}
     type: bounded-integer
     minimum: 0
     maximum: 20
@@ -1322,7 +1322,7 @@ source:
   ref: relationships
 answers:
   - concept: relationship_confirmed
-    id: {RELATIONSHIP_CONCEPT}
+    uri: {RELATIONSHIP_CONCEPT}
     type: boolean
 derivation: derivations/parent-relationship.rhai
 disclosure:

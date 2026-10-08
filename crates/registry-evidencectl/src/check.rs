@@ -1520,13 +1520,13 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             .flatten()
             .enumerate()
         {
-            if answer.get("id").is_none() {
+            if answer.get("uri").is_none() {
                 report.push(diagnostic(
                     Severity::Warning,
                     "evidence.answer.stable-id-missing",
-                    &format!("/answers/{index}/id"),
-                    "the answer has no stable concept id",
-                    "Add the stable concept identifier required for deployment authoring.",
+                    &format!("/answers/{index}/uri"),
+                    "the answer has no stable concept uri",
+                    "Add the stable concept `uri` required for deployment authoring.",
                 ));
             }
         }

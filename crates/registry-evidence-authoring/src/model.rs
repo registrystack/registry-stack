@@ -220,7 +220,7 @@ pub enum FactCombination {
 #[serde(deny_unknown_fields)]
 pub struct QuestionAnswer {
     pub concept: String,
-    pub id: Option<String>,
+    pub uri: Option<ExternalId>,
     #[serde(rename = "type")]
     pub answer_type: AnswerType,
     #[serde(default)]

@@ -501,10 +501,10 @@ fn a_card_draws_two_different_names_differently() {
 #[test]
 fn a_card_cut_at_its_ceiling_closes_every_span_it_opened() {
     let answers =
-        "  - concept: is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n"
+        "  - concept: is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n"
             .repeat(140);
     let question = QUESTION.replace(
-        "answers:\n  - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    \
+        "answers:\n  - concept: <|concept|>is_adult\n    uri: urn:example:concepts:is-adult\n    \
          type: boolean\n",
         &format!("answers:\n{answers}"),
     );

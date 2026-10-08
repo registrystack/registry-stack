@@ -25,7 +25,7 @@ source:
 # and the type it must have. The derivation may produce these and nothing else.
 answers:
   - concept: active
-    id: urn:example:concept:record-active:active
+    uri: urn:example:concept:record-active:active
     type: boolean
 
 # The bounded script that turns the extracted facts into those answers.

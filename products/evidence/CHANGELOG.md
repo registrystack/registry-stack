@@ -73,6 +73,10 @@
   `severity: warning`, its codes follow `evidence.<area>.<condition>`, and
   `--production` requires `--target`. `release/notes/config-conventions/evidence.md`
   ("Evidence authoring tools") gives each migration and the full code table.
+- BREAKING: a question answer's concept URI is written `answers[].uri`, no
+  longer `answers[].id`; a file that keeps `id` under an answer is refused as
+  `config.removed-key`. Migration: rename the key in every
+  `questions/*.yaml`.
 
 ### Evidence runtime
 

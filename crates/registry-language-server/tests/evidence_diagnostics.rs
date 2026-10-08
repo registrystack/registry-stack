@@ -264,9 +264,9 @@ fn a_finding_naming_a_field_the_document_omits_lands_on_the_field_above_it() {
 #[test]
 fn a_doubled_concept_is_reported_once_by_the_check_that_owns_it() {
     let text = QUESTION.replace(
-        "  - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n",
-        "  - concept: is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n  \
-         - concept: <|concept|>is_adult\n    id: urn:example:concepts:is-adult\n    type: boolean\n",
+        "  - concept: <|concept|>is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n",
+        "  - concept: is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n  \
+         - concept: <|concept|>is_adult\n    uri: urn:example:concepts:is-adult\n    type: boolean\n",
     );
 
     let (project, reported) = question_project(&text);

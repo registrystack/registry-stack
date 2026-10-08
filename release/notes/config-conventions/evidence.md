@@ -415,6 +415,16 @@ Track: Evidence authoring tools (`evidencectl`, `registry-evidence-authoring`,
     |---|---|---|
     | project marker | `https://registrystack.example/schemas/evidence-authoring/project-marker.v1.json` | `https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json` |
     | question | `https://registrystack.example/schemas/evidence-authoring/question.v1.json` | `https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json` |
+11. **A question answer's concept URI is `uri`.** The member `answers[].id`
+    holds an identifier another system issues (a URN), so it was never a
+    local identifier and no longer shares the name `id` with the question's
+    own identifier. The question's own top-level `id` does not change.
+    Migration: in every `questions/*.yaml`, rename `id:` to `uri:` under each
+    entry of `answers`. A file that keeps `answers[].id` is refused as
+    `config.removed-key` at `/answers/<n>/id`, naming `answers[].uri`. The
+    value is held to 1 to 512 characters with no control characters. The
+    diagnostic code `evidence.answer.stable-id-missing` is unchanged and now
+    points at `/answers/<n>/uri`.
 
 ### Other changes
 
