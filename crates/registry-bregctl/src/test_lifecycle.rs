@@ -107,12 +107,21 @@ pub(crate) enum TestLifecycleError {
 /// The schema-test credentials file: one credential for every step of the
 /// packaged journeys, a bearer token only by secret reference (CFG-SEC-1).
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct CredentialDocument {
     bindings: Vec<CredentialBindingDocument>,
 }
 
+/// The JSON Schema of the credentials members the reader decodes. The header
+/// is checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub(crate) fn credentials_schema() -> schemars::Schema {
+    schemars::schema_for!(CredentialDocument)
+}
+
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CredentialBindingDocument {
     journey_id: LocalId,
@@ -121,12 +130,14 @@ struct CredentialBindingDocument {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     remote = "Self",
     deny_unknown_fields,
     rename_all = "kebab-case",
     rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum CredentialDocumentMode {
     Anonymous {},
     Bearer { token_ref: SecretReference },

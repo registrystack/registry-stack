@@ -333,6 +333,13 @@ impl fmt::Display for FixtureError {
 
 impl std::error::Error for FixtureError {}
 
+/// The JSON Schema of the journeys members the reader decodes. The header
+/// is checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub fn journeys_schema() -> schemars::Schema {
+    schemars::schema_for!(JourneyDocument)
+}
+
 #[derive(Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

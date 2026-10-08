@@ -35,6 +35,7 @@ pub(crate) const SELECTION_FORMAT: FormatSpec<'static> = FormatSpec {
 
 /// A reference model the command can derive a project from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, clap::ValueEnum)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ModelName {
     /// The PublicSchema reference model embedded in this binary.
@@ -53,6 +54,7 @@ impl fmt::Display for ModelName {
 /// removes the header before the members are decoded, so the header members
 /// are written from the format and never read.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Selection {
     #[serde(skip_deserializing, default = "api_version")]
@@ -79,20 +81,29 @@ pub(crate) struct Selection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct RegistrySelection {
+    // The resolver holds the identifier to the project grammar, which is the
+    // local identifier grammar.
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub title: String,
 }
 
 /// One concept of the model that becomes an entity.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EntitySelection {
     /// The concept's name in the model.
     pub concept: String,
     /// The entity identifier; the concept name in kebab case when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
     pub id: Option<String>,
     /// The collection route; the entity identifier pluralized when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,6 +120,7 @@ pub(crate) struct EntitySelection {
 
 /// One property of the concept that becomes a field.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct PropertySelection {
     /// The property's name in the model.
@@ -122,6 +134,7 @@ pub(crate) struct PropertySelection {
 
 /// How one enumeration of the model is carried, overriding the size rule.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct VocabularySelection {
     /// The enumeration's name in the model.
@@ -130,6 +143,7 @@ pub(crate) struct VocabularySelection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum VocabularyMode {
     /// A closed `vocabulary-code` field with every value listed in the
@@ -138,6 +152,13 @@ pub(crate) enum VocabularyMode {
     /// A bounded string that carries the code without the project listing the
     /// values.
     Code,
+}
+
+/// The JSON Schema of the selection members the reader decodes. The header is
+/// checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub(crate) fn selection_schema() -> schemars::Schema {
+    schemars::schema_for!(Selection)
 }
 
 impl Selection {

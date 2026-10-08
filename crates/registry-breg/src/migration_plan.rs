@@ -735,27 +735,49 @@ pub struct RehearsalRowAssertion {
 /// The operator's backup binding. Rust field names keep their engine
 /// spelling; each serde rename names the document member.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(remote = "Self", deny_unknown_fields, rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(!remote))]
 pub struct ExternalBackupBinding {
     /// The document member `database`: the database identity the binding
     /// was taken from.
     #[serde(rename = "database")]
     pub database_id: String,
     #[serde(deserialize_with = "members::digest")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     pub prior_package_digest: String,
     #[serde(deserialize_with = "members::digest")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     pub prior_schema_fingerprint: String,
     pub backup_file: String,
     /// The document member `digest`.
     #[serde(rename = "digest", deserialize_with = "members::digest")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     pub sha256: String,
     /// The document member `sizeBytes`.
     #[serde(rename = "sizeBytes", deserialize_with = "members::size_bytes")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<1, { u64::MAX }>")
+    )]
     pub byte_length: u64,
     pub created_at: String,
     /// The document member `maximumAgeSeconds`.
     #[serde(rename = "maximumAgeSeconds", deserialize_with = "members::backup_age")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::BoundedU64<1, { crate::migration::MAX_BACKUP_AGE_SECONDS }>"
+        )
+    )]
     pub max_age_seconds: u64,
+}
+
+/// The JSON Schema of the backup binding members the reader decodes. The
+/// header is checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub fn backup_binding_schema() -> schemars::Schema {
+    schemars::schema_for!(ExternalBackupBinding)
 }
 enveloped_document!(
     ExternalBackupBinding,

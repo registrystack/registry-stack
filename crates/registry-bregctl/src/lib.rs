@@ -67,6 +67,8 @@ mod safe_path;
 mod starters;
 mod statistics_lifecycle;
 mod test_lifecycle;
+#[cfg(feature = "schema")]
+pub mod tool_schema;
 mod webhook_lifecycle;
 
 use active_registry::ActiveRegistryError;

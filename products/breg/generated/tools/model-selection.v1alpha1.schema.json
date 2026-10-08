@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "EntitySelection": {
+      "additionalProperties": false,
+      "description": "One concept of the model that becomes an entity.",
+      "properties": {
+        "classification": {
+          "description": "The entity classification; `internal` when absent.",
+          "type": "string"
+        },
+        "concept": {
+          "description": "The concept's name in the model.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The entity identifier; the concept name in kebab case when absent."
+        },
+        "identifierField": {
+          "description": "The field that identifies a record; `<id>-code` when absent.",
+          "type": "string"
+        },
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/PropertySelection"
+          },
+          "type": "array"
+        },
+        "route": {
+          "description": "The collection route; the entity identifier pluralized when absent.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concept"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ModelName": {
+      "const": "publicschema",
+      "description": "The PublicSchema reference model embedded in this binary.",
+      "type": "string"
+    },
+    "PropertySelection": {
+      "additionalProperties": false,
+      "description": "One property of the concept that becomes a field.",
+      "properties": {
+        "name": {
+          "description": "The property's name in the model.",
+          "type": "string"
+        },
+        "target": {
+          "description": "For a property whose range is another concept: the selected entity the\nreference points at. Required only when more than one selected entity\nfits the range.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "RegistrySelection": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "VocabularyMode": {
+      "oneOf": [
+        {
+          "const": "inline",
+          "description": "A closed `vocabulary-code` field with every value listed in the\nproject.",
+          "type": "string"
+        },
+        {
+          "const": "code",
+          "description": "A bounded string that carries the code without the project listing the\nvalues.",
+          "type": "string"
+        }
+      ]
+    },
+    "VocabularySelection": {
+      "additionalProperties": false,
+      "description": "How one enumeration of the model is carried, overriding the size rule.",
+      "properties": {
+        "enum": {
+          "description": "The enumeration's name in the model.",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/VocabularyMode"
+        }
+      },
+      "required": [
+        "enum",
+        "mode"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What a model-driven `init` generates from. The shared reader checks and\nremoves the header before the members are decoded, so the header members\nare written from the format and never read.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/model-selection/v1alpha1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "entities": {
+      "items": {
+        "$ref": "#/$defs/EntitySelection"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "BRegModelSelection",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    },
+    "model": {
+      "$ref": "#/$defs/ModelName"
+    },
+    "modelRevision": {
+      "description": "The upstream commit of the model snapshot the selection was written\nagainst. When present it must equal the embedded snapshot's commit, so\na selection written for one revision of the model is not silently\napplied to another.",
+      "type": "string"
+    },
+    "modelVersion": {
+      "description": "The model version the selection was written against. When present it\nmust equal the embedded snapshot's declared version label. Several\nrevisions of the model can share one version label, so this alone does\nnot pin a revision; `modelRevision` does.",
+      "type": "string"
+    },
+    "registry": {
+      "$ref": "#/$defs/RegistrySelection"
+    },
+    "vocabularies": {
+      "items": {
+        "$ref": "#/$defs/VocabularySelection"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "model",
+    "registry",
+    "entities"
+  ],
+  "title": "Base Registry Engine model selection",
+  "type": "object"
+}

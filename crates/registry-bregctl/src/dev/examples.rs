@@ -120,14 +120,25 @@ fn optional_local_id<'de, D: Deserializer<'de>>(
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Catalogue {
     scenarios: UniqueIdList<Scenario>,
 }
+
+/// The JSON Schema of the catalogue members the reader decodes. The header is
+/// checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub(crate) fn catalogue_schema() -> schemars::Schema {
+    schemars::schema_for!(Catalogue)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Scenario {
     #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     id: String,
     description: String,
     input: String,
@@ -139,34 +150,44 @@ impl Identified for Scenario {
     }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Step {
     #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     id: String,
     operation: Operation,
     #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     entity: String,
     #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     client: String,
     #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     access_profile: String,
     #[serde(default, deserialize_with = "optional_local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     input: Option<String>,
     #[serde(default, deserialize_with = "optional_local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     capture: Option<String>,
     #[serde(default, deserialize_with = "optional_local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     record: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_local_id",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     action: Option<String>,
     #[serde(
         default,
         deserialize_with = "optional_local_id",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     result: Option<String>,
 }
 impl Identified for Step {
@@ -175,6 +196,7 @@ impl Identified for Step {
     }
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 enum Operation {
     Create,

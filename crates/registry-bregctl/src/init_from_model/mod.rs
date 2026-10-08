@@ -31,6 +31,8 @@ use crate::{
     SuggestedAction,
 };
 
+#[cfg(feature = "schema")]
+pub(crate) use selection::selection_schema;
 pub(crate) use selection::{ModelName, SELECTION_FORMAT};
 
 /// Check a selection document `bregctl check --file` read: it resolves

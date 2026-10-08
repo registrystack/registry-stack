@@ -58,7 +58,7 @@ class ConfigureTests(unittest.TestCase):
         settings = json.loads(settings_path.read_text())
         self.assertEqual(settings["editor.tabSize"], 4)
         schemas = settings["yaml.schemas"]
-        self.assertEqual(len(schemas), 3)
+        self.assertEqual(len(schemas), 6)
         project_schema = (project / ".registry-stack-editor/schemas/registry-project.schema.json").as_uri()
         self.assertEqual(schemas[project_schema], [str(project / "registry.yaml")])
         zed = json.loads((self.workspace / ".zed/settings.json").read_text())
@@ -183,7 +183,7 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(len(settings["yaml.schemas"]), 5)
+        self.assertEqual(len(settings["yaml.schemas"]), 8)
         self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(len(tasks), 2)

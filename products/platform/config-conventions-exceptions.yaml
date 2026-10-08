@@ -492,13 +492,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-2
-  format: breg/backup-binding
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
 - rule: CFG-SCHEMA-6
   format: breg/backup-binding
   location: editors/configure.py#/SCHEMAS/breg
@@ -822,29 +815,8 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: breg/example-scenarios
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
 - rule: CFG-SCHEMA-6
   format: breg/example-scenarios
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-2
-  format: breg/journeys
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: breg/journeys
   location: editors/configure.py#/SCHEMAS/breg
   class: pending
   wp: WP6
@@ -1539,20 +1511,6 @@ exceptions:
   wp: WP6
   reason: digest is not typed as $defs/Digest
   resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-SCHEMA-2
-  format: breg/model-selection
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: breg/model-selection
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-EMPTY-1
   format: breg/module
   location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionRequirementSource/properties/equals
@@ -3711,20 +3669,6 @@ exceptions:
   wp: WP3
   reason: grantSourceIssuer is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-SCHEMA-2
-  format: breg/schema-test-credentials
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: breg/schema-test-credentials
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-ENV-1
   format: casework/apply-report
   location: products/casework/contracts/cli/ApplyReport.schema.json#/properties

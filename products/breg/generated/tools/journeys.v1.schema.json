@@ -1,0 +1,673 @@
+{
+  "$defs": {
+    "ActionSource": {
+      "description": "One request form. `type` names the form; the members beside it are the\nform's own. Request bodies (`items`, `data`, `values`, `input`, and a\nchange's `value`) are the registry's HTTP API bodies, carried as written.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+                "type": "object",
+                "x-registry-foreign": "breg-http-api"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "import",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+              "type": "object",
+              "x-registry-foreign": "breg-http-api"
+            },
+            "type": {
+              "const": "create",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "recordCapture": {
+              "type": "string"
+            },
+            "type": {
+              "const": "get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordCapture"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bbox": {
+              "$ref": "#/$defs/BboxSource"
+            },
+            "count": {
+              "default": false,
+              "type": "boolean"
+            },
+            "select": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "top": {
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "query",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "selector": {
+              "type": "string"
+            },
+            "type": {
+              "const": "lookup",
+              "type": "string"
+            },
+            "values": {
+              "default": {},
+              "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+              "type": "object",
+              "x-registry-foreign": "breg-http-api"
+            }
+          },
+          "required": [
+            "type",
+            "selector"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "default": false,
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "recordCapture": {
+              "type": "string"
+            },
+            "select": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "top": {
+              "format": "uint32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "read-path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "recordCapture"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "changes": {
+              "items": {
+                "$ref": "#/$defs/FieldChangeSource"
+              },
+              "type": "array"
+            },
+            "etagCapture": {
+              "type": "string"
+            },
+            "recordCapture": {
+              "type": "string"
+            },
+            "type": {
+              "const": "patch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordCapture",
+            "etagCapture",
+            "changes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/BatchItemSource"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "batch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "default": {},
+              "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+              "type": "object",
+              "x-registry-foreign": "breg-http-api"
+            },
+            "type": {
+              "const": "target-conditions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "input": {
+              "default": {},
+              "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+              "type": "object",
+              "x-registry-foreign": "breg-http-api"
+            },
+            "preconditions": {
+              "additionalProperties": {
+                "$ref": "#/$defs/ImmediateActionPreconditionSource"
+              },
+              "propertyNames": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "type": "object"
+            },
+            "type": {
+              "const": "invoke",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "etagCapture": {
+              "type": "string"
+            },
+            "recordCapture": {
+              "type": "string"
+            },
+            "type": {
+              "const": "submit-request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordCapture",
+            "etagCapture"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "etagCapture": {
+              "type": "string"
+            },
+            "rebase": {
+              "type": "boolean"
+            },
+            "recordCapture": {
+              "type": "string"
+            },
+            "type": {
+              "const": "revise-request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordCapture",
+            "etagCapture",
+            "rebase"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "etagCapture": {
+              "type": "string"
+            },
+            "recordCapture": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel-request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordCapture",
+            "etagCapture"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effectDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "effectDigestCapture": {
+              "type": "string"
+            },
+            "etagCapture": {
+              "type": "string"
+            },
+            "proposalVersion": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "proposalVersionCapture": {
+              "type": "string"
+            },
+            "recordCapture": {
+              "type": "string"
+            },
+            "type": {
+              "const": "apply-request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "recordCapture",
+            "etagCapture"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ActorKindSource": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "BatchItemSource": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+          "type": "object",
+          "x-registry-foreign": "breg-http-api"
+        },
+        "type": {
+          "const": "create",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "data"
+      ],
+      "type": "object"
+    },
+    "BboxSource": {
+      "additionalProperties": false,
+      "properties": {
+        "east": {
+          "type": "string"
+        },
+        "north": {
+          "type": "string"
+        },
+        "south": {
+          "type": "string"
+        },
+        "west": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "west",
+        "south",
+        "east",
+        "north"
+      ],
+      "type": "object"
+    },
+    "ClaimsSource": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKind": {
+          "$ref": "#/$defs/ActorKindSource"
+        },
+        "actorSubject": {
+          "type": "string"
+        },
+        "directClaims": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DirectClaimSource"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "principal": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "requesterClient": {
+          "type": "string"
+        },
+        "scopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "DirectClaimSource": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "ExpectationSource": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entityId": {
+          "type": "string"
+        },
+        "fieldId": {
+          "type": "string"
+        },
+        "fields": {
+          "default": {},
+          "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+          "type": "object",
+          "x-registry-foreign": "breg-http-api"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ExpectedOutcome"
+        },
+        "problemCode": {
+          "type": "string"
+        },
+        "refusalCode": {
+          "type": "string"
+        },
+        "status": {
+          "format": "uint32",
+          "maximum": 599,
+          "minimum": 100,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "outcome",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ExpectedOutcome": {
+      "enum": [
+        "success",
+        "refusal"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FieldChangeSource": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "value": {
+          "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+          "x-registry-foreign": "breg-http-api"
+        }
+      },
+      "required": [
+        "field",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ImmediateActionPreconditionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "conditionCapture": {
+          "type": "string"
+        },
+        "ifMatch": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "JourneySource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/StepSource"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "StepSource": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "capture": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "captureResults": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "claims": {
+          "$ref": "#/$defs/ClaimsSource"
+        },
+        "entity": {
+          "default": "",
+          "type": "string"
+        },
+        "expect": {
+          "$ref": "#/$defs/ExpectationSource"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "request": {
+          "$ref": "#/$defs/ActionSource"
+        }
+      },
+      "required": [
+        "id",
+        "accessProfile",
+        "request",
+        "expect"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/journeys/v1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "journeys": {
+      "items": {
+        "$ref": "#/$defs/JourneySource"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "kind": {
+      "const": "BRegJourneys",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "journeys"
+  ],
+  "title": "Base Registry Engine acceptance journeys",
+  "type": "object"
+}

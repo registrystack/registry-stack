@@ -336,7 +336,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/journeys/v1
       kind: BRegJourneys
-    schema: none
+    schema:
+      path: products/breg/generated/tools/journeys.v1.schema.json
+      id: https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/fixtures.rs
@@ -398,7 +403,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1
       kind: BRegSchemaTestCredentials
-    schema: none
+    schema:
+      path: products/breg/generated/tools/schema-test-credentials.v1.schema.json
+      id: https://id.registrystack.org/schemas/breg/schema-test-credentials/schema-test-credentials.v1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
       file: crates/registry-bregctl/src/test_lifecycle.rs
@@ -522,7 +532,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
       kind: BRegModelSelection
-    schema: none
+    schema:
+      path: products/breg/generated/tools/model-selection.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
       file: crates/registry-bregctl/src/init_from_model/selection.rs
@@ -584,7 +599,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
       kind: BRegExampleScenarios
-    schema: none
+    schema:
+      path: products/breg/generated/tools/example-scenarios.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/example-scenarios/example-scenarios.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
       file: crates/registry-bregctl/src/dev/examples.rs
@@ -677,7 +697,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/backup-binding/v1alpha1
       kind: BRegBackupBinding
-    schema: none
+    schema:
+      path: products/breg/generated/tools/backup-binding.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/backup-binding/backup-binding.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-breg
       file: crates/registry-breg/src/migration_plan.rs

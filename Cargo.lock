@@ -5080,6 +5080,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rustix 1.1.5",
  "rustls",
+ "schemars",
  "serde",
  "serde_json",
  "serde_norway",

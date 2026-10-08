@@ -163,6 +163,22 @@
       "description": "Base Registry Engine citizen review page runtime configuration JSON Schema."
     },
     {
+      "glob": "products/breg/generated/tools/*.v1.schema.json",
+      "sourcePath": "crates/registry-bregctl/src/tool_schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "Base Registry Engine tool-file JSON Schemas at version v1."
+    },
+    {
+      "glob": "products/breg/generated/tools/*.v1alpha1.schema.json",
+      "sourcePath": "crates/registry-bregctl/src/tool_schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1."
+    },
+    {
       "glob": "products/casework/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-casework/src/schema.rs",
       "owner": "casework",

@@ -1494,3 +1494,16 @@ database, or network. It prints the diagnostics in the human form, or with
 `--format json` the report's `diagnostics` list, and exits 0 when the file
 passes, 1 when it is refused or, with `--deny-warnings`, when it carries a
 warning, 2 for a usage error, and 3 when the file cannot be read.
+
+### Published JSON Schemas for five tool files
+
+The fixture journeys, schema-test credentials, model selection, example
+scenarios, and backup binding each publish a JSON Schema generated from the
+types `bregctl` decodes, under `products/breg/generated/tools/`, with the
+identifier
+`https://id.registrystack.org/schemas/breg/<format>/<format>.<version>.schema.json`.
+`editors/configure.py` maps the three YAML formats (`tests/journeys.yaml`,
+`credentials.yaml`, `model/selection.yaml`) for editors. The schema is an
+editing aid: `bregctl check --file` remains the check, and it also refuses
+what a schema cannot express, such as a journey that names a route its
+project does not declare.
