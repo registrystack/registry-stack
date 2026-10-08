@@ -151,3 +151,32 @@ fn an_initialized_project_exports_an_evidence_source_without_edits() {
     );
     assert!(destination.join("sources/registry-status.yaml").exists());
 }
+
+/// The `breg/evidence-source-export` format's example is the manifest this
+/// export writes, committed as written. Rewrite it from the repository root:
+///
+/// ```text
+/// bregctl generate evidence-source products/breg/evidence/registry \
+///   --access-profile evidence-source --entity record \
+///   --selector by-code --selector by-registration-number --fields status \
+///   --source-id registry-status --connection registry --output "$export"
+/// cp "$export/source-export.json" products/breg/examples/formats/
+/// ```
+#[test]
+fn committed_example_is_the_manifest_bregctl_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().canonicalize().unwrap().join("export");
+    let result = export(&destination, "status");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/formats/source-export.json");
+    assert!(
+        fs::read(destination.join("source-export.json")).unwrap() == fs::read(&example).unwrap(),
+        "{example:?} is not the manifest `bregctl generate evidence-source` writes now; \
+         rewrite it with the command in this test's comment"
+    );
+}

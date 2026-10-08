@@ -833,7 +833,7 @@ formats:
       function: read_export_manifest
       type: ExportDocument
     check: none
-    example: none
+    example: products/breg/examples/formats/source-export.json
     conformance:
       requiredText: none
       optionalText: none

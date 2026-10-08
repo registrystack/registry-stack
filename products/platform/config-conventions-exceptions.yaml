@@ -514,13 +514,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-SCHEMA-1
-  format: breg/evidence-source-export
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-6
   format: breg/example-scenarios
   location: editors/configure.py#/SCHEMAS/breg

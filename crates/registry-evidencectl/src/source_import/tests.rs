@@ -1160,3 +1160,25 @@ fn import_refuses_a_bare_hex_digest_and_an_unknown_member() {
         [("config.unknown-key".to_owned(), "/install".to_owned())]
     );
 }
+
+/// The format's registered example, the manifest `bregctl generate
+/// evidence-source` writes for the Evidence example registry, decodes through
+/// the shared reader.
+#[test]
+fn import_reads_the_committed_example_manifest() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/formats/source-export.json");
+    let bytes = fs::read(&path).expect("the example manifest reads");
+    let document = export::read_export_manifest(MANIFEST_FILE, &bytes)
+        .map_err(|refused| {
+            refused
+                .report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect::<Vec<_>>()
+        })
+        .expect("the example manifest decodes");
+    assert_eq!(document.source_id, "registry-status");
+    assert_eq!(document.artifacts.len(), 8);
+}
