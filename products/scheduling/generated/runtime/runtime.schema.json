@@ -316,7 +316,8 @@
           "maxProperties": 64,
           "minProperties": 1,
           "propertyNames": {
-            "$ref": "#/$defs/ExternalId"
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
           },
           "type": "object"
         },

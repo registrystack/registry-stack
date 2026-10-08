@@ -537,11 +537,16 @@ pub struct OidcClientsConfig {
 /// the bounds `OidcClientsConfig::check` enforces.
 #[cfg(feature = "schema")]
 fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut client = generator.subschema_for::<registry_platform_yaml::ExternalId>();
+    client.insert(
+        "maxLength".to_owned(),
+        serde_json::json!(MAX_ASSERTION_ISSUER_CLIENT_BYTES),
+    );
     schemars::json_schema!({
         "type": "object",
         "minProperties": 1,
         "maxProperties": MAX_ASSERTION_ISSUER_CLIENTS,
-        "propertyNames": generator.subschema_for::<registry_platform_yaml::ExternalId>(),
+        "propertyNames": client,
         "additionalProperties": {
             "type": "array",
             "maxItems": MAX_ASSERTION_ISSUERS_PER_CLIENT,
