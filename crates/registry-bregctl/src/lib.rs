@@ -377,7 +377,7 @@ struct CheckArgs {
     /// Runtime configuration file to check offline beside the project; no package, database, network, or secret is read.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
-    /// Resolve the runtime configuration's ${VAR} substitutions from the environment, and report an unset variable.
+    /// Resolve the runtime configuration's `${VAR}` substitutions from the environment, and report an unset variable.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
 }

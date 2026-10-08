@@ -140,7 +140,8 @@ relevant product pages on this site rather than duplicating release notes.
   fixes for RUSTSEC-2026-0325, RUSTSEC-2026-0326, and RUSTSEC-2026-0327.
 
 {/* Evidence: crates/registry-platform-script/Cargo.toml;
-    crates/registry-breg/src/compiler.rs, wasm_build_unsupported. */}
+    crates/registry-breg/src/compiler.rs, validate_hook_assets;
+    crates/registry-breg/tests/hook_declaration.rs, a_wasm_hook_is_refused_by_a_build_without_wasm_support. */}
 
 - BREAKING: `bregctl dev` takes PostgreSQL loopback port 15432 on a first start, where it took
   55432, and `caseworkctl dev` takes 15433, where it took 55433. A session that already started
@@ -155,7 +156,7 @@ relevant product pages on this site rather than duplicating release notes.
   `Idempotency-Key` on a BReg immediate action names the header in `fieldPath`, and the Rust,
   Node.js, and Python BReg clients expose the validated `fieldPath` of an accepted problem.
 
-{/* Evidence: crates/registry-breg/src/compiler.rs, create_required_field_not_writable;
+{/* Evidence: crates/registry-breg/src/compiler.rs, create_required_field_findings;
     crates/registry-breg/src/api/mod.rs, missing_idempotency_key;
     crates/registry-breg-client/src/error.rs, BRegProblemFieldPath. */}
 
@@ -1025,9 +1026,9 @@ relevant product pages on this site rather than duplicating release notes.
   boolean that came from a variable directly in the file. See
   [deploy a registry](../operate/breg/#write-the-runtime-configuration).
 
-{/* Evidence: crates/registry-breg/src/runtime_config.rs, parse_runtime_config_with_env and runtime_config_error_from_loader;
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, parse_runtime_config_with_env and runtime_config_loader;
     crates/registry-breg/src/cli.rs, Arguments;
-    crates/registry-breg/src/contract.rs, reject_authored_environment_expression;
+    crates/registry-breg/src/contract.rs, AuthoredExpressions;
     crates/registry-breg/tests/runtime_config.rs, a_substitution_inside_a_secret_reference_is_refused,
     substituted_values_stay_strings, a_substituted_value_cannot_inject_document_structure,
     oidc_issuer_and_audience_follow_the_shared_issuer_block and
@@ -1313,7 +1314,7 @@ relevant product pages on this site rather than duplicating release notes.
   request needs a profile of its own without delegated authority; move
   `apply_request` there.
 
-{/* Evidence: crates/registry-breg/src/compiler.rs, access_profile.task_grant.operation_forbidden;
+{/* Evidence: crates/registry-breg/src/compiler.rs, expand_project_access;
     crates/registry-breg/tests/http_auth.rs, task-grant apply_request compile refusal;
     products/breg/TASK_GRANTS.md. */}
 
