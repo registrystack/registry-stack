@@ -258,6 +258,31 @@ fn open_bundle_root(root: &Path) -> Result<std::fs::File, RenderProblem> {
     Ok(directory)
 }
 
+/// The bytes of the bundle's root manifest, read as the loader reads them:
+/// without following a link at the manifest or at any directory above it.
+pub(crate) fn read_root_manifest(root: &Path) -> Result<Vec<u8>, RenderProblem> {
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    {
+        let directory = open_bundle_root(root)?;
+        read_bundle_file(
+            &directory,
+            std::ffi::OsStr::new(MANIFEST_FILE),
+            &root.join(MANIFEST_FILE),
+        )
+    }
+
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    {
+        Err(RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            format!(
+                "cannot securely read bundle {} on this platform",
+                root.display()
+            ),
+        ))
+    }
+}
+
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn read_bundle_file(
     directory: &std::fs::File,

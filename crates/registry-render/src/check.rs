@@ -18,9 +18,9 @@ use std::path::{Component, Path, PathBuf};
 use registry_platform_yaml::{Diagnostic, NodeValue, Reader, Report, Severity, Source};
 use serde::Serialize;
 
-use crate::bundle::{bundle_file_name, Bundle};
+use crate::bundle::{bundle_file_name, read_root_manifest, Bundle};
 use crate::labels::{labels_path, read_labels, LABELS_KIND};
-use crate::manifest::{MANIFEST_FILE, MANIFEST_KIND};
+use crate::manifest::{error_at, read_manifest, MANIFEST_FILE, MANIFEST_KIND};
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::RUNTIME_KIND;
 
@@ -257,7 +257,16 @@ fn check_bundle(dir: &Path) -> BundleCheck {
     let bundle = match Bundle::load_for_preview(dir) {
         Ok(bundle) => bundle,
         Err(problem) => {
-            let diagnostics = load_refusal(dir, problem);
+            let linked = if problem.diagnostics.is_empty() {
+                linked_members(dir)
+            } else {
+                Vec::new()
+            };
+            let diagnostics = if linked.is_empty() {
+                load_refusal(dir, problem)
+            } else {
+                linked
+            };
             let files = diagnostics
                 .iter()
                 .filter_map(|diagnostic| diagnostic.source.as_ref())
@@ -335,6 +344,50 @@ fn unreadable(dir: &Path) -> Option<Diagnostic> {
         column: None,
     });
     Some(diagnostic)
+}
+
+/// The loader refuses a bundle that holds a link and names only the file
+/// (CFG-VAL-8). When the link lies on a path the manifest names, the refusal
+/// is placed at the member that names it instead, and comes before any
+/// finding about the package as a whole. A manifest that cannot be read here
+/// is left to the loader's own refusal.
+fn linked_members(dir: &Path) -> Vec<Diagnostic> {
+    let Ok(bytes) = read_root_manifest(dir) else {
+        return Vec::new();
+    };
+    let Ok(read) = read_manifest(&bundle_file_name(dir, MANIFEST_FILE), &bytes) else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    for (index, spec) in read.manifest.documents.iter().enumerate() {
+        let members = [
+            ("entryFile", Some(&spec.entry)),
+            ("schemaFile", spec.schema.as_ref()),
+        ];
+        for (member, path) in members {
+            if path.is_some_and(|path| through_link(dir, path)) {
+                diagnostics.push(error_at(
+                    &read.document,
+                    "render.bundle.refused-entry",
+                    &format!("/documents/{index}/{member}"),
+                    "the path leads through a link, and a bundle holds only regular files",
+                    "Replace the link with the file it points to, inside the bundle.",
+                ));
+            }
+        }
+    }
+    diagnostics
+}
+
+/// Whether any component of the bundle path `path` under `dir` is a link.
+fn through_link(dir: &Path, path: &Path) -> bool {
+    let mut current = dir.to_path_buf();
+    path.components()
+        .filter(|component| matches!(component, Component::Normal(_)))
+        .any(|component| {
+            current.push(component);
+            fs::symlink_metadata(&current).is_ok_and(|meta| meta.file_type().is_symlink())
+        })
 }
 
 /// The diagnostics of a bundle the loader refused: the reader's own,

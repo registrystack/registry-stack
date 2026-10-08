@@ -43,7 +43,9 @@
   environment. `--require-audit-under` takes an absolute directory and
   needs `--runtime-config`. Every YAML file in a bundle is identified by its
   envelope: a file of another kind is refused by `check` and `package`, and
-  an unused label table or a file without an envelope is a warning.
+  an unused label table or a file without an envelope is a warning. A link
+  on an `entryFile` or `schemaFile` path is refused at that member, before
+  any finding about the package as a whole.
 - JSON Schemas for the bundle manifest, label tables, and runtime file are
   generated from the reader types under `products/render/schemas`, and
   `editors/configure.py render` maps them.

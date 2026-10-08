@@ -209,7 +209,7 @@ findings now ride in `diagnostics` with these codes.
 | none: an audit path written as `${VAR}` was resolved from the environment before the proof | `render.runtime.audit-proof-needs-environment` |
 | `bundle-tampered` or `bundle-unsealed`, the package does not match its `SHA256SUMS` (check) | `render.bundle.package-mismatch` |
 | `invalid-argument`, `SHA256SUMS` or `REVISION` in a source bundle (check) | `render.bundle.envelope-in-source` |
-| `manifest-invalid`, a link, a non-regular file, or a repeated or non-UTF-8 name in the bundle (check) | `render.bundle.refused-entry` |
+| `manifest-invalid`, a link, a non-regular file, or a repeated or non-UTF-8 name in the bundle (check); a link on an `entryFile` or `schemaFile` path is placed at that member, also in a package | `render.bundle.refused-entry` |
 | `manifest-invalid`, the bundle directory or its `manifest.yaml` cannot be opened (check) | `render.bundle.unreadable` |
 | none: a runtime file path check cannot make absolute | `render.check.runtime-unreadable` |
 | none: a YAML file no document reads | `render.bundle.unread-file`, `render.bundle.unused-labels` (warnings), `render.bundle.foreign-kind` |

@@ -618,6 +618,51 @@ fn bundle_with_symlink_cannot_be_packaged() {
     let _ = out;
 }
 
+#[cfg(unix)]
+#[test]
+fn cfg_val_8_check_refuses_a_linked_entry_file_at_the_member_that_names_it() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let package = tempdir().join("package");
+    let packaged = run(&[
+        "package",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--output",
+        package.to_str().unwrap(),
+    ]);
+    assert!(
+        packaged.status.success(),
+        "{}",
+        String::from_utf8_lossy(&packaged.stderr)
+    );
+    let outside = tempdir();
+    // The same bytes reached through a link that resolves outside the bundle:
+    // a source bundle and a package both refuse it at the member naming it,
+    // before any finding about the package as a whole.
+    for root in [&dir, &package] {
+        let entry = root.join("templates/letter.typ");
+        let target = outside.join(root.file_name().unwrap());
+        std::fs::copy(&entry, &target).unwrap();
+        std::fs::remove_file(&entry).unwrap();
+        std::os::unix::fs::symlink(&target, &entry).unwrap();
+        let out = run(&["check", "--bundle", root.to_str().unwrap()]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "error[render.bundle.refused-entry] {}:8:16 /documents/0/entryFile\n",
+                root.join("manifest.yaml").display()
+            )) && stderr.ends_with("1 error, 0 warnings in 1 file\n"),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains(&outside.display().to_string()),
+            "the report never names the link's target: {stderr}"
+        );
+    }
+}
+
 #[test]
 fn openapi_document_has_no_drift() {
     let (_home, runtime, _) = serve_deployment();
