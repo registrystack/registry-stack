@@ -275,9 +275,9 @@ ROWS: tuple[Row, ...] = (
             ),
             RustBlock(
                 "crates/registry-breg/src/runtime_config.rs",
-                "RawListenerConfig",
-                "bind",
-                "ListenerBind",
+                "RawRegistryListener",
+                "listener",
+                "ListenerConfig",
             ),
             RustBlock(
                 "crates/registry-breg/src/runtime_config.rs",
