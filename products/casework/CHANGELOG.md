@@ -85,7 +85,7 @@
   the shared configuration reader, and has a published JSON Schema that
   `caseworkctl init` copies into the project and names in a modeline.
   `caseworkctl check` reads it beside `casework.yaml`, counts it in
-  `filesChecked` (now at most 3139), and reports each problem at its line
+  `filesChecked`, and reports each problem at its line
   and column with a `casework.dev-clients.*` code, where `caseworkctl dev`
   reported the first problem alone as one sentence. A `${...}` expression
   is refused, and `integrations.taskAuthority.jwksPort` must be 1 to 65535.
@@ -96,6 +96,17 @@
   `taskAuthority.issuer` is an absolute URL, and a source binding no longer
   takes its timeouts or reconciliation interval.
   Migration steps are in `release/notes/config-conventions/casework.md`.
+- BREAKING: `.casework/dev/state.json`, the session state `caseworkctl dev`
+  retains, declares
+  `apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1`
+  and `kind: CaseworkDevState` in place of `version: 2`, and is read through
+  the shared configuration reader. `caseworkctl dev` refuses a session an
+  earlier `caseworkctl` started, without changing it. `caseworkctl check`
+  reads the file when the project has one, counts it in `filesChecked` (now
+  at most 3140), and reports a problem at its line and column, or with
+  `casework.dev-state.invalid-ownership` for an owner, port, or container
+  `caseworkctl` never writes. Migration: run `caseworkctl dev stop --remove`
+  with the earlier `caseworkctl`, remove `.casework/dev`, and start again.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

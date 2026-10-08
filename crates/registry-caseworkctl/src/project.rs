@@ -583,7 +583,8 @@ pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Re
 
 /// `check`, keeping what it read: `casework.yaml`, every imported source
 /// description, every fixture, simulation, and holiday set the project
-/// holds, and its `dev-clients.yaml` (CFG-CHECK-2), each reference resolved (CFG-ID-4) and each fixture
+/// holds, its `dev-clients.yaml`, and its retained development session state
+/// (CFG-CHECK-2), each reference resolved (CFG-ID-4) and each fixture
 /// display checked against its review kind (CFG-VAL-9).
 pub(super) fn checked_project(
     project: &Path,
@@ -598,23 +599,28 @@ pub(super) fn checked_project(
                 return Err(error);
             };
             let (clients_read, clients) = crate::offline::check_dev_clients(project, None);
+            let (state_read, state) = crate::offline::check_dev_state(project);
             let mut report = refused.clone();
             report.extend(scanned);
             report.extend(clients);
-            report.set_files_checked(1 + offline.files_read + clients_read);
+            report.extend(state);
+            report.set_files_checked(1 + offline.files_read + clients_read + state_read);
             return Err(report.into());
         }
     };
     let (clients_read, clients) = crate::offline::check_dev_clients(project, Some(&decoded.value));
+    let (state_read, state) = crate::offline::check_dev_state(project);
+    let dev_read = clients_read + state_read;
     let mut diagnostics = authoring_diagnostics(project, &decoded, production);
     diagnostics.extend(scanned);
     diagnostics.extend(crate::offline::resolve(&decoded, &offline));
     diagnostics.extend(clients);
+    diagnostics.extend(state);
     let refused = |diagnostics: &Report| {
         diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0)
     };
     if refused(&diagnostics) {
-        diagnostics.set_files_checked(1 + offline.files_read + clients_read);
+        diagnostics.set_files_checked(1 + offline.files_read + dev_read);
         return Err(diagnostics.into());
     }
     let policy = &decoded.value;
@@ -624,7 +630,7 @@ pub(super) fn checked_project(
         .any(|diagnostic| diagnostic.code == MISSING_SOURCE_DESCRIPTION);
     let files_checked = 1
         + offline.files_read
-        + clients_read
+        + dev_read
         + policy
             .sources
             .iter()

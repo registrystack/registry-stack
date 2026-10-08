@@ -377,9 +377,9 @@ Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.displ
   of its files is read. Migration: remove files until no more than 1024
   remain.
 - `filesChecked` in `CheckReport.schema.json` and `TestReport.schema.json`
-  states its maximum, 3139: the project file, the runtime configuration,
-  `dev-clients.yaml`, 64 source descriptions, and 1024 files from each of
-  the three directories.
+  states its maximum, 3140: the project file, the runtime configuration,
+  `dev-clients.yaml`, the development session state, 64 source
+  descriptions, and 1024 files from each of the three directories.
   A `warning` in a report's `diagnostics` is a closed object. A consumer that
   validates reports takes the regenerated schemas.
 
@@ -472,6 +472,38 @@ checked by `caseworkctl check`.
   Migration: remove them; set them in a deployed runtime configuration.
 
 Development clients codes: `casework.dev-clients.clients-out-of-range`, `casework.dev-clients.duplicate-access-profile`, `casework.dev-clients.duplicate-id`, `casework.dev-clients.duplicate-member`, `casework.dev-clients.duplicate-queue`, `casework.dev-clients.duplicate-scope`, `casework.dev-clients.duplicate-team`, `casework.dev-clients.invalid-access-profile`, `casework.dev-clients.invalid-claim-name`, `casework.dev-clients.invalid-claim-value`, `casework.dev-clients.invalid-id`, `casework.dev-clients.invalid-queue`, `casework.dev-clients.invalid-resource`, `casework.dev-clients.invalid-scope`, `casework.dev-clients.invalid-secret-file`, `casework.dev-clients.invalid-status-client`, `casework.dev-clients.invalid-task-authority-issuer`, `casework.dev-clients.invalid-task-exchange`, `casework.dev-clients.invalid-team`, `casework.dev-clients.member-role-mismatch`, `casework.dev-clients.missing-administrator`, `casework.dev-clients.missing-human-claim`, `casework.dev-clients.missing-integrations`, `casework.dev-clients.missing-principal-claim`, `casework.dev-clients.missing-required-scope`, `casework.dev-clients.missing-task-authority`, `casework.dev-clients.missing-task-exchange-client`, `casework.dev-clients.repeated-principal`, `casework.dev-clients.requester-human-claim`, `casework.dev-clients.requester-member`, `casework.dev-clients.reserved-claim`, `casework.dev-clients.reserved-id`, `casework.dev-clients.scopes-out-of-range`, `casework.dev-clients.service-client-human-claim`, `casework.dev-clients.source-bindings-mismatch`, `casework.dev-clients.staff-out-of-range`, `casework.dev-clients.too-many-claims`, `casework.dev-clients.too-many-integrations`, `casework.dev-clients.too-many-supervisors`, `casework.dev-clients.too-many-teams`, `casework.dev-clients.unknown-access-profile`, `casework.dev-clients.unknown-client`, `casework.dev-clients.unknown-queue`, `casework.dev-clients.unserved-queue`.
+
+## BREAKING: the development session state is read by the shared reader
+
+`.casework/dev/state.json`, the session state `caseworkctl dev` writes and
+reads back, carries the format envelope, is read through the shared
+configuration reader, and is checked by `caseworkctl check`.
+
+- The file declares:
+
+  ```json
+  "apiVersion": "id.registrystack.org/formats/casework/dev-state/v1alpha1",
+  "kind": "CaseworkDevState"
+  ```
+
+  in place of `"version": 2`. `caseworkctl dev` refuses a session an
+  earlier `caseworkctl` started and changes nothing. Migration: run
+  `caseworkctl dev stop --remove` with the `caseworkctl` that started the
+  session, remove `.casework/dev`, and start again. If that `caseworkctl` is
+  gone, remove the session's `casework-dev-<owner>` database container with
+  `docker rm -fv`, then remove `.casework/dev`.
+- An absent optional member is omitted rather than written as `null`, and a
+  `null` is refused with `config.null-value`. A team recorded twice under
+  `seeded` is refused with `config.duplicate-item`.
+- `caseworkctl check` reads the file when the project has one, counts it in
+  `filesChecked`, and reports a problem at its line and column with a reader
+  code, or with `casework.dev-state.invalid-ownership` when the owner, an
+  issuer owner, the resource, the directory revision, the container, or the
+  ports are ones `caseworkctl` never writes. A link or special file in its
+  place is refused with `casework.project.not-a-regular-file`. No diagnostic
+  repeats a value from the file.
+
+Development state codes: `casework.dev-state.invalid-ownership`.
 
 ## Diagnostic codes
 

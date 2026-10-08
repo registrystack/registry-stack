@@ -22,10 +22,11 @@ OBJECT_ARRAY = {"type": "array", "items": {"type": "object"}}
 DIAGNOSTICS = {"$ref": "#/$defs/diagnostics"}
 WARNINGS = {"$ref": "#/$defs/warnings"}
 # A check reads the project file, the runtime configuration it is given, the
-# project's dev-clients.yaml, at most MAXIMUM_SOURCES (64) source
-# descriptions, and at most MAXIMUM_DIRECTORY_FILES (1024) YAML files from
-# each of the three offline directories.
-FILES_CHECKED = {"type": "integer", "minimum": 1, "maximum": 1 + 1 + 1 + 64 + 3 * 1024}
+# project's dev-clients.yaml, its retained development session state, at most
+# MAXIMUM_SOURCES (64) source descriptions, and at most
+# MAXIMUM_DIRECTORY_FILES (1024) YAML files from each of the three offline
+# directories.
+FILES_CHECKED = {"type": "integer", "minimum": 1, "maximum": 1 + 1 + 1 + 1 + 64 + 3 * 1024}
 
 
 DIGEST = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}

@@ -1403,14 +1403,16 @@ formats:
   - id: casework/dev-state
     product: casework
     title: Casework development environment state
-    files: [.caseworkctl-dev/state.json]
+    files: [.casework/dev/state.json]
     syntax: json
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1
+      kind: CaseworkDevState
+      checkedBy:
+        file: crates/registry-caseworkctl/src/dev/mod.rs
+        symbol: DEV_STATE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/casework/dev-state/v1alpha1
       kind: CaseworkDevState
@@ -1420,13 +1422,13 @@ formats:
       file: crates/registry-caseworkctl/src/dev/mod.rs
       function: read_state
       type: State
-    check: none
-    example: none
+    check: caseworkctl check {project}
+    example: products/casework/examples/formats/dev-session/.casework/dev/state.json
     conformance:
-      requiredText: none
+      requiredText: /sourceDigest
       optionalText: none
-      integer: none
-      boolean: none
+      integer: /caseworkPort
+      boolean: /migrated
     securityMembers: []
     restrictingMembers: []
   - id: casework/breg-source-description

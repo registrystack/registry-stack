@@ -112,8 +112,10 @@ fn generated_schemas_are_current() {
 
 #[test]
 fn the_files_checked_bound_is_the_most_files_a_check_reads() {
+    // The project file, the runtime configuration, `dev-clients.yaml`, and the
+    // retained session state, then the sources and the three directories.
     let most =
-        3 + registry_casework_core::MAXIMUM_SOURCES + 3 * crate::offline::MAXIMUM_DIRECTORY_FILES;
+        4 + registry_casework_core::MAXIMUM_SOURCES + 3 * crate::offline::MAXIMUM_DIRECTORY_FILES;
     for kind in ["CheckReport", "TestReport"] {
         let path = repo_root()
             .join("products/casework/contracts/cli")

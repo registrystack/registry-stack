@@ -360,6 +360,37 @@ pub(crate) fn check_dev_clients(
     }
 }
 
+/// Where a project keeps the state of its local development session.
+pub(crate) const DEV_STATE: &str = ".casework/dev/state.json";
+
+/// Read the session state `caseworkctl dev` retains in the project when it
+/// holds one, and check it (CFG-CHECK-1, CFG-CHECK-2). Returns how many files
+/// were read and every diagnostic found.
+pub(crate) fn check_dev_state(project: &Path) -> (usize, Report) {
+    let path = project.join(DEV_STATE);
+    let shown = path.display().to_string();
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (0, Report::default()),
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return (
+                0,
+                Report::new(vec![file_diagnostic(
+                    Severity::Error,
+                    "casework.project.not-a-regular-file",
+                    &shown,
+                    "this path is not a regular file; caseworkctl reads the session state only as a regular file",
+                    "Remove the link or special file, then start the session again with caseworkctl dev start.",
+                )]),
+            );
+        }
+        _ => {}
+    }
+    let Ok(bytes) = read_bounded(&path) else {
+        return (0, Report::new(vec![unreadable(&shown)]));
+    };
+    (1, crate::dev::check_state(&shown, &bytes))
+}
+
 fn unreadable(file: &str) -> Diagnostic {
     file_diagnostic(
         Severity::Error,

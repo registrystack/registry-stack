@@ -7,7 +7,8 @@ use registry_casework::RuntimeConfig;
 
 fn session(project: &Path) -> State {
     State {
-        version: 2,
+        api_version: DEV_STATE_API_VERSION.to_owned(),
+        kind: DEV_STATE_KIND.to_owned(),
         project: project.to_path_buf(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
@@ -24,7 +25,7 @@ fn session(project: &Path) -> State {
         tls_files_copied: false,
         database_ready: false,
         migrated: false,
-        seeded: BTreeSet::new(),
+        seeded: Vec::new(),
         directory_revision: 0,
         directory_teams: 0,
         binaries: BTreeMap::new(),
@@ -1307,7 +1308,7 @@ fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
     state.container_id = Some("a".repeat(64));
     state.database_ready = true;
     state.migrated = true;
-    state.seeded.insert("decisions-team".to_owned());
+    record_seeded(&mut state.seeded, "decisions-team");
     state.directory_revision = 7;
     state.directory_teams = 1;
     parent_directory(&project).unwrap();
@@ -3064,17 +3065,40 @@ fn retained_state_of_another_shape_is_invalid_without_mutation() {
     private::create(&state_file, &serde_json::to_vec(&current).unwrap()).unwrap();
     assert_eq!(read_state(&state.root()).unwrap().owner, state.owner);
 
-    let ownership = "retained dev state ownership is invalid; no resources were changed";
-    let invalid = "retained dev state is invalid; preserve it for inspection";
-    let mut earlier_version = current.clone();
-    earlier_version["version"] = json!(1);
-    let mut unknown_field = earlier_version.clone();
+    // A state an earlier caseworkctl wrote, before the envelope.
+    let mut earlier_release = current.clone();
+    let object = earlier_release.as_object_mut().unwrap();
+    object.remove("apiVersion").unwrap();
+    object.remove("kind").unwrap();
+    object.insert("version".to_owned(), json!(2));
+    let mut removed_version = current.clone();
+    removed_version["version"] = json!(2);
+    let mut later_version = current.clone();
+    later_version["apiVersion"] = json!("id.registrystack.org/formats/casework/dev-state/v1alpha2");
+    let mut unknown_field = current.clone();
     unknown_field["mintPort"] = json!(8081);
-    let mut cases = vec![(earlier_version, ownership), (unknown_field, invalid)];
+    let mut repeated_team = current.clone();
+    repeated_team["seeded"] = json!(["decisions-team", "decisions-team"]);
+    let mut null_failure = current.clone();
+    null_failure["failure"] = Value::Null;
+    let mut foreign_owner = current.clone();
+    foreign_owner["owner"] = json!("not-an-owner");
+    let mut shared_port = current.clone();
+    shared_port["databasePort"] = current["caseworkPort"].clone();
+    let mut cases = vec![
+        (earlier_release, INVALID_STATE),
+        (removed_version, INVALID_STATE),
+        (later_version, INVALID_STATE),
+        (unknown_field, INVALID_STATE),
+        (repeated_team, INVALID_STATE),
+        (null_failure, INVALID_STATE),
+        (foreign_owner, STATE_OWNERSHIP),
+        (shared_port, STATE_OWNERSHIP),
+    ];
     for field in ["binaries", "sources", "borrowedScopes"] {
         let mut missing = current.clone();
         missing.as_object_mut().unwrap().remove(field).unwrap();
-        cases.push((missing, invalid));
+        cases.push((missing, INVALID_STATE));
     }
     for (retained, refusal) in cases {
         let bytes = serde_json::to_vec(&retained).unwrap();
@@ -3086,6 +3110,60 @@ fn retained_state_of_another_shape_is_invalid_without_mutation() {
         );
         assert_eq!(fs::read(&state_file).unwrap(), bytes);
     }
+}
+
+/// `caseworkctl check` reads the session state a project retains through
+/// the shared reader and holds it to the rules that hold wherever the state
+/// is kept (CFG-CHECK-1, CFG-CHECK-2).
+#[test]
+fn check_reads_the_retained_session_state() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    state.failure = Some("${NOT_SUBSTITUTED}".to_owned());
+    record_seeded(&mut state.seeded, "decisions-team");
+    private::directory(&project.join(".casework")).unwrap();
+    private::directory(&state.root()).unwrap();
+    let without_state = crate::project::check(&project, false, false).unwrap();
+    state.save().unwrap();
+    let state_file = state.root().join("state.json");
+    let written: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
+    assert_eq!(written["apiVersion"], DEV_STATE_API_VERSION);
+    assert_eq!(written["kind"], DEV_STATE_KIND);
+    assert!(written.get("issuerProject").is_none(), "{written}");
+
+    let checked = crate::project::check(&project, false, false).unwrap();
+    assert_eq!(
+        checked["filesChecked"],
+        without_state["filesChecked"].as_u64().unwrap() + 1
+    );
+    assert_eq!(checked["diagnostics"], json!([]));
+
+    let refusal = |document: &Value| {
+        private::replace(&state_file, &serde_json::to_vec_pretty(document).unwrap()).unwrap();
+        let error = crate::project::check(&project, false, false).unwrap_err();
+        crate::configuration_report(&error)
+            .expect("a positioned refusal")
+            .diagnostics()
+            .to_vec()
+    };
+    let mut unknown_field = written.clone();
+    unknown_field["mintPort"] = json!(8081);
+    let refused = refusal(&unknown_field);
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].code, "config.unknown-key");
+    assert_eq!(refused[0].path, "/mintPort");
+    let source = refused[0].source.as_ref().unwrap();
+    assert_eq!(source.file, state_file.display().to_string());
+    assert!(source.line.is_some() && source.column.is_some());
+
+    let mut foreign_owner = written.clone();
+    foreign_owner["owner"] = json!("foreign-owner-marker");
+    let refused = refusal(&foreign_owner);
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].code, "casework.dev-state.invalid-ownership");
+    assert_eq!(refused[0].path, "");
+    assert!(!format!("{refused:?}").contains("foreign-owner-marker"));
 }
 
 #[test]

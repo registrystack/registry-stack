@@ -16,6 +16,9 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
 use registry_casework_core::{findings_report, CaseworkRole};
+use registry_platform_yaml::{
+    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -61,6 +64,29 @@ const FIRST_SOURCE_PORT: u16 = 32768;
 /// would claim owned services were stopped when none were ever created.
 const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check the project path, or start one with caseworkctl dev";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const DEV_STATE_API_VERSION: &str =
+    "id.registrystack.org/formats/casework/dev-state/v1alpha1";
+pub(crate) const DEV_STATE_KIND: &str = "CaseworkDevState";
+/// The session state `caseworkctl dev` retains in `.casework/dev/state.json`
+/// (CFG-ENV-1). Only caseworkctl writes it.
+pub(crate) const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: DEV_STATE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(DEV_STATE_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/version",
+        replacement: "Remove version; apiVersion and kind identify the file.",
+    }],
+};
+/// Refusal for retained state this caseworkctl cannot read, including state
+/// an earlier caseworkctl wrote. Nothing is changed, so the earlier
+/// caseworkctl can still stop and remove what it started.
+const INVALID_STATE: &str = "retained dev state is invalid; preserve it for inspection, or, if an earlier caseworkctl started this session, run caseworkctl dev stop --remove with that caseworkctl, then remove .casework/dev and start again";
+/// Refusal for retained state whose ownership members break the rules every
+/// state caseworkctl writes satisfies.
+const STATE_OWNERSHIP: &str = "retained dev state ownership is invalid; no resources were changed";
 /// Longest one supervised prerequisite command may run before the supervisor
 /// stops it and fails the start.
 const CHILD_DEADLINE: Duration = Duration::from_secs(120);
@@ -251,21 +277,26 @@ pub struct ServiceGuardArgs {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct State {
-    version: u8,
+    api_version: String,
+    kind: String,
     project: PathBuf,
     owner: String,
     status: Status,
     casework_port: u16,
     issuer_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_project: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer_owner: Option<String>,
     database_port: u16,
     clients_file: PathBuf,
     source_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     resource: Option<String>,
     /// Every local client with the access profile it binds and that profile's
     /// role, recorded so the report needs no second reading of the project.
     clients: Vec<ReportedClient>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     container_id: Option<String>,
     tls_files_copied: bool,
     database_ready: bool,
@@ -273,8 +304,10 @@ struct State {
     /// Migrations remain idempotent and run again on every start so an upgraded
     /// toolset cannot reuse an older schema.
     migrated: bool,
-    /// Directory teams this session has already seeded, by team identifier.
-    seeded: BTreeSet<String>,
+    /// Directory teams this session has already seeded, by team identifier,
+    /// each once.
+    #[serde(deserialize_with = "registry_casework_core::typed::unique_list")]
+    seeded: Vec<String>,
     directory_revision: i64,
     directory_teams: usize,
     /// Installed prerequisites this session resolved, keyed by command name.
@@ -283,6 +316,7 @@ struct State {
     /// asked for the start can report it. The supervisor writes both its
     /// streams to a private log, so this is the only path a refusal has back
     /// to the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     failure: Option<String>,
     sources: BTreeMap<String, SourceSession>,
     borrowed_scopes: BTreeMap<String, Vec<String>>,
@@ -292,6 +326,7 @@ struct State {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceSession {
     project: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     binding: Option<SourceBinding>,
 }
 
@@ -542,31 +577,63 @@ fn clients_file(
 
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
-    let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
-    let state: State = serde_json::from_slice(&bytes)
-        .context("retained dev state is invalid; preserve it for inspection")?;
-    if state.version != 2
-        || state.root() != root
-        || uuid::Uuid::parse_str(&state.owner).is_err()
-        || state.issuer_project.is_some() != state.issuer_owner.is_some()
-        || state
+    let file = root.join("state.json");
+    let bytes = private::read(&file, MAX_BYTES)?;
+    let state = Reader::new(file.display().to_string())
+        .decode::<State>(&bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map_err(|_| anyhow::anyhow!(INVALID_STATE))?
+        .value;
+    if state.root() != root || !state_rules(&state) {
+        bail!(STATE_OWNERSHIP);
+    }
+    Ok(state)
+}
+
+/// Check a retained session state `caseworkctl check` found in the project
+/// (CFG-CHECK-1): read through the shared reader, then held to the rules that
+/// hold wherever the state is kept. The rule that binds the state to its
+/// session directory is checked when the session reads its own state.
+pub(crate) fn check_state(file: &str, bytes: &[u8]) -> Report {
+    let decoded = match Reader::new(file).decode::<State>(bytes, &Expect::one(&DEV_STATE_FORMAT)) {
+        Ok(decoded) => decoded,
+        Err(refused) => return refused,
+    };
+    let mut report = decoded.document.warnings();
+    if !state_rules(&decoded.value) {
+        report.push(state_refused(&decoded.document));
+    }
+    report
+}
+
+fn state_refused(document: &Document) -> registry_platform_yaml::Diagnostic {
+    document.diagnostic_at_value(
+        Severity::Error,
+        "casework.dev-state.invalid-ownership",
+        "",
+        "the session state names an owner, issuer owner, resource, directory revision, container, or set of ports caseworkctl never writes",
+        "Only caseworkctl writes this file: stop the session's database container, remove .casework/dev, and start again with caseworkctl dev start.",
+    )
+}
+
+/// The rules every session state caseworkctl writes satisfies, wherever it
+/// is read.
+fn state_rules(state: &State) -> bool {
+    uuid::Uuid::parse_str(&state.owner).is_ok()
+        && state.issuer_project.is_some() == state.issuer_owner.is_some()
+        && state
             .issuer_owner
             .as_ref()
-            .is_some_and(|owner| uuid::Uuid::parse_str(owner).is_err())
-        || state
+            .is_none_or(|owner| uuid::Uuid::parse_str(owner).is_ok())
+        && state
             .resource
             .as_ref()
-            .is_some_and(|resource| !registry_platform_httputil::valid_resource_uri(resource))
-        || state.directory_revision < 0
-        || state
+            .is_none_or(|resource| registry_platform_httputil::valid_resource_uri(resource))
+        && state.directory_revision >= 0
+        && state
             .container_id
             .as_ref()
-            .is_some_and(|id| id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()))
-    {
-        bail!("retained dev state ownership is invalid; no resources were changed");
-    }
-    ports(state.casework_port, state.issuer_port, state.database_port)?;
-    Ok(state)
+            .is_none_or(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        && ports(state.casework_port, state.issuer_port, state.database_port).is_ok()
 }
 
 /// Read the exact retained BREG owner; a borrowed Casework session never
@@ -1364,7 +1431,8 @@ fn start(args: StartArgs) -> Result<Value> {
             None
         };
         let state = State {
-            version: 2,
+            api_version: DEV_STATE_API_VERSION.to_owned(),
+            kind: DEV_STATE_KIND.to_owned(),
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
@@ -1394,7 +1462,7 @@ fn start(args: StartArgs) -> Result<Value> {
             tls_files_copied: false,
             database_ready: false,
             migrated: false,
-            seeded: BTreeSet::new(),
+            seeded: Vec::new(),
             directory_revision: 0,
             directory_teams: 0,
             binaries: BTreeMap::new(),
@@ -4368,6 +4436,13 @@ fn ready_with_probe(
     }
 }
 
+/// Record a seeded directory team once.
+fn record_seeded(seeded: &mut Vec<String>, team: &str) {
+    if !seeded.iter().any(|recorded| recorded == team) {
+        seeded.push(team.to_owned());
+    }
+}
+
 /// Seed the directory so `caseworkctl doctor` reports ready and a person can
 /// open the inbox. One authored team per declared queue, created as the
 /// Administrator the clients file binds. A team that already serves its queue
@@ -4415,7 +4490,7 @@ fn seed(state: &mut State, clients: &Clients, terminate: &AtomicBool) -> Result<
             })
         });
         if serving {
-            state.seeded.insert(team.team.clone());
+            record_seeded(&mut state.seeded, &team.team);
             continue;
         }
         let revision = directory["revision"]
@@ -4451,7 +4526,7 @@ fn seed(state: &mut State, clients: &Clients, terminate: &AtomicBool) -> Result<
             bail!("the local Casework directory refused team {} for queue {} (HTTP {status}); inspect the clients file and private logs", team.team, team.queue);
         }
         directory = body;
-        state.seeded.insert(team.team.clone());
+        record_seeded(&mut state.seeded, &team.team);
         state.save()?;
     }
     state.directory_revision = directory["revision"].as_i64().unwrap_or_default();
