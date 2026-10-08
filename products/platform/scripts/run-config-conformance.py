@@ -304,9 +304,6 @@ class Format:
     harness: dict[str, Any]
     schema: str | None = None
     schema_id: str | None = None
-    # Whether the format's files carry the envelope today; false when the
-    # registry records `current.apiVersion: none`.
-    envelope: bool = True
 
     def with_harness(self, harness: dict[str, Any]) -> "Format":
         return dataclasses.replace(self, harness=dict(harness))
@@ -1200,8 +1197,6 @@ def not_applicable(case: Case, fmt: Format) -> str | None:
         return f"the case applies to {' and '.join(audiences)} files"
     if case.applies_to.get("envelope") and fmt.kind is None:
         return "the format has no envelope"
-    if case.applies_to.get("envelope") and not fmt.envelope:
-        return "the format's files carry no envelope yet (apiVersion: none)"
     formats = case.applies_to.get("formats")
     if formats and fmt.id not in formats:
         return f"the case applies to {', '.join(formats)}"
@@ -1404,7 +1399,6 @@ def load_registry(path: Path) -> list[Format]:
     formats = []
     for entry in document["formats"]:
         target = entry.get("target")
-        current = entry.get("current")
         roles = entry.get("conformance")
         schema = entry.get("schema") if isinstance(entry.get("schema"), dict) else {}
         formats.append(
@@ -1419,7 +1413,6 @@ def load_registry(path: Path) -> list[Format]:
                 harness={},
                 schema=str(root / schema["path"]) if isinstance(schema.get("path"), str) else None,
                 schema_id=schema["id"] if isinstance(schema.get("id"), str) else None,
-                envelope=isinstance(current, dict) and none(current.get("apiVersion")) is not None,
             )
         )
     return formats

@@ -711,38 +711,6 @@ class PlanTest(unittest.TestCase):
         self.assertIsNotNone(runner.not_applicable(envelope, bare))
         self.assertIsNone(runner.not_applicable(envelope, authored))
 
-    def test_cfg_env_1_envelope_cases_skip_a_format_whose_files_carry_no_envelope_yet(self) -> None:
-        unenveloped = demo_format(envelope=False)
-        envelope = self.case(appliesTo={"envelope": True})
-        self.assertEqual(
-            runner.not_applicable(envelope, unenveloped),
-            "the format's files carry no envelope yet (apiVersion: none)",
-        )
-        self.assertIsNone(runner.not_applicable(self.case(), unenveloped))
-
-    def test_the_registry_records_whether_a_format_carries_its_envelope_today(self) -> None:
-        def entry(format_id: str, api_version: str) -> dict[str, Any]:
-            return {
-                "id": format_id,
-                "current": {"apiVersion": api_version, "kind": "none"},
-                "target": {"apiVersion": f"id.registrystack.org/formats/{format_id}/v1alpha1", "kind": "Demo"},
-            }
-
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "products/platform/config-formats.yaml"
-            path.parent.mkdir(parents=True)
-            path.write_text(
-                yaml.safe_dump({"formats": [
-                    entry("demo/enveloped", "id.registrystack.org/formats/demo/enveloped/v1alpha1"),
-                    entry("demo/bare", "none"),
-                ]}),
-                encoding="utf-8",
-            )
-            formats = {fmt.id: fmt for fmt in runner.load_registry(path)}
-        self.assertTrue(formats["demo/enveloped"].envelope)
-        self.assertFalse(formats["demo/bare"].envelope)
-        self.assertEqual(formats["demo/bare"].kind, "Demo")
-
     def test_case_file_shape_is_checked(self) -> None:
         with self.assertRaises(runner.HarnessError):
             runner.Case.from_document({"id": "x", "rules": [], "expect": {"exit": 1}}, "x")
