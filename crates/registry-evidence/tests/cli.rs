@@ -633,6 +633,30 @@ fn check_skips_value_checks_on_substituted_members_unless_asked_for_the_environm
         Some(1),
         "--deny-warnings refuses an unchecked file"
     );
+
+    // Substitution fills text only, so an expression in an integer member is
+    // refused whatever the environment holds, and the refusal is kept.
+    deployment.replace(
+        "runtime.yaml",
+        "  bind: ${EVIDENCE_BIND:-127.0.0.1:8080}\n",
+        "  bind: 127.0.0.1:8080\n",
+    );
+    deployment.replace(
+        "runtime.yaml",
+        "  maximumRequestBytes: 65536\n",
+        "  maximumRequestBytes: ${EVIDENCE_BIND}\n",
+    );
+    let typed = check(&["check", "--format", "json"], &[]);
+    assert_eq!(typed.status.code(), Some(1), "the integer is refused");
+    let report: Value = serde_json::from_slice(&typed.stdout).expect("one JSON document");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "config.expected-integer"
+                && diagnostic["path"] == "/listener/maximumRequestBytes"
+        }),
+        "{report}"
+    );
 }
 
 #[test]

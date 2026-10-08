@@ -510,7 +510,10 @@ held for the stable release" lists them.
    `${NAME}` expressions from the process environment and checks the values
    they fill; without it an expression is checked by its syntax and position
    only, and a warning (`evidence.runtime.not-checked`,
-   `evidence.package.not-checked`) says what was skipped. Every diagnostic
+   `evidence.package.not-checked`) says what was skipped. Substitution fills
+   text only, so an expression in an integer or boolean member is refused
+   (`config.expected-integer`, `config.expected-boolean`) with or without
+   `--environment`. Every diagnostic
    carries a three-segment code. Migration: a script that matched message
    text should match the code instead; the table in "Diagnostic codes, old
    to new" maps each previous message to its code.

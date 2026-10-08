@@ -361,13 +361,22 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
 /// substituted text, so it is skipped. Decoding stopped there, so the members
 /// after it and the package were not checked either, and a warning says so.
 /// A refusal of the expression itself (its syntax, or a position where
-/// substitution is not allowed) is kept, as is every refusal elsewhere.
+/// substitution is not allowed) is kept, as is a refusal of its type:
+/// substitution fills text only, so a member that is not text refuses it
+/// whatever the environment holds. Every refusal elsewhere is kept too.
 fn push_offline_refusal(check: &mut OfflineCheck, report: Report, bytes: &[u8]) {
+    const TYPE_REFUSALS: [&str; 4] = [
+        "config.expected-integer",
+        "config.expected-number",
+        "config.expected-boolean",
+        "config.invalid-type",
+    ];
     let layout = Layout::scan(&check.file, bytes);
     let mut skipped = None;
     let mut kept = Vec::new();
     for diagnostic in report_in_file(report, &check.file.clone()).into_diagnostics() {
-        let value_check = !diagnostic.code.starts_with("config.substitution");
+        let value_check = !diagnostic.code.starts_with("config.substitution")
+            && !TYPE_REFUSALS.contains(&diagnostic.code.as_str());
         if value_check && layout.substituted(&diagnostic.path) {
             skipped.get_or_insert(diagnostic.path);
         } else {
