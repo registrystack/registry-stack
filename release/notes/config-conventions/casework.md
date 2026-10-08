@@ -283,6 +283,87 @@ project changes.
 | `--against-breg-package` with no, several, or an unknown BReg source | unchanged code, `arguments` | unchanged code, `/sources` |
 | `--against-breg-package` with a missing or stale description | unchanged code, `casework.yaml:/sources/N/description` | unchanged code, `/sources/N/description` |
 
+## BREAKING: fixtures, simulations, and holiday sets are read by the shared reader
+
+`caseworkctl check`, `test`, and `simulate` read the files under
+`fixtures/`, `simulations/`, and `simulations/holiday-sets/` through the
+reader every Registry Stack product shares. Each format has a published JSON
+Schema, generated from the reader types into
+`products/casework/generated/{fixture,simulation,holiday-set}/`:
+`https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json`,
+`.../simulation/simulation.v1alpha1.schema.json`, and
+`.../holiday-set/holiday-set.v1alpha1.schema.json`.
+`python3 editors/configure.py casework` maps them for those directories.
+Everything the `casework.yaml` reader refuses (null, anchors, tags, plain
+numbers where text is expected, unknown keys) is refused in these files too,
+each at its position.
+
+A fixture changes spelling:
+
+| Old | New |
+|---|---|
+| `apiVersion: registry.registrystack.org/casework-fixture/v1alpha1` | `apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1` |
+| `name: X` | `id: X` |
+| `source: {id: S, requestEntity: E, reviewStage: T}` | `request: {source: S, entity: E}`; `reviewStage` was never read and is removed |
+| `expect.targetElapsed: PT48H` | `expect.target: {elapsedMinutes: 2880}` |
+| `expect.targetElapsed:` (empty, no target) | `expect.target: none` |
+
+A simulation and a holiday set gain an envelope, and a simulation changes
+spelling:
+
+| Old | New |
+|---|---|
+| a simulation with no envelope | `apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1` and `kind: CaseworkSimulation` |
+| a holiday set with no envelope | `apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1` and `kind: CaseworkHolidaySet` |
+| `subject.id` | `subject.recordId` |
+| `expect.ruleId` | `expect.rule` |
+| `expect.ruleId` absent, meaning no rule matches | `expect.rule: none`; an absent `rule` is no longer checked |
+| `expect.dueState: atRisk` | `expect.dueState: at-risk` (`pending` and `due` are unchanged) |
+| `pauseStartedAt: null`, `completedAt: null` | omit the member |
+
+The reader names the replacement for each old spelling at its position
+(`config.removed-key`, `config.retired-api-version`). Other changes:
+
+- Every member of a fixture's or a simulation's `expect` other than `queue`
+  is optional, and one you leave out is not checked. `eligibleReminders`,
+  `eligibleSteps`, and `outcomes` are compared as sets.
+- A holiday-set file is named `<holidaySet>-<revision>.yaml` (or `.yml`),
+  and a simulation finds the revision `holidayRevisions` pins by that name.
+  A file whose name does not match its `holidaySet` and `revision` is
+  `casework.holiday-set.misnamed`. Migration: rename the file.
+- `caseworkctl check` reads every `.yaml` and `.yml` file directly under the
+  three directories, counts each in `filesChecked`, and refuses, at its
+  position: a fixture or simulation that names a source, request, review
+  kind, or field `casework.yaml` does not declare; a fixture review display
+  its kind's `displaySchema` rejects (`casework.fixture.display-mismatch`,
+  with the schema's position in `related`); a simulation field the request
+  does not project or the source description types otherwise; a missing
+  pinned holiday set; a nested directory, link, or special file, which is
+  never skipped silently; and a file of one format under another format's
+  directory (`casework.project.misplaced-file`).
+- `caseworkctl test` runs every fixture and every simulation, where it ran
+  only fixtures and a simulation placed under `fixtures/`, and refuses a
+  project with neither (`casework.test.no-fixtures`). Each expectation that
+  does not hold is its own diagnostic at the `expect` member that states it,
+  where the first failure was reported alone as `caseworkctl.refused`.
+- `caseworkctl simulate --fixture FILE` reports the same diagnostics for the
+  one simulation it reads.
+
+Migration: rewrite each file as the tables above show; `caseworkctl check`
+names each member to change. A script that matched a failure's message
+matches its `code`.
+
+| Failure | Old code | New code |
+|---|---|---|
+| a fixture or simulation that does not parse or has the wrong envelope | `caseworkctl.refused` | a reader code |
+| a fixture reference `casework.yaml` does not declare | `caseworkctl.refused` | `casework.fixture.unknown-reference` |
+| a fixture expectation that does not hold | `caseworkctl.refused` | `casework.fixture.expectation-not-met` |
+| a fixture display the kind's schema rejects | `caseworkctl.refused` | `casework.fixture.display-mismatch` |
+| a simulation reference `casework.yaml` does not declare | `caseworkctl.refused` | `casework.simulation.unknown-reference` |
+| a simulation expectation that does not hold | `caseworkctl.refused` | `casework.simulation.expectation-not-met` |
+| a missing pinned holiday set | `caseworkctl.refused` | `casework.simulation.missing-holiday-set` |
+| a project with no fixture | `caseworkctl.refused` | `casework.test.no-fixtures` |
+
 ## Diagnostic codes
 
 | Old code | New code |

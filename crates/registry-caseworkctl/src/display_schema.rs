@@ -364,7 +364,7 @@ fn contains_reference(schema: &Value, depth: usize) -> bool {
 }
 
 /// The JSON types a schema's own `type` keyword admits.
-fn json_types(schema: &Value) -> Option<BTreeSet<String>> {
+pub(crate) fn json_types(schema: &Value) -> Option<BTreeSet<String>> {
     match schema.get("type")? {
         Value::String(name) => Some(BTreeSet::from([name.clone()])),
         Value::Array(names) => names
@@ -400,7 +400,7 @@ fn types_overlap(source: &str, shown: &str) -> bool {
         || (source == "number" && shown == "integer")
 }
 
-fn render_types(types: &BTreeSet<String>) -> String {
+pub(crate) fn render_types(types: &BTreeSet<String>) -> String {
     match types.iter().collect::<Vec<_>>().as_slice() {
         [single] => (*single).clone(),
         several => format!(

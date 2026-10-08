@@ -48,6 +48,18 @@ SCHEMAS = {
         ("products/casework/generated/project/project.schema.json", "casework.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+        ("products/casework/generated/fixture/fixture.schema.json", "fixtures/*.yaml"),
+        ("products/casework/generated/fixture/fixture.schema.json", "fixtures/*.yml"),
+        ("products/casework/generated/simulation/simulation.schema.json", "simulations/*.yaml"),
+        ("products/casework/generated/simulation/simulation.schema.json", "simulations/*.yml"),
+        (
+            "products/casework/generated/holiday-set/holiday-set.schema.json",
+            "simulations/holiday-sets/*.yaml",
+        ),
+        (
+            "products/casework/generated/holiday-set/holiday-set.schema.json",
+            "simulations/holiday-sets/*.yml",
+        ),
     ),
     "scheduling": (
         ("products/scheduling/generated/project/project.schema.json", "scheduling.yaml"),

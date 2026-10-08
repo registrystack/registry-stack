@@ -202,6 +202,30 @@
       "description": "Registry Casework project JSON Schema."
     },
     {
+      "glob": "products/casework/generated/fixture/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework fixture JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/simulation/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework simulation JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/holiday-set/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework holiday set JSON Schema."
+    },
+    {
       "glob": "products/scheduling/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-scheduling/src/schema.rs",
       "owner": "scheduling",

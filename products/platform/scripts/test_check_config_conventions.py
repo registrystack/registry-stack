@@ -974,6 +974,18 @@ class IdentifierTests(ConventionsTestCase):
         self.union([{"type": "string", "enum": ["none"]}, self.variant("type", "file", "path")])
         self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/source"))
 
+    def test_cfg_id_7_accepts_none_beside_an_untagged_single_key_mapping(self) -> None:
+        elapsed = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["elapsedMinutes"],
+            "properties": {"elapsedMinutes": {"type": "integer", "minimum": 1, "maximum": 10}},
+        }
+        self.union([{"type": "string", "enum": ["none"]}, elapsed], "anyOf")
+        self.assertNoFinding(self.repo.run(), "CFG-ID-7")
+        self.union([{"type": "string", "enum": ["never"]}, elapsed], "anyOf")
+        self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/source"))
+
     def test_cfg_id_7_reports_an_untagged_union_of_one_node_kind(self) -> None:
         plain = {"type": "object", "additionalProperties": False, "properties": {"path": {"type": "string"}}}
         other = {"type": "object", "additionalProperties": False, "properties": {"text": {"type": "string"}}}

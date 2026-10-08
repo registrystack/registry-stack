@@ -26,8 +26,10 @@ pub const MAXIMUM_REVIEW_POLICY_SNAPSHOT_BYTES: usize = 256 * 1024;
 const MAXIMUM_REVIEW_OUTCOMES: usize = 16;
 const MAXIMUM_REVIEW_KIND_CLOCKS: usize = 32;
 const MAXIMUM_REVIEW_SCHEMA_BYTES: usize = 64 * 1024;
-const MAXIMUM_REVIEW_DISPLAY_BYTES: usize = 16 * 1024;
-const MAXIMUM_REVIEW_VALUE_DEPTH: usize = 16;
+/// The most bytes a review display holds, as canonical JSON.
+pub const MAXIMUM_REVIEW_DISPLAY_BYTES: usize = 16 * 1024;
+/// The deepest a review display or result nests.
+pub const MAXIMUM_REVIEW_VALUE_DEPTH: usize = 16;
 const MAXIMUM_REVIEW_REASON_BYTES: usize = 2_000;
 const MAXIMUM_REVIEW_RESULT_BYTES: usize = 16 * 1024;
 const MAXIMUM_REVIEW_RESULT_CONSTRAINTS_BYTES: usize = 16 * 1024;
@@ -567,6 +569,12 @@ impl ReviewKindPolicy {
         let canonical = registry_platform_canonical_json::canonicalize_json(&value)
             .map_err(|_| ReviewPolicyError::Canonical)?;
         Ok(ContentDigest::for_bytes(&canonical))
+    }
+
+    /// Check `display` against this kind's `displaySchema` and the display
+    /// bounds, exactly as the runtime checks a display a producer submits.
+    pub fn validate_display(&self, display: &Value) -> Result<(), ReviewValidationError> {
+        validate_display(&self.display_schema, display)
     }
 
     pub fn snapshot(&self) -> Result<ReviewKindPolicySnapshot, ReviewPolicyError> {

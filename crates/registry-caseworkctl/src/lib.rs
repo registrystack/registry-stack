@@ -4,6 +4,7 @@ mod breg_package;
 mod dev;
 mod display_schema;
 mod lifecycle;
+mod offline;
 mod policy;
 mod project;
 mod report;
@@ -52,13 +53,13 @@ enum Command {
     Explain(ProjectArgs),
     /// Report the occurrence and review state machines the runtime enforces.
     Lifecycle,
-    /// Evaluate a fixture using its controlled clock and source facts.
+    /// Evaluate a simulation using its controlled clock and source facts.
     Simulate(SimulateArgs),
     /// Package validated policy and exact imported descriptions for deployment.
     ///
     /// The package is the unit caseworkctl plan and apply activate: a new directory holding the checked policy and the source descriptions it pins, named by the runtime configuration. bregctl package is a different verb that builds a Base Registry Engine (BReg) registry package from a tested BReg project.
     Package(PackageArgs),
-    /// Run the project's bounded synthetic fixtures offline.
+    /// Run the project's fixtures and simulations offline.
     Test(ProjectArgs),
     /// Check live database, issuer, source and directory readiness.
     Doctor(DoctorArgs),
@@ -182,7 +183,7 @@ struct SimulateArgs {
     /// Authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Synthetic fixture with source facts and a controlled clock.
+    /// Simulation file (CaseworkSimulation) with source facts and a controlled clock.
     #[arg(long, value_name = "FILE")]
     fixture: PathBuf,
 }
@@ -1543,15 +1544,14 @@ mod tests {
         assert_eq!(report["apiVersion"], CLI_API_VERSION);
         assert_eq!(report["kind"], "TestReport");
         let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["artifact"], "authoring_input");
-        assert_eq!(diagnostic["path"], "authoring");
+        assert_eq!(diagnostic["code"], "casework.test.no-fixtures", "{report}");
+        assert_eq!(diagnostic["path"], "");
         assert!(diagnostic["message"]
             .as_str()
-            .is_some_and(|message| message.contains("test requires at least one YAML fixture")));
-        assert_eq!(
-            diagnostic["suggestedAction"],
-            "Correct the authored input named by the refusal, then retry."
-        );
+            .is_some_and(|message| message.contains("holds no fixture under fixtures/")));
+        assert!(diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("caseworkctl init writes a starting fixture")));
 
         stdout.clear();
         let mut stderr = Vec::new();
@@ -1567,7 +1567,10 @@ mod tests {
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stdout.is_empty());
         let rendered = String::from_utf8(stderr).unwrap();
-        assert!(rendered.contains("test requires at least one YAML fixture"));
+        assert!(
+            rendered.contains("error[casework.test.no-fixtures]"),
+            "{rendered}"
+        );
         assert!(!rendered.contains("runtime dependency"));
     }
 
@@ -1706,7 +1709,7 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
         let report: Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(report["status"], "incomplete");
-        assert_eq!(report["filesChecked"], 1);
+        assert_eq!(report["filesChecked"], 2);
         let warning = &report["diagnostics"][0];
         assert_eq!(warning["severity"], "warning");
         assert_eq!(warning["code"], "casework.source-description.missing");
@@ -1728,7 +1731,7 @@ mod tests {
             "{stdout}"
         );
         assert!(
-            stdout.ends_with("0 errors, 1 warning in 1 file\n"),
+            stdout.ends_with("0 errors, 1 warning in 2 files\n"),
             "{stdout}"
         );
 
@@ -1753,7 +1756,7 @@ mod tests {
             "warning[casework.source-description.missing] {file}:"
         )));
         assert!(
-            stderr.ends_with("0 errors, 1 warning in 1 file\n"),
+            stderr.ends_with("0 errors, 1 warning in 2 files\n"),
             "{stderr}"
         );
 
@@ -1856,7 +1859,7 @@ mod tests {
             "{stderr}"
         );
         assert!(
-            stderr.ends_with("1 error, 0 warnings in 1 file\n"),
+            stderr.ends_with("1 error, 0 warnings in 2 files\n"),
             "{stderr}"
         );
         assert!(!stderr.contains("QUEUE_LABEL"), "{stderr}");
@@ -1998,7 +2001,7 @@ mod tests {
             "{stderr}"
         );
         assert!(
-            stderr.ends_with("2 errors, 0 warnings in 2 files\n"),
+            stderr.ends_with("2 errors, 0 warnings in 3 files\n"),
             "{stderr}"
         );
     }
@@ -2105,7 +2108,7 @@ mod tests {
   recoveryDays is longer than the result retention of a review kind this producer submits
   next: Make recoveryDays no longer than that review kind's retention.terminalDays.
   note: {file}:{related_line}:21 /reviewKinds/0/retention/terminalDays terminalDays is written here
-1 error, 0 warnings in 1 file
+1 error, 0 warnings in 2 files
 "
             )
         );

@@ -52,6 +52,20 @@
   `/sources` or `/sources/N/description`; the stale pin no longer repeats
   either revision. Migration steps and the old-to-new table are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: fixtures, simulations, and holiday sets are read through the
+  shared configuration reader and have published JSON Schemas. A fixture
+  declares `apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1`,
+  names itself with `id`, writes its request as `request: {source, entity}`,
+  and states its target as `target: {elapsedMinutes: N}` or `target: none`.
+  A simulation declares `kind: CaseworkSimulation`, names its record
+  `subject.recordId` and its rule `expect.rule` (or `rule: none`), and
+  writes `dueState: at-risk`; a holiday set declares
+  `kind: CaseworkHolidaySet`. `caseworkctl check` reads every file under
+  `fixtures/` and `simulations/` and refuses an undeclared reference or a
+  review display its kind's display schema rejects, `caseworkctl test` also
+  runs simulations, and each failure is its own positioned diagnostic.
+  Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

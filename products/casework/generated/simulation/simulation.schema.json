@@ -1,0 +1,230 @@
+{
+  "$defs": {
+    "DataLiteral": {
+      "description": "A record value: null, a boolean, a number, or text.",
+      "type": [
+        "null",
+        "boolean",
+        "number",
+        "string"
+      ]
+    },
+    "DueState": {
+      "description": "An activity clock's state at an instant.",
+      "enum": [
+        "pending",
+        "at-risk",
+        "due"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "SimulationExpectation": {
+      "additionalProperties": false,
+      "description": "What a simulation expects. An absent member is not checked (CFG-EMPTY-6).",
+      "properties": {
+        "dueAt": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "The activity or subject clock's due instant."
+        },
+        "dueState": {
+          "$ref": "#/$defs/DueState",
+          "description": "The activity clock's state at `now`."
+        },
+        "eligibleReminders": {
+          "description": "The activity clock reminders due at `now`.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "eligibleSteps": {
+          "description": "The activity clock steps due at `now`.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "queue": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The queue routing selects."
+        },
+        "remainingMilliseconds": {
+          "description": "The subject clock's remaining budget at `now`.",
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rule": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The routing rule that matched, or `none` when no rule matched and the\nrequest's default queue applies."
+        }
+      },
+      "required": [
+        "queue"
+      ],
+      "type": "object"
+    },
+    "SimulationReviewTiming": {
+      "additionalProperties": false,
+      "description": "The source's request-wide review timing.",
+      "properties": {
+        "completedAt": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "The final completion; absent while the review is open."
+        },
+        "firstSubmittedAt": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "pauseStartedAt": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "The start of an open pause; absent when the review is not paused."
+        },
+        "pausedMilliseconds": {
+          "description": "Completed pause intervals.",
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "firstSubmittedAt",
+        "pausedMilliseconds"
+      ],
+      "type": "object"
+    },
+    "SimulationSubject": {
+      "additionalProperties": false,
+      "description": "The source request a simulation routes.",
+      "properties": {
+        "activity": {
+          "$ref": "#/$defs/SubjectActivity"
+        },
+        "entity": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The request entity a `sources[].requests[].entity` names."
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DataLiteral"
+          },
+          "default": {},
+          "description": "Routing field values, by the field id the request's projection names.",
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "recordId": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The source record identifier."
+        },
+        "reviewTiming": {
+          "$ref": "#/$defs/SimulationReviewTiming",
+          "description": "The source's review timing; a subject clock reads it."
+        },
+        "stage": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The source stage the record is in."
+        },
+        "stageEnteredAt": {
+          "$ref": "#/$defs/Timestamp",
+          "description": "When the record entered its stage; an activity clock starts here."
+        },
+        "version": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The source record version."
+        }
+      },
+      "required": [
+        "entity",
+        "recordId",
+        "version",
+        "activity"
+      ],
+      "type": "object"
+    },
+    "SubjectActivity": {
+      "description": "The activity a simulated record is in.",
+      "enum": [
+        "review",
+        "apply"
+      ],
+      "type": "string"
+    },
+    "Timestamp": {
+      "description": "An RFC 3339 timestamp with an offset, such as 2026-09-11T17:00:00+07:00.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/casework/simulation/simulation.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One offline routing and clock simulation of a source request.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/casework/simulation/v1alpha1",
+      "type": "string"
+    },
+    "expect": {
+      "$ref": "#/$defs/SimulationExpectation"
+    },
+    "holidayRevisions": {
+      "additionalProperties": {
+        "format": "uint64",
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "default": {},
+      "description": "The revision of each holiday set the simulation pins, by holiday-set\nid; the file is `holiday-sets/<id>-<revision>.yaml` beside this one.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "CaseworkSimulation",
+      "type": "string"
+    },
+    "now": {
+      "$ref": "#/$defs/Timestamp",
+      "description": "The instant the clock state is evaluated at."
+    },
+    "source": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The `sources[].id` in `casework.yaml` the subject comes from."
+    },
+    "subject": {
+      "$ref": "#/$defs/SimulationSubject"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "source",
+    "subject",
+    "now",
+    "expect"
+  ],
+  "title": "Registry Casework simulation",
+  "type": "object"
+}

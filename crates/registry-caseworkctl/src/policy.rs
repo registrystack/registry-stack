@@ -2,18 +2,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Utc};
 use registry_casework_core::{
     evaluate_activity_clock, evaluate_routing, evaluate_subject_clock, routing_policy_findings,
-    CaseworkProject, ClockPolicy, ConfigFinding, HolidaySetDocument, ReviewTiming, RoutingActivity,
-    RoutingContext, RoutingFieldDescriptor, RoutingSourceMetadata, SourcePolicy,
-    SourceRequestPolicy,
+    CaseworkProject, CaseworkSimulation, ClockPolicy, ClockPolicyError, ConfigFinding, DueState,
+    HolidaySetDocument, RoutingDecision, RoutingDiagnosticReason, RoutingFieldDescriptor,
+    RoutingSourceMetadata, SourcePolicy, SourceRequestPolicy, NO_RULE,
 };
-use serde::Deserialize;
+use registry_platform_yaml::{Decoded, Diagnostic, Document, LocalId, Severity};
 use serde_json::{json, Value};
+
+use crate::display_schema::{json_types, render_types};
+use crate::offline::{admits, json_type, project_related};
 
 pub(crate) const MAXIMUM_SOURCE_DESCRIPTION_BYTES: usize = 1024 * 1024;
 
@@ -95,102 +97,382 @@ pub(super) fn explain(project: &Path, policy: &CaseworkProject) -> Result<Value>
     }))
 }
 
-pub(super) fn simulate(
-    project: &Path,
-    policy: &CaseworkProject,
-    fixture_path: &Path,
-) -> Result<Value> {
-    let fixture: SimulationFixture = load_yaml(fixture_path, "simulation fixture")?;
-    let source = policy
+const SIMULATION_NOT_MET: &str = "casework.simulation.expectation-not-met";
+const NOT_MET_ACTION: &str = "Remove the member, run caseworkctl simulate on this file to read the value the project computes, and write it back if it is the one you expect; otherwise change the subject or casework.yaml.";
+
+/// What one simulation computes, and each expectation it does not meet.
+pub(crate) struct SimulationOutcome {
+    pub report: Value,
+    pub failures: Vec<Diagnostic>,
+}
+
+/// The source, request, and request pointer a simulation names, once
+/// `crate::offline::resolve` has accepted it.
+fn simulated_request<'a>(
+    policy: &'a CaseworkProject,
+    simulation: &CaseworkSimulation,
+) -> Option<(&'a SourcePolicy, &'a SourceRequestPolicy, String)> {
+    let source_index = policy
         .sources
         .iter()
-        .find(|source| source.id == fixture.source)
-        .context("fixture source is not declared")?;
-    let request = source
+        .position(|source| source.id == simulation.source.as_str())?;
+    let source = &policy.sources[source_index];
+    let request_index = source
         .requests
         .iter()
-        .find(|request| request.entity == fixture.subject.entity)
-        .context("fixture subject entity is not declared for the source")?;
-    let description = load_source_description(project, source)?;
+        .position(|request| request.entity == simulation.subject.entity.as_str())?;
+    Some((
+        source,
+        &source.requests[request_index],
+        format!("/sources/{source_index}/requests/{request_index}"),
+    ))
+}
+
+/// Check a simulation's subject against the source description of the
+/// request it names: the stage its activity allows and each field value
+/// against the field's schema (CFG-VAL-9). A simulation whose source
+/// description is not imported yet is left to `test`.
+pub(crate) fn simulation_input_diagnostics(
+    project_dir: &Path,
+    project: &Decoded<CaseworkProject>,
+    simulation: &Decoded<CaseworkSimulation>,
+) -> Result<Vec<Diagnostic>> {
+    let Some((source, request, request_at)) = simulated_request(&project.value, &simulation.value)
+    else {
+        return Ok(Vec::new());
+    };
+    if !project_dir.join(&source.description).is_file() {
+        return Ok(Vec::new());
+    }
+    let description = load_source_description(project_dir, source)?;
     let metadata = metadata_for_request(&description, request)?;
-    let decision = evaluate_routing(
+    Ok(route(project, simulation, request, &request_at, &metadata)
+        .err()
+        .into_iter()
+        .map(|diagnostic| *diagnostic)
+        .collect())
+}
+
+/// Route the simulated subject with the runtime's evaluator, placing a
+/// refusal at the subject member the runtime would have refused.
+fn route(
+    project: &Decoded<CaseworkProject>,
+    simulation: &Decoded<CaseworkSimulation>,
+    request: &SourceRequestPolicy,
+    request_at: &str,
+    metadata: &RoutingSourceMetadata,
+) -> std::result::Result<RoutingDecision, Box<Diagnostic>> {
+    let document = &simulation.document;
+    let error = match evaluate_routing(
         &request.queue,
         &request.projection,
         &request.routing,
-        &metadata,
-        &RoutingContext {
-            activity: fixture.subject.activity,
-            stage: fixture.subject.stage.clone(),
-            fields: fixture.subject.fields.clone(),
-        },
-    )
-    .with_context(|| request_path(source, request))?;
+        metadata,
+        &simulation.value.subject.routing_context(),
+    ) {
+        Ok(decision) => return Ok(decision),
+        Err(error) => error,
+    };
+    if error.path == "/source/stage" {
+        let pointer = if simulation.value.subject.stage.is_some() {
+            "/subject/stage"
+        } else {
+            "/subject"
+        };
+        return Err(Box::new(document.diagnostic_at_value(
+            Severity::Error,
+            "casework.simulation.stage-mismatch",
+            pointer,
+            "the subject's stage does not fit its activity: a record under review is in a stage, and a record being applied is in none",
+            "Write subject.stage for activity: review, and no stage for activity: apply.",
+        )));
+    }
+    if let Some(field) = error.path.strip_prefix("/source/fields/") {
+        let pointer = format!("/subject/fields/{field}");
+        if error.reason == RoutingDiagnosticReason::UnknownField {
+            let mut diagnostic = document.diagnostic_at_key(
+                Severity::Error,
+                "casework.simulation.unknown-field",
+                &pointer,
+                "the source description declares no usable schema for this field",
+                "Use a field the source description lists, or import a description that declares it.",
+            );
+            diagnostic.related.push(project_related(
+                project,
+                &format!("{request_at}/projection"),
+                "the request projects its fields here",
+            ));
+            return Err(Box::new(diagnostic));
+        }
+        let name = field.replace("~1", "/").replace("~0", "~");
+        let declared = metadata
+            .fields
+            .iter()
+            .find(|descriptor| descriptor.field == name)
+            .and_then(|descriptor| json_types(&descriptor.schema));
+        let written = simulation
+            .value
+            .subject
+            .fields
+            .iter()
+            .find(|(key, _)| key.as_str() == name)
+            .and_then(|(_, value)| serde_json::to_value(value).ok());
+        let message = match (declared, written) {
+            (Some(types), Some(written)) if !admits(&types, json_type(&written)) => format!(
+                "the source description declares this field as {}, and it is written as {}",
+                render_types(&types),
+                json_type(&written)
+            ),
+            _ => "this value is outside what the source description's schema allows for the field"
+                .to_owned(),
+        };
+        return Err(Box::new(document.diagnostic_at_value(
+            Severity::Error,
+            "casework.simulation.field-mismatch",
+            &pointer,
+            &message,
+            "Write a value the field's schema in the source description allows.",
+        )));
+    }
+    let mut diagnostic = document.diagnostic_at_value(
+        Severity::Error,
+        error.reason.code(),
+        "/source",
+        error.reason.message(),
+        error.reason.suggested_action(),
+    );
+    diagnostic.related.push(project_related(
+        project,
+        &format!("{request_at}{}", error.path),
+        "the request's routing is declared here",
+    ));
+    Err(Box::new(diagnostic))
+}
 
+/// Evaluate one simulation `crate::offline::resolve` accepted with the
+/// runtime's routing and clock evaluators, against the holiday-set
+/// revisions it pins.
+pub(crate) fn simulate(
+    project_dir: &Path,
+    project: &Decoded<CaseworkProject>,
+    simulation: &Decoded<CaseworkSimulation>,
+    holidays: &BTreeMap<(String, u64), HolidaySetDocument>,
+) -> Result<SimulationOutcome> {
+    let policy = &project.value;
+    let document = &simulation.document;
+    let value = &simulation.value;
+    let (source, request, request_at) =
+        simulated_request(policy, value).context("the simulation names no declared request")?;
+    let mut failures = Vec::new();
+    if !project_dir.join(&source.description).is_file() {
+        let mut diagnostic = document.diagnostic_at_value(
+            Severity::Error,
+            crate::project::MISSING_SOURCE_DESCRIPTION,
+            "/source",
+            "the source description routing reads is not imported",
+            "Import the source description with caseworkctl source add.",
+        );
+        let index = request_at.split('/').nth(2).unwrap_or_default().to_owned();
+        diagnostic.related.push(project_related(
+            project,
+            &format!("/sources/{index}/description"),
+            "the source names its description here",
+        ));
+        failures.push(diagnostic);
+        return Ok(SimulationOutcome {
+            report: Value::Null,
+            failures,
+        });
+    }
+    let description = load_source_description(project_dir, source)?;
+    let metadata = metadata_for_request(&description, request)?;
+    let decision = match route(project, simulation, request, &request_at, &metadata) {
+        Ok(decision) => decision,
+        Err(diagnostic) => {
+            failures.push(*diagnostic);
+            return Ok(SimulationOutcome {
+                report: Value::Null,
+                failures,
+            });
+        }
+    };
+    let now = value.now.get();
+    let expect = &value.expect;
     let mut clock_report = Value::Null;
     if let Some(clock_id) = request.clock.as_deref() {
-        let clock = policy
+        let clock_index = policy
             .clocks
             .iter()
-            .find(|clock| clock.id() == clock_id)
-            .context("request clock is not declared")?;
+            .position(|clock| clock.id() == clock_id)
+            .context("the request's clock is not declared")?;
+        let clock = &policy.clocks[clock_index];
         match clock {
             ClockPolicy::Activity { calendar, .. } => {
-                if fixture.subject.activity != RoutingActivity::Review {
-                    bail!("an activity clock anchored to stageEnteredAt requires review activity");
-                }
-                let anchor = fixture
-                    .subject
-                    .stage_entered_at
-                    .context("fixture requires subject.stageEnteredAt for its activity clock")?;
                 let calendar = policy
                     .calendars
                     .iter()
                     .find(|candidate| candidate.id == *calendar)
-                    .context("activity clock calendar is not declared")?;
-                let revision = fixture
+                    .context("the activity clock's calendar is not declared")?;
+                let revision = value
                     .holiday_revisions
-                    .get(&calendar.holiday_set)
-                    .copied()
-                    .context("fixture does not pin the calendar holiday-set revision")?;
-                let holiday_path =
-                    holiday_fixture_path(fixture_path, &calendar.holiday_set, revision)?;
-                let holidays: HolidaySetDocument = load_yaml(&holiday_path, "holiday-set fixture")?;
-                let evaluated = evaluate_activity_clock(clock, calendar, &holidays, anchor)
-                    .context("activity clock evaluation failed")?;
-                let now = fixture.now;
-                let state = if now >= evaluated.due_at {
-                    "due"
-                } else if evaluated.at_risk_at.is_some_and(|at| now >= at) {
-                    "atRisk"
-                } else {
-                    "pending"
+                    .iter()
+                    .find(|(pinned, _)| pinned.as_str() == calendar.holiday_set)
+                    .map(|(_, revision)| revision.get())
+                    .context("the simulation pins no revision of the calendar's holiday set")?;
+                let holidays = holidays
+                    .get(&(calendar.holiday_set.clone(), revision))
+                    .context("no holiday-set file holds the pinned revision")?;
+                let anchor = value
+                    .subject
+                    .stage_entered_at
+                    .context("the simulation states no subject.stageEnteredAt")?
+                    .get();
+                let evaluated = match evaluate_activity_clock(clock, calendar, holidays, anchor) {
+                    Ok(evaluated) => evaluated,
+                    Err(error) => {
+                        failures.push(clock_failed(
+                            project,
+                            document,
+                            "/subject/stageEnteredAt",
+                            clock_index,
+                            &error,
+                        ));
+                        return Ok(SimulationOutcome {
+                            report: Value::Null,
+                            failures,
+                        });
+                    }
                 };
+                let state = if now >= evaluated.due_at {
+                    DueState::Due
+                } else if evaluated.at_risk_at.is_some_and(|at| now >= at) {
+                    DueState::AtRisk
+                } else {
+                    DueState::Pending
+                };
+                let reminders = evaluated
+                    .reminders
+                    .iter()
+                    .filter(|occurrence| now >= occurrence.at)
+                    .map(|occurrence| occurrence.id.as_str())
+                    .collect::<Vec<_>>();
+                let steps = evaluated
+                    .steps
+                    .iter()
+                    .filter(|occurrence| now >= occurrence.at)
+                    .map(|occurrence| occurrence.id.as_str())
+                    .collect::<Vec<_>>();
+                let clock_at = format!("/clocks/{clock_index}");
+                if expect
+                    .due_at
+                    .is_some_and(|due_at| due_at.get() != evaluated.due_at)
+                {
+                    failures.push(not_met(
+                        project,
+                        document,
+                        "/expect/dueAt",
+                        "the clock falls due at another instant",
+                        &clock_at,
+                    ));
+                }
+                if expect.due_state.is_some_and(|expected| expected != state) {
+                    failures.push(not_met(
+                        project,
+                        document,
+                        "/expect/dueState",
+                        "the clock is in another state at now",
+                        &clock_at,
+                    ));
+                }
+                if expect
+                    .eligible_reminders
+                    .as_ref()
+                    .is_some_and(|expected| !same_ids(expected, &reminders))
+                {
+                    failures.push(not_met(
+                        project,
+                        document,
+                        "/expect/eligibleReminders",
+                        "another set of reminders is eligible at now",
+                        &format!("{clock_at}/reminders"),
+                    ));
+                }
+                if expect
+                    .eligible_steps
+                    .as_ref()
+                    .is_some_and(|expected| !same_ids(expected, &steps))
+                {
+                    failures.push(not_met(
+                        project,
+                        document,
+                        "/expect/eligibleSteps",
+                        "another set of steps is eligible at now",
+                        &format!("{clock_at}/steps"),
+                    ));
+                }
                 clock_report = json!({
                     "id": clock_id,
                     "dueAt": evaluated.due_at,
-                    "dueState": state,
+                    "dueState": match state {
+                        DueState::Due => "due",
+                        DueState::AtRisk => "atRisk",
+                        DueState::Pending => "pending",
+                    },
                     "atRiskAt": evaluated.at_risk_at,
-                    "eligibleReminders": evaluated.reminders.iter()
-                        .filter(|occurrence| now >= occurrence.at)
-                        .map(|occurrence| occurrence.id.as_str())
-                        .collect::<Vec<_>>(),
-                    "eligibleSteps": evaluated.steps.iter()
-                        .filter(|occurrence| now >= occurrence.at)
-                        .map(|occurrence| occurrence.id.as_str())
-                        .collect::<Vec<_>>(),
+                    "eligibleReminders": reminders,
+                    "eligibleSteps": steps,
                     "calendar": calendar.id,
                     "holidaySet": holidays.holiday_set,
                     "holidayRevision": evaluated.calendar_revision,
                 });
             }
             ClockPolicy::Subject { .. } => {
-                let timing = fixture
+                let timing = value
                     .subject
                     .review_timing
                     .as_ref()
-                    .context("fixture requires subject.reviewTiming for its subject clock")?;
-                let evaluated = evaluate_subject_clock(clock, timing, fixture.now)
-                    .context("subject clock evaluation failed")?;
+                    .context("the simulation states no subject.reviewTiming")?
+                    .to_timing();
+                let evaluated = match evaluate_subject_clock(clock, &timing, now) {
+                    Ok(evaluated) => evaluated,
+                    Err(error) => {
+                        failures.push(clock_failed(
+                            project,
+                            document,
+                            "/subject/reviewTiming",
+                            clock_index,
+                            &error,
+                        ));
+                        return Ok(SimulationOutcome {
+                            report: Value::Null,
+                            failures,
+                        });
+                    }
+                };
+                let clock_at = format!("/clocks/{clock_index}");
+                if expect
+                    .due_at
+                    .is_some_and(|due_at| Some(due_at.get()) != evaluated.due_at)
+                {
+                    failures.push(not_met(
+                        project,
+                        document,
+                        "/expect/dueAt",
+                        "the clock falls due at another instant, or has no due instant at now",
+                        &clock_at,
+                    ));
+                }
+                if expect.remaining_milliseconds.is_some_and(|remaining| {
+                    i64::try_from(remaining.get()).ok() != Some(evaluated.remaining_milliseconds)
+                }) {
+                    failures.push(not_met(
+                        project,
+                        document,
+                        "/expect/remainingMilliseconds",
+                        "the clock has another budget left at now",
+                        &clock_at,
+                    ));
+                }
                 clock_report = json!({
                     "id": clock_id,
                     "state": evaluated.state,
@@ -201,25 +483,116 @@ pub(super) fn simulate(
             }
         }
     }
-
+    if decision.queue != expect.queue.as_str() {
+        let declared_at = match decision.rule_id.as_deref() {
+            Some(rule) => request
+                .routing
+                .iter()
+                .position(|declared| declared.id == rule)
+                .map_or_else(
+                    || format!("{request_at}/routing"),
+                    |index| format!("{request_at}/routing/{index}/queue"),
+                ),
+            None => format!("{request_at}/queue"),
+        };
+        failures.push(not_met(
+            project,
+            document,
+            "/expect/queue",
+            "the project routes this subject to another queue",
+            &declared_at,
+        ));
+    }
+    if let Some(rule) = &expect.rule {
+        let expected = (rule.as_str() != NO_RULE).then_some(rule.as_str());
+        if decision.rule_id.as_deref() != expected {
+            let message = match (expected, decision.rule_id.is_some()) {
+                (None, _) => "a routing rule matches this subject",
+                (Some(_), false) => "no routing rule matches this subject",
+                (Some(_), true) => "another routing rule matches this subject first",
+            };
+            failures.push(not_met(
+                project,
+                document,
+                "/expect/rule",
+                message,
+                &format!("{request_at}/routing"),
+            ));
+        }
+    }
     let report = json!({
         "ok": true,
         "command": "simulate",
-        "fixture": fixture.id,
+        "fixture": value.id,
         "projectId": policy.casework.id,
         "policyVersion": policy.casework.version,
         "source": source.id,
-        "subject": {"entity": fixture.subject.entity, "id": fixture.subject.id, "version": fixture.subject.version},
+        "subject": {
+            "entity": value.subject.entity,
+            "id": value.subject.record_id,
+            "version": value.subject.version,
+        },
         "routing": decision,
         "clock": clock_report,
         "networkAccess": false,
         "databaseAccess": false,
     });
-    validate_expectations(&fixture.expect, &report)?;
-    Ok(report)
+    Ok(SimulationOutcome { report, failures })
 }
 
-fn metadata_for_request(
+fn same_ids(expected: &[LocalId], computed: &[&str]) -> bool {
+    expected
+        .iter()
+        .map(LocalId::as_str)
+        .collect::<BTreeSet<_>>()
+        == computed.iter().copied().collect::<BTreeSet<_>>()
+}
+
+fn not_met(
+    project: &Decoded<CaseworkProject>,
+    document: &Document,
+    pointer: &str,
+    message: &str,
+    declared_at: &str,
+) -> Diagnostic {
+    let mut diagnostic = document.diagnostic_at_value(
+        Severity::Error,
+        SIMULATION_NOT_MET,
+        pointer,
+        message,
+        NOT_MET_ACTION,
+    );
+    diagnostic.related.push(project_related(
+        project,
+        declared_at,
+        "the project computes this from the declaration here",
+    ));
+    diagnostic
+}
+
+fn clock_failed(
+    project: &Decoded<CaseworkProject>,
+    document: &Document,
+    pointer: &str,
+    clock_index: usize,
+    error: &ClockPolicyError,
+) -> Diagnostic {
+    let mut diagnostic = document.diagnostic_at_value(
+        Severity::Error,
+        "casework.simulation.clock-failed",
+        pointer,
+        &format!("the request's clock cannot be evaluated from this input: {error}"),
+        "Change this input or the clock in casework.yaml so the clock falls due within its bounds.",
+    );
+    diagnostic.related.push(project_related(
+        project,
+        &format!("/clocks/{clock_index}"),
+        "the request's clock is declared here",
+    ));
+    diagnostic
+}
+
+pub(crate) fn metadata_for_request(
     description: &Value,
     request: &SourceRequestPolicy,
 ) -> Result<RoutingSourceMetadata> {
@@ -260,7 +633,7 @@ fn metadata_for_request(
     Ok(RoutingSourceMetadata { stages, fields })
 }
 
-fn load_source_description(project: &Path, source: &SourcePolicy) -> Result<Value> {
+pub(crate) fn load_source_description(project: &Path, source: &SourcePolicy) -> Result<Value> {
     let path = project.join(&source.description);
     let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     if bytes.len() > MAXIMUM_SOURCE_DESCRIPTION_BYTES {
@@ -281,99 +654,6 @@ fn load_source_description(project: &Path, source: &SourcePolicy) -> Result<Valu
         bail!("source description is not bound to the declared source");
     }
     Ok(description)
-}
-
-fn request_path(source: &SourcePolicy, request: &SourceRequestPolicy) -> String {
-    format!(
-        "sources[id={}].requests[entity={}]",
-        source.id, request.entity
-    )
-}
-
-fn holiday_fixture_path(fixture: &Path, holiday_set: &str, revision: u64) -> Result<PathBuf> {
-    let directory = fixture.parent().context("fixture path has no parent")?;
-    Ok(directory
-        .join("holiday-sets")
-        .join(format!("{holiday_set}-{revision}.yaml")))
-}
-
-fn load_yaml<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result<T> {
-    let bytes = fs::read(path).with_context(|| format!("reading {label} {}", path.display()))?;
-    if bytes.len() > 1024 * 1024 {
-        bail!("{label} exceeds the one MiB authoring limit");
-    }
-    serde_norway::from_slice(&bytes).with_context(|| format!("parsing {label} {}", path.display()))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SimulationFixture {
-    id: String,
-    source: String,
-    #[serde(default)]
-    holiday_revisions: BTreeMap<String, u64>,
-    subject: SimulationSubject,
-    now: DateTime<Utc>,
-    expect: SimulationExpectation,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SimulationSubject {
-    entity: String,
-    id: String,
-    version: String,
-    activity: RoutingActivity,
-    #[serde(default)]
-    stage: Option<String>,
-    #[serde(default)]
-    fields: BTreeMap<String, Value>,
-    #[serde(default)]
-    stage_entered_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    review_timing: Option<ReviewTiming>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SimulationExpectation {
-    queue: String,
-    #[serde(default)]
-    rule_id: Option<String>,
-    #[serde(default)]
-    due_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    due_state: Option<String>,
-    #[serde(default)]
-    eligible_reminders: Vec<String>,
-    #[serde(default)]
-    eligible_steps: Vec<String>,
-    #[serde(default)]
-    remaining_milliseconds: Option<i64>,
-}
-
-fn validate_expectations(expect: &SimulationExpectation, report: &Value) -> Result<()> {
-    if report["routing"]["queue"] != expect.queue
-        || report["routing"].get("ruleId")
-            != expect.rule_id.as_ref().map(|value| json!(value)).as_ref()
-        || expect
-            .due_at
-            .is_some_and(|value| report["clock"]["dueAt"] != json!(value))
-        || expect
-            .due_state
-            .as_ref()
-            .is_some_and(|value| report["clock"]["dueState"] != json!(value))
-        || (report["clock"].get("eligibleReminders").is_some()
-            && report["clock"]["eligibleReminders"] != json!(expect.eligible_reminders))
-        || (report["clock"].get("eligibleSteps").is_some()
-            && report["clock"]["eligibleSteps"] != json!(expect.eligible_steps))
-        || expect
-            .remaining_milliseconds
-            .is_some_and(|value| report["clock"]["remainingMilliseconds"] != json!(value))
-    {
-        bail!("simulation result does not match the fixture expectations");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -408,49 +688,23 @@ mod tests {
         assert!(metadata_for_request(&description, &undeclared).is_err());
     }
 
-    #[test]
-    fn uc2_uc4_uc5_fixture_compiles_and_uses_the_runtime_evaluators() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::create_dir_all(directory.path().join("sources")).unwrap();
-        fs::create_dir_all(directory.path().join("fixtures/holiday-sets")).unwrap();
-        fs::write(
-            directory.path().join("sources/professional.json"),
-            r#"{"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","sourceId":"professional-register","authority":"none","request":{"requestEntity":"scope-correction","stages":[{"id":"technical"},{"id":"authorization"}],"fields":[{"field":"region","apiName":"region","schema":{"type":"string","enum":["north","south","islands"]}}]}}"#,
+    /// Read the simulation at `relative` the way `caseworkctl simulate`
+    /// does, resolve it against the project, and evaluate it.
+    fn run(directory: &Path, project: &[u8], relative: &str) -> SimulationOutcome {
+        let project = CaseworkProject::read("casework.yaml", project).unwrap();
+        let files = crate::offline::read_simulation_file(&directory.join(relative)).unwrap();
+        let resolved = crate::offline::resolve(&project, &files);
+        assert!(resolved.is_empty(), "{}", resolved.render_human());
+        simulate(
+            directory,
+            &project,
+            &files.simulations[0].decoded,
+            &files.holiday_documents(),
         )
-        .unwrap();
-        fs::write(
-            directory
-                .path()
-                .join("fixtures/holiday-sets/office-holidays-7.yaml"),
-            "holidaySet: office-holidays\nrevision: 7\ndates: [2026-09-07]\n",
-        )
-        .unwrap();
-        fs::write(
-            directory.path().join("fixtures/friday-review.yaml"),
-            r#"id: friday-review
-source: professional-register
-holidayRevisions: {office-holidays: 7}
-subject:
-  entity: scope-correction
-  id: request-0042
-  version: "1"
-  activity: review
-  stage: technical
-  fields: {region: north}
-  stageEnteredAt: "2026-09-04T15:00:00+07:00"
-now: "2026-09-11T17:00:00+07:00"
-expect:
-  queue: northern-review
-  ruleId: northern-requests
-  dueAt: "2026-09-14T17:00:00+07:00"
-  dueState: atRisk
-  eligibleReminders: [due-soon]
-  eligibleSteps: []
-"#,
-        )
-        .unwrap();
-        let policy = CaseworkProject::from_slice(
-            r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+        .unwrap()
+    }
+
+    const REGIONAL_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework: {id: regional-review, version: "1"}
 accessProfiles:
@@ -494,47 +748,194 @@ clocks:
         because: The review deadline passed while the review remained active.
         at: due
         action: {reassign: {queue: overdue-review}}
-"#
-            .as_bytes(),
+"#;
+
+    const FRIDAY_REVIEW: &str = r#"apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
+kind: CaseworkSimulation
+id: friday-review
+source: professional-register
+holidayRevisions: {office-holidays: 7}
+subject:
+  entity: scope-correction
+  recordId: request-0042
+  version: "1"
+  activity: review
+  stage: technical
+  fields: {region: north}
+  stageEnteredAt: "2026-09-04T15:00:00+07:00"
+now: "2026-09-11T17:00:00+07:00"
+expect:
+  queue: northern-review
+  rule: northern-requests
+  dueAt: "2026-09-14T17:00:00+07:00"
+  dueState: at-risk
+  eligibleReminders: [due-soon]
+  eligibleSteps: []
+"#;
+
+    fn regional_directory(simulation: &str) -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("sources")).unwrap();
+        fs::create_dir_all(directory.path().join("simulations/holiday-sets")).unwrap();
+        fs::write(
+            directory.path().join("sources/professional.json"),
+            r#"{"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","sourceId":"professional-register","authority":"none","request":{"requestEntity":"scope-correction","stages":[{"id":"technical"},{"id":"authorization"}],"fields":[{"field":"region","apiName":"region","schema":{"type":"string","enum":["north","south","islands"]}}]}}"#,
         )
         .unwrap();
-        policy.check().unwrap();
-        let report = simulate(
-            directory.path(),
-            &policy,
-            &directory.path().join("fixtures/friday-review.yaml"),
+        fs::write(
+            directory
+                .path()
+                .join("simulations/holiday-sets/office-holidays-7.yaml"),
+            "apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1\nkind: CaseworkHolidaySet\nholidaySet: office-holidays\nrevision: 7\ndates: [2026-09-07]\n",
         )
         .unwrap();
-        assert_eq!(report["routing"]["ruleId"], "northern-requests");
-        assert_eq!(report["clock"]["dueState"], "atRisk");
-        assert_eq!(report["clock"]["holidayRevision"], 7);
+        fs::write(
+            directory.path().join("simulations/friday-review.yaml"),
+            simulation,
+        )
+        .unwrap();
+        directory
     }
 
     #[test]
-    fn uc3_fixture_uses_authoritative_request_wide_timing() {
+    fn uc2_uc4_uc5_simulation_compiles_and_uses_the_runtime_evaluators() {
+        let directory = regional_directory(FRIDAY_REVIEW);
+        let outcome = run(
+            directory.path(),
+            REGIONAL_PROJECT.as_bytes(),
+            "simulations/friday-review.yaml",
+        );
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+        let report = outcome.report;
+        assert_eq!(report["routing"]["ruleId"], "northern-requests");
+        assert_eq!(report["clock"]["dueState"], "atRisk");
+        assert_eq!(report["clock"]["holidayRevision"], 7);
+        assert_eq!(report["subject"]["id"], "request-0042");
+    }
+
+    #[test]
+    fn an_unmet_simulation_expectation_is_placed_at_its_member_without_its_value() {
+        let directory = regional_directory(
+            &FRIDAY_REVIEW
+                .replace("queue: northern-review", "queue: triage")
+                .replace("rule: northern-requests", "rule: none")
+                .replace("dueState: at-risk", "dueState: due")
+                .replace(
+                    "eligibleSteps: []",
+                    "eligibleSteps: [supervisor-at-deadline]",
+                ),
+        );
+        let outcome = run(
+            directory.path(),
+            REGIONAL_PROJECT.as_bytes(),
+            "simulations/friday-review.yaml",
+        );
+        let placed = outcome
+            .failures
+            .iter()
+            .map(|failure| {
+                (
+                    failure.code.as_str(),
+                    failure.path.as_str(),
+                    failure.source.as_ref().and_then(|source| source.line),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            placed,
+            [
+                (
+                    "casework.simulation.expectation-not-met",
+                    "/expect/dueState",
+                    Some(19)
+                ),
+                (
+                    "casework.simulation.expectation-not-met",
+                    "/expect/eligibleSteps",
+                    Some(21)
+                ),
+                (
+                    "casework.simulation.expectation-not-met",
+                    "/expect/queue",
+                    Some(16)
+                ),
+                (
+                    "casework.simulation.expectation-not-met",
+                    "/expect/rule",
+                    Some(17)
+                ),
+            ]
+        );
+        let queue = &outcome.failures[2];
+        assert_eq!(
+            queue.related[0].path,
+            "/sources/0/requests/0/routing/0/queue"
+        );
+        let rendered = serde_json::to_string(
+            &outcome
+                .failures
+                .iter()
+                .map(|failure| failure.message.clone() + &failure.suggested_action)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        for value in [
+            "northern-review",
+            "triage",
+            "supervisor-at-deadline",
+            "2026-09-14",
+        ] {
+            assert!(!rendered.contains(value), "{value} repeated in {rendered}");
+        }
+    }
+
+    #[test]
+    fn a_subject_field_outside_the_source_schema_is_refused_naming_the_declared_type() {
+        let directory =
+            regional_directory(&FRIDAY_REVIEW.replace("{region: north}", "{region: 2031}"));
+        let project = CaseworkProject::read("casework.yaml", REGIONAL_PROJECT.as_bytes()).unwrap();
+        let files = crate::offline::read_simulation_file(
+            &directory.path().join("simulations/friday-review.yaml"),
+        )
+        .unwrap();
+        let found =
+            simulation_input_diagnostics(directory.path(), &project, &files.simulations[0].decoded)
+                .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, "casework.simulation.field-mismatch");
+        assert_eq!(found[0].path, "/subject/fields/region");
+        assert_eq!(
+            found[0].message,
+            "the source description declares this field as string, and it is written as integer"
+        );
+        assert!(!found[0].message.contains("2031"));
+    }
+
+    #[test]
+    fn uc3_simulation_uses_authoritative_request_wide_timing() {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir_all(directory.path().join("sources")).unwrap();
-        fs::create_dir_all(directory.path().join("fixtures")).unwrap();
+        fs::create_dir_all(directory.path().join("simulations")).unwrap();
         fs::write(
             directory.path().join("sources/professional.json"),
             r#"{"apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1","kind":"BRegCaseworkSourceDescription","sourceId":"professional-register","authority":"none","request":{"requestEntity":"scope-correction","stages":[{"id":"review"}],"fields":[]}}"#,
         )
         .unwrap();
         fs::write(
-            directory.path().join("fixtures/resubmitted-review.yaml"),
-            r#"id: resubmitted-review
+            directory.path().join("simulations/resubmitted-review.yaml"),
+            r#"apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
+kind: CaseworkSimulation
+id: resubmitted-review
 source: professional-register
 subject:
   entity: scope-correction
-  id: request-0042
+  recordId: request-0042
   version: "2"
   activity: review
   stage: review
   reviewTiming:
     firstSubmittedAt: "2026-09-10T09:00:00+07:00"
     pausedMilliseconds: 86400000
-    pauseStartedAt: null
-    completedAt: null
 now: "2026-09-11T13:00:00+07:00"
 expect:
   queue: corrections
@@ -543,8 +944,9 @@ expect:
 "#,
         )
         .unwrap();
-        let policy = CaseworkProject::from_slice(
-            r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+        let outcome = run(
+            directory.path(),
+            br#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework: {id: response-budget, version: "1"}
 accessProfiles:
@@ -565,17 +967,11 @@ clocks:
     completeOn: reviewCompleted
     after: {elapsed: PT48H}
     pauseWhile: [awaitingApplicant]
-"#
-            .as_bytes(),
-        )
-        .unwrap();
-        policy.check().unwrap();
-        let report = simulate(
-            directory.path(),
-            &policy,
-            &directory.path().join("fixtures/resubmitted-review.yaml"),
-        )
-        .unwrap();
+"#,
+            "simulations/resubmitted-review.yaml",
+        );
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+        let report = outcome.report;
         assert_eq!(report["clock"]["remainingMilliseconds"], 158_400_000);
         assert_eq!(report["clock"]["dueAt"], "2026-09-13T02:00:00Z");
     }

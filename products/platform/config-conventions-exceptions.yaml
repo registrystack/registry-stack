@@ -3638,62 +3638,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-ENV-2
-  format: casework/fixture
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/casework-fixture/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/casework/fixture/v1alpha1; refuse the old value with config.retired-api-version
-- rule: CFG-SCHEMA-2
-  format: casework/fixture
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: casework/fixture
-  location: editors/configure.py#/SCHEMAS/casework
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-ENV-1
-  format: casework/holiday-set
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1'
-- rule: CFG-ENV-1
-  format: casework/holiday-set
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: CaseworkHolidaySet'
-- rule: CFG-SCHEMA-2
-  format: casework/holiday-set
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: casework/holiday-set
-  location: editors/configure.py#/SCHEMAS/casework
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: casework/holiday-set
-  location: crates/registry-caseworkctl/src/policy.rs#load_yaml()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: casework/init-report
   location: products/casework/contracts/cli/InitReport.schema.json#/properties
@@ -4255,41 +4199,6 @@ exceptions:
   class: stable-move
   reason: timeoutMilliseconds is a refused spelling of 'Time allowed for one outbound call or delivery attempt'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to attemptTimeoutMilliseconds'
-- rule: CFG-ENV-1
-  format: casework/simulation
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1'
-- rule: CFG-ENV-1
-  format: casework/simulation
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: CaseworkSimulation'
-- rule: CFG-SCHEMA-2
-  format: casework/simulation
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: casework/simulation
-  location: editors/configure.py#/SCHEMAS/casework
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: casework/simulation
-  location: crates/registry-caseworkctl/src/policy.rs#load_yaml()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: casework/simulation-report
   location: products/casework/contracts/cli/SimulationReport.schema.json#/properties

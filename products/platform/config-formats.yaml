@@ -1257,30 +1257,35 @@ formats:
   - id: casework/fixture
     product: casework
     title: Casework fixture
-    files: [fixtures/*.yaml]
+    files: [fixtures/*.yaml, fixtures/*.yml]
     syntax: yaml
     audience: authored
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+      apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
       kind: CaseworkFixture
       checkedBy:
-        file: crates/registry-caseworkctl/src/project.rs
-        symbol: validate_fixture
+        file: crates/registry-casework-core/src/fixture.rs
+        symbol: CASEWORK_FIXTURE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
       kind: CaseworkFixture
-    schema: none
+    schema:
+      path: products/casework/generated/fixture/fixture.schema.json
+      id: https://id.registrystack.org/schemas/casework/fixture/fixture.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-casework-core --features schema --example offline-schemas -- --output products/casework/generated
+      driftCheck: crates/registry-casework-core/src/schema.rs
     reader:
-      crate: registry-caseworkctl
-      file: crates/registry-caseworkctl/src/project.rs
-      function: load_yaml
-      type: untyped
-    check: caseworkctl test {project}
+      crate: registry-casework-core
+      file: crates/registry-casework-core/src/fixture.rs
+      function: read_offline_file
+      type: CaseworkFixture
+    check: caseworkctl check {project}
     example: products/casework/examples/payment-review/fixtures/payment-review.yaml
     conformance:
-      requiredText: /name
-      optionalText: /expect/queue
+      requiredText: /id
+      optionalText: none
       integer: none
       boolean: none
       operand: /review/display/amountMinor
@@ -1289,53 +1294,67 @@ formats:
   - id: casework/simulation
     product: casework
     title: Casework clock simulation
-    files: [simulations/*.yaml]
+    files: [simulations/*.yaml, simulations/*.yml]
     syntax: yaml
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
+      kind: CaseworkSimulation
+      checkedBy:
+        file: crates/registry-casework-core/src/fixture.rs
+        symbol: CASEWORK_SIMULATION_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
       kind: CaseworkSimulation
-    schema: none
+    schema:
+      path: products/casework/generated/simulation/simulation.schema.json
+      id: https://id.registrystack.org/schemas/casework/simulation/simulation.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-casework-core --features schema --example offline-schemas -- --output products/casework/generated
+      driftCheck: crates/registry-casework-core/src/schema.rs
     reader:
-      crate: registry-caseworkctl
-      file: crates/registry-caseworkctl/src/policy.rs
-      function: load_yaml
-      type: SimulationFixture
-    check: caseworkctl test {project}
+      crate: registry-casework-core
+      file: crates/registry-casework-core/src/fixture.rs
+      function: read_offline_file
+      type: CaseworkSimulation
+    check: caseworkctl check {project}
     example: products/casework/examples/multi-stage-routing-clocks/simulations/friday-review.yaml
     conformance:
-      requiredText: none
+      requiredText: /subject/recordId
       optionalText: none
-      integer: none
+      integer: /holidayRevisions/office-holidays
       boolean: none
     securityMembers: []
     restrictingMembers: []
   - id: casework/holiday-set
     product: casework
     title: Casework holiday set
-    files: [simulations/holiday-sets/*.yaml]
+    files: [simulations/holiday-sets/*.yaml, simulations/holiday-sets/*.yml]
     syntax: yaml
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1
+      kind: CaseworkHolidaySet
+      checkedBy:
+        file: crates/registry-casework-core/src/fixture.rs
+        symbol: CASEWORK_HOLIDAY_SET_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1
       kind: CaseworkHolidaySet
-    schema: none
+    schema:
+      path: products/casework/generated/holiday-set/holiday-set.schema.json
+      id: https://id.registrystack.org/schemas/casework/holiday-set/holiday-set.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-casework-core --features schema --example offline-schemas -- --output products/casework/generated
+      driftCheck: crates/registry-casework-core/src/schema.rs
     reader:
-      crate: registry-caseworkctl
-      file: crates/registry-caseworkctl/src/policy.rs
-      function: load_yaml
-      type: HolidaySetDocument
-    check: caseworkctl test {project}
+      crate: registry-casework-core
+      file: crates/registry-casework-core/src/fixture.rs
+      function: read_offline_file
+      type: CaseworkHolidaySet
+    check: caseworkctl check {project}
     example: products/casework/examples/multi-stage-routing-clocks/simulations/holiday-sets/office-holidays-7.yaml
     conformance:
       requiredText: /holidaySet

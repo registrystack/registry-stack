@@ -154,7 +154,7 @@ impl ScalarHook for AuthoredSubstitution {
 
 /// Whether `text` holds a `${NAME}`, `${NAME:-default}`, or `${NAME:?message}`
 /// expression, the forms runtime substitution reads.
-fn contains_environment_expression(text: &str) -> bool {
+pub(crate) fn contains_environment_expression(text: &str) -> bool {
     let mut rest = text;
     while let Some(start) = rest.find("${") {
         let after = &rest[start + 2..];

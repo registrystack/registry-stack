@@ -451,31 +451,35 @@ Read it when you want to confirm that what you wrote is what a team will experie
 
 `caseworkctl simulate` runs one case at one instant.
 The fixture below belongs to the [complete regional-review example](https://github.com/registrystack/registry-stack/tree/6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d/products/casework/examples/multi-stage-routing-clocks), which also supplies the matching policy, source descriptions, and holiday-set revision.
-A simulation fixture names the source, the subject with its activity, stage, and projected fields, the moment `now`, the holiday revisions in force, and what you expect:
+A simulation names the source, the subject with its activity, stage, and projected fields, the moment `now`, the holiday-set revisions in force, and what you expect:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1
+kind: CaseworkSimulation
 id: friday-review
 source: regional-register
-holidayRevisions:
-  office-holidays: 7
+holidayRevisions: {office-holidays: 7}
 subject:
   entity: regional-correction
-  id: request-0042
+  recordId: request-0042
   version: "1"
   activity: review
   stage: technical
-  fields:
-    region: north
+  fields: {region: north}
   stageEnteredAt: "2026-09-04T15:00:00+07:00"
 now: "2026-09-11T17:00:00+07:00"
 expect:
   queue: northern-review
-  ruleId: northern-requests
+  rule: northern-requests
   dueAt: "2026-09-14T17:00:00+07:00"
-  dueState: atRisk
+  dueState: at-risk
   eligibleReminders: [due-soon]
   eligibleSteps: []
 ```
+
+Each `holidayRevisions` entry pins one revision, read from `simulations/holiday-sets/<holiday-set>-<revision>.yaml` beside the simulation.
+Every member of `expect` other than `queue` is optional, and a member you leave out is not checked.
+Write `rule: none` to expect that no routing rule matched.
 
 If you have saved that complete example as `./regional-review`, run:
 
@@ -486,10 +490,25 @@ caseworkctl simulate ./regional-review \
 
 The report names the rule that matched and the sentence behind it, the calendar and holiday revision used, the due instant in UTC, the due state, and the reminders and steps eligible at that moment.
 That is how you prove a five-working-day deadline entered on a Friday lands where you meant it to, across a weekend and a holiday.
-A simulation fixture is not a test fixture: pass a `test` fixture to `simulate` and the command refuses and names the six members a simulation accepts, `id`, `source`, `holidayRevisions`, `subject`, `now`, and `expect`.
+An expectation that does not hold is reported at the `expect` member that states it.
 
-`caseworkctl test` runs the fixtures the project carries under `fixtures/`, which assert the queue and the available outcomes for a case without a source.
-It reports each fixture as passed or failed, so it belongs in the same loop as `check`.
+`caseworkctl test` runs every fixture under `fixtures/` and every simulation under `simulations/`.
+A fixture asserts the queue, the available outcomes, the target, and the application mode for one review or source request:
+
+```yaml
+apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1
+kind: CaseworkFixture
+id: professional-review-offline
+request:
+  source: professional-licences
+  entity: scope-correction
+expect:
+  queue: corrections
+  target: {elapsedMinutes: 2880}
+```
+
+It reports each file as passed, or refuses at the expectation that failed, so it belongs in the same loop as `check`.
+`check` reads the same files and refuses a reference the project does not declare, or a review display value of a type its review kind's display schema does not admit.
 
 ```sh
 caseworkctl test ./decisions

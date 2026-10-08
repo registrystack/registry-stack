@@ -1752,7 +1752,11 @@ class Lint:
             if objects and tags:
                 if "type" not in tags and not ok_envelope(root, objects, tags):
                     return f"a union tagged by {', '.join(sorted(tags))}, not type"
-            sentinel_units = [parts for parts in units if unit_values(parts) == {"unrestricted"}]
+            # `unrestricted` (CFG-EMPTY-2) is a sentinel beside any mapping;
+            # `none` (CFG-EMPTY-6) is one beside an untagged single-key
+            # mapping, such as `target: none` or `target: {elapsedMinutes: N}`.
+            sentinels = [{"unrestricted"}] + ([] if tags else [{"none"}])
+            sentinel_units = [parts for parts in units if unit_values(parts) in sentinels]
             if units and objects and (tags or single) and len(sentinel_units) < len(units):
                 return "a union mixing unit variants with mapping variants"
             if len(objects) >= 2 and not tags and not single:
