@@ -19,7 +19,11 @@ else
   export RUSTC_WRAPPER=
   export CARGO_INCREMENTAL=0
   cargo build --manifest-path "$repository_root/Cargo.toml" --locked -p registry-breg --features registry-breg/runtime -p registry-bregctl --bins >/dev/null
-  breg="$repository_root/target/debug/breg"; bregctl="$repository_root/target/debug/bregctl"
+  cargo_target_dir="${CARGO_TARGET_DIR:-$repository_root/target}"
+  if [[ "$cargo_target_dir" != /* ]]; then
+    cargo_target_dir="$repository_root/$cargo_target_dir"
+  fi
+  breg="$cargo_target_dir/debug/breg"; bregctl="$cargo_target_dir/debug/bregctl"
 fi
 umask 077
 mkdir -m 700 "$run_dir" "$run_dir/headers"
