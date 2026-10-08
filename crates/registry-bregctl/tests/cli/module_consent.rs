@@ -148,18 +148,57 @@ fn registry_source(project: &Path) -> String {
     fs::read_to_string(project.join("registry.yaml")).expect("registry.yaml reads")
 }
 
+/// Each warning's code and the place it names, read back out of the source
+/// file its pointer addresses: every list item is named by the first of its
+/// `id`, `action`, or `entity` members.
 fn finding_codes(report: &Value) -> Vec<(String, String)> {
-    report["findings"]
+    report["diagnostics"]
         .as_array()
-        .expect("findings array")
+        .expect("diagnostics array")
         .iter()
+        .filter(|finding| finding["severity"] == "warning")
         .map(|finding| {
+            let file = finding["source"]["file"].as_str().expect("source file");
+            let bytes = fs::read(file).expect("the reported source reads");
+            let document = registry_platform_yaml::Reader::new(file)
+                .scan(&bytes)
+                .expect("the reported source scans")
+                .expect("the reported source is not empty")
+                .to_json_value();
+            let pointer = finding["path"].as_str().expect("path");
             (
                 finding["code"].as_str().expect("code").to_owned(),
-                finding["path"].as_str().expect("path").to_owned(),
+                named_path(&document, pointer),
             )
         })
         .collect()
+}
+
+fn named_path(document: &Value, pointer: &str) -> String {
+    let mut named = String::new();
+    let mut node = document;
+    for segment in pointer.split('/').skip(1) {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
+        match node {
+            Value::Array(items) => {
+                let item = &items[segment.parse::<usize>().expect("an index")];
+                let (key, value) = ["id", "action", "entity"]
+                    .into_iter()
+                    .find_map(|key| item[key].as_str().map(|value| (key, value)))
+                    .expect("a list item names itself");
+                named.push_str(&format!("[{key}={value}]"));
+                node = item;
+            }
+            _ => {
+                if !named.is_empty() {
+                    named.push('.');
+                }
+                named.push_str(&segment);
+                node = &node[segment.as_str()];
+            }
+        }
+    }
+    named
 }
 
 /// The registry-wide findings a steward-issued consent action and the steward
@@ -188,7 +227,7 @@ fn expected_steward_findings(subject: &str) -> Vec<(String, String)> {
             expected.push((
                 "access.target.unrestricted_rows".to_owned(),
                 format!(
-                    "actions[id={action}].permissions[profile={profile}].targets[entity={target}].rowBoundaries"
+                    "accessProfiles[id={profile}].permissions[action={action}].targets[entity={target}].rowBoundaries"
                 ),
             ));
         }
@@ -352,7 +391,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     assert!(
         codes.iter().all(|(_, path)| ["give", "refuse", "withdraw"]
             .iter()
-            .all(|verb| !path.contains(&format!("actions[id={verb}-")))),
+            .all(|verb| !path.contains(&format!("permissions[action={verb}-")))),
         "{codes:?}"
     );
     let mut expected = expected_steward_findings("person");

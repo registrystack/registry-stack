@@ -463,6 +463,72 @@ pub fn parse_runtime_config_with_env(
     RuntimeConfig::from_raw(raw)
 }
 
+/// What an offline check of one runtime file found (CFG-CHECK-1).
+#[derive(Debug)]
+pub struct RuntimeConfigCheck {
+    /// Every finding, each naming the file as `path` was given to
+    /// [`check_runtime_config`].
+    pub diagnostics: Vec<Diagnostic>,
+    /// The file could not be read at all, as opposed to read and refused.
+    pub unavailable: bool,
+}
+
+/// Check the runtime file at the absolute `path` as `breg` reads it at
+/// startup, with no package, database, network, or secret material
+/// (CFG-CHECK-1).
+///
+/// With `substitute` set, `${NAME}` expressions are filled from the process
+/// environment and every value is checked. Without it, each expression is
+/// checked by syntax and position only, and a runtime rule about a block that
+/// holds one is skipped, because it needs the substituted text. The runtime's
+/// own rules stop at their first refusal, as they do at startup. The package
+/// root and the file secret provider root are not looked for: a runtime file
+/// is checked before the deployment it describes exists.
+#[must_use]
+pub fn check_runtime_config(path: &Path, substitute: bool) -> RuntimeConfigCheck {
+    let mut check = runtime_config_loader().check_offline::<RawRuntimeConfig>(
+        path,
+        substitute,
+        runtime_stand_in,
+    );
+    let mut diagnostics = std::mem::take(&mut check.diagnostics);
+    if let Some(loaded) = check.loaded.take() {
+        if let Err(error) = RuntimeConfig::from_raw(loaded.config) {
+            for refusal in error.diagnostics(None) {
+                if !check.defers_within(&refusal.path) {
+                    diagnostics.push(check.error_at(
+                        RUNTIME_CONFIG_KIND,
+                        &refusal.code,
+                        &refusal.path,
+                        refusal.message,
+                        refusal.suggested_action,
+                    ));
+                }
+            }
+        }
+    }
+    RuntimeConfigCheck {
+        diagnostics,
+        unavailable: check.unavailable,
+    }
+}
+
+/// A value that satisfies the member at `pointer`, so a deferred expression
+/// never decides whether its neighbours decode.
+fn runtime_stand_in(pointer: &str) -> &'static str {
+    match pointer {
+        "/listener/bind" => "127.0.0.1:8080",
+        "/metricsListener/bind" => "127.0.0.1:9100",
+        "/listener/publicOrigin" => "https://registry.invalid",
+        "/authentication/oidc/issuer" => "https://issuer.invalid",
+        "/package/root" => "/",
+        "/package/expectedDigest" => {
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+        _ => registry_platform_config::DEFAULT_STAND_IN,
+    }
+}
+
 /// The shared runtime configuration loader under BReg's envelope. BReg reads
 /// the file through it: the loader holds the path, symbolic link, regular
 /// file, and bounded read checks, and the shared reader decodes the typed

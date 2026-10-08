@@ -530,7 +530,7 @@ fn check_reports_the_registry_revision_of_a_project_and_of_a_verified_package() 
     assert_ne!(other["registryRevision"], registry_revision, "{other}");
 
     // A package whose bytes no longer match its sums is refused, naming no
-    // packaged value or path.
+    // packaged value; the source is the package path as it was given.
     fs::write(
         package.package.join("source/modules/core/module.yaml"),
         VALUE_CANARY,
@@ -547,18 +547,18 @@ fn check_reports_the_registry_revision_of_a_project_and_of_a_verified_package() 
     assert!(tampered.stderr.is_empty());
     let rendered = String::from_utf8_lossy(&tampered.stdout);
     assert!(!rendered.contains(VALUE_CANARY));
-    assert!(!rendered.contains(path(&package.package)));
+    assert!(!rendered.contains("source/modules/core/module.yaml"));
     let refused = json_stdout(&tampered);
     assert_eq!(refused["command"], "check");
-    assert_eq!(
-        refused["diagnostics"][0]["code"],
-        "check.package.integrity_refused"
-    );
-    assert_tool_diagnostic(
-        &refused["diagnostics"][0],
-        "verified_package",
-        "verify_package_integrity",
-    );
+    let diagnostic = &refused["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "check.package.integrity_refused");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["path"], "");
+    assert!(diagnostic.get("artifact").is_none(), "{diagnostic}");
+    assert_eq!(diagnostic["source"]["file"], path(&package.package));
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .is_some_and(|action| action.starts_with("Rebuild the package with bregctl package")));
 
     // A project and a package together, or neither, is a usage error.
     let both = run(&["check", path(&project), "--package", path(&changed.package)]);

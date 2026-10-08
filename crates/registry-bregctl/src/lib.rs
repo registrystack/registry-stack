@@ -42,6 +42,7 @@ use serde_json::{json, Value};
 mod action_handler_test;
 mod active_registry;
 mod apply_lifecycle;
+mod check;
 mod consent_module;
 mod data_lifecycle;
 mod dev;
@@ -364,15 +365,21 @@ struct CheckArgs {
     project: Option<PathBuf>,
 
     /// Closed package to verify against its sums, reporting the registry revision it rederives.
-    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["production", "deny_findings"])]
+    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["production", "runtime_config"])]
     package: Option<PathBuf>,
 
     /// Enforce production-only package closure requirements.
     #[arg(long)]
     production: bool,
-    /// Exit unsuccessfully when any authoring finding needs review, including access warnings.
+    /// Exit unsuccessfully when the check reports any warning, including access warnings.
     #[arg(long)]
-    deny_findings: bool,
+    deny_warnings: bool,
+    /// Runtime configuration file to check offline beside the project; no package, database, network, or secret is read.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: Option<PathBuf>,
+    /// Resolve the runtime configuration's ${VAR} substitutions from the environment, and report an unset variable.
+    #[arg(long, requires = "runtime_config")]
+    environment: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1635,7 +1642,6 @@ enum SuggestedAction {
     PrepareFieldEncryptionEraseRequest,
     CorrectPlannerTestInput,
     CorrectActionHandler,
-    RunSchemaTest,
 }
 
 #[derive(Serialize)]
@@ -2264,22 +2270,17 @@ where
             }
             (Some(_), Some(_)) => unreachable!("clap refuses --from together with --template"),
         },
-        Command::Check(args) => match (&args.project, &args.package) {
-            (Some(project), None) => check(project, profile(args.production)),
-            (None, Some(package)) => check_package(package),
-            _ => unreachable!("clap enforces exactly one of a project and a package"),
+        Command::Check(args) => {
+            let request = check::Request {
+                project: args.project.as_deref(),
+                package: args.package.as_deref(),
+                production: args.production,
+                deny_warnings: args.deny_warnings,
+                runtime_config: args.runtime_config.as_deref(),
+                environment: args.environment,
+            };
+            return check::run(&request, format, stdout, stderr);
         }
-        .and_then(|report| {
-            if args.deny_findings && !report.findings.is_empty() {
-                Err(FailureReport {
-                    ok: false,
-                    command: "check",
-                    diagnostics: report.findings,
-                })
-            } else {
-                Ok(report)
-            }
-        }),
         Command::Module(args) => match args.command {
             ModuleCommand::Add(args) => match args.module {
                 ModuleAddCommand::Consent(args) => {
@@ -6915,69 +6916,6 @@ fn init_next_steps(destination: &Path) -> Vec<String> {
             destination.join("registry.yaml").display()
         ),
     ]
-}
-
-fn check(project_path: &Path, profile: ProfileArg) -> Result<SuccessReport, FailureReport> {
-    let compiled = compile(project_path, profile, "check")?;
-    let mut findings = compiler_findings(&compiled);
-    findings.extend(compiled.entities().values().flat_map(|entity| {
-        entity.fields.values().filter_map(move |field| {
-            field.pattern.as_ref().map(|_| ToolDiagnostic {
-                severity: DiagnosticSeverity::Finding,
-                code: "field.pattern.unverified_offline".to_owned(),
-                artifact: DiagnosticArtifact::RegistryProject,
-                path: format!("entities[{}].fields[{}].pattern", entity.id, field.id),
-                message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
-                suggested_action: SuggestedAction::RunSchemaTest,
-            })
-        })
-    }));
-    Ok(SuccessReport {
-        ok: true,
-        command: "check",
-        profile,
-        revision: Some(compiled.revision().to_owned()),
-        registry_revision: Some(compiled.revision().to_owned()),
-        package_digest: None,
-        findings,
-        artifacts: Vec::new(),
-        explanation: None,
-        next_steps: Vec::new(),
-    })
-}
-
-/// Verify a closed package against its sums and rederive its registry
-/// revision, with no database, runtime configuration, or test receipt.
-fn check_package(package_root: &Path) -> Result<SuccessReport, FailureReport> {
-    let inspected = inspect_package_integrity(package_root).map_err(|error| {
-        let (suffix, action) = package_refusal(&error);
-        FailureReport {
-            ok: false,
-            command: "check",
-            diagnostics: vec![tool_diagnostic(
-                diagnostic(
-                    &format!("check.package.{suffix}"),
-                    "package",
-                    "the package was refused",
-                ),
-                DiagnosticArtifact::VerifiedPackage,
-                action,
-            )],
-        }
-    })?;
-    let revision = inspected.registry().revision().to_owned();
-    Ok(SuccessReport {
-        ok: true,
-        command: "check",
-        profile: ProfileArg::Production,
-        revision: Some(revision.clone()),
-        registry_revision: Some(revision),
-        package_digest: Some(inspected.package_digest().to_owned()),
-        findings: Vec::new(),
-        artifacts: Vec::new(),
-        explanation: None,
-        next_steps: Vec::new(),
-    })
 }
 
 fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, FailureReport> {

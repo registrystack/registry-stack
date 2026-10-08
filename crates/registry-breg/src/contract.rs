@@ -3714,9 +3714,10 @@ pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// A module's `module.yaml`. A module carries no envelope: its project's
-/// module lock names it by identifier, version, and digest.
+/// module lock names it by identifier, version, and digest. Its diagnostics
+/// name the format's registered kind as their `artifact`.
 pub const MODULE_FORMAT: FormatSpec<'static> = FormatSpec {
-    kind: "RegistryModule",
+    kind: "BRegModule",
     envelope: EnvelopeRule::Exempt {
         reason: "a module is named by its project's module lock, which records its \
                  identifier, version, and digest",

@@ -38,6 +38,7 @@ p256.workspace = true
 rcgen.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
+registry-platform-yaml.workspace = true
 registry-platform-hooks.workspace = true
 registry-platform-httputil.workspace = true
 registry-thunderid-tooling.workspace = true

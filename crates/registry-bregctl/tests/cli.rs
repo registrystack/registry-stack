@@ -51,15 +51,29 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
     let output = bregctl(&["--format", "json", "check", path(project.path())]);
     assert!(output.status.success(), "{output:?}");
     let report = json_stdout(&output);
-    let finding = report["findings"]
+    let finding = report["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .find(|finding| finding["code"] == "field.pattern.unverified_offline")
         .expect("offline success must identify native syntax as unverified");
-    assert_eq!(finding["path"], "entities[record].fields[code].pattern");
-    assert_tool_finding(finding, "registry_project", "run_schema_test");
+    assert_eq!(finding["severity"], "warning");
+    assert_check_diagnostic(finding, Some("RegistryProject"));
+    let pointer = finding["path"].as_str().unwrap();
+    assert!(
+        pointer.starts_with("/entities/") && pointer.ends_with("/pattern"),
+        "{finding}"
+    );
+    assert_eq!(
+        finding["source"]["file"],
+        project.path().join("registry.yaml").display().to_string()
+    );
+    assert!(finding["source"]["line"].as_u64().is_some(), "{finding}");
     assert!(finding["message"]
+        .as_str()
+        .unwrap()
+        .contains("bregctl test"));
+    assert!(finding["suggestedAction"]
         .as_str()
         .unwrap()
         .contains("bregctl test"));
@@ -70,18 +84,18 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         "json",
         "check",
         path(project.path()),
-        "--deny-findings",
+        "--deny-warnings",
     ]);
     assert_eq!(denied.status.code(), Some(1));
     let denied_report = json_stdout(&denied);
+    assert_eq!(denied_report["ok"], false);
     let denied_finding = denied_report["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .find(|diagnostic| diagnostic["code"] == "field.pattern.unverified_offline")
-        .expect("denied finding remains in the refusal diagnostics");
-    assert_eq!(denied_finding["severity"], "finding");
-    assert_tool_diagnostic(denied_finding, "registry_project", "run_schema_test");
+        .expect("denied warning remains in the refusal diagnostics");
+    assert_eq!(denied_finding, finding);
 }
 
 #[test]
@@ -212,16 +226,16 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
     let report = json_stdout(&output);
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "source.planner_asset.missing");
+    assert_eq!(diagnostic["path"], "/actions/0/handler/script");
     assert_eq!(
-        diagnostic["path"],
-        "actions[register-person].handler.script"
+        diagnostic["source"]["file"],
+        project.path().join("registry.yaml").display().to_string()
     );
     assert!(diagnostic["message"]
         .as_str()
         .unwrap()
         .contains("scripts/register-person.rhai"));
-    assert_tool_diagnostic(diagnostic, "registry_project", "correct_authoring_source");
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(path(project.path())));
+    assert_check_diagnostic(diagnostic, Some("RegistryProject"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("fn handle"));
 }
 
@@ -231,7 +245,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "../../../products/breg/examples/access-review/registry.yaml"
     ));
     let path = project.path().to_str().unwrap();
-    let check = bregctl(&["--format", "json", "check", path, "--deny-findings"]);
+    let check = bregctl(&["--format", "json", "check", path, "--deny-warnings"]);
     assert!(check.status.success(), "{check:?}");
     let human = bregctl(&["explain", "access", path]);
     assert!(human.status.success());
@@ -322,7 +336,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
     )
     .unwrap();
     assert!(bregctl(&["check", path]).status.success());
-    assert!(!bregctl(&["check", path, "--deny-findings"])
+    assert!(!bregctl(&["check", path, "--deny-warnings"])
         .status
         .success());
 }
@@ -854,25 +868,46 @@ fn assert_tool_diagnostic(diagnostic: &Value, artifact: &str, suggested_action: 
     assert_eq!(diagnostic["suggestedAction"], suggested_action);
 }
 
-fn assert_tool_finding(finding: &Value, artifact: &str, suggested_action: &str) {
-    let keys = finding
-        .as_object()
-        .expect("finding is an object")
-        .keys()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        keys,
-        std::collections::BTreeSet::from([
-            "artifact",
-            "code",
-            "message",
-            "path",
-            "suggestedAction",
-        ])
+/// A `bregctl check` diagnostic in the shared shape (CFG-DIAG-1): a JSON
+/// pointer path, an `error` or `warning` severity, the document's kind as
+/// the artifact, and a sentence the reader can act on.
+fn assert_check_diagnostic(diagnostic: &Value, artifact: Option<&str>) {
+    let object = diagnostic.as_object().expect("diagnostic is an object");
+    for key in object.keys() {
+        assert!(
+            [
+                "severity",
+                "code",
+                "artifact",
+                "path",
+                "message",
+                "suggestedAction",
+                "source",
+                "related",
+            ]
+            .contains(&key.as_str()),
+            "{key} in {diagnostic}"
+        );
+    }
+    assert!(
+        matches!(diagnostic["severity"].as_str(), Some("error" | "warning")),
+        "{diagnostic}"
     );
-    assert_eq!(finding["artifact"], artifact);
-    assert_eq!(finding["suggestedAction"], suggested_action);
+    let pointer = diagnostic["path"].as_str().expect("path is a string");
+    assert!(
+        pointer.is_empty() || pointer.starts_with('/'),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.ends_with('.')),
+        "{diagnostic}"
+    );
+    match artifact {
+        Some(artifact) => assert_eq!(diagnostic["artifact"], artifact),
+        None => assert!(diagnostic.get("artifact").is_none(), "{diagnostic}"),
+    }
 }
 
 #[test]
@@ -891,13 +926,15 @@ fn authored_project_findings_use_the_tool_finding_schema() {
     assert_eq!(report["ok"], true);
     assert_eq!(report["command"], "check");
     assert_eq!(report["profile"], "authoring");
-    assert!(report["findings"]
+    let diagnostics = report["diagnostics"]
         .as_array()
-        .expect("findings is an array")
+        .expect("diagnostics is an array");
+    assert!(diagnostics
         .iter()
         .any(|finding| finding["code"] == "package.identity.missing"));
-    for finding in report["findings"].as_array().expect("findings is an array") {
-        assert_tool_finding(finding, "registry_project", "review_authoring_finding");
+    for finding in diagnostics {
+        assert_eq!(finding["severity"], "warning", "{finding}");
+        assert_check_diagnostic(finding, Some("RegistryProject"));
     }
 }
 
@@ -927,7 +964,7 @@ fn production_profile_refuses_missing_package_closure() {
         .as_array()
         .expect("diagnostics is an array")
     {
-        assert_tool_diagnostic(diagnostic, "registry_project", "correct_authoring_source");
+        assert_check_diagnostic(diagnostic, Some("RegistryProject"));
     }
 }
 
@@ -1101,13 +1138,13 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(check.status.success(), "{check:?}");
     let check_report = json_stdout(&check);
     assert_eq!(check_report["ok"], true);
-    assert_eq!(
-        check_report["findings"]
-            .as_array()
-            .expect("findings is an array")
-            .len(),
-        2
-    );
+    let warnings = check_report["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    assert_eq!(warnings.len(), 2, "{check_report}");
+    assert!(warnings
+        .iter()
+        .all(|warning| warning["severity"] == "warning"));
 
     let locked = bregctl(&[
         "--format",
@@ -1472,12 +1509,21 @@ fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
         );
         let report = json_stdout(&checked);
         assert_eq!(report["command"], "check");
-        assert_eq!(report["diagnostics"][0]["code"], case);
-        assert_eq!(
-            report["diagnostics"][0],
-            json_stdout(&lock_checked)["diagnostics"][0],
-            "{case}"
-        );
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], case);
+        // A missing module is a problem of the project's lock; a renamed one
+        // is a problem of the module file.
+        let artifact = if case == "module.lock.source_missing" {
+            "RegistryProject"
+        } else {
+            "BRegModule"
+        };
+        assert_check_diagnostic(diagnostic, Some(artifact));
+        // The check places the lock check's refusal in the source; the code
+        // and the sentence are the lock check's own.
+        let lock_diagnostic = &json_stdout(&lock_checked)["diagnostics"][0];
+        assert_eq!(diagnostic["code"], lock_diagnostic["code"], "{case}");
+        assert_eq!(diagnostic["message"], lock_diagnostic["message"], "{case}");
     }
 }
 
@@ -1521,28 +1567,240 @@ modules:
 }
 
 #[test]
-fn deny_findings_refuses_on_the_findings_that_refused_it() {
+fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
     let project = TestProject::asset_fixture();
     let destination = project.path().join("initialized");
     assert!(bregctl(&["init", path(&destination)]).status.success());
 
-    let refused = bregctl(&["check", path(&destination), "--deny-findings"]);
+    let passed = bregctl(&["check", path(&destination)]);
+    assert_eq!(passed.status.code(), Some(0), "{passed:?}");
+    let passed = String::from_utf8(passed.stdout).expect("report is UTF-8");
+    assert!(
+        passed.starts_with("Authoring check passed; registry revision sha256:"),
+        "{passed}"
+    );
+
+    let refused = bregctl(&["check", path(&destination), "--deny-warnings"]);
 
     assert_eq!(refused.status.code(), Some(1), "{refused:?}");
     assert!(refused.stdout.is_empty(), "{refused:?}");
     let rendered = String::from_utf8(refused.stderr).expect("refusal is UTF-8");
     assert!(
-        rendered.starts_with("bregctl check refused.\n"),
+        rendered
+            .starts_with("bregctl check refused the project: --deny-warnings refuses a warning.\n"),
+        "a refusal names what refused it: {rendered}"
+    );
+    let registry = destination.join("registry.yaml");
+    assert!(
+        rendered.contains(&format!(
+            "\nwarning[access.profile.unrestricted_collection] {}:",
+            registry.display()
+        )),
         "{rendered}"
     );
     assert!(
-        rendered.ends_with("\nrefused on 2 findings.\n"),
-        "a refusal names what refused it: {rendered}"
+        rendered.ends_with("\n0 errors, 2 warnings in 2 files\n"),
+        "{rendered}"
+    );
+    // The warnings are the ones the passing check reported, in its words.
+    let warnings = |text: &str| text.lines().skip(1).map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(warnings(&rendered), warnings(&passed));
+}
+
+/// The committed minimal example: a project and the runtime file that runs it.
+fn minimal_example() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/minimal")
+        .canonicalize()
+        .expect("the minimal example exists")
+}
+
+/// The minimal example's runtime file with `edit` applied, written into a
+/// scratch directory so the check reads it from a path the test chose.
+fn edited_runtime_config(scratch: &TestProject, edit: impl Fn(&str) -> String) -> PathBuf {
+    let source = fs::read_to_string(minimal_example().join("runtime.yaml"))
+        .expect("the minimal runtime file reads");
+    let edited = edit(&source);
+    assert_ne!(edited, source, "the edit changes the runtime file");
+    let runtime = scratch.path().join("runtime.yaml");
+    fs::write(&runtime, edited).expect("the edited runtime file writes");
+    runtime
+}
+
+#[test]
+fn check_reads_a_runtime_configuration_beside_the_project() {
+    let example = minimal_example();
+    let runtime = example.join("runtime.yaml");
+
+    let human = bregctl(&["check", path(&example), "--runtime-config", path(&runtime)]);
+    assert_eq!(human.status.code(), Some(0), "{human:?}");
+    let rendered = String::from_utf8(human.stdout).expect("report is UTF-8");
+    assert!(
+        rendered.starts_with("Authoring check passed; registry revision sha256:"),
+        "{rendered}"
+    );
+    // The project's two files and the runtime file.
+    assert!(
+        rendered.ends_with("\n0 errors, 0 warnings in 3 files\n"),
+        "{rendered}"
+    );
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+        "--deny-warnings",
+    ]);
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["diagnostics"], json!([]));
+}
+
+#[test]
+fn check_refuses_a_runtime_configuration_in_the_reader_words() {
+    let scratch = TestProject::asset_fixture();
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace("listener:\n", "unexpectedSetting: true\nlistener:\n")
+    });
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], false);
+    assert!(report.get("registryRevision").is_none(), "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["code"], "config.unknown-key");
+    assert_eq!(diagnostic["path"], "/unexpectedSetting");
+    assert_eq!(diagnostic["source"]["file"], path(&runtime));
+    assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic}");
+
+    let human = bregctl(&["check", path(&example), "--runtime-config", path(&runtime)]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(human.stdout.is_empty(), "{human:?}");
+    let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with(&format!(
+            "bregctl check refused the project or its runtime configuration.\n\
+             error[config.unknown-key] {}:",
+            runtime.display()
+        )),
+        "{rendered}"
     );
     assert!(
-        !rendered.contains("0 errors"),
-        "a refusal never closes on a count of no errors: {rendered}"
+        rendered.ends_with("\n1 error, 0 warnings in 3 files\n"),
+        "{rendered}"
     );
+}
+
+#[test]
+fn check_cannot_read_a_missing_runtime_configuration() {
+    let scratch = TestProject::asset_fixture();
+    let missing = scratch.path().join("missing-runtime.yaml");
+    let example = minimal_example();
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&example),
+        "--runtime-config",
+        path(&missing),
+    ]);
+    assert_eq!(json.status.code(), Some(3), "{json:?}");
+    let report = json_stdout(&json);
+    assert_eq!(report["ok"], false);
+    let diagnostic = &report["diagnostics"][0];
+    // A file that cannot be read has no document kind to name.
+    assert_check_diagnostic(diagnostic, None);
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["source"]["file"], path(&missing));
+
+    let human = bregctl(&["check", path(&example), "--runtime-config", path(&missing)]);
+    assert_eq!(human.status.code(), Some(3), "{human:?}");
+    let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with(
+            "bregctl check could not read the project or its runtime configuration.\n"
+        ),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn check_substitutes_the_environment_only_when_asked_and_never_repeats_a_value() {
+    const CANARY: &str = "runtime-check-value-canary";
+    let scratch = TestProject::asset_fixture();
+    let runtime = edited_runtime_config(&scratch, |source| {
+        source.replace("bind: 127.0.0.1:8080", "bind: ${BREG_CHECK_TEST_BIND}")
+    });
+    let example = minimal_example();
+    let check = |environment: bool, bind: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+        command.args([
+            "--format",
+            "json",
+            "check",
+            path(&example),
+            "--runtime-config",
+            path(&runtime),
+        ]);
+        if environment {
+            command.arg("--environment");
+        }
+        command.env_remove("BREG_CHECK_TEST_BIND");
+        if let Some(bind) = bind {
+            command.env("BREG_CHECK_TEST_BIND", bind);
+        }
+        command.output().expect("bregctl starts")
+    };
+
+    // Without --environment, the expression is checked by its syntax and
+    // position only, so an unset variable is not a finding.
+    let deferred = check(false, None);
+    assert_eq!(deferred.status.code(), Some(0), "{deferred:?}");
+
+    let unset = check(true, None);
+    assert_eq!(unset.status.code(), Some(1), "{unset:?}");
+    let diagnostic = &json_stdout(&unset)["diagnostics"][0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["path"], "/listener/bind");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("BREG_CHECK_TEST_BIND")),
+        "{diagnostic}"
+    );
+
+    let invalid = check(true, Some(CANARY));
+    assert_eq!(invalid.status.code(), Some(1), "{invalid:?}");
+    let diagnostic = &json_stdout(&invalid)["diagnostics"][0];
+    assert_check_diagnostic(diagnostic, Some("BRegRuntimeConfig"));
+    assert_eq!(diagnostic["path"], "/listener/bind");
+    for stream in [&invalid.stdout, &invalid.stderr] {
+        assert!(
+            !String::from_utf8_lossy(stream).contains(CANARY),
+            "a diagnostic never repeats a substituted value: {invalid:?}"
+        );
+    }
+
+    let filled = check(true, Some("127.0.0.1:9"));
+    assert_eq!(filled.status.code(), Some(0), "{filled:?}");
 }
 
 /// One numbered step, read back out of the rendering: the ordinal line and the
@@ -3280,12 +3538,17 @@ entities:
     let report = json_stdout(&check);
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "derived.sql.invalid");
+    assert_eq!(diagnostic["path"], "/entities/0/derived/0/sql");
     assert_eq!(
-        diagnostic["path"],
-        "modules/core/module.yaml:entities[record].derived[summary].sql"
+        diagnostic["source"]["file"],
+        project
+            .path()
+            .join("modules/core/module.yaml")
+            .display()
+            .to_string()
     );
-    assert_eq!(diagnostic["artifact"], "registry_project");
-    assert_eq!(diagnostic["suggestedAction"], "correct_authoring_source");
+    assert!(diagnostic["source"]["line"].as_u64().is_some());
+    assert_check_diagnostic(diagnostic, Some("BRegModule"));
 }
 
 #[test]
@@ -4256,11 +4519,11 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     let check_project = bregctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(check_project.status.code(), Some(1), "{check_project:?}");
     let project_report = json_stdout(&check_project);
+    assert_eq!(project_report["diagnostics"][0]["code"], "yaml.too-large");
     assert_eq!(
-        project_report["diagnostics"][0]["code"],
-        "source.file.bounds"
+        project_report["diagnostics"][0]["source"]["file"],
+        project.path().join("registry.yaml").display().to_string()
     );
-    assert_eq!(project_report["diagnostics"][0]["path"], "registry.yaml");
     let test_project = test_candidate_command(
         &project,
         &project.path().join("unused-runtime.yaml"),
@@ -4285,13 +4548,14 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     let check_module = bregctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(check_module.status.code(), Some(1), "{check_module:?}");
     let module_report = json_stdout(&check_module);
+    assert_eq!(module_report["diagnostics"][0]["code"], "yaml.too-large");
     assert_eq!(
-        module_report["diagnostics"][0]["code"],
-        "source.file.bounds"
-    );
-    assert_eq!(
-        module_report["diagnostics"][0]["path"],
-        "modules/core/module.yaml"
+        module_report["diagnostics"][0]["source"]["file"],
+        project
+            .path()
+            .join("modules/core/module.yaml")
+            .display()
+            .to_string()
     );
     let test_module = test_candidate_command(
         &project,
@@ -5826,11 +6090,11 @@ fn unknown_source_is_refused_without_echoing_source_values() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains(SOURCE_VALUE_CANARY));
     let report = json_stdout(&output);
     assert_eq!(report["diagnostics"][0]["code"], "config.unknown-key");
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "registry_project",
-        "correct_authoring_source",
-    );
+    assert_eq!(report["diagnostics"][0]["path"], "/unexpectedSetting");
+    assert!(report["diagnostics"][0]["source"]["line"]
+        .as_u64()
+        .is_some());
+    assert_check_diagnostic(&report["diagnostics"][0], Some("RegistryProject"));
 }
 
 #[test]
