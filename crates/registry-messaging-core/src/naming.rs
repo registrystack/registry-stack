@@ -4,6 +4,12 @@
 
 /// apiVersion of the operator runtime configuration document.
 pub const MESSAGING_RUNTIME_API_VERSION: &str =
+    "id.registrystack.org/formats/messaging/runtime/v1alpha1";
+
+/// The runtime configuration apiVersion before the format moved under
+/// `id.registrystack.org/formats/`. The runtime refuses it and names
+/// [`MESSAGING_RUNTIME_API_VERSION`] as its replacement.
+pub const RETIRED_MESSAGING_RUNTIME_API_VERSION: &str =
     "registry.registrystack.org/messaging-runtime/v1alpha1";
 
 /// Kind of the operator runtime configuration document.
@@ -82,6 +88,10 @@ mod tests {
     fn fixed_names_are_pinned() {
         assert_eq!(
             MESSAGING_RUNTIME_API_VERSION,
+            "id.registrystack.org/formats/messaging/runtime/v1alpha1"
+        );
+        assert_eq!(
+            RETIRED_MESSAGING_RUNTIME_API_VERSION,
             "registry.registrystack.org/messaging-runtime/v1alpha1"
         );
         assert_eq!(MESSAGING_RUNTIME_KIND, "MessagingRuntimeConfig");

@@ -2387,7 +2387,7 @@ formats:
     audience: operator
     stability: experimental
     current:
-      apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1
       kind: MessagingRuntimeConfig
       checkedBy:
         file: crates/registry-messaging-core/src/naming.rs
@@ -2406,12 +2406,12 @@ formats:
       file: crates/registry-messaging/src/config.rs
       function: load
       type: RuntimeConfig
-    check: messagingctl check --runtime-config {file}
+    check: messagingctl check --project {project} --runtime-config {file}
     example: products/messaging/examples/starter/runtime.example.yaml
     conformance:
       requiredText: /authentication/oidc/audience
       optionalText: /audit/path
-      integer: /retention/recordDays
+      integer: /retention/recordRetentionDays
       boolean: none
       set: /authentication/oidc/allowedClients
     securityMembers:

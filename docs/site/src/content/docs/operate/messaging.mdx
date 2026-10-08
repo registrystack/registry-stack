@@ -141,14 +141,15 @@ The runtime file binds one package to one database, one issuer, one listener, an
 per provider. Keep it outside the package, and put no credential in it:
 
 ```yaml
-apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1
 kind: MessagingRuntimeConfig
 identity:
   databaseId: messaging-production
 package:
   root: /srv/registry-messaging/package
   # The digest messagingctl check reported for the package you were handed.
-  expectedDigest: sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4
+  expectedDigest: sha256:a608bc08ae761c742b31271709822309e52c9a87ec6e7f7b0aaa7703d914c092
 listener:
   bind: 10.42.0.7:8107
   tlsTermination: operator-controlled-upstream
@@ -170,29 +171,29 @@ audit:
   path: /var/lib/registry-messaging/audit/audit.ndjson
   hashKeyRef: secret:file/messaging-audit-key
 retention:
-  payloadDays: 7
-  recordDays: 90
-  submissionReceiptDays: 7
+  payloadRetentionDays: 7
+  recordRetentionDays: 90
+  submissionReceiptRetentionDays: 7
 providers:
   mail-relay:
-    kind: smtp
+    type: smtp
     host: smtp.example.org
     tls: starttls
     authentication:
       usernameRef: secret:file/smtp-username
       passwordRef: secret:file/smtp-password
   sms-gateway:
-    kind: http
+    type: http
     baseUrl: https://sms-gateway.example.org/v1/
-    timeoutMilliseconds: 5000
+    attemptTimeoutMilliseconds: 5000
     maximumResponseBytes: 65536
-    concurrencyLimit: 4
+    maximumConcurrentRequests: 4
     redirects: deny
     authentication:
-      kind: static-authorization
+      type: static-authorization
       tokenRef: secret:file/sms-gateway-token
     callbackVerifier:
-      kind: hmac-sha256-body
+      type: hmac-sha256-body
       header: x-signature
       encoding: hex
       secretRef: secret:file/sms-gateway-callback-key
@@ -209,7 +210,7 @@ providers:
 | `authentication.oidc` | The issuer, audience, and admitted clients, and optionally `scopeClaim`, `jwksSource`, and `assertionIssuers` |
 | `audit` | The per-process destination and the key for minimized references |
 | `retention` | How long payloads, records, and submission receipts are kept |
-| `providers` | One connection per provider the package declares, keyed by its id and tagged with the same `kind` |
+| `providers` | One connection per provider the package declares, keyed by its id and tagged with the same `type` |
 | `tlsTrustProfiles` | Named PEM bundles an HTTP provider's `tlsTrustProfile` selects |
 
 Every mapping is closed, so a misspelled key is refused with its path instead of falling back to a
@@ -242,7 +243,7 @@ with `the OIDC issuer could not be initialized` when the issuer is unreachable.
 
 ### Connect providers
 
-A connection for a provider the package does not declare, or with another `kind`, is refused. A
+A connection for a provider the package does not declare, or with another `type`, is refused. A
 declared provider with no connection is not activated: startup logs a warning, and its messages
 fail with the attempt failure code `provider-unconfigured` without a send. Every credential, trust
 bundle, and callback secret is resolved once at startup, before either listener binds, and a
@@ -250,21 +251,22 @@ provider that cannot be activated stops the runtime with an error naming the pro
 member, never a value.
 
 An `smtp` connection takes `host`, `tls` (`starttls` on port 587 or `implicit` on port 465 by
-default), and optionally `port`, `authentication`, `attemptTimeoutSeconds` (1 to 60, default 30),
-`trustedRootCertificateRef`, and `allowedPrivateCidrs`. SMTP relays report no delivery, so an email
-message's report is `unavailable` and `submitted` is the last status it reaches.
+default), and optionally `port`, `authentication`, `attemptTimeoutMilliseconds` (1000 to 60000,
+default 30000), `trustedRootCertificateRef`, and `allowedPrivateCidrs`. SMTP relays report no
+delivery, so an email message's report is `unavailable` and `submitted` is the last status it
+reaches.
 
-An `http` connection takes `baseUrl`, `timeoutMilliseconds` (at most 10000),
-`maximumResponseBytes` (at most 1 MiB), `concurrencyLimit` (at most the package's),
-`redirects: deny`, and one `authentication` kind: `none` for a loopback `http` base URL only,
-`basic`, `static-authorization`, `static-api-key`, `static-api-key-query`, `aws-sigv4`, or
-`oauth2-client-credentials`. The runtime resolves the provider's host and refuses a metadata,
+An `http` connection takes `baseUrl`, `attemptTimeoutMilliseconds` (1 to 10000),
+`maximumResponseBytes` (at most 1 MiB), `maximumConcurrentRequests` (1 to 64, and at most the
+package's), `redirects: deny`, and one `authentication` `type`: `none` for a loopback `http` base
+URL only, `basic`, `static-authorization`, `static-api-key`, `static-api-key-query`, `aws-sigv4`,
+or `oauth2-client-credentials`. The runtime resolves the provider's host and refuses a metadata,
 private, or other non-public address unless `allowedPrivateCidrs` names its network.
 
 When the package declares `receipts: callback` for a provider, its connection needs a
 `callbackVerifier`, and give the provider this callback URL on your public edge:
 
-| `kind` | Keys | Callback URL |
+| `type` | Keys | Callback URL |
 | --- | --- | --- |
 | `hmac-sha256-body` | `header`, `encoding` (`hex` or `base64`), `secretRef` | `/v1/provider-callbacks/<provider-id>` |
 | `hmac-sha1-url-form` | `url`, `header`, `secretRef` | `/v1/provider-callbacks/<provider-id>` |
@@ -281,25 +283,25 @@ and signs, so a reverse proxy in front of the runtime must not change it.
 
 | Key | Default | Bounds |
 | --- | --- | --- |
-| `payloadDays` | 7 | 1 to 30 |
-| `recordDays` | 90 | `payloadDays` to 3650 |
-| `submissionReceiptDays` | 7 | 1 to `recordDays` |
+| `payloadRetentionDays` | 7 | 1 to 30 |
+| `recordRetentionDays` | 90 | `payloadRetentionDays` to 3650 |
+| `submissionReceiptRetentionDays` | 7 | 1 to `recordRetentionDays` |
 
-`submissionReceiptDays` is also the idempotency window: the same request under a key whose stored
-receipt is older is refused with `410 idempotency.expired`, and a different request under the key
-is refused with `409 idempotency.key-reused` whatever the key's age. A submission whose `expiresAt`
-falls after its payload period is refused. These values are defaults, not a jurisdictional
-recommendation, and the audit journal's start record carries the values in force.
+`submissionReceiptRetentionDays` is also the idempotency window: the same request under a key
+whose stored receipt is older is refused with `410 idempotency.expired`, and a different request
+under the key is refused with `409 idempotency.key-reused` whatever the key's age. A submission
+whose `expiresAt` falls after its payload period is refused. These values are defaults, not a
+jurisdictional recommendation, and the audit journal's start record carries the values in force.
 
-`payloadDays` and `recordDays` count from the moment a message reached a terminal state
-(delivered, failed, expired, or cancelled), not from acceptance, so a message waiting in a retry
-keeps its payload:
+`payloadRetentionDays` and `recordRetentionDays` count from the moment a message reached a terminal
+state (delivered, failed, expired, or cancelled), not from acceptance, so a message waiting in a
+retry keeps its payload:
 
 | Period ends | What is erased |
 | --- | --- |
-| `payloadDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
-| `recordDays` after the terminal state | The message record, with its attempts and receipts, and the request hash of its idempotency key. The key stays spent, held only as a digest of the caller and the key with its times, and a repeat of it, with the same request or another, is refused with `idempotency.expired` |
-| `submissionReceiptDays` after acceptance | The stored submission receipt, with the raw issuer, subject, and key beside it. Their SHA-256 digest keeps the key spent for that caller alone: the caller's repeat of the request is refused with `idempotency.expired` and a changed request with `idempotency.key-reused`, and another caller's identical key is fresh |
+| `payloadRetentionDays` after the terminal state | The rendered parts and the recipient contact. The message record stays |
+| `recordRetentionDays` after the terminal state | The message record, with its attempts and receipts, and the request hash of its idempotency key. The key stays spent, held only as a digest of the caller and the key with its times, and a repeat of it, with the same request or another, is refused with `idempotency.expired` |
+| `submissionReceiptRetentionDays` after acceptance | The stored submission receipt, with the raw issuer, subject, and key beside it. Their SHA-256 digest keeps the key spent for that caller alone: the caller's repeat of the request is refused with `idempotency.expired` and a changed request with `idempotency.key-reused`, and another caller's identical key is fresh |
 
 A message that is queued, sending, or held in an unknown outcome is never erased, whatever its age.
 The runtime sweeps once at start and then hourly with the runtime credential. A sweep erases in
@@ -355,8 +357,8 @@ hash-chained; ship records to append-only storage if you require external tamper
 
 ## Check the runtime file
 
-`messagingctl check --runtime-config` checks the runtime file and its package offline, before any
-database or issuer is reached:
+`messagingctl check --runtime-config` checks the runtime file and the package at `package.root`
+offline, before any database, issuer, or secret is reached:
 
 ```sh
 messagingctl check --runtime-config /etc/registry-messaging/runtime.yaml
@@ -364,9 +366,9 @@ messagingctl check --runtime-config /etc/registry-messaging/runtime.yaml
 
 ```text
 ok: /etc/registry-messaging/runtime.yaml
-package digest: sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4
-listener: 127.0.0.1:8107
-metrics listener: 127.0.0.1:9107
+package digest: sha256:a608bc08ae761c742b31271709822309e52c9a87ec6e7f7b0aaa7703d914c092
+listener: 10.42.0.7:8107
+metrics listener: 10.42.0.7:9107
 template: appointment-reminder 1 (email)
   sample en: renders
   sample fr: renders
@@ -377,17 +379,29 @@ access profile: operations (operator)
 retention: payload 7 days, record 90 days, submission receipt 7 days
 ```
 
-That run used a loopback listener. When `package.expectedDigest` names another package, `check`,
-`plan`, `apply`, and `serve` all refuse before reaching a database:
+Before the package is built, add `--project ./notices` to check the runtime file against the
+editable project instead; `package.root` and `package.expectedDigest` then name nothing to compare,
+because they name the installed package. `--package DIRECTORY` checks against another installed
+package. A `${VAR}` expression is checked for its syntax and position only, unless
+`--environment` resolves it from this process's environment. `--deny-warnings` turns a warning into
+a refusal, and `--format json` prints every finding with its code, JSON Pointer path, and line and
+column. The command exits 0 when the file is accepted, 1 when it is refused, 2 on a usage error,
+and 3 when a file could not be read.
+
+When `package.expectedDigest` names another package, `check`, `plan`, `apply`, and `serve` all
+refuse before reaching a database:
 
 ```text
-error[config.refused] package.expectedDigest: the Messaging package at package.expectedDigest does not satisfy the shared package envelope: package.expectedDigest is sha256:0000000000000000000000000000000000000000000000000000000000000000 but the package at package.root is sha256:beb567ec1a2813ac361cc1765151e398dbbb6e77bd886889769ed21c029f43f4; deploy the pinned package or update package.expectedDigest
-  next: Correct the member the path names, then rerun messagingctl check.
+error[messaging.package.digest-mismatch] /etc/registry-messaging/runtime.yaml:9:19 /package/expectedDigest
+  package.expectedDigest does not pin the package at package.root, whose digest is sha256:a608bc08ae761c742b31271709822309e52c9a87ec6e7f7b0aaa7703d914c092; deploy the pinned package or update package.expectedDigest
+  next: Set package.expectedDigest to the digest `messagingctl package` reported for the package at package.root, or remove it.
+1 error, 0 warnings in 1 file
 ```
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, check();
-    products/messaging/RUNTIME-CONFIG.md, Keys; check and digest-refusal outputs observed with messagingctl 0.34.0-dev on
-    2026-09-27. */}
+    crates/registry-messaging/src/config.rs, check_runtime_file();
+    products/messaging/RUNTIME-CONFIG.md, Keys; check and digest-refusal outputs observed with
+    messagingctl 0.40.0 on 2026-10-08 against the runtime example above. */}
 
 ## Plan, apply, inspect, and serve
 
@@ -719,7 +733,7 @@ Each process writes its own JSON Lines audit stream. Envelopes carry `schema`, `
 response records describe established outcomes. A dropped live request can produce `unfinished`.
 Process or destination loss can leave unmatched requests. There is no total order across streams.
 
-File mode uses `audit.path`, `audit.rotateBytes`, and `audit.retainDays`. Accepted writes include
+File mode uses `audit.path`, `audit.rotateBytes`, and `audit.retentionDays`. Accepted writes include
 fsync; stdout mode is best-effort. Applied `messagingctl` operations use a sibling file or stderr,
 keeping command stdout available for JSON results. A failed writer stays unhealthy until restart,
 and `/ready` fails. If the response append failed after a database commit, the effect still stands:
@@ -727,7 +741,7 @@ inspect the operation's stored result or use its documented retry contract, neve
 
 Old hash-chained files are refused by the new writer. Preserve them in a separate archive and use
 a fresh destination. Local segment expiry is not proof of off-host completeness: arrange shipping
-before `retainDays` removes sealed segments.
+before `retentionDays` removes sealed segments.
 
 | Event | Recorded when |
 | --- | --- |
@@ -805,11 +819,12 @@ Each of these is the process's whole output on standard error, and each exits no
 | `messaging: the Messaging schema readiness check failed: the Messaging query failed: db error` | `serve` ran against a database `messagingctl apply` has not prepared |
 | `messaging: the Messaging package ledger names no active package; record package sha256:… with messagingctl apply before serving` | No package was recorded. Review `messagingctl plan`, then run `messagingctl apply` |
 | `messaging: the Messaging package on disk (…) is not the package the ledger names active (…); record it with messagingctl apply, then restart` | The package changed since it was recorded |
-| `messaging: package.expectedDigest is …, but the package under package.root has digest …` | The package directory is not the one the runtime file pins |
+| `messaging: package.expectedDigest does not pin the package at package.root, whose digest is …; deploy the pinned package or update package.expectedDigest` | The package directory is not the one the runtime file pins |
 
 {/* Evidence: crates/registry-messaging/src/main.rs; crates/registry-messaging/src/runtime.rs;
     crates/registry-messaging/src/store.rs; outputs observed with messaging 0.33.0-dev on
-    2026-09-25, digests shortened. */}
+    2026-09-25, and the expectedDigest row with messaging 0.40.0 on 2026-10-08, digests
+    shortened. */}
 
 ## Next
 

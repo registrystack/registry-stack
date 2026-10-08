@@ -103,18 +103,18 @@ fn secret(value: &str) -> String {
 fn verifier_config(verifier: Verifier) -> Value {
     match verifier {
         Verifier::Body => json!({
-            "kind": "hmac-sha256-body",
+            "type": "hmac-sha256-body",
             "header": SIGNATURE_HEADER,
             "encoding": "hex",
             "secretRef": secret(BODY_SECRET)
         }),
         Verifier::Form => json!({
-            "kind": "hmac-sha1-url-form",
+            "type": "hmac-sha1-url-form",
             "url": EXTERNAL_CALLBACK_URL,
             "header": FORM_SIGNATURE_HEADER,
             "secretRef": secret(FORM_SECRET)
         }),
-        Verifier::PathToken => json!({"kind": "path-token", "tokenRef": secret(PATH_TOKEN)}),
+        Verifier::PathToken => json!({"type": "path-token", "tokenRef": secret(PATH_TOKEN)}),
     }
 }
 
@@ -138,13 +138,13 @@ async fn deployment(verifier: Verifier) -> Deployment {
         .mount(&gateway)
         .await;
     let providers = json!({"sms-gateway": {
-        "kind": "http",
+        "type": "http",
         "baseUrl": format!("{}/v1/", gateway.uri()),
-        "timeoutMilliseconds": 5000,
+        "attemptTimeoutMilliseconds": 5000,
         "maximumResponseBytes": 65536,
-        "concurrencyLimit": 4,
+        "maximumConcurrentRequests": 4,
         "redirects": "deny",
-        "authentication": {"kind": "none"},
+        "authentication": {"type": "none"},
         "callbackVerifier": verifier_config(verifier)
     }});
     let harness = Harness::start_with(providers, |package: &Path| {

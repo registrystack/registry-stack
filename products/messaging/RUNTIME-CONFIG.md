@@ -1,17 +1,31 @@
 # Messaging runtime configuration
 
 Messaging reads one versioned operator document selected with
-`messaging --runtime-config ABSOLUTE_FILE serve`, and
-`messagingctl check --runtime-config ABSOLUTE_FILE` checks the same document
-offline. The selected file path and every operated resource path are
-absolute. The document is at most one mebibyte.
+`messaging --runtime-config ABSOLUTE_FILE serve`. The selected file path and
+every operated resource path are absolute. The document is at most one
+mebibyte.
+
+`messagingctl check --runtime-config FILE` checks the same document offline,
+with no built package, database, network, or secret: against the authoring
+project or package `--project` or `--package` names, or else against the
+package `package.root` names, its pinned digest included. Each `${VAR}`
+expression is checked by its syntax and position, and with `--environment`
+filled from the environment and checked by its value. The check reports
+every finding at once, each with its code, member, and line and column, and
+exits 0 when the document is accepted, 1 when it is refused, 2 for a usage
+error, and 3 when the file or the package it names cannot be read;
+`--deny-warnings` refuses a document with a warning.
 
 The closed envelope is:
 
 ```yaml
-apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1
 kind: MessagingRuntimeConfig
 ```
+
+The former `registry.registrystack.org/messaging-runtime/v1alpha1` is
+refused with this replacement named. A removed key is refused with the key
+that replaced it.
 
 Every mapping is closed: an unknown key is refused with its path, so a
 misspelled setting never falls back to a default silently.
@@ -106,12 +120,12 @@ that performs no token exchange leaves it empty, and an exchanged token is
 then refused. Tokens must be `at+jwt` access tokens.
 
 `audit.destination` selects `file` (the default) or `stdout`. File mode uses
-`audit.path`, `audit.rotateBytes`, and `audit.retainDays` for a per-process
-JSON Lines stream. File acceptance includes fsync; stdout is best-effort and
-requires the deployment's log pipeline for durable retention. Each process
-uses its own destination: applied operator commands write a sibling
-`messagingctl` file, or stderr when the runtime uses stdout, keeping command
-stdout machine-readable.
+`audit.path`, `audit.rotateBytes`, and `audit.retentionDays` for a
+per-process JSON Lines stream. File acceptance includes fsync; stdout is
+best-effort and requires the deployment's log pipeline for durable
+retention. Each process uses its own destination: applied operator commands
+write a sibling `messagingctl` file, or stderr when the runtime uses stdout,
+keeping command stdout machine-readable.
 
 `audit.hashKeyRef` supplies the key for minimized identifier references. It
 does not sign or chain the journal. Rotating it changes the caller and
@@ -119,7 +133,7 @@ recipient pseudonyms later audit records carry, so records written before and
 after the rotation no longer join on them; it frees no idempotency key, which
 is scoped to the caller's issuer and subject. External tamper evidence and
 complete off-host retention are deployment responsibilities.
-`retainDays` removes local sealed segments; ship required records before
+`retentionDays` removes local sealed segments; ship required records before
 that retention expires. A failed writer remains unhealthy until restart and
 makes `/ready` fail.
 
@@ -127,36 +141,37 @@ makes `/ready` fail.
 
 | Key | Default | Bounds |
 |---|---|---|
-| `payloadDays` | 7 | 1 to 30 |
-| `recordDays` | 90 | `payloadDays` to 3650 |
-| `submissionReceiptDays` | 7 | 1 to `recordDays` |
+| `payloadRetentionDays` | 7 | 1 to 30 |
+| `recordRetentionDays` | 90 | `payloadRetentionDays` to 3650 |
+| `submissionReceiptRetentionDays` | 7 | 1 to `recordRetentionDays` |
 
-The start record carries the deployed values. `submissionReceiptDays` is
-also the idempotency window: a submission repeating the request of a key
-whose receipt is older is refused with `idempotency.expired`, and one that
-changes the request under the key is refused with `idempotency.key-reused`
-whatever the key's age. A submission whose `expiresAt`
-is already past, or falls more than `payloadDays` after acceptance, is
-refused with `request.unprocessable`, so a message is never still waiting to
-send when its payload's period could end.
+The start record carries the deployed values.
+`submissionReceiptRetentionDays` is also the idempotency window: a
+submission repeating the request of a key whose receipt is older is refused
+with `idempotency.expired`, and one that changes the request under the key
+is refused with `idempotency.key-reused` whatever the key's age. A
+submission whose `expiresAt` is already past, or falls more than
+`payloadRetentionDays` after acceptance, is refused with
+`request.unprocessable`, so a message is never still waiting to send when
+its payload's period could end.
 
 Each period counts from the moment the message reached a terminal state
-(delivered, failed, expired, or cancelled), not from acceptance, so a message
-still waiting in a retry keeps its payload. `payloadDays` after that moment
-the rendered parts and the recipient contact are erased and the message
-record stays; `recordDays` after it the record is deleted with its attempts
-and receipts. The idempotency key stays spent, held only as a digest of
-the caller and the key with its times, and a repeat of it, with the same
-request or another, is refused with `idempotency.expired`.
-`submissionReceiptDays` after acceptance the stored submission receipt is
-dropped together with the raw issuer, subject, and key beside it, the
-request hash stays with the message record, and the same caller's repeat
-of its request under the key is refused with `idempotency.expired` and a
-changed request with `idempotency.key-reused`; their SHA-256 digest keeps
-the key spent for that caller alone. A
-message that is queued, sending, or in an unknown outcome is never erased,
-and an operator retry committed while a sweep waits for the message keeps
-its payload.
+(delivered, failed, expired, or cancelled), not from acceptance, so a
+message still waiting in a retry keeps its payload. `payloadRetentionDays`
+after that moment the rendered parts and the recipient contact are erased
+and the message record stays; `recordRetentionDays` after it the record is
+deleted with its attempts and receipts. The idempotency key stays spent,
+held only as a digest of the caller and the key with its times, and a repeat
+of it, with the same request or another, is refused with
+`idempotency.expired`. `submissionReceiptRetentionDays` after acceptance the
+stored submission receipt is dropped together with the raw issuer, subject,
+and key beside it, the request hash stays with the message record, and the
+same caller's repeat of its request under the key is refused with
+`idempotency.expired` and a changed request with `idempotency.key-reused`;
+their SHA-256 digest keeps the key spent for that caller alone. A message
+that is queued, sending, or in an unknown outcome is never erased, and an
+operator retry committed while a sweep waits for the message keeps its
+payload.
 
 The runtime sweeps once at start and then hourly, under the runtime
 credential. A sweep erases in batches of at most 1,000 of each kind, each
@@ -173,8 +188,8 @@ command.
 ### Providers
 
 `providers` gives each provider `messaging.yaml` declares its connection,
-keyed by the provider id and tagged with the same `kind`. A connection for a
-provider the package does not declare, or with another kind, is refused. A
+keyed by the provider id and tagged with the same `type`. A connection for a
+provider the package does not declare, or with another type, is refused. A
 declared provider with no connection is not activated: startup logs a
 warning, and its messages fail with the attempt failure code
 `provider-unconfigured` without a send. Every credential, trust bundle, and
@@ -190,7 +205,7 @@ An `smtp` connection:
 | `tls` | yes | `starttls`, `implicit`, or `development-loopback` (plaintext to a loopback relay, accepted only by a test build or behind a `development-loopback` listener) |
 | `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `development-loopback` |
 | `authentication` | no | `usernameRef` and `passwordRef` |
-| `attemptTimeoutSeconds` | no | One attempt's whole budget, 1 to 60, default 30 |
+| `attemptTimeoutMilliseconds` | no | One attempt's whole budget, 1000 to 60000, default 30000 |
 | `trustedRootCertificateRef` | no | A PEM root trusted besides the public web roots |
 | `allowedPrivateCidrs` | no | Exact private networks the relay may resolve into |
 
@@ -199,17 +214,17 @@ An `http` connection:
 | Key | Required | Meaning |
 |---|---|---|
 | `baseUrl` | yes | Origin and path prefix ending in `/`; `https`, or `http` only to a loopback host |
-| `timeoutMilliseconds` | yes | One send's whole budget, at most 10000 |
+| `attemptTimeoutMilliseconds` | yes | One send's whole budget, 1 to 10000 |
 | `maximumResponseBytes` | yes | The largest response body read, at most 1 MiB |
-| `concurrencyLimit` | yes | Sends in flight, at most the package's `capabilities.concurrencyLimit` |
+| `maximumConcurrentRequests` | yes | Sends in flight, 1 to 64 and at most the package's `capabilities.concurrencyLimit` |
 | `redirects` | yes | `deny`, the only policy |
-| `authentication` | yes | One of the kinds below |
+| `authentication` | yes | One of the types below |
 | `callbackVerifier` | when the package declares `receipts: callback`, and only then | See Provider callbacks |
 | `tlsTrustProfile` | no | A `tlsTrustProfiles` name whose bundle is trusted in addition to the system roots |
 | `allowedPrivateCidrs` | no | Exact private networks an `https` provider may resolve into |
 | `acknowledgeQueryStringContent` | when, and only when, the package sends with `get` | Acknowledges that content travels in the query string |
 
-`authentication.kind` is `none` (only for a loopback `http` `baseUrl`),
+`authentication.type` is `none` (only for a loopback `http` `baseUrl`),
 `basic` (`usernameRef`, `passwordRef`), `static-authorization` (`tokenRef`,
 and `scheme`, which may only be `Bearer`), `static-api-key` (`headerName`,
 `valueRef`), `static-api-key-query` (`parameterName`, `valueRef`),
@@ -261,7 +276,7 @@ listener, or, for `path-token`, to
 bearer token: the connection's `callbackVerifier` authenticates each
 callback, and is one of
 
-| `kind` | Keys | Verifies |
+| `type` | Keys | Verifies |
 |---|---|---|
 | `hmac-sha1-url-form` | `url`, `header`, `secretRef` | HMAC-SHA1 over `url` and the request's query, then the form parameters sorted by name, base64 in `header` |
 | `hmac-sha256-body` | `header`, `encoding` (`hex` or `base64`), `secretRef` | HMAC-SHA256 over the raw body, encoded in `header` |
@@ -271,7 +286,7 @@ callback, and is one of
 as given, `http` or `https`, without a query or fragment, at most 2048 bytes;
 it is what a reverse proxy in front of the runtime must not change for the
 provider. `header` is an HTTP header name of at most 128 bytes. There is no
-unauthenticated kind.
+unauthenticated type.
 
 The receipt script reads only what the verifier signed: under
 `hmac-sha256-body` its `query` is empty, under `hmac-sha1-url-form` its
@@ -373,8 +388,8 @@ declares `idempotentSubmit: true`, meaning it deduplicates on that key, or
 the profile sets `acceptDuplicates: true`, the operator's choice that a
 duplicate is better than a missed message. A message whose request names no
 `expiresAt` expires `defaultExpirySeconds` after acceptance, or at
-`retention.payloadDays` if that comes first, and is not sent after it
-expires.
+`retention.payloadRetentionDays` if that comes first, and is not sent after
+it expires.
 
 ### HTTP providers
 
@@ -399,14 +414,15 @@ capabilities:
 `ratePerSecond` paces the worker: an attempt waits for the provider's next
 send slot after it is leased and before anything reaches the provider, so at
 most one send starts every `1 / ratePerSecond` seconds per runtime process.
-A paced attempt first waits for one of the connection's `concurrencyLimit`
-sends in flight and holds it through the send, so the rate spaces requests as
-they leave, including ones queued behind a slow send. Both waits share their
-own ten-second allowance on top of the send's time budget, and stop at the
-message's `expiresAt`; an attempt whose slot does not open in time is retried
-under its dispatch policy without a send, and one past its expiry is not sent
-again: it expires, or stays `unknown` when an earlier attempt may have reached
-the provider and its policy retries.
+A paced attempt first waits for one of the connection's
+`maximumConcurrentRequests` sends in flight and holds it through the send,
+so the rate spaces requests as they leave, including ones queued behind a
+slow send. Both waits share their own ten-second allowance on top of the
+send's time budget, and stop at the message's `expiresAt`; an attempt whose
+slot does not open in time is retried under its dispatch policy without a
+send, and one past its expiry is not sent again: it expires, or stays
+`unknown` when an earlier attempt may have reached the provider and its
+policy retries.
 
 `provider.yaml` is closed and at most 64 KiB; each script is at most 64 KiB
 and must compile with exactly its entry point when the package loads. A

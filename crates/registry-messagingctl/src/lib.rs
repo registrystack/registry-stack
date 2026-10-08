@@ -49,14 +49,17 @@ use std::process::ExitCode;
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_messaging::activation::{ActivationError, ActivationRefusal, ApplyRequest};
-use registry_messaging::config::{RuntimeConfig, RuntimeConfigError};
+use registry_messaging::config::{
+    check_runtime_file, startup_report, CheckedAgainst, RuntimeCheck, RuntimeConfig,
+    RuntimeConfigError,
+};
 use registry_messaging::http::preview_json;
 use registry_messaging::messages::{
     MessageReader, MessageStoreError, OperatorAction, OperatorActionReport, SettleOutcome,
 };
 use registry_messaging::package::{
     load_package, load_project, package_inputs, plan_package_inputs, write_package_inputs,
-    LoadedPackage,
+    LoadedPackage, PackageLoadError,
 };
 use registry_messaging::retention::RetentionError;
 use registry_messaging::runtime::{
@@ -65,7 +68,9 @@ use registry_messaging::runtime::{
 };
 use registry_messaging_core::{
     ContentRefusal, MessageDispatch, MessageStatus, ProblemCode, TemplatePreviewRequest,
+    MESSAGING_RUNTIME_KIND,
 };
+use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -280,10 +285,35 @@ struct PackageSource {
     project: Option<PathBuf>,
 }
 
+/// What `check` reads: a runtime configuration, a package or authoring
+/// project, or a runtime configuration together with the package or
+/// project it is checked against.
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("checked")
+        .required(true)
+        .multiple(true)
+        .args(["runtime_config", "package", "project"])
+))]
 struct CheckArgs {
-    #[command(flatten)]
-    source: PackageSource,
+    /// The runtime configuration file, checked offline against the package
+    /// --package or --project names, or else the one its package.root names.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: Option<PathBuf>,
+    /// The package directory holding messaging.yaml.
+    #[arg(long, value_name = "DIRECTORY", conflicts_with = "project")]
+    package: Option<PathBuf>,
+    /// Editable authoring project holding messaging.yaml.
+    #[arg(long, value_name = "DIRECTORY")]
+    project: Option<PathBuf>,
+    /// Fill ${NAME} expressions in the runtime configuration from the
+    /// environment and check every value; without it each expression is
+    /// checked by its syntax and position only.
+    #[arg(long, requires = "runtime_config")]
+    environment: bool,
+    /// Refuse the check when it reports a warning.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
 #[derive(Debug, Args)]
@@ -364,6 +394,9 @@ enum View {
     Init,
     Package,
     Check,
+    /// A refusal whose diagnostics carry their positions, printed as the
+    /// shared human report (CFG-DIAG-2).
+    Diagnostics,
     Preview,
     Activation,
     MessageList,
@@ -400,6 +433,27 @@ impl Outcome {
             }),
             exit,
             view: View::Check,
+            raw_json: None,
+        }
+    }
+
+    /// A refusal reporting every diagnostic in `report`. A diagnostic that
+    /// names no artifact is about the runtime configuration.
+    fn diagnosed(exit: u8, report: &Report) -> Self {
+        let mut diagnostics = report.to_json_value();
+        for diagnostic in diagnostics.as_array_mut().into_iter().flatten() {
+            if diagnostic.get("artifact").is_none() {
+                diagnostic["artifact"] = json!(MESSAGING_RUNTIME_KIND);
+            }
+        }
+        let mut refused = json!({"ok": false, "diagnostics": diagnostics});
+        if let Some(files) = report.files_checked() {
+            refused["filesChecked"] = json!(files);
+        }
+        Self {
+            report: refused,
+            exit,
+            view: View::Diagnostics,
             raw_json: None,
         }
     }
@@ -616,7 +670,7 @@ where
         Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
         Command::Init(args) => init(&args.directory),
         Command::Package(args) => package(&args),
-        Command::Check(args) => check(&args.source),
+        Command::Check(args) => check(&args),
         Command::Preview(args) => preview(&args),
         Command::Plan(args) => plan(&args.runtime_config),
         Command::Apply(args) => apply(&args),
@@ -733,40 +787,18 @@ fn init(directory: &Path) -> Outcome {
 fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage), Outcome> {
     match (&source.runtime_config, &source.package, &source.project) {
         (Some(path), _, _) => {
-            let loaded = RuntimeConfig::load(path).and_then(|config| {
-                let package = config.load_package()?;
-                Ok((config, package))
-            });
-            loaded
-                .map(|(config, package)| (Some(config), package))
-                .map_err(|error| config_refusal(&error))
+            let config = load_runtime(path)?;
+            let package = config
+                .load_package()
+                .map_err(|error| config_refusal(&error))?;
+            Ok((Some(config), package))
         }
-        (None, Some(root), _) => {
-            load_package(root)
-                .map(|package| (None, package))
-                .map_err(|error| {
-                    let exit = if error.is_read_failure() {
-                        OPERATIONAL_FAILURE_EXIT
-                    } else {
-                        DOMAIN_REFUSAL_EXIT
-                    };
-                    Outcome::refused(exit, "config.refused", error.path(), error.to_string())
-                        .about("messaging_package")
-                })
-        }
-        (None, None, Some(root)) => {
-            load_project(root)
-                .map(|package| (None, package))
-                .map_err(|error| {
-                    let exit = if error.is_read_failure() {
-                        OPERATIONAL_FAILURE_EXIT
-                    } else {
-                        DOMAIN_REFUSAL_EXIT
-                    };
-                    Outcome::refused(exit, "config.refused", error.path(), error.to_string())
-                        .about("messaging_package")
-                })
-        }
+        (None, Some(root), _) => load_package(root)
+            .map(|package| (None, package))
+            .map_err(|error| package_refusal(&error)),
+        (None, None, Some(root)) => load_project(root)
+            .map(|package| (None, package))
+            .map_err(|error| package_refusal(&error)),
         (None, None, None) => Err(Outcome::refused(
             USAGE_EXIT,
             "usage.invalid",
@@ -776,9 +808,32 @@ fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage)
     }
 }
 
-fn config_refusal(error: &RuntimeConfigError) -> Outcome {
-    let exit = match error {
-        RuntimeConfigError::Shared(error)
+/// The refusal of a package or authoring project that could not be read,
+/// or was read and refused.
+fn package_refusal(error: &PackageLoadError) -> Outcome {
+    let exit = if error.is_read_failure() {
+        OPERATIONAL_FAILURE_EXIT
+    } else {
+        DOMAIN_REFUSAL_EXIT
+    };
+    Outcome::refused(exit, "config.refused", error.path(), error.to_string())
+        .about("messaging_package")
+}
+
+/// Read the runtime file at `path` as `messaging serve` does. A refusal of
+/// the file itself reports every rule it breaks, each at its position.
+fn load_runtime(path: &Path) -> Result<RuntimeConfig, Outcome> {
+    RuntimeConfig::load(path).map_err(|error| match startup_report(path, &error) {
+        Some(report) => Outcome::diagnosed(refusal_exit(&error), &report),
+        None => config_refusal(&error),
+    })
+}
+
+/// The exit class of a refused runtime configuration: an operational
+/// failure when a file it needs could not be read at all.
+fn refusal_exit(error: &RuntimeConfigError) -> u8 {
+    match error {
+        RuntimeConfigError::Load(error)
             if error.kind()
                 == registry_messaging::config::SharedRuntimeConfigErrorKind::Unavailable =>
         {
@@ -786,17 +841,158 @@ fn config_refusal(error: &RuntimeConfigError) -> Outcome {
         }
         RuntimeConfigError::Package(error) if error.is_read_failure() => OPERATIONAL_FAILURE_EXIT,
         _ => DOMAIN_REFUSAL_EXIT,
-    };
-    Outcome::refused(exit, "config.refused", error.path(), error.to_string())
+    }
 }
 
-/// Report what the runtime would serve, rendering each template's sample
-/// in every locale it declares.
-fn check(source: &PackageSource) -> Outcome {
-    let (config, loaded) = match load(source) {
-        Ok(loaded) => loaded,
+/// The refusal of a runtime configuration, or of the package or dependency
+/// it names, by its own code at the member it concerns.
+fn config_refusal(error: &RuntimeConfigError) -> Outcome {
+    let report = match error {
+        RuntimeConfigError::Load(error) => Report::new(error.diagnostics().to_vec()),
+        _ => Report::new(vec![Diagnostic::error(
+            error.code(),
+            error.pointer(),
+            error.to_string(),
+            error.suggested_action(),
+        )]),
+    };
+    Outcome::diagnosed(refusal_exit(error), &report)
+}
+
+/// Check a runtime configuration offline (CFG-CHECK-1), a package, or an
+/// authoring project, and report what the runtime would serve, rendering
+/// each template's sample in every locale it declares.
+fn check(args: &CheckArgs) -> Outcome {
+    let given = match (&args.package, &args.project) {
+        (Some(root), _) => Some((root, load_package(root))),
+        (None, Some(root)) => Some((root, load_project(root))),
+        (None, None) => None,
+    };
+    let Some(path) = &args.runtime_config else {
+        return match given {
+            Some((root, Ok(loaded))) => match package_report(&loaded) {
+                Ok(mut report) => {
+                    report["package"] = json!(root);
+                    Outcome::new(report, View::Check)
+                }
+                Err(refused) => refused,
+            },
+            Some((_, Err(error))) => package_refusal(&error),
+            None => Outcome::refused(
+                USAGE_EXIT,
+                "usage.invalid",
+                "arguments",
+                "name --runtime-config, --package, or --project".to_owned(),
+            ),
+        };
+    };
+    let (given, mut refused) = match given {
+        Some((root, Ok(loaded))) => (Some((root, loaded)), None),
+        Some((_, Err(error))) => (None, Some(package_refusal(&error))),
+        None => (None, None),
+    };
+    let absolute = match std::path::absolute(path) {
+        Ok(absolute) => absolute,
+        Err(_) => {
+            return Outcome::refused(
+                OPERATIONAL_FAILURE_EXIT,
+                "config.refused",
+                "arguments",
+                "the --runtime-config path could not be resolved against the working directory"
+                    .to_owned(),
+            )
+        }
+    };
+    let against = match (&given, &refused) {
+        (Some((_, loaded)), _) => CheckedAgainst::Package(loaded),
+        (None, Some(_)) => CheckedAgainst::Nothing,
+        (None, None) => CheckedAgainst::NamedPackage,
+    };
+    let runtime = check_runtime_file(&absolute, against, args.environment);
+    let report = runtime_report(path, &absolute, &runtime);
+    let denied = report.has_errors() || (args.deny_warnings && report.warning_count() > 0);
+    if let Some(mut refused) = refused.take() {
+        let exit = if runtime.unavailable {
+            OPERATIONAL_FAILURE_EXIT
+        } else {
+            refused.exit
+        };
+        if let (Some(diagnostics), Value::Array(more)) = (
+            refused.report["diagnostics"].as_array_mut(),
+            Outcome::diagnosed(exit, &report).report["diagnostics"].take(),
+        ) {
+            diagnostics.extend(more);
+        }
+        refused.exit = exit;
+        refused.view = View::Diagnostics;
+        return refused;
+    }
+    if denied {
+        let exit = if runtime.unavailable {
+            OPERATIONAL_FAILURE_EXIT
+        } else {
+            DOMAIN_REFUSAL_EXIT
+        };
+        return Outcome::diagnosed(exit, &report);
+    }
+    let package = given
+        .as_ref()
+        .map(|(_, loaded)| loaded)
+        .or(runtime.package.as_ref());
+    let mut checked = match package.map(package_report).transpose() {
+        Ok(checked) => checked.unwrap_or_else(|| json!({"ok": true})),
         Err(refused) => return refused,
     };
+    if let Some((root, _)) = &given {
+        checked["package"] = json!(root);
+    }
+    checked["runtimeConfig"] = json!(path);
+    checked["filesChecked"] = json!(report.files_checked());
+    checked["diagnostics"] = report.to_json_value();
+    if let Some(config) = runtime.config() {
+        if !runtime.defers_within("/listener") {
+            checked["listener"] = json!(config.listener.bind.socket_addr().to_string());
+        }
+        if !runtime.defers_within("/metricsListener") {
+            checked["metricsListener"] = json!(config
+                .metrics_listener
+                .as_ref()
+                .map(|metrics| metrics.bind.socket_addr().to_string()));
+        }
+        if !runtime.defers_within("/retention") {
+            checked["retention"] = config.retention.report();
+        }
+    }
+    Outcome::new(checked, View::Check)
+}
+
+/// The findings of an offline runtime check, each naming the file as its
+/// path was given rather than as it was resolved.
+fn runtime_report(given: &Path, absolute: &Path, runtime: &RuntimeCheck) -> Report {
+    let given = given.display().to_string();
+    let absolute = absolute.display().to_string();
+    let named = |diagnostic: &Diagnostic| {
+        let mut diagnostic = diagnostic.clone();
+        if let Some(source) = &mut diagnostic.source {
+            if source.file == absolute {
+                source.file.clone_from(&given);
+            }
+        }
+        for related in &mut diagnostic.related {
+            if related.file == absolute {
+                related.file.clone_from(&given);
+            }
+        }
+        diagnostic
+    };
+    let mut report = Report::new(runtime.diagnostics.iter().map(named).collect());
+    report.set_files_checked(1);
+    report
+}
+
+/// The package part of a `check` report: its digest, its templates with
+/// each sample rendered in every locale, and its access profiles.
+fn package_report(loaded: &LoadedPackage) -> Result<Value, Outcome> {
     let package = &loaded.package;
     let profiles: Vec<Value> = package
         .access_profiles()
@@ -817,9 +1013,7 @@ fn check(source: &PackageSource) -> Outcome {
                 };
                 match package.preview(template.id(), template.version(), &request) {
                     Ok(preview) => samples.push(json!({"locale": locale, "sms": preview.sms})),
-                    Err(refusal) => {
-                        return preview_refusal(&refusal);
-                    }
+                    Err(refusal) => return Err(preview_refusal(&refusal)),
                 }
             }
         }
@@ -831,25 +1025,13 @@ fn check(source: &PackageSource) -> Outcome {
             "samples": samples,
         }));
     }
-    let mut report = json!({
+    Ok(json!({
         "ok": true,
         "packageDigest": package.digest(),
         "packageFiles": loaded.files.len(),
         "templates": templates,
         "accessProfiles": profiles,
-    });
-    if let Some(config) = config {
-        report["runtimeConfig"] = json!(source.runtime_config);
-        report["listener"] = json!(config.listener.bind.socket_addr().to_string());
-        report["metricsListener"] = json!(config
-            .metrics_listener
-            .as_ref()
-            .map(|metrics| metrics.bind.socket_addr().to_string()));
-        report["retention"] = json!(config.retention);
-    } else {
-        report["package"] = json!(source.package.as_ref().or(source.project.as_ref()));
-    }
-    Outcome::new(report, View::Check)
+    }))
 }
 
 fn preview(args: &PreviewArgs) -> Outcome {
@@ -971,9 +1153,9 @@ fn async_runtime() -> Result<tokio::runtime::Runtime, Outcome> {
 }
 
 fn plan(path: &Path) -> Outcome {
-    let config = match RuntimeConfig::load(path) {
+    let config = match load_runtime(path) {
         Ok(config) => config,
-        Err(error) => return config_refusal(&error),
+        Err(refused) => return refused,
     };
     let runtime = match async_runtime() {
         Ok(runtime) => runtime,
@@ -1014,9 +1196,9 @@ fn plan(path: &Path) -> Outcome {
 
 fn apply(args: &ApplyArgs) -> Outcome {
     let path = &args.activation.runtime_config;
-    let config = match RuntimeConfig::load(path) {
+    let config = match load_runtime(path) {
         Ok(config) => config,
-        Err(error) => return config_refusal(&error),
+        Err(refused) => return refused,
     };
     let runtime = match async_runtime() {
         Ok(runtime) => runtime,
@@ -1054,9 +1236,9 @@ fn apply(args: &ApplyArgs) -> Outcome {
 }
 
 fn status(path: &Path) -> Outcome {
-    let config = match RuntimeConfig::load(path) {
+    let config = match load_runtime(path) {
         Ok(config) => config,
-        Err(error) => return config_refusal(&error),
+        Err(refused) => return refused,
     };
     let runtime = match async_runtime() {
         Ok(runtime) => runtime,
@@ -1192,9 +1374,9 @@ fn messages(command: &MessagesCommand) -> Outcome {
         MessagesCommand::Retry(args) | MessagesCommand::Cancel(args) => &args.target.runtime_config,
         MessagesCommand::Settle(args) => &args.action.target.runtime_config,
     };
-    let config = match RuntimeConfig::load(path) {
+    let config = match load_runtime(path) {
         Ok(config) => config,
-        Err(error) => return config_refusal(&error),
+        Err(refused) => return refused,
     };
     let runtime = match async_runtime() {
         Ok(runtime) => runtime,
@@ -1257,9 +1439,9 @@ fn erase_expired(args: &EraseExpiredArgs) -> Outcome {
     if args.before > chrono::Utc::now() {
         return future_cutoff();
     }
-    let config = match RuntimeConfig::load(&args.runtime_config) {
+    let config = match load_runtime(&args.runtime_config) {
         Ok(config) => config,
-        Err(error) => return config_refusal(&error),
+        Err(refused) => return refused,
     };
     let runtime = match async_runtime() {
         Ok(runtime) => runtime,
@@ -1279,7 +1461,7 @@ fn erase_expired(args: &EraseExpiredArgs) -> Outcome {
                 "payloads": report.payloads,
                 "records": report.records,
                 "submissionReceipts": report.submission_receipts,
-                "retention": config.retention,
+                "retention": config.retention.report(),
             }),
             View::Retention,
         ),
@@ -1550,7 +1732,21 @@ fn render_human(
     stderr: &mut dyn io::Write,
 ) -> io::Result<()> {
     let report = &outcome.report;
-    if report["ok"] == json!(false) {
+    let failed = report["ok"] == json!(false);
+    // A refusal with positions, and the warnings of a check that passed,
+    // print as the shared human report.
+    let warned = matches!(outcome.view, View::Check)
+        && !failed
+        && report["diagnostics"]
+            .as_array()
+            .is_some_and(|diagnostics| !diagnostics.is_empty());
+    if matches!(outcome.view, View::Diagnostics) || warned {
+        write!(stderr, "{}", shared_report(report).render_human())?;
+        if failed {
+            return Ok(());
+        }
+    }
+    if failed {
         for diagnostic in report["diagnostics"].as_array().into_iter().flatten() {
             writeln!(
                 stderr,
@@ -1581,7 +1777,7 @@ fn render_human(
     match outcome.view {
         View::Init => render_init(report, stdout),
         View::Package => render_package(report, stdout),
-        View::Check => render_check(report, stdout),
+        View::Check | View::Diagnostics => render_check(report, stdout),
         View::Preview => render_preview(report, stdout),
         View::Activation => render_activation(report, stdout),
         View::MessageList => render_message_list(report, stdout),
@@ -1591,6 +1787,17 @@ fn render_human(
         View::Dev => render_dev(report, stdout),
         View::DevToken => render_dev_token(report, stdout),
     }
+}
+
+/// The diagnostics of a report as the shared human report prints them.
+fn shared_report(report: &Value) -> Report {
+    let diagnostics: Vec<Diagnostic> =
+        serde_json::from_value(report["diagnostics"].clone()).unwrap_or_default();
+    let mut shared = Report::new(diagnostics);
+    if let Some(files) = report["filesChecked"].as_u64() {
+        shared.set_files_checked(usize::try_from(files).unwrap_or(usize::MAX));
+    }
+    shared
 }
 
 fn render_package(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
@@ -1656,10 +1863,14 @@ fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         Some(path) => writeln!(stdout, "ok: {path}")?,
         None => writeln!(stdout, "ok: {}", text(&report["package"]))?,
     }
-    writeln!(stdout, "package digest: {}", text(&report["packageDigest"]))?;
+    if let Some(digest) = report["packageDigest"].as_str() {
+        writeln!(stdout, "package digest: {digest}")?;
+    }
     if report.get("listener").is_some() {
         writeln!(stdout, "listener: {}", text(&report["listener"]))?;
-        match report["metricsListener"].as_str() {
+    }
+    if let Some(metrics) = report.get("metricsListener") {
+        match metrics.as_str() {
             Some(bind) => writeln!(stdout, "metrics listener: {bind}")?,
             None => writeln!(stdout, "metrics listener: none")?,
         }
@@ -1700,7 +1911,9 @@ fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         writeln!(
             stdout,
             "retention: payload {} days, record {} days, submission receipt {} days",
-            retention["payloadDays"], retention["recordDays"], retention["submissionReceiptDays"]
+            retention["payloadRetentionDays"],
+            retention["recordRetentionDays"],
+            retention["submissionReceiptRetentionDays"]
         )?;
     }
     Ok(())
@@ -1915,7 +2128,7 @@ accessProfiles:
 
     fn runtime(root: &Path, extra: &str) -> String {
         format!(
-            r"apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+            r"apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1
 kind: MessagingRuntimeConfig
 identity:
   databaseId: messaging-test
@@ -2000,7 +2213,7 @@ audit:
         assert_eq!(report["metricsListener"], "127.0.0.1:9107");
         assert_eq!(report["accessProfiles"][0]["id"], "operations");
         assert_eq!(report["accessProfiles"][0]["role"], "operator");
-        assert_eq!(report["retention"]["payloadDays"], 7);
+        assert_eq!(report["retention"]["payloadRetentionDays"], 7);
 
         let (exit, stdout, stderr) = run(&[
             OsStr::new("check"),
@@ -2021,11 +2234,11 @@ audit:
         let (exit, report) = check_json(&path);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert_eq!(report["ok"], false);
-        assert_eq!(report["diagnostics"][0]["code"], "config.refused");
-        assert!(report["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("surprise"));
+        assert_eq!(report["diagnostics"][0]["code"], "config.unknown-key");
+        assert_eq!(report["diagnostics"][0]["path"], "/surprise");
+        let source = &report["diagnostics"][0]["source"];
+        assert_eq!(source["file"], json!(path));
+        assert!(source["line"].is_u64() && source["column"].is_u64());
     }
 
     #[test]
@@ -2045,12 +2258,12 @@ audit:
         std::fs::write(&path, document).unwrap();
         let (exit, report) = check_json(&path);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
-        assert_eq!(report["diagnostics"][0]["path"], "audit.hashKeyRef");
+        assert_eq!(report["diagnostics"][0]["path"], "/audit/hashKeyRef");
     }
 
     #[test]
     fn a_human_refusal_goes_to_standard_error() {
-        let (_root, path) = project("retention:\n  payloadDays: 31\n");
+        let (_root, path) = project("retention:\n  payloadRetentionDays: 31\n");
         let (exit, stdout, stderr) = run(&[
             OsStr::new("check"),
             OsStr::new("--runtime-config"),
@@ -2058,14 +2271,24 @@ audit:
         ]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stdout.is_empty());
-        assert!(stderr.contains("retention is out of bounds"), "{stderr}");
-        assert!(stderr.starts_with("error[config.refused] "), "{stderr}");
+        // Position first, then the message, the next step, and the summary
+        // (CFG-DIAG-2), with the file named as it was given.
+        let mut lines = stderr.lines();
+        let head = lines.next().unwrap();
         assert!(
-            stderr.contains(
-                "\n  next: Correct the member the path names, then rerun messagingctl check.\n"
-            ),
+            head.starts_with(&format!("error[config.out-of-range] {}:", path.display())),
             "{stderr}"
         );
+        assert!(
+            head.ends_with(" /retention/payloadRetentionDays"),
+            "{stderr}"
+        );
+        assert!(lines
+            .next()
+            .unwrap()
+            .starts_with("  the value is outside its bounds"));
+        assert!(lines.next().unwrap().starts_with("  next: "), "{stderr}");
+        assert_eq!(lines.next(), Some("1 error, 0 warnings in 1 file"));
     }
 
     #[test]
@@ -2144,7 +2367,7 @@ audit:
         write_package_inputs(&safe_root.join("package"), &inputs, None).unwrap();
         let document = runtime(
             &safe_root,
-            "providers:\n  mail-relay:\n    kind: smtp\n    host: 127.0.0.1\n    \
+            "providers:\n  mail-relay:\n    type: smtp\n    host: 127.0.0.1\n    \
              port: 1025\n    tls: development-loopback\n",
         )
         .replace(
@@ -2380,16 +2603,60 @@ audit:
     }
 
     #[test]
-    fn check_takes_exactly_one_package_source() {
+    fn check_takes_one_package_at_most_and_the_environment_only_with_a_runtime_file() {
+        for refused in [
+            ["check", "--project", "/a", "--package", "/b"].as_slice(),
+            ["check", "--project", "/a", "--environment"].as_slice(),
+        ] {
+            let arguments: Vec<&OsStr> = refused.iter().map(OsStr::new).collect();
+            let (exit, report) = json_run(&arguments);
+            assert_eq!(exit, ExitCode::from(USAGE_EXIT), "{refused:?}");
+            assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+        }
+        assert!(Cli::try_parse_from([
+            "messagingctl",
+            "check",
+            "--project",
+            "/a",
+            "--runtime-config",
+            "/b",
+            "--environment",
+            "--deny-warnings",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn a_runtime_file_is_checked_against_a_project_with_no_built_package() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = starter(&std::fs::canonicalize(root.path()).unwrap());
+        let runtime_config = directory.join("runtime.example.yaml");
         let (exit, report) = json_run(&[
             OsStr::new("check"),
             OsStr::new("--project"),
-            OsStr::new("/a"),
+            directory.as_os_str(),
             OsStr::new("--runtime-config"),
-            OsStr::new("/b"),
+            runtime_config.as_os_str(),
         ]);
-        assert_eq!(exit, ExitCode::from(USAGE_EXIT));
-        assert_eq!(report["diagnostics"][0]["code"], "usage.invalid");
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert_eq!(report["runtimeConfig"], json!(runtime_config));
+        assert_eq!(report["diagnostics"], json!([]));
+        assert!(report["packageDigest"].is_string());
+
+        // Alone, the file is checked against the package its package.root
+        // names, which this machine does not hold.
+        let (exit, report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--runtime-config"),
+            runtime_config.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT), "{report}");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "messaging.package.invalid"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "/package/root");
+        assert!(report["diagnostics"][0]["source"]["line"].is_u64());
     }
 
     #[test]
@@ -2536,7 +2803,11 @@ audit:
             path.as_os_str(),
         ]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
-        assert_eq!(report["diagnostics"][0]["path"], "package.expectedDigest");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "messaging.package.digest-mismatch"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "/package/expectedDigest");
     }
 
     #[test]

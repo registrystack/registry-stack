@@ -182,13 +182,18 @@ impl PackageLoadError {
     }
 
     fn envelope(error: SharedPackageError) -> Self {
-        let path = if matches!(error.kind(), SharedPackageErrorKind::DigestMismatch(_)) {
-            "package.expectedDigest".to_owned()
-        } else {
-            "package.root".to_owned()
-        };
+        // The shared refusal repeats the pin as written; this one names only
+        // the digest computed from the package, which the pin is compared to.
+        if let SharedPackageErrorKind::DigestMismatch(mismatch) = error.kind() {
+            return Self {
+                path: "package.expectedDigest".to_owned(),
+                reason: PackageLoadReason::DigestMismatch {
+                    found: mismatch.found.clone(),
+                },
+            };
+        }
         Self {
-            path,
+            path: "package.root".to_owned(),
             reason: PackageLoadReason::Envelope(Box::new(error)),
         }
     }
@@ -227,6 +232,11 @@ pub enum PackageLoadReason {
     Envelope(#[source] Box<SharedPackageError>),
     #[error("contains an authored configuration refusal: {0}")]
     Authored(#[source] AuthoredConfigError),
+    #[error(
+        "does not pin the package at package.root, whose digest is {found}; \
+         deploy the pinned package or update package.expectedDigest"
+    )]
+    DigestMismatch { found: String },
     #[error("changed after its package digest was verified")]
     Changed,
     #[error("could not be read")]

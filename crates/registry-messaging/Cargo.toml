@@ -57,8 +57,10 @@ postgres-test = []
 smtp-test = []
 schema = [
   "dep:schemars",
+  "registry-messaging-core/schema",
   "registry-platform-audit/schema",
   "registry-platform-config/schema",
+  "registry-platform-yaml/schema",
 ]
 
 [lints]
@@ -87,6 +89,7 @@ registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
 registry-platform-script.workspace = true
+registry-platform-yaml.workspace = true
 rhai.workspace = true
 rustls.workspace = true
 serde.workspace = true

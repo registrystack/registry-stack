@@ -532,13 +532,8 @@ fn run_session(
             gateway_port: gateway_address.port(),
         };
         let runtime_config = root.join("runtime.yaml");
-        let document = serde_norway::to_string(&config::runtime_config(
-            &root.join("package"),
-            &root,
-            loaded,
-            &endpoints,
-        ))
-        .map_err(|error| {
+        let document = config::runtime_document(&root.join("package"), &root, loaded, &endpoints)
+            .map_err(|error| {
             failed(format!(
                 "the runtime configuration could not be written: {error}"
             ))

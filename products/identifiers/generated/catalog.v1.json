@@ -3881,11 +3881,11 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "e0975fd1bbab8a304ea899e1eb693cb7f1f6a307e764d88bcbb79ea4de9f1b77"
+        "sha256": "62e1d7f34e58dc153cd69cdaa8de9e10bd671277be8db8733b00009ff1e73993"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "3f1e3c30d730820c1e6eade98ec4bc6fff641610531e1c474b695d4324f07e26",
+        "sha256": "b61f0f39d63bd1b74c86a76e71995b7e26ecd8aaf78e43d8d8f66ba76126afd8",
         "mediaType": "application/schema+json"
       }
     },

@@ -38,13 +38,21 @@ fn the_generated_configuration_is_one_the_runtime_accepts() {
         smtp_port: 11025,
         gateway_port: 18200,
     };
-    let document = serde_norway::to_string(&config::runtime_config(
-        &root.join("package"),
-        &root,
-        &loaded,
-        &endpoints,
-    ))
-    .unwrap();
+    let document =
+        config::runtime_document(&root.join("package"), &root, &loaded, &endpoints).unwrap();
+    // CFG-SCHEMA-7 and CFG-ENV-5: the modeline, then the envelope.
+    let mut lines = document.lines();
+    assert_eq!(
+        lines.next(),
+        Some(
+            "# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/runtime/runtime.v1alpha1.schema.json"
+        )
+    );
+    assert_eq!(
+        lines.next(),
+        Some("apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1")
+    );
+    assert_eq!(lines.next(), Some("kind: MessagingRuntimeConfig"));
     let path = root.join("runtime.yaml");
     private::create(&path, document.as_bytes()).unwrap();
 

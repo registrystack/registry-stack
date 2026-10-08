@@ -8,6 +8,7 @@ use std::time::Duration;
 use ipnet::IpNet;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::client::{Certificate, TlsParameters};
+use registry_messaging_core::typed;
 use registry_platform_config::{SecretReference, SecretResolver};
 use registry_platform_httputil::destination::{
     DestinationPolicyError, ProductionAddressPolicy, MAX_DESTINATION_PRIVATE_CIDRS,
@@ -18,14 +19,17 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::{Network, SmtpProvider, Transport};
-use crate::config::describe_secret_failure;
+use crate::config::{describe_secret_failure, optional_secret_reference, secret_reference};
 
 /// The attempt timeout a provider gets when none is configured.
-pub const DEFAULT_SMTP_ATTEMPT_TIMEOUT_SECONDS: u64 = 30;
+pub const DEFAULT_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 30_000;
+
+/// The shortest attempt timeout a provider may configure.
+pub const MINIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 1_000;
 
 /// The longest attempt timeout a provider may configure. One attempt covers
 /// resolution, connection, TLS, authentication, and the whole transaction.
-pub const MAXIMUM_SMTP_ATTEMPT_TIMEOUT_SECONDS: u64 = 60;
+pub const MAXIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 60_000;
 
 /// The submission port, which requires STARTTLS.
 pub const SMTP_SUBMISSION_PORT: u16 = 587;
@@ -67,7 +71,17 @@ pub enum SmtpTlsMode {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SmtpAuthentication {
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_config::SecretReference")
+    )]
     pub username_ref: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_config::SecretReference")
+    )]
     pub password_ref: String,
 }
 
@@ -91,25 +105,63 @@ pub struct SmtpProviderSettings {
     pub host: String,
     /// Defaults to 587 for `starttls` and 465 for `implicit`; required for
     /// `development-loopback`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "optional_port",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 65535)))]
     pub port: Option<u16>,
     pub tls: SmtpTlsMode,
     /// A PEM root certificate trusted in addition to the public web roots,
     /// for a relay behind a private certificate authority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "optional_secret_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_config::SecretReference>")
+    )]
     pub trusted_root_certificate_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<SmtpAuthentication>,
-    #[serde(default = "default_attempt_timeout_seconds")]
-    pub attempt_timeout_seconds: u64,
+    /// How long one attempt may take, from 1000 to 60000 milliseconds;
+    /// omitted, 30000.
+    #[serde(
+        default = "default_attempt_timeout_milliseconds",
+        deserialize_with = "typed::bounded_u64::<_, MINIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS, MAXIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MINIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS,
+            max = MAXIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS
+        ))
+    )]
+    pub attempt_timeout_milliseconds: u64,
     /// Exact RFC 1918, CGNAT, or unique-local networks the relay may resolve
     /// into. Every other non-public address is refused.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_DESTINATION_PRIVATE_CIDRS))
+    )]
     pub allowed_private_cidrs: Vec<String>,
 }
 
-const fn default_attempt_timeout_seconds() -> u64 {
-    DEFAULT_SMTP_ATTEMPT_TIMEOUT_SECONDS
+const fn default_attempt_timeout_milliseconds() -> u64 {
+    DEFAULT_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS
+}
+
+/// A port from 1 to 65535 (CFG-QTY-4); absent reads as `None` through
+/// `serde(default)`.
+fn optional_port<'de, D>(deserializer: D) -> Result<Option<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    typed::bounded_u16::<D, 1, 65535>(deserializer).map(Some)
 }
 
 impl std::fmt::Debug for SmtpProviderSettings {
@@ -127,7 +179,10 @@ impl std::fmt::Debug for SmtpProviderSettings {
                     .map(|_| "<redacted>"),
             )
             .field("authentication", &self.authentication)
-            .field("attempt_timeout_seconds", &self.attempt_timeout_seconds)
+            .field(
+                "attempt_timeout_milliseconds",
+                &self.attempt_timeout_milliseconds,
+            )
             .field("allowed_private_cidrs", &self.allowed_private_cidrs)
             .finish()
     }
@@ -159,7 +214,8 @@ pub enum SmtpSettingsError {
     #[error("tls development-loopback cannot declare allowedPrivateCidrs")]
     DevelopmentPrivateCidrsDenied,
     #[error(
-        "attemptTimeoutSeconds must be from 1 to {MAXIMUM_SMTP_ATTEMPT_TIMEOUT_SECONDS} seconds"
+        "attemptTimeoutMilliseconds must be from {MINIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS} to \
+         {MAXIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS} milliseconds"
     )]
     AttemptTimeoutOutOfRange,
     #[error("allowedPrivateCidrs accepts at most {MAX_DESTINATION_PRIVATE_CIDRS} networks")]
@@ -181,6 +237,32 @@ pub enum SmtpSettingsError {
     InvalidTrustedRootCertificate,
     #[error("the TLS client for this provider could not be built")]
     TlsClient,
+}
+
+impl SmtpSettingsError {
+    /// The settings member the refusal concerns, spelled with dots, or empty
+    /// when it concerns the provider as a whole.
+    #[must_use]
+    pub const fn member(&self) -> &'static str {
+        match self {
+            Self::InvalidHost | Self::DevelopmentRequiresLoopbackHost => "host",
+            Self::PortZero
+            | Self::SubmissionPortRequiresStarttls
+            | Self::ImplicitPortRequiresImplicitTls
+            | Self::DevelopmentRequiresExplicitPort => "port",
+            Self::DevelopmentNotPermitted => "tls",
+            Self::DevelopmentTrustedRootDenied | Self::InvalidTrustedRootCertificate => {
+                "trustedRootCertificateRef"
+            }
+            Self::DevelopmentPrivateCidrsDenied
+            | Self::TooManyPrivateCidrs
+            | Self::InvalidPrivateCidr { .. }
+            | Self::PrivateCidrDenied => "allowedPrivateCidrs",
+            Self::AttemptTimeoutOutOfRange => "attemptTimeoutMilliseconds",
+            Self::InvalidSecretReference { field } | Self::SecretNotText { field } => field,
+            Self::Secret(_) | Self::TlsClient => "",
+        }
+    }
 }
 
 impl SmtpProviderSettings {
@@ -284,7 +366,9 @@ impl SmtpProviderSettings {
 
     fn checked_with(&self, development_permitted: bool) -> Result<Checked, SmtpSettingsError> {
         let host_literal = check_host(&self.host)?;
-        if !(1..=MAXIMUM_SMTP_ATTEMPT_TIMEOUT_SECONDS).contains(&self.attempt_timeout_seconds) {
+        if !(MINIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS..=MAXIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS)
+            .contains(&self.attempt_timeout_milliseconds)
+        {
             return Err(SmtpSettingsError::AttemptTimeoutOutOfRange);
         }
         if self.port == Some(0) {
@@ -354,7 +438,7 @@ impl SmtpProviderSettings {
         })?;
         Ok(Checked {
             port,
-            attempt_timeout: Duration::from_secs(self.attempt_timeout_seconds),
+            attempt_timeout: Duration::from_millis(self.attempt_timeout_milliseconds),
             policy,
         })
     }
@@ -449,10 +533,10 @@ pub(super) mod tests {
     #[test]
     fn the_attempt_timeout_is_bounded_to_sixty_seconds() {
         let mut settings = starttls();
-        settings.attempt_timeout_seconds = 60;
+        settings.attempt_timeout_milliseconds = 60_000;
         assert!(settings.check(false).is_ok());
-        for refused in [0, 61, 3600] {
-            settings.attempt_timeout_seconds = refused;
+        for refused in [0, 999, 60_001, 3_600_000] {
+            settings.attempt_timeout_milliseconds = refused;
             assert_eq!(
                 settings.check(false),
                 Err(SmtpSettingsError::AttemptTimeoutOutOfRange)
@@ -700,7 +784,7 @@ pub(super) mod tests {
             tls: SmtpTlsMode::DevelopmentLoopback,
             trusted_root_certificate_ref: None,
             authentication: None,
-            attempt_timeout_seconds: DEFAULT_SMTP_ATTEMPT_TIMEOUT_SECONDS,
+            attempt_timeout_milliseconds: DEFAULT_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS,
             allowed_private_cidrs: Vec::new(),
         }
     }

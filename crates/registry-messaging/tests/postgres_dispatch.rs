@@ -56,7 +56,8 @@ struct Scripted {
     rate: Option<u32>,
     started: Mutex<Vec<std::time::Instant>>,
     /// The provider's in-flight bound, and the slots a send waits for
-    /// before it leaves, as an HTTP provider's `concurrencyLimit` does.
+    /// before it leaves, as an HTTP provider's `maximumConcurrentRequests`
+    /// does.
     limit: Option<NonZeroUsize>,
     slots: Option<tokio::sync::Semaphore>,
     /// How long the first send takes, on top of `delay`.

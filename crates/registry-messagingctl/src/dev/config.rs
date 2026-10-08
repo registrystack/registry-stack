@@ -16,6 +16,7 @@ use registry_messaging::http_provider::ReceiptCapability;
 use registry_messaging::package::LoadedPackage;
 use registry_messaging_core::{
     ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
+    MESSAGING_RUNTIME_SCHEMA_ID,
 };
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
@@ -194,10 +195,28 @@ pub(super) struct Endpoints {
     pub gateway_port: u16,
 }
 
-/// The runtime configuration: a development listener on loopback, the
-/// session's database, key set, and audit key, every `smtp` provider on the
-/// local relay, and every `http` provider on the mock gateway.
-pub(super) fn runtime_config(
+/// The session's `runtime.yaml`: the schema modeline on the first line,
+/// then `apiVersion` and `kind`, then the members of [`runtime_members`].
+pub(super) fn runtime_document(
+    project: &Path,
+    root: &Path,
+    loaded: &LoadedPackage,
+    endpoints: &Endpoints,
+) -> Result<String, serde_norway::Error> {
+    let members = serde_norway::to_string(&runtime_members(project, root, loaded, endpoints))?;
+    Ok(format!(
+        "# yaml-language-server: $schema={MESSAGING_RUNTIME_SCHEMA_ID}\n\
+         apiVersion: {MESSAGING_RUNTIME_API_VERSION}\n\
+         kind: {MESSAGING_RUNTIME_KIND}\n\
+         {members}"
+    ))
+}
+
+/// The runtime configuration's members: a development listener on
+/// loopback, the session's database, key set, and audit key, every `smtp`
+/// provider on the local relay, and every `http` provider on the mock
+/// gateway.
+fn runtime_members(
     project: &Path,
     root: &Path,
     loaded: &LoadedPackage,
@@ -217,7 +236,7 @@ pub(super) fn runtime_config(
         .map(|provider| {
             let connection = match provider.kind {
                 ProviderKind::Smtp => json!({
-                    "kind": "smtp",
+                    "type": "smtp",
                     "host": "127.0.0.1",
                     "port": endpoints.smtp_port,
                     "tls": "development-loopback",
@@ -228,17 +247,17 @@ pub(super) fn runtime_config(
                         .get(&provider.id)
                         .map(|source| &source.package.capabilities);
                     let mut connection = json!({
-                        "kind": "http",
+                        "type": "http",
                         "baseUrl": format!(
                             "http://127.0.0.1:{}/{}/v1/",
                             endpoints.gateway_port, provider.id
                         ),
-                        "timeoutMilliseconds": 10000,
+                        "attemptTimeoutMilliseconds": 10000,
                         "maximumResponseBytes": 16384,
-                        "concurrencyLimit": capabilities.map_or(1, |capabilities| capabilities.concurrency_limit),
+                        "maximumConcurrentRequests": capabilities.map_or(1, |capabilities| capabilities.concurrency_limit),
                         "redirects": "deny",
                         "authentication": {
-                            "kind": "static-authorization",
+                            "type": "static-authorization",
                             "tokenRef": "secret:file/gateway-token",
                         },
                     });
@@ -246,7 +265,7 @@ pub(super) fn runtime_config(
                         .is_some_and(|capabilities| capabilities.receipts == ReceiptCapability::Callback)
                     {
                         connection["callbackVerifier"] = json!({
-                            "kind": "hmac-sha256-body",
+                            "type": "hmac-sha256-body",
                             "header": SIGNATURE_HEADER,
                             "encoding": "hex",
                             "secretRef": "secret:file/gateway-callback-key",
@@ -259,8 +278,6 @@ pub(super) fn runtime_config(
         })
         .collect();
     json!({
-        "apiVersion": MESSAGING_RUNTIME_API_VERSION,
-        "kind": MESSAGING_RUNTIME_KIND,
         "identity": {"databaseId": "messaging-test"},
         "package": {"root": project},
         "listener": {

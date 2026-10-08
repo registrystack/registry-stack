@@ -18,7 +18,7 @@
 //! same key with the same canonical request replays the stored status and
 //! receipt; the same key with another request is refused with
 //! `idempotency.key-reused`, whatever the key's age; the same request under
-//! a key whose receipt is older than `retention.submissionReceiptDays` is
+//! a key whose receipt is older than `retention.submissionReceiptRetentionDays` is
 //! refused with `idempotency.expired`. A replay is authorized and rendered again against
 //! the active package before its receipt is answered.
 //!
@@ -1121,7 +1121,7 @@ impl MessageService {
             links: MessageLinks::for_message(&message_id.to_string()),
         })
         .map_err(|_| Refusal::Problem(ProblemCode::ServiceUnavailable))?;
-        let receipt_expires = now + days(self.retention.submission_receipt_days);
+        let receipt_expires = now + days(self.retention.submission_receipt_retention_days);
         let inserted = transaction
             .execute(
                 "INSERT INTO messaging_idempotency \
@@ -1396,7 +1396,7 @@ impl Window {
     /// profile's expiry capped by that retention; `notBefore` must precede
     /// it. The cap keeps a message from waiting in the queue longer than
     /// its payload would be kept once it ends; the payload itself is erased
-    /// `payloadDays` after the message reaches a terminal state (see
+    /// `payloadRetentionDays` after the message reaches a terminal state (see
     /// [`crate::retention`]).
     fn new(
         now: SystemTime,
@@ -1404,7 +1404,7 @@ impl Window {
         retention: &RetentionConfig,
     ) -> Result<Self, Refusal> {
         let invalid = || Refusal::Problem(ProblemCode::RequestUnprocessable);
-        let payload = days(retention.payload_days);
+        let payload = days(retention.payload_retention_days);
         let latest = now + payload;
         let expires_at = match submission.expires_at {
             Some(expires_at) if expires_at <= now || expires_at > latest => return Err(invalid()),

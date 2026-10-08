@@ -97,7 +97,7 @@ decisions:
       credential from rewriting its own activation history. Restart keeps one
       package per process; the pin binds deployment to reviewed bytes.
     evidence:
-      - {path: crates/registry-messaging/src/config.rs, name: runtime_package_digest_pin_reports_expected_and_found}
+      - {path: crates/registry-messaging/src/config.rs, name: runtime_package_digest_pin_names_the_found_digest}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: plan_is_read_only_and_apply_records_once_and_is_idempotent}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: the_runtime_refuses_a_package_the_ledger_does_not_name_active}
       - {path: crates/registry-messaging/tests/postgres_package.rs, name: a_pinned_digest_must_match_the_package_before_any_ledger_write}
@@ -291,11 +291,11 @@ decisions:
   - id: MESSAGING-DEC-16
     subject: Retention periods count from the terminal state
     decision: >-
-      A payload is erased retention.payloadDays, and a record deleted
-      retention.recordDays, after the message's dispatch job reached a
-      terminal state, not after acceptance. A message's expiresAt stays
-      capped at acceptance plus payloadDays, so a message never waits to
-      send past the point its payload could be erased.
+      A payload is erased retention.payloadRetentionDays, and a record deleted
+      retention.recordRetentionDays, after the message's dispatch job reached
+      a terminal state, not after acceptance. A message's expiresAt stays
+      capped at acceptance plus payloadRetentionDays, so a message never waits
+      to send past the point its payload could be erased.
     reasoning: >-
       Counting from acceptance erased the payload of a message still waiting
       in a retry, which then failed without a send. The terminal instant is
@@ -330,27 +330,26 @@ decisions:
     reasoning: >-
       Freeing a key would turn a caller's mistaken retry into a second message
       sent to the same recipient, which is the duplicate the key exists to
-      prevent. A changed request under a spent key is a caller defect
-      whatever the key's age, so it answers the conflict it answers inside
-      the horizon; telling it apart takes only the request hash the row
-      already holds until recordDays, and the record deletion drops that hash
-      with the message rather than keeping it for this answer alone. A key
-      scoped to the pseudonym was freed by every audit key rotation, so
-      routine key hygiene reopened that duplicate for every caller with a
-      retry in flight, and a digest keyed with any rotating secret would do
-      the same; the digest therefore takes no key. The raw
-      issuer and subject name the authenticated caller, not a recipient, and
-      under a profile that admits a human or agent actor or reads the
-      principal from a claim other than sub they may identify a person, such
-      as a staff member's email address. They are kept for at most
-      submissionReceiptDays, no longer than the message row already holds
-      them, and the spent-key row holds them no longer. The residual is that
-      an unkeyed digest lets anyone who reads the table and can guess a
-      caller's issuer, subject, and key confirm that the caller spent that
-      key, which a random key makes impractical. Version 3 discarded the
-      records it replaced rather than re-keying them because no deployment
-      held Messaging records worth keeping, and a key attributed to the wrong
-      caller would replay one caller's receipt to another.
+      prevent. A changed request under a spent key is a caller defect whatever
+      the key's age, so it answers the conflict it answers inside the horizon;
+      telling it apart takes only the request hash the row already holds until
+      recordRetentionDays, and the record deletion drops that hash with the
+      message rather than keeping it for this answer alone. A key scoped to
+      the pseudonym was freed by every audit key rotation, so routine key
+      hygiene reopened that duplicate for every caller with a retry in flight,
+      and a digest keyed with any rotating secret would do the same; the
+      digest therefore takes no key. The raw issuer and subject name the
+      authenticated caller, not a recipient, and under a profile that admits a
+      human or agent actor or reads the principal from a claim other than sub
+      they may identify a person, such as a staff member's email address. They
+      are kept for at most submissionReceiptRetentionDays, no longer than the
+      message row already holds them, and the spent-key row holds them no
+      longer. The residual is that an unkeyed digest lets anyone who reads the
+      table and can guess a caller's issuer, subject, and key confirm that the
+      caller spent that key, which a random key makes impractical. Version 3
+      discarded the records it replaced rather than re-keying them because no
+      deployment held Messaging records worth keeping, and a key attributed to
+      the wrong caller would replay one caller's receipt to another.
     evidence:
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_exact_retry_across_an_audit_key_rotation_replays_and_never_sends_again}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: an_idempotency_key_replays_one_request_and_refuses_another}
@@ -437,7 +436,7 @@ decisions:
     decision: >-
       An http provider's capabilities.ratePerSecond is enforced in-process by
       the worker: a leased attempt holds one of the connection's
-      concurrencyLimit sends in flight and then waits in turn for the
+      maximumConcurrentRequests sends in flight and then waits in turn for the
       provider's next send slot, with a ten-second allowance added to its
       time budget that never runs past the message's expiresAt, and an
       attempt whose slot does not open in time is a transient failure with

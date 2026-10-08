@@ -119,7 +119,7 @@ entries:
       - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha1_url_form_refuses_every_forgery}
       - {path: crates/registry-messaging-core/src/callback.rs, name: hmac_sha256_body_refuses_every_forgery}
       - {path: crates/registry-messaging-core/src/callback.rs, name: path_token_accepts_only_the_exact_token}
-      - {path: crates/registry-messaging-core/src/callback.rs, name: a_verifier_configuration_document_refuses_none_and_unknown_keys}
+      - {path: crates/registry-messaging/src/http_provider/callback_verifier.rs, name: a_verifier_configuration_document_refuses_none_and_unknown_keys}
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_report_never_regresses}
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_duplicate_report_is_a_no_op}
       - {path: crates/registry-messaging-core/src/receipt.rs, name: a_terminal_state_is_never_displaced_by_the_other_terminal_state}

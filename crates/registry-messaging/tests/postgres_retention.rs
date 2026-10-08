@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Database-backed retention tests: a message's payload is erased
-//! `retention.payloadDays` after the message reached a terminal state, its
-//! record is deleted `retention.recordDays` after, a submission receipt
-//! expires at the end of `retention.submissionReceiptDays`, and nothing of
-//! a message still sending or in an unknown outcome is ever erased.
+//! `retention.payloadRetentionDays` after the message reached a terminal
+//! state, its record is deleted `retention.recordRetentionDays` after, a
+//! submission receipt expires at the end of
+//! `retention.submissionReceiptRetentionDays`, and nothing of a message
+//! still sending or in an unknown outcome is ever erased.
 //!
 //! A message's dispatch state and its age are set directly in the schema,
 //! so each case names exactly the state and the time it proves.
@@ -836,7 +837,7 @@ async fn a_retention_run_is_journaled_with_its_counts_only() {
             "submissionReceipts"
         ]
     );
-    assert_eq!(records[1]["retention"]["payloadDays"], 7);
+    assert_eq!(records[1]["retention"]["payloadRetentionDays"], 7);
     harness.publish().await;
     assert_absent("the retention journal", &Value::Array(harness.journal()));
     assert_logs_clean();

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- BREAKING: the runtime file follows the Registry Stack configuration
+  conventions. Its `apiVersion` is
+  `id.registrystack.org/formats/messaging/runtime/v1alpha1`; the retention
+  periods are `*RetentionDays`; `audit.retainDays` is `audit.retentionDays`;
+  a provider connection, its `authentication`, and its `callbackVerifier`
+  are tagged by `type`; an `smtp` connection's `attemptTimeoutSeconds` is
+  `attemptTimeoutMilliseconds` (`attemptTimeoutSeconds: 10` becomes
+  `attemptTimeoutMilliseconds: 10000`); and an `http` connection's
+  `timeoutMilliseconds` and `concurrencyLimit` are
+  `attemptTimeoutMilliseconds` and `maximumConcurrentRequests`. Each old
+  spelling is refused with its replacement. The audit events and
+  `messagingctl` reports name the retention periods with the same keys.
+  Migration steps are in `release/notes/config-conventions/messaging.md`.
+- BREAKING: `messagingctl check --runtime-config` reports every refusal at
+  its line and column with its own `messaging.<area>.<condition>` or shared
+  `config.*` code and a JSON Pointer path, where it reported `config.refused`
+  at a dotted path. It checks a runtime file against `--project` or
+  `--package` offline, takes `--environment` and `--deny-warnings`, and the
+  digest mismatch names only the digest of the package found. A provider
+  connection's out-of-range integer and a malformed callback verifier are
+  refused by the reader at the member. `RuntimeConfigError::path` is
+  replaced by `RuntimeConfigError::pointer`. Migration steps and the
+  old-to-new code table are in
+  `release/notes/config-conventions/messaging.md`.
 - BREAKING: a spent idempotency key is scoped to the caller's issuer and
   subject, as in Scheduling and Casework, instead of the caller's keyed audit
   pseudonym, so rotating `audit.hashKeyRef` no longer frees spent keys: an
@@ -11,12 +35,13 @@
   operation, and key; the raw issuer, subject, and key stay beside it only
   until retention erases the submission receipt, which clears all three,
   and the digest alone keeps the key spent for that caller after
-  `submissionReceiptDays`. Past that horizon a changed request under the key
-  is refused with `409 idempotency.key-reused`, as Base Registry Engine,
-  Scheduling, and Casework refuse it, instead of `410 idempotency.expired`:
-  only the exact request is `410`, and every request is once retention
-  deletes the message record after `recordDays`, since its request hash goes
-  with it. Audit records keep the pseudonym. The upgrade discards existing idempotency
+  `retention.submissionReceiptRetentionDays`. Past that horizon a changed
+  request under the key is refused with `409 idempotency.key-reused`, as Base
+  Registry Engine, Scheduling, and Casework refuse it, instead of
+  `410 idempotency.expired`: only the exact request is `410`, and every
+  request is once retention deletes the message record after
+  `retention.recordRetentionDays`, since its request hash goes with it. Audit
+  records keep the pseudonym. The upgrade discards existing idempotency
   records, so every key spent before it can be used again, and a retry the
   new runtime receives under a discarded key sends its message a second
   time. Before you run `messagingctl apply` with this release, stop new

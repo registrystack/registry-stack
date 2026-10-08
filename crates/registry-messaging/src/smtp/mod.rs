@@ -49,8 +49,8 @@ use tokio::time::{timeout_at, Instant};
 
 pub use settings::{
     SmtpAuthentication, SmtpProviderSettings, SmtpSettingsError, SmtpTlsMode,
-    DEFAULT_SMTP_ATTEMPT_TIMEOUT_SECONDS, MAXIMUM_SMTP_ATTEMPT_TIMEOUT_SECONDS,
-    SMTP_IMPLICIT_TLS_PORT, SMTP_SUBMISSION_PORT,
+    DEFAULT_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS, MAXIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS,
+    MINIMUM_SMTP_ATTEMPT_TIMEOUT_MILLISECONDS, SMTP_IMPLICIT_TLS_PORT, SMTP_SUBMISSION_PORT,
 };
 
 /// The most resolved addresses one attempt tries to connect to.

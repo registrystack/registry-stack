@@ -95,6 +95,23 @@ through aliases (MESSAGING-DEC-05). Diagnostics identify the field without
 revealing substituted or default values. Secret-bearing configuration blocks
 redact their `Debug` output.
 
+The runtime file is read under the configuration conventions. Every integer
+member carries its bound in its type, every union names its variant under
+`type`, and a mapping that merges shared blocks (the OIDC issuer and
+clients, the audit key, a provider connection) is read without serde
+flattening, so each unknown key inside it is refused at that key. A removed
+key or the retired apiVersion is refused by name with its replacement, never
+ignored, so an old file cannot fall back to a default. Each refusal carries
+its code, its JSON Pointer, and its line and column, and no refusal repeats
+a value read from the file or the environment: a digest pin that does not
+match names the digest computed from the package, never the pin as written.
+`messagingctl check` reads no database, network, or secret; without
+`--environment` a `${VAR}` expression is checked for its syntax and position
+only, so no variable's value is resolved into a finding. A callback
+verifier's header, URL, and secret reference, and an `http` connection's
+integer bounds, are refused when the file is read; activation keeps its own
+checks, so a document built in code is held to the same rules.
+
 Tests: the `config.rs` unit tests, the `registry-platform-config`
 expansion and protected-member tests, and the checkpoint's `messagingctl
 check` refusal cases.
@@ -143,7 +160,7 @@ an explicit migration before adopting this schema. ConfigMap-style symlink
 mounts remain refused; copy the installed package into place instead
 (MESSAGING-DEC-24).
 
-Tests: `config.rs::a_pinned_package_digest_must_equal_the_digest_of_the_package_read`,
+Tests: `config.rs::runtime_package_digest_pin_names_the_found_digest`,
 the `package.rs` loader tests, and the PostgreSQL activation and package suites.
 
 ## Listeners and metrics
@@ -193,7 +210,7 @@ best-effort. The hash key still derives the same caller and recipient
 references. It no longer chains or signs log entries, and it scopes no
 idempotency key: rotating it changes pseudonyms only (MESSAGING-DEC-17).
 Tamper evidence, aggregation, and complete retention outside local
-`retainDays` are deployment responsibilities.
+`retentionDays` are deployment responsibilities.
 
 A fresh invocation correlation joins request and response. A caller's reusable
 Idempotency-Key is not that correlation. The writer must accept the request
@@ -280,7 +297,7 @@ sends again.
 The request hash covers the canonical request body: the same key with
 another body is `409 idempotency.key-reused` whatever the key's age, as in
 Base Registry Engine, Scheduling, and Casework, and the same body under a
-key older than `retention.submissionReceiptDays` is
+key older than `retention.submissionReceiptRetentionDays` is
 `410 idempotency.expired`. A replay is
 authorized and rendered again against the active package before the stored
 receipt is answered, so a key cannot outlive the caller's authority
@@ -299,36 +316,37 @@ revised 2026-10-07). A spent key is recorded and found under
 `registry-messaging-idempotency-key-v1` and the length-prefixed issuer,
 subject, operation, and key. The row also holds the caller's raw issuer and
 subject and the raw key, and only while its submission receipt does: when
-retention erases the receipt after `submissionReceiptDays`, whether the
-runtime sweep or `messagingctl retention erase-expired` runs it, the same
-statement clears all three, and the record deletion after `recordDays`
-clears them too if they remain (MESSAGING-SEC-11). A schema constraint
-holds the pair: a row whose receipt is erased holds none of the three, and
-a row whose receipt stands holds all three. The digest row then stays
-indefinitely with the operation and its times, and the message and request
-hash until `recordDays`, so the key stays spent for that caller alone: the
-same caller's exact retry is `410 idempotency.expired`, a changed one is
-`409 idempotency.key-reused` while the request hash stays and `410` once the
-record deletion clears it, and neither sends anything; another caller's
-identical key is fresh, and an audit key
-rotation frees nothing, since the digest takes no key. The issuer and
-subject name the authenticated caller, not a recipient, and that caller is
-not always a service: an access profile may admit a human or agent actor,
-or read the principal from a claim other than `sub`, so under such a
-profile the raw subject may identify a person, such as a staff member's
-email address. The raw values are accepted for at most
-`submissionReceiptDays`, a period no longer than the one the message row
-already holds the issuer and subject for (`recordDays`). The residual is the
-digest itself: it is not keyed, because a keyed digest would let a key
-rotation free every spent key, the duplicate-send failure the pseudonym
-scope had before schema version 3. Anyone who reads the table and can guess
-a caller's issuer, subject, and key can therefore confirm that the caller
-spent that key. A random key makes the guess impractical, and the API
-reference tells callers to choose one; a short or predictable key does not. The audit journal
-and the rate limiter keep the pseudonym. Schema version 3 discarded every
-idempotency record written under the pseudonym scope, request hashes and
-receipts included, so no pseudonym-keyed row survives the upgrade and every
-key spent before it is free again (`postgres_migrate.rs`,
+retention erases the receipt after `submissionReceiptRetentionDays`, whether
+the runtime sweep or `messagingctl retention erase-expired` runs it, the
+same statement clears all three, and the record deletion after
+`recordRetentionDays` clears them too if they remain (MESSAGING-SEC-11). A
+schema constraint holds the pair: a row whose receipt is erased holds none
+of the three, and a row whose receipt stands holds all three. The digest row
+then stays indefinitely with the operation and its times, and the message
+and request hash until `recordRetentionDays`, so the key stays spent for
+that caller alone: the same caller's exact retry is
+`410 idempotency.expired`, a changed one is `409 idempotency.key-reused`
+while the request hash stays and `410` once the record deletion clears it,
+and neither sends anything; another caller's identical key is fresh, and an
+audit key rotation frees nothing, since the digest takes no key. The issuer
+and subject name the authenticated caller, not a recipient, and that caller
+is not always a service: an access profile may admit a human or agent actor,
+or read the principal from a claim other than `sub`, so under such a profile
+the raw subject may identify a person, such as a staff member's email
+address. The raw values are accepted for at most
+`submissionReceiptRetentionDays`, a period no longer than the one the
+message row already holds the issuer and subject for
+(`recordRetentionDays`). The residual is the digest itself: it is not keyed,
+because a keyed digest would let a key rotation free every spent key, the
+duplicate-send failure the pseudonym scope had before schema version 3.
+Anyone who reads the table and can guess a caller's issuer, subject, and key
+can therefore confirm that the caller spent that key. A random key makes the
+guess impractical, and the API reference tells callers to choose one; a
+short or predictable key does not. The audit journal and the rate limiter
+keep the pseudonym. Schema version 3 discarded every idempotency record
+written under the pseudonym scope, request hashes and receipts included, so
+no pseudonym-keyed row survives the upgrade and every key spent before it is
+free again (`postgres_migrate.rs`,
 `version_3_discards_pseudonym_scoped_records_and_the_runtime_scopes_keys_to_the_caller`).
 
 Tests: MESSAGING-SEC-01, -02, and -11 in
@@ -360,13 +378,13 @@ the daily count. A refusal is journaled like every refused submission, as
 `messaging.message.refused` with its problem code.
 
 A provider's `capabilities.ratePerSecond` paces the worker in-process: a
-leased attempt waits for one of the connection's `concurrencyLimit` sends in
-flight, holds it through the send, and then waits for the provider's next
-send slot, so the rate holds for requests as they leave. The wait has a
-ten-second allowance added to its time budget and never outlasts the
-message's `expiresAt`; an attempt whose slot does not open in it is transient
-and nothing is sent, and no attempt reaches the provider once the message has
-expired (MESSAGING-DEC-22).
+leased attempt waits for one of the connection's `maximumConcurrentRequests`
+sends in flight, holds it through the send, and then waits for the
+provider's next send slot, so the rate holds for requests as they leave. The
+wait has a ten-second allowance added to its time budget and never outlasts
+the message's `expiresAt`; an attempt whose slot does not open in it is
+transient and nothing is sent, and no attempt reaches the provider once the
+message has expired (MESSAGING-DEC-22).
 
 Residual risk: a caller that keeps sending past its rate still makes the
 runtime authenticate each request and write one journal record for it. The
@@ -806,21 +824,22 @@ that may still be sent, requeued, or settled; a retention run erases what
 has not expired, races an operator, or leaves no trace
 (MESSAGING-SEC-10, enforced).
 
-`retention.payloadDays` (1 to 30), `recordDays` (up to ten years), and
-`submissionReceiptDays` (up to the record period) are validated and recorded
-at start. The payload and record periods count from the instant the
-message's dispatch job reached a terminal state, `delivered`,
-`dead_lettered`, `expired`, or `cancelled`, which the job row already holds
-(MESSAGING-DEC-16). A `pending`, `leased`, or `unknown` message is never
-erased, whatever its age. A submission's `expiresAt` stays capped at
-acceptance plus `payloadDays`. Past `payloadDays` the recipient and the
-rendered parts are nulled and the content-free record stays; past
-`recordDays` the record is deleted with its payload, job, attempts, and
-delivery receipts; its idempotency row stays with the message, the request
-hash, any stored receipt, and the raw issuer, subject, and key nulled,
-holding only their digest and its times, so a repeat, exact or changed,
-is still `410 idempotency.expired` (MESSAGING-DEC-17), whatever audit hash
-key the runtime holds then. Past `submissionReceiptDays` the stored receipt
+`retention.payloadRetentionDays` (1 to 30), `recordRetentionDays` (up to ten
+years), and `submissionReceiptRetentionDays` (up to the record period) are
+validated and recorded at start. The payload and record periods count from
+the instant the message's dispatch job reached a terminal state,
+`delivered`, `dead_lettered`, `expired`, or `cancelled`, which the job row
+already holds (MESSAGING-DEC-16). A `pending`, `leased`, or `unknown`
+message is never erased, whatever its age. A submission's `expiresAt` stays
+capped at acceptance plus `payloadRetentionDays`. Past
+`payloadRetentionDays` the recipient and the rendered parts are nulled and
+the content-free record stays; past `recordRetentionDays` the record is
+deleted with its payload, job, attempts, and delivery receipts; its
+idempotency row stays with the message, the request hash, any stored
+receipt, and the raw issuer, subject, and key nulled, holding only their
+digest and its times, so a repeat, exact or changed, is still
+`410 idempotency.expired` (MESSAGING-DEC-17), whatever audit hash key the
+runtime holds then. Past `submissionReceiptRetentionDays` the stored receipt
 is dropped together with the raw issuer, subject, and key, the request hash
 stays, and the same caller's exact repeat of its key is
 `410 idempotency.expired` and a changed one `409 idempotency.key-reused`

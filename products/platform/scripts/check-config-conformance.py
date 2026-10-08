@@ -426,7 +426,7 @@ ROWS: tuple[Row, ...] = (
         ),
         digest_mismatch=TestRef(
             "crates/registry-messaging/src/config.rs",
-            "runtime_package_digest_pin_reports_expected_and_found",
+            "runtime_package_digest_pin_names_the_found_digest",
         ),
         rust_blocks=(
             RustBlock(

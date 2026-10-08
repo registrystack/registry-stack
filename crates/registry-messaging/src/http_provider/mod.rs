@@ -5,7 +5,8 @@
 //! substrate.
 //!
 //! An attempt runs in this order, under one deadline of the configured
-//! `timeoutMilliseconds`, or of the dispatch budget when that is shorter:
+//! `attemptTimeoutMilliseconds`, or of the dispatch budget when that is
+//! shorter:
 //!
 //! 1. The prepare script turns the rendered message and the sender profile
 //!    into a request target relative to `baseUrl`, a set of declared
@@ -42,6 +43,7 @@
 
 #[cfg(test)]
 mod aws_tests;
+mod callback_verifier;
 mod script;
 mod settings;
 #[cfg(test)]
@@ -51,9 +53,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_messaging_core::{
-    CallbackRequest, CallbackVerifierConfig, Channel, Receipt, RenderedParts, SenderProfile,
-};
+use registry_messaging_core::{CallbackRequest, Channel, Receipt, RenderedParts, SenderProfile};
 use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome, Sent};
 use registry_platform_httputil::destination::json::decode_script_json;
@@ -75,6 +75,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
+pub use callback_verifier::CallbackVerifierConfig;
 pub use script::{
     ScriptFailure, MAXIMUM_PREPARE_OUTPUT_BYTES, MAXIMUM_SCRIPT_OPERATIONS,
     MAXIMUM_SCRIPT_OUTPUT_BYTES, MAXIMUM_SCRIPT_SOURCE_BYTES,
@@ -82,9 +83,10 @@ pub use script::{
 pub use settings::{
     CredentialPlacement, HttpProviderAuthentication, HttpProviderCapabilities, HttpProviderError,
     HttpProviderPackage, HttpProviderRequest, HttpProviderSettings, HttpSendMethod,
-    ReceiptCapability, RedirectPolicy, MAXIMUM_CONCURRENCY_LIMIT, MAXIMUM_RATE_PER_SECOND,
-    MAXIMUM_RESPONSE_BYTES, MAXIMUM_SCRIPT_HEADERS, MAXIMUM_SCRIPT_PATH_BYTES,
-    MAXIMUM_TOKEN_CACHE_SECONDS, MINIMUM_TOKEN_CACHE_SECONDS,
+    ReceiptCapability, RedirectPolicy, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS,
+    MAXIMUM_CONCURRENT_REQUESTS, MAXIMUM_RATE_PER_SECOND, MAXIMUM_RESPONSE_BYTES,
+    MAXIMUM_SCRIPT_HEADERS, MAXIMUM_SCRIPT_PATH_BYTES, MAXIMUM_TOKEN_CACHE_SECONDS,
+    MINIMUM_TOKEN_CACHE_SECONDS,
 };
 
 use script::{
@@ -511,8 +513,10 @@ impl HttpProviderSettings {
             authenticated: AuthenticatedParts::of(self.callback_verifier.as_ref()),
             timeout: connection.timeout,
             maximum_response_bytes: connection.maximum_response_bytes,
-            slots: Arc::new(Semaphore::new(usize::from(self.concurrency_limit))),
-            concurrency_limit: self.concurrency_limit,
+            slots: Arc::new(Semaphore::new(usize::from(
+                self.maximum_concurrent_requests,
+            ))),
+            concurrency_limit: self.maximum_concurrent_requests,
             capabilities: package.capabilities.clone(),
         })
     }

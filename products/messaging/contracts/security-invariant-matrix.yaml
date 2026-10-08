@@ -210,12 +210,13 @@ invariants:
     enforcementPoint: >-
       The retention run, hourly in the runtime and on demand through
       messagingctl retention erase-expired, in bounded batches, each one
-      transaction under one advisory lock: a payload is nulled retention.payloadDays after its
-      dispatch job reached a terminal state, a record is deleted
-      retention.recordDays after it, and a submission receipt is dropped
-      when its retention.submissionReceiptDays end. Each terminal job is
-      locked before its payload is erased, so an operator requeue that
-      commits first keeps the payload.
+      transaction under one advisory lock: a payload is nulled
+      retention.payloadRetentionDays after its dispatch job reached a terminal
+      state, a record is deleted retention.recordRetentionDays after it, and a
+      submission receipt is dropped when its
+      retention.submissionReceiptRetentionDays end. Each terminal job is
+      locked before its payload is erased, so an operator requeue that commits
+      first keeps the payload.
     refusal: >-
       Skip every pending, leased, or unknown message whatever its age, and
       erase every expired terminal payload; refuse a cutoff later than the
@@ -239,7 +240,7 @@ invariants:
       retention statement that erases a submission receipt, in the runtime
       sweep and messagingctl retention erase-expired alike, clears the raw
       submitter_issuer, submitter_subject, and idempotency_key in the same
-      update, and so does the record deletion after recordDays. The
+      update, and so does the record deletion after recordRetentionDays. The
       messaging_idempotency_caller constraint holds all three non-empty
       while the receipt stands and all three NULL once it is erased.
     refusal: >-

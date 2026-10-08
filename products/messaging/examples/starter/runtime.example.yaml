@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/runtime/runtime.v1alpha1.schema.json
 # A complete Messaging runtime configuration: the document
 # `messagingctl plan/apply/status --runtime-config` and `messaging serve --runtime-config`
 # read, and `messagingctl check --runtime-config` checks offline. Copy it to
@@ -10,8 +11,8 @@
 # a dollar sign and braces around VAR, VAR:-default, or VAR:?message
 # (RUNTIME-CONFIG.md spells them out). Expressions in keys, non-string values,
 # secret reference fields, and secretProviders are refused.
-# Unknown keys are refused, with the path of the first one found.
-apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+# Unknown keys are refused, each reported with its path.
+apiVersion: id.registrystack.org/formats/messaging/runtime/v1alpha1
 kind: MessagingRuntimeConfig
 identity:
   databaseId: messaging-production
@@ -88,18 +89,18 @@ retention:
   # submission receipt: one day up to the record period. These are defaults,
   # not a jurisdictional recommendation; the start record in the audit journal
   # carries the deployed values.
-  payloadDays: 7
-  recordDays: 90
-  submissionReceiptDays: 7
+  payloadRetentionDays: 7
+  recordRetentionDays: 90
+  submissionReceiptRetentionDays: 7
 # The runtime half of each provider messaging.yaml declares, by provider id,
-# with the same kind. Credentials, trust bundles, and callback verifier
+# with the same type. Credentials, trust bundles, and callback verifier
 # secrets are secret references resolved once at startup; a provider that
 # cannot be activated stops the runtime, naming the provider and the member.
 # A declared provider given no connection here is not activated, and its
 # messages fail with provider-unconfigured.
 providers:
   mail-relay:
-    kind: smtp
+    type: smtp
     host: smtp.example.org
     # `starttls` (port 587) or `implicit` (port 465). `development-loopback`
     # is plaintext to a loopback relay, accepted only by a test build or
@@ -108,23 +109,23 @@ providers:
     authentication:
       usernameRef: secret:file/smtp-username
       passwordRef: secret:file/smtp-password
-    # attemptTimeoutSeconds: 30
+    # attemptTimeoutMilliseconds: 30000
     # trustedRootCertificateRef: secret:file/smtp-ca.pem
     # allowedPrivateCidrs: [10.20.0.0/16]
   sms-gateway:
-    kind: http
+    type: http
     baseUrl: https://sms-gateway.example.org/v1/
-    timeoutMilliseconds: 5000
+    attemptTimeoutMilliseconds: 5000
     maximumResponseBytes: 65536
     # At most the package's capabilities.concurrencyLimit.
-    concurrencyLimit: 4
+    maximumConcurrentRequests: 4
     redirects: deny
     authentication:
-      kind: static-authorization
+      type: static-authorization
       tokenRef: secret:file/sms-gateway-token
     # Required exactly when the package declares `receipts: callback`.
     callbackVerifier:
-      kind: hmac-sha256-body
+      type: hmac-sha256-body
       header: x-signature
       encoding: hex
       secretRef: secret:file/sms-gateway-callback-key

@@ -162,31 +162,32 @@ report = json.loads(sys.argv[1])
 assert report["diagnostics"][0]["code"] == "template.locale-unavailable", report
 PY
 
-# Each refusal exits 1 and names the member it refused.
+# Each refusal exits 1 and names the member it refused, at its JSON Pointer,
+# under its own code.
 expect_refusal() {
-  local name=$1 path=$2 status=0 report
+  local name=$1 path=$2 code=$3 status=0 report
   variant "$name" "$name"
   report=$("$messagingctl_bin" --format json check --runtime-config "$work/$name/runtime.yaml") || status=$?
   if [[ "$status" -ne 1 ]]; then
     printf 'messagingctl check exited %s for %s, expected a refusal\n' "$status" "$name" >&2
     exit 1
   fi
-  python3 - "$report" "$path" "$name" <<'PY'
+  python3 - "$report" "$path" "$code" "$name" <<'PY'
 import json
 import sys
 
-report, path, name = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+report, path, code, name = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 assert report["ok"] is False, report
-paths = [diagnostic["path"] for diagnostic in report["diagnostics"]]
-assert paths == [path], f"{name}: refused {paths}, expected {path}"
+refused = [(diagnostic["path"], diagnostic["code"]) for diagnostic in report["diagnostics"]]
+assert refused == [(path, code)], f"{name}: refused {refused}, expected {(path, code)}"
 PY
 }
 
-expect_refusal unknown-key listener.port
-expect_refusal environment-in-credential database.runtimeUrlRef
-expect_refusal metrics-on-public-socket metricsListener.bind
-expect_refusal pinned-digest package.expectedDigest
-expect_refusal unadmitted-client authentication.oidc.allowedClients
+expect_refusal unknown-key /listener/port config.unknown-key
+expect_refusal environment-in-credential /database/runtimeUrlRef config.substitution-not-allowed
+expect_refusal metrics-on-public-socket /metricsListener/bind messaging.runtime.invalid-metrics-listener
+expect_refusal pinned-digest /package/expectedDigest messaging.package.digest-mismatch
+expect_refusal unadmitted-client /authentication/oidc/allowedClients messaging.runtime.profile-client-not-allowed
 
 # messages checks its arguments before any database, and a database it cannot
 # reach is an operational failure, never an empty list.

@@ -213,7 +213,7 @@ effect, so the client returns the earlier unknown-outcome error instead of that 
 
 The receipt horizon is how long a service holds a key's first answer: BReg's
 `idempotency.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
-Messaging's `retention.submissionReceiptDays`,</DocsetProduct> and Scheduling's
+Messaging's `retention.submissionReceiptRetentionDays`,</DocsetProduct> and Scheduling's
 `retention.attemptReceiptRetentionDays`. Every service answers a spent key by one rule: a different request
 under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
 `409 idempotency.key-reused` in the others, whatever the key's age. Past the horizon the same
@@ -222,7 +222,7 @@ the first attempt committed: read the record or its history rather than sending 
 under a new key. In Casework it means an earlier attempt under the key committed and retention
 erased only its stored response: reconcile by reading the item, review request, or directory before
 choosing a new key.<DocsetProduct product="registry-messaging"> In Messaging, once retention deletes
-the message record after `retention.recordDays`, the request hash goes with it and any request under
+the message record after `retention.recordRetentionDays`, the request hash goes with it and any request under
 the key is refused with `410`.</DocsetProduct>
 
 {/* Evidence: crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation,
@@ -1263,11 +1263,11 @@ A submission requires an idempotency key the caller chose: 1 to 128 visible ASCI
 refused before any exchange otherwise. A key is scoped to the caller's verified issuer and subject.
 The client never generates or replaces a key, and resends a submission only under the
 [same-key retry](#unknown-outcomes-and-the-same-key-retry). After a lost response it still reports,
-send the same key with the same submission within `retention.submissionReceiptDays`, and the runtime
+send the same key with the same submission within `retention.submissionReceiptRetentionDays`, and the runtime
 answers the stored receipt instead of accepting a second message. A `403` or `422` answering an exact
 retry does not show that the first attempt failed, so never resubmit under a new key: have the
 operator restore the access, template version, or locale the refusal names, then retry under the
-same key within `retention.submissionReceiptDays`, as the
+same key within `retention.submissionReceiptRetentionDays`, as the
 [replay rule](../apis/registry-messaging/#contract-boundary) explains. A message
 identifier must be the lowercase hyphenated UUID the runtime answered; any other value is refused
 before any exchange. The view carries the recipient's channel with the value `redacted`, and no

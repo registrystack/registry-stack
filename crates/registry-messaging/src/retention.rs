@@ -5,15 +5,15 @@
 //! Every period counts from a fixed instant the store already holds:
 //!
 //! - a message's payload, its recipient contact and rendered parts, is
-//!   erased `payloadDays` after its dispatch job reached a terminal state
+//!   erased `payloadRetentionDays` after its dispatch job reached a terminal state
 //!   (`delivered`, `dead_lettered`, `expired`, or `cancelled`), and the
 //!   content-free message record stays;
-//! - the message record is deleted `recordDays` after that terminal state,
+//! - the message record is deleted `recordRetentionDays` after that terminal state,
 //!   and its payload, job, attempts, and delivery receipts go with it; its
 //!   idempotency record stays, holding only the digest of the caller and
 //!   the key and its times, so the key stays spent;
 //! - a submission receipt, the stored answer an idempotent replay returns,
-//!   is erased when its `submissionReceiptDays` end, together with the raw
+//!   is erased when its `submissionReceiptRetentionDays` end, together with the raw
 //!   issuer, subject, and key beside it, and its key stays spent under
 //!   their digest.
 //!
@@ -288,8 +288,8 @@ async fn erase_batch(
         return Err(RetentionError::FutureCutoff);
     }
     let before: SystemTime = row.get(0);
-    let payload_days = i32::from(retention.payload_days);
-    let record_days = i32::from(retention.record_days);
+    let payload_days = i32::from(retention.payload_retention_days);
+    let record_days = i32::from(retention.record_retention_days);
     let candidates = (
         count(
             &transaction,
@@ -328,7 +328,7 @@ async fn erase_batch(
                 .begin(json!({
                     "event": "messaging.retention.requested",
                     "before": format_instant(before),
-                    "retention": retention,
+                    "retention": retention.report(),
                     "actor": actor.to_json(),
                 }))
                 .await
@@ -365,7 +365,7 @@ async fn erase_batch(
                 "payloads": batch.payloads,
                 "records": batch.records,
                 "submissionReceipts": batch.submission_receipts,
-                "retention": retention,
+                "retention": retention.report(),
                 "actor": actor.to_json(),
             }))
             .await

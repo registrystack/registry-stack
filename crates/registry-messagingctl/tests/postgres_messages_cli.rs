@@ -445,7 +445,7 @@ async fn retention_previews_by_default_and_erases_only_expired_terminal_messages
     assert_eq!(preview["applied"], false);
     assert_eq!(preview["payloads"], 1);
     assert_eq!(preview["records"], 0);
-    assert_eq!(preview["retention"]["payloadDays"], 7);
+    assert_eq!(preview["retention"]["payloadRetentionDays"], 7);
     assert_eq!(harness.count(erased).await, 0);
 
     let (code, stdout, _) = messagingctl(

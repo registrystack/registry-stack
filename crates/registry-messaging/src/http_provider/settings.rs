@@ -21,7 +21,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use ipnet::IpNet;
-use registry_messaging_core::{valid_header_name, CallbackVerifierConfig};
+use registry_messaging_core::{typed, valid_header_name};
 use registry_platform_config::{ProtectedSecret, SecretReference, SecretResolver};
 use registry_platform_httputil::destination::{
     is_script_visible_response_header_name, is_script_writable_request_header_name,
@@ -32,7 +32,8 @@ use thiserror::Error;
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::config::describe_secret_failure;
+use super::CallbackVerifierConfig;
+use crate::config::{describe_secret_failure, optional_secret_reference, secret_reference};
 
 /// The longest script artifact path a package may name.
 pub const MAXIMUM_SCRIPT_PATH_BYTES: usize = 256;
@@ -42,7 +43,14 @@ pub const MAXIMUM_SCRIPT_PATH_BYTES: usize = 256;
 pub const MAXIMUM_SCRIPT_HEADERS: usize = 16;
 
 /// The most sends one provider may have in flight.
-pub const MAXIMUM_CONCURRENCY_LIMIT: u16 = 64;
+pub const MAXIMUM_CONCURRENT_REQUESTS: u16 = 64;
+
+/// The longest one HTTP send may take, in milliseconds: the destination
+/// substrate's whole-operation bound.
+pub const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
+const _: () = assert!(
+    MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS == MAX_DESTINATION_OPERATION_TIMEOUT.as_millis() as u64
+);
 
 /// The highest declared send rate.
 pub const MAXIMUM_RATE_PER_SECOND: u32 = 1_000;
@@ -139,46 +147,71 @@ pub enum ReceiptCapability {
 
 /// Runtime settings for one HTTP provider.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderSettings {
     /// The provider's origin and path prefix, ending in `/`. Every request
     /// target a script returns is relative to it and stays under it.
     /// `https` in production; `http` only to a loopback host.
+    #[serde(deserialize_with = "typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub base_url: String,
     /// The operator-declared trust bundle the provider's certificate may
-    /// chain to. Its roots are trusted in addition to the system roots, not
-    /// instead of them. The runtime resolves the name to PEM and passes it to
+    /// chain to, by its name under `tlsTrustProfiles`. Its roots are trusted
+    /// in addition to the system roots, not instead of them. The runtime
+    /// resolves the name to PEM and passes it to
     /// [`HttpProviderSettings::activate`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
     pub tls_trust_profile: Option<String>,
-    /// One send's whole budget: resolution, connection, request, and
-    /// response, at most 10000.
-    pub timeout_milliseconds: u64,
+    /// One send's whole budget in milliseconds: resolution, connection,
+    /// request, and response.
+    #[serde(deserialize_with = "typed::bounded_u64::<_, 1, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS))
+    )]
+    pub attempt_timeout_milliseconds: u64,
     /// The largest response body read, at most 1 MiB.
+    #[serde(deserialize_with = "typed::bounded_u64::<_, 1, MAXIMUM_RESPONSE_BYTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_RESPONSE_BYTES))
+    )]
     pub maximum_response_bytes: u64,
     /// The most sends this deployment has in flight to the provider, at most
     /// the package's declared `capabilities.concurrencyLimit`.
-    pub concurrency_limit: u16,
+    #[serde(
+        deserialize_with = "typed::bounded_u16::<_, 1, { MAXIMUM_CONCURRENT_REQUESTS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_CONCURRENT_REQUESTS))
+    )]
+    pub maximum_concurrent_requests: u16,
     pub redirects: RedirectPolicy,
     /// Exact RFC 1918, CGNAT, or unique-local networks an `https` provider may
     /// resolve into, for an in-country gateway on a private network. Every
-    /// other non-public address is refused.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// other non-public address is refused. Omitted, the provider may resolve
+    /// only to public addresses.
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_DESTINATION_PRIVATE_CIDRS))
+    )]
     pub allowed_private_cidrs: Vec<String>,
     /// Required, and only allowed, when the package sends with `get`: the
     /// message content travels in the query string, where provider access
     /// logs keep it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub acknowledge_query_string_content: bool,
     pub authentication: HttpProviderAuthentication,
     /// How the provider's delivery callbacks are authenticated. Required
     /// exactly when the package declares `receipts: callback`.
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")
-    )]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub callback_verifier: Option<CallbackVerifierConfig>,
 }
 
@@ -188,9 +221,15 @@ impl fmt::Debug for HttpProviderSettings {
             .debug_struct("HttpProviderSettings")
             .field("base_url", &self.base_url)
             .field("tls_trust_profile", &self.tls_trust_profile)
-            .field("timeout_milliseconds", &self.timeout_milliseconds)
+            .field(
+                "attempt_timeout_milliseconds",
+                &self.attempt_timeout_milliseconds,
+            )
             .field("maximum_response_bytes", &self.maximum_response_bytes)
-            .field("concurrency_limit", &self.concurrency_limit)
+            .field(
+                "maximum_concurrent_requests",
+                &self.maximum_concurrent_requests,
+            )
             .field("allowed_private_cidrs", &self.allowed_private_cidrs)
             .field(
                 "acknowledge_query_string_content",
@@ -210,12 +249,14 @@ pub enum RedirectPolicy {
     Deny,
 }
 
-/// How a send authenticates to the provider. The credential is added by
-/// Rust after the prepare script returns; no script ever sees it.
+/// How a send authenticates to the provider, chosen by `type`. The
+/// credential is added by Rust after the prepare script returns; no script
+/// ever sees it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+#[derive(Clone, Deserialize, Eq, PartialEq)]
 #[serde(
-    tag = "kind",
+    remote = "Self",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
@@ -225,25 +266,50 @@ pub enum HttpProviderAuthentication {
     None {},
     /// `Authorization: Basic` over the two resolved values.
     Basic {
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         username_ref: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         password_ref: String,
     },
     /// `Authorization: <scheme> <token>`. Absent, the scheme is `Bearer`,
     /// the only one the destination substrate presents today.
     StaticAuthorization {
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         token_ref: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         scheme: Option<String>,
     },
     /// The resolved value in the named request header.
     StaticApiKey {
         header_name: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         value_ref: String,
     },
     /// The resolved value in the named query parameter, appended after the
     /// script's own target.
     StaticApiKeyQuery {
         parameter_name: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         value_ref: String,
     },
     /// AWS Signature Version 4 for a JSON API. Rust signs the final request;
@@ -251,38 +317,82 @@ pub enum HttpProviderAuthentication {
     AwsSigv4 {
         region: String,
         service: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         access_key_id_ref: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         secret_access_key_ref: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The session token for temporary credentials. Omitted, the request
+        /// is signed without one.
+        #[serde(default, deserialize_with = "optional_secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_config::SecretReference>")
+        )]
         session_token_ref: Option<String>,
     },
     /// An OAuth 2.0 client-credentials bearer token, fetched from
     /// `tokenEndpoint` and cached.
     Oauth2ClientCredentials {
+        #[serde(deserialize_with = "typed::url")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
         token_endpoint: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         client_id_ref: String,
+        #[serde(deserialize_with = "secret_reference")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_config::SecretReference")
+        )]
         client_secret_ref: String,
         /// Where the client secret travels. The token request carries it in
         /// the form body; `basic-header` is refused until the substrate can
         /// place it there.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         credential_placement: Option<CredentialPlacement>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         scope: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         audience: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         resource: Option<String>,
+        /// The longest a fetched token is reused, in seconds.
+        #[serde(
+            deserialize_with = "typed::bounded_u64::<_, MINIMUM_TOKEN_CACHE_SECONDS, MAXIMUM_TOKEN_CACHE_SECONDS>"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(range(min = MINIMUM_TOKEN_CACHE_SECONDS, max = MAXIMUM_TOKEN_CACHE_SECONDS))
+        )]
         maximum_cache_seconds: u64,
-        /// The lifetime assumed when the token response carries no
-        /// `expires_in`. Absent, `expires_in` is required.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The lifetime assumed, in seconds, when the token response carries
+        /// no `expires_in`. Omitted, `expires_in` is required.
+        #[serde(
+            default,
+            deserialize_with = "typed::optional_bounded_u64::<_, MINIMUM_TOKEN_CACHE_SECONDS, MAXIMUM_TOKEN_CACHE_SECONDS>"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(range(min = MINIMUM_TOKEN_CACHE_SECONDS, max = MAXIMUM_TOKEN_CACHE_SECONDS))
+        )]
         assumed_lifetime_seconds: Option<u64>,
     },
 }
+registry_platform_yaml::tagged_union!(HttpProviderAuthentication);
 
 impl HttpProviderAuthentication {
-    /// The authentication kind, as written in configuration.
+    /// The authentication type, as written in configuration.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
@@ -301,7 +411,7 @@ impl fmt::Debug for HttpProviderAuthentication {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("HttpProviderAuthentication")
-            .field("kind", &self.kind())
+            .field("type", &self.kind())
             .finish_non_exhaustive()
     }
 }
@@ -364,10 +474,10 @@ impl HttpProviderPackage {
             "is withheld by the runtime; scripts cannot read it",
         )?;
         let capabilities = &self.capabilities;
-        if !(1..=MAXIMUM_CONCURRENCY_LIMIT).contains(&capabilities.concurrency_limit) {
+        if !(1..=MAXIMUM_CONCURRENT_REQUESTS).contains(&capabilities.concurrency_limit) {
             return Err(invalid(
                 "capabilities.concurrencyLimit",
-                format!("must be 1 to {MAXIMUM_CONCURRENCY_LIMIT}"),
+                format!("must be 1 to {MAXIMUM_CONCURRENT_REQUESTS}"),
             ));
         }
         if capabilities
@@ -536,15 +646,8 @@ impl HttpProviderSettings {
                 ("authentication.clientSecretRef", client_secret_ref.as_str()),
             ],
         };
-        match &self.callback_verifier {
-            None => {}
-            Some(
-                CallbackVerifierConfig::HmacSha1UrlForm { secret_ref, .. }
-                | CallbackVerifierConfig::HmacSha256Body { secret_ref, .. },
-            ) => references.push(("callbackVerifier.secretRef", secret_ref.as_str())),
-            Some(CallbackVerifierConfig::PathToken { token_ref }) => {
-                references.push(("callbackVerifier.tokenRef", token_ref.as_str()));
-            }
+        if let Some(verifier) = &self.callback_verifier {
+            references.push(verifier.secret_reference());
         }
         references
     }
@@ -571,12 +674,11 @@ impl HttpProviderSettings {
                 ))
             }
         }
-        let maximum_timeout =
-            u64::try_from(MAX_DESTINATION_OPERATION_TIMEOUT.as_millis()).unwrap_or(u64::MAX);
-        if !(1..=maximum_timeout).contains(&self.timeout_milliseconds) {
+        if !(1..=MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS).contains(&self.attempt_timeout_milliseconds)
+        {
             return Err(invalid(
-                "timeoutMilliseconds",
-                format!("must be 1 to {maximum_timeout}"),
+                "attemptTimeoutMilliseconds",
+                format!("must be 1 to {MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS}"),
             ));
         }
         if !(1..=MAXIMUM_RESPONSE_BYTES).contains(&self.maximum_response_bytes) {
@@ -585,11 +687,11 @@ impl HttpProviderSettings {
                 format!("must be 1 to {MAXIMUM_RESPONSE_BYTES}"),
             ));
         }
-        if self.concurrency_limit == 0
-            || self.concurrency_limit > package.capabilities.concurrency_limit
+        if self.maximum_concurrent_requests == 0
+            || self.maximum_concurrent_requests > package.capabilities.concurrency_limit
         {
             return Err(invalid(
-                "concurrencyLimit",
+                "maximumConcurrentRequests",
                 "must be 1 to the package's capabilities.concurrencyLimit",
             ));
         }
@@ -647,31 +749,14 @@ impl HttpProviderSettings {
                     "is allowed only when the package declares receipts: callback",
                 ))
             }
-            (_, Some(verifier)) => {
-                verifier
-                    .validate()
-                    .map_err(|error| invalid("callbackVerifier", error.to_string()))?;
-                let (field, reference) = match verifier {
-                    CallbackVerifierConfig::HmacSha1UrlForm { secret_ref, .. }
-                    | CallbackVerifierConfig::HmacSha256Body { secret_ref, .. } => {
-                        ("callbackVerifier.secretRef", secret_ref)
-                    }
-                    CallbackVerifierConfig::PathToken { token_ref } => {
-                        ("callbackVerifier.tokenRef", token_ref)
-                    }
-                };
-                SecretReference::parse(reference.as_str()).map_err(|error| {
-                    HttpProviderError::Secret(describe_secret_failure(field, reference, &error))
-                })?;
-            }
-            (_, None) => {}
+            _ => {}
         }
         Ok(CheckedConnection {
             origin,
             base_path,
             development,
             allowed_private_cidrs,
-            timeout: Duration::from_millis(self.timeout_milliseconds),
+            timeout: Duration::from_millis(self.attempt_timeout_milliseconds),
             maximum_response_bytes: usize::try_from(self.maximum_response_bytes)
                 .unwrap_or(usize::MAX),
         })
@@ -690,7 +775,7 @@ impl HttpProviderSettings {
                 } else {
                     Err(invalid(
                         "authentication",
-                        "kind none is allowed only for a loopback http baseUrl",
+                        "type none is allowed only for a loopback http baseUrl",
                     ))
                 }
             }

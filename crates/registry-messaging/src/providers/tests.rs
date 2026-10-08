@@ -65,7 +65,7 @@ fn write_secret(root: &Path, name: &str, value: &[u8]) {
 
 fn smtp_connection(stub: &Stub) -> Value {
     json!({
-        "kind": "smtp",
+        "type": "smtp",
         "host": "127.0.0.1",
         "port": stub.address.port(),
         "tls": "development-loopback"
@@ -81,21 +81,21 @@ fn http_connection(upstream: &MockHttpUpstream, authentication: Value) -> Value 
 
 fn http_connection_to(base_url: &str, authentication: Value) -> Value {
     json!({
-        "kind": "http",
+        "type": "http",
         "baseUrl": base_url,
-        "timeoutMilliseconds": 3000,
+        "attemptTimeoutMilliseconds": 3000,
         "maximumResponseBytes": 65536,
-        "concurrencyLimit": 4,
+        "maximumConcurrentRequests": 4,
         "redirects": "deny",
         "authentication": authentication,
-        "callbackVerifier": {"kind": "path-token", "tokenRef": "secret:file/callback-token"}
+        "callbackVerifier": {"type": "path-token", "tokenRef": "secret:file/callback-token"}
     })
 }
 
 /// The callback receivers of a starter project whose `sms-gateway` names
 /// `verifier`, reading `secrets`.
 pub(crate) fn callback_receivers(verifier: Value, secrets: &[(&str, &[u8])]) -> CallbackReceivers {
-    let mut connection = http_connection_to("http://127.0.0.1:9/v1/", json!({"kind": "none"}));
+    let mut connection = http_connection_to("http://127.0.0.1:9/v1/", json!({"type": "none"}));
     connection["callbackVerifier"] = verifier;
     let project = project(json!({"sms-gateway": connection}), |_| {}, secrets);
     activate_providers(
@@ -173,7 +173,7 @@ async fn configured_providers_become_transports_that_send_what_was_accepted() {
     let project = project(
         json!({
             "mail-relay": smtp_connection(&stub),
-            "sms-gateway": http_connection(&upstream, json!({"kind": "none"}))
+            "sms-gateway": http_connection(&upstream, json!({"type": "none"}))
         }),
         |_| {},
         &[("callback-token", CALLBACK_TOKEN)],
@@ -259,7 +259,7 @@ async fn the_idempotency_key_follows_the_capability_persisted_at_acceptance() {
         .respond_json(200, json!({"id": "gw-7732"}))
         .await;
     let project = project(
-        json!({"sms-gateway": http_connection(&upstream, json!({"kind": "none"}))}),
+        json!({"sms-gateway": http_connection(&upstream, json!({"type": "none"}))}),
         |package| {
             package["providers"][1]
                 .as_object_mut()
@@ -304,7 +304,7 @@ fn a_path_token_must_be_bounded_utf8_before_callback_activation() {
             json!({
                 "sms-gateway": http_connection_to(
                     "http://127.0.0.1:9/v1/",
-                    json!({"kind": "none"})
+                    json!({"type": "none"})
                 )
             }),
             |_| {},
@@ -327,7 +327,7 @@ fn a_path_token_must_be_bounded_utf8_before_callback_activation() {
 async fn an_unconfigured_package_provider_gets_no_transport() {
     let upstream = MockHttpUpstream::start().await;
     let project = project(
-        json!({"sms-gateway": http_connection(&upstream, json!({"kind": "none"}))}),
+        json!({"sms-gateway": http_connection(&upstream, json!({"type": "none"}))}),
         |_| {},
         &[("callback-token", CALLBACK_TOKEN)],
     );
@@ -348,7 +348,7 @@ async fn a_provider_that_cannot_be_activated_names_itself_and_never_a_secret() {
 
     // The callback verifier's secret is resolved at startup.
     let missing = project(
-        json!({"sms-gateway": http_connection(&upstream, json!({"kind": "none"}))}),
+        json!({"sms-gateway": http_connection(&upstream, json!({"type": "none"}))}),
         |_| {},
         &[],
     );
@@ -367,7 +367,7 @@ async fn a_provider_that_cannot_be_activated_names_itself_and_never_a_secret() {
     let mut connection = http_connection(
         &upstream,
         json!({
-            "kind": "basic",
+            "type": "basic",
             "usernameRef": "secret:file/gateway-user",
             "passwordRef": "secret:file/gateway-password"
         }),
@@ -497,7 +497,7 @@ async fn an_activated_provider_resolving_to_loopback_is_refused_before_connectin
     // activation, so no send is ever attempted.
     let gateway = http_connection_to(
         &format!("https://localhost:{port}/v1/"),
-        json!({"kind": "static-authorization", "tokenRef": "secret:file/gateway-token"}),
+        json!({"type": "static-authorization", "tokenRef": "secret:file/gateway-token"}),
     );
     let gateway_project = project(json!({"sms-gateway": gateway}), |_| {}, secrets);
     let refused = activate_providers(
@@ -529,7 +529,7 @@ async fn an_activated_provider_cut_off_after_the_message_left_is_maybe_sent() {
             "mail-relay": smtp_connection(&stub),
             "sms-gateway": http_connection_to(
                 &format!("http://127.0.0.1:{port}/v1/"),
-                json!({"kind": "none"}),
+                json!({"type": "none"}),
             )
         }),
         |_| {},
@@ -593,10 +593,10 @@ async fn a_dispatched_http_attempt_classifies_its_own_timeout_before_the_worker_
     let (port, read) = holding_listener().await;
     let mut gateway = http_connection_to(
         &format!("http://127.0.0.1:{port}/v1/"),
-        json!({"kind": "none"}),
+        json!({"type": "none"}),
     );
-    gateway["timeoutMilliseconds"] = json!(1000);
-    gateway["concurrencyLimit"] = json!(1);
+    gateway["attemptTimeoutMilliseconds"] = json!(1000);
+    gateway["maximumConcurrentRequests"] = json!(1);
     let project = project(
         json!({"sms-gateway": gateway}),
         |_| {},
@@ -665,7 +665,7 @@ async fn a_dispatched_smtp_attempt_classifies_its_own_timeout_before_the_worker_
     ] {
         let stub = Stub::start(script).await;
         let mut relay = smtp_connection(&stub);
-        relay["attemptTimeoutSeconds"] = json!(1);
+        relay["attemptTimeoutMilliseconds"] = json!(1_000);
         let project = project(
             json!({"mail-relay": relay}),
             |_| {},
