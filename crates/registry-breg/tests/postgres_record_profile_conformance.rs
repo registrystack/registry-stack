@@ -527,6 +527,7 @@ async fn create_additional_record(
         .to_owned()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exercise_breg_client(
     base_url: &str,
     first_public_identifier: &str,
