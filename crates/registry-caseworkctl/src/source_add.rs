@@ -4,6 +4,7 @@ use crate::policy::MAXIMUM_SOURCE_DESCRIPTION_BYTES;
 use crate::SourceAddArgs;
 use anyhow::{bail, Context, Result};
 use registry_casework_breg::{lifecycle_event_type, MAXIMUM_REQUEST_ENTITIES};
+use registry_platform_yaml::{Diagnostic, Reader, Source};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -90,7 +91,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let paired_entities: BTreeSet<&str> = requests.iter().map(SelectedRequest::entity).collect();
     refuse_overlong_lifecycle_hook_ids(&paired_entities)?;
     refuse_dropped_entity_fragments(&authored, &paired_entities)?;
-    let mut findings = check_unpaired_review_policies(
+    let mut diagnostics = check_unpaired_review_policies(
         &project,
         &authored,
         &paired_entities,
@@ -126,7 +127,15 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         &candidate_requests,
         casework_endpoint,
     )?;
-    findings.extend(dev_clients_plan.findings.iter().cloned());
+    diagnostics.extend(dev_clients_plan.findings.iter().cloned());
+    // Each warning names a member of registry.yaml as apply leaves it, or as
+    // it stands for a preview.
+    let described = if args.apply {
+        proposed.as_bytes()
+    } else {
+        &bytes
+    };
+    place_in_registry(&registry_yaml, described, &mut diagnostics);
     let description =
         source_description(&args.source_id, &candidate_requests, &candidate_explanation)?;
     check_display_schemas(&project, &args.source_id, &description_path, &description)?;
@@ -153,12 +162,13 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "connection": connection_report(&candidate_requests),
         "bregAuthoringChanges": breg_authoring_changes,
         "bregAuthoringPatch": authoring_patch,
-        "findings": findings,
+        "diagnostics": diagnostics,
         "activation": "not_performed",
         "next": report_next(args.apply, &dev_clients_plan.warnings),
     });
     if !args.apply {
-        report["candidateRuntimeBinding"] = serde_norway::from_str(&binding)?;
+        report["candidateRuntimeBinding"] =
+            read_runtime_binding(&binding_path.display().to_string(), &binding)?;
         return Ok(report);
     }
     let retry = retry_command(
@@ -394,7 +404,7 @@ struct ReviewerAuthority {
     profiles: BTreeSet<String>,
     scopes: BTreeSet<String>,
     purpose: Option<String>,
-    row_boundary_findings: Vec<Value>,
+    row_boundary_findings: Vec<Diagnostic>,
     /// Access profiles that also admit requester clients outside this Casework
     /// project. Those clients can act on the request without Casework.
     warnings: Vec<String>,
@@ -421,7 +431,7 @@ struct DevClientsPlan {
     patch: Value,
     changes: Value,
     write: Option<DevClientsWrite>,
-    findings: Vec<Value>,
+    findings: Vec<Diagnostic>,
     warnings: Vec<String>,
 }
 
@@ -781,7 +791,7 @@ fn check_unpaired_review_policies(
     authored: &Value,
     paired_entities: &BTreeSet<&str>,
     authorities: &BTreeSet<&str>,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Diagnostic>> {
     let policy = load_casework_policy(project)?;
     let review_kind_ids: BTreeSet<&str> = policy["reviewKinds"]
         .as_array()
@@ -803,17 +813,15 @@ fn check_unpaired_review_policies(
         let Some(review) = entity.pointer("/changeRequest/review") else {
             continue;
         };
-        let Some(authority) = review["authority"]
+        if !review["authority"]
             .as_str()
-            .filter(|authority| authorities.contains(authority))
-        else {
+            .is_some_and(|authority| authorities.contains(authority))
+        {
             continue;
-        };
+        }
         match review.get("policyId").and_then(Value::as_str) {
             Some(policy_id) if review_kind_ids.contains(policy_id) => {}
-            Some(policy_id) => findings.push(unresolved_review_policy_finding(
-                index, entity_id, authority, policy_id,
-            )),
+            Some(_) => findings.push(unresolved_review_policy_finding(index)),
             // `bregctl check` already refused a missing or non-string
             // policyId, since BReg reads it as a required string.
             None => {}
@@ -822,30 +830,40 @@ fn check_unpaired_review_policies(
     Ok(findings)
 }
 
-/// A finding warning that a BReg change-request entity other than the ones
-/// being paired names this Casework project's review authority with a
-/// `policyId` no declared `reviewKinds[].id` matches. BReg's own compile
-/// check does not catch this, since it only validates that `policyId` is a
-/// well-formed identifier, not that the named authority actually declares
-/// it.
-fn unresolved_review_policy_finding(
-    index: usize,
-    entity_id: &str,
-    authority: &str,
-    policy_id: &str,
-) -> Value {
-    json!({
-        "severity": "finding",
-        "code": "casework.source-add.review-policy-unresolved",
-        "artifact": "breg_entity",
-        "path": format!("registry.yaml:/entities/{index}/changeRequest/review/policyId"),
-        "message": format!(
-            "BReg change-request entity {entity_id} declares review authority {authority} with policyId {policy_id}, but casework.yaml has no reviewKinds[].id matching {policy_id}"
-        ),
-        "suggestedAction": format!(
-            "Add a reviewKinds[].id matching {policy_id} to casework.yaml, or correct entity {entity_id}'s changeRequest.review.policyId, before pairing a source for it."
-        ),
-    })
+/// A warning that a BReg change-request entity other than the ones being
+/// paired names this Casework project's review authority with a `policyId`
+/// no declared `reviewKinds[].id` matches. BReg's own compile check does not
+/// catch this, since it only validates that `policyId` is a well-formed
+/// identifier, not that the named authority actually declares it. Like
+/// every diagnostic, it names the member and never repeats its value.
+fn unresolved_review_policy_finding(index: usize) -> Diagnostic {
+    Diagnostic::warning(
+        "casework.source-add.review-policy-unresolved",
+        format!("/entities/{index}/changeRequest/review/policyId"),
+        "this change-request entity names a review authority the source pairs, and casework.yaml declares no review kind whose id is this policyId",
+        "Add a review kind with this policyId as its id to casework.yaml, or correct this policyId, before pairing a source for the entity.",
+    )
+}
+
+/// Give each warning about BReg's `registry.yaml` its file and the line and
+/// column of the member it names. The file's grammar is BReg's, and
+/// `bregctl check` has already accepted it: the shared reader only locates
+/// the member here, so a file written outside the YAML subset that reader
+/// reads keeps its warnings with the file and JSON pointer alone.
+fn place_in_registry(registry_yaml: &Path, text: &[u8], diagnostics: &mut [Diagnostic]) {
+    let file = registry_yaml.display().to_string();
+    let root = Reader::new(file.clone()).scan(text).ok().flatten();
+    for diagnostic in diagnostics {
+        let start = root
+            .as_ref()
+            .and_then(|root| root.pointer(&diagnostic.path))
+            .map(|node| node.span.start);
+        diagnostic.source = Some(Source {
+            file: file.clone(),
+            line: start.map(|position| position.line),
+            column: start.map(|position| position.column),
+        });
+    }
 }
 
 fn source_projection(
@@ -974,10 +992,11 @@ fn report_next(apply: bool, warnings: &[String]) -> Value {
     )
 }
 
+/// `casework.yaml` as the shared reader read it, as JSON.
 fn load_casework_policy(project: &Path) -> Result<Value> {
-    let bytes = fs::read(project.join("casework.yaml")).context("reading casework.yaml")?;
-    let root: Value = serde_norway::from_slice(&bytes).context("parsing casework.yaml")?;
-    Ok(root)
+    Ok(crate::project::read_project(project)?
+        .document
+        .to_json_value())
 }
 
 /// Pair every request entity with its own lifecycle hook and the shared
@@ -1598,7 +1617,7 @@ fn resolve_row_boundary_field_type(authored: &Value, entity: &str, field: &str) 
 }
 
 /// Groups every row boundary location representable by a local dev-client
-/// claim into one finding per `rowBoundaries` array, and refuses the
+/// claim into one warning per `rowBoundaries` array, and refuses the
 /// pairing outright for any location the local claim model cannot carry.
 /// BReg's runtime reads an `equals` row boundary claim as the field's own
 /// scalar shape and an `in` claim as a JSON array of that shape, but a local
@@ -1609,8 +1628,8 @@ fn represent_row_boundary_locations(
     id: &str,
     profile_index: usize,
     locations: &[RowBoundaryLocation],
-) -> Result<Vec<Value>> {
-    let mut claims_by_pointer: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+) -> Result<Vec<Diagnostic>> {
+    let mut pointers: BTreeSet<&str> = BTreeSet::new();
     for location in locations {
         let field_type = location
             .entity
@@ -1628,18 +1647,15 @@ fn represent_row_boundary_locations(
                 field_type = field_type.as_deref().unwrap_or("<unresolved>"),
             );
         }
-        claims_by_pointer
-            .entry(location.pointer.as_str())
-            .or_default()
-            .insert(location.claim.clone());
+        pointers.insert(location.pointer.as_str());
     }
-    Ok(claims_by_pointer
+    Ok(pointers
         .into_iter()
-        .map(|(pointer, claims)| row_boundary_finding(id, profile_index, pointer, &claims))
+        .map(|pointer| row_boundary_finding(profile_index, pointer))
         .collect())
 }
 
-/// A finding warning that a BReg access profile's rowBoundaries claims are
+/// A warning that a BReg access profile's rowBoundaries claims are
 /// not reflected in the local dev-client export: BReg's runtime still
 /// refuses that profile for a local reviewer client whose token lacks the
 /// claim, so access is neither widened nor silently bypassed, but an
@@ -1648,25 +1664,13 @@ fn represent_row_boundary_locations(
 /// over a string-shaped field; `represent_row_boundary_locations` refuses
 /// every other operator or field type instead, since none of those can be
 /// represented by a local dev-client claim.
-fn row_boundary_finding(
-    id: &str,
-    profile_index: usize,
-    pointer: &str,
-    claims: &BTreeSet<String>,
-) -> Value {
-    let claim_list = claims.iter().cloned().collect::<Vec<_>>().join(", ");
-    json!({
-        "severity": "finding",
-        "code": "casework.source-add.row-boundary-claim-unsupported",
-        "artifact": "breg_access_profile",
-        "path": format!("registry.yaml:/accessProfiles/{profile_index}/{pointer}"),
-        "message": format!(
-            "BReg access profile {id} uses rowBoundaries on claim(s) {claim_list}; the local dev-client export does not add these claims, so a local Casework reviewer client cannot exercise the profile until an operator adds them by hand, each set to the string value equal to the field's stored value"
-        ),
-        "suggestedAction": format!(
-            "Add claim(s) {claim_list} to the local Casework reviewer dev clients that need access profile {id}, each set to the string value BReg's rowBoundaries operator equals expects for the matching field."
-        ),
-    })
+fn row_boundary_finding(profile_index: usize, pointer: &str) -> Diagnostic {
+    Diagnostic::warning(
+        "casework.source-add.row-boundary-claim-unsupported",
+        format!("/accessProfiles/{profile_index}/{pointer}"),
+        "these rowBoundaries compare claims the local dev-client export does not add, so a local Casework reviewer client cannot exercise this access profile until the claims are added by hand",
+        "Add each claim these rowBoundaries name to the local Casework reviewer dev clients that use this access profile, set to the string value of the field it is compared with.",
+    )
 }
 
 /// The BReg dev client bound to one Casework dev client: same id, scopes, and
@@ -2603,9 +2607,18 @@ fn runtime_binding(
             yaml_string(access_profile),
         ));
     }
-    serde_norway::from_str::<Value>(&binding)
-        .context("validating generated BReg runtime binding")?;
+    read_runtime_binding(&format!("sources/{source_id}.breg-runtime.yaml"), &binding)?;
     Ok(binding)
+}
+
+/// Read a runtime binding `runtime_binding` rendered back through the shared
+/// reader, as JSON. A refusal here is a defect in the rendering.
+fn read_runtime_binding(file: &str, binding: &str) -> Result<Value> {
+    let root = Reader::new(file)
+        .scan(binding.as_bytes())
+        .context("validating generated BReg runtime binding")?
+        .context("the generated BReg runtime binding is empty")?;
+    Ok(root.to_json_value())
 }
 
 fn verify_candidate(binary: &Path, registry: &Path, proposed: &str) -> Result<Value> {
@@ -2892,6 +2905,60 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_yaml::Severity;
+
+    /// Write a `casework.yaml` the shared reader accepts: the
+    /// professional-review example with the lists `overlay` names replaced.
+    /// Each replacement entry is laid over the example's first entry of that
+    /// list, and each source request over the example's first request without
+    /// its context projection and target, so a test states only the members
+    /// it is about.
+    fn write_policy(project: &Path, overlay: Value) {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/professional-review/casework.yaml");
+        let mut policy: Value = serde_norway::from_slice(&fs::read(example).unwrap()).unwrap();
+        let mut request = policy["sources"][0]["requests"][0].clone();
+        let request = request.as_object_mut().unwrap();
+        request.remove("contextProjection");
+        request.remove("target");
+        let request = Value::Object(request.clone());
+        for key in ["sources", "reviewKinds", "reviewProducers"] {
+            let Some(entries) = overlay.get(key) else {
+                continue;
+            };
+            let template = policy[key][0].clone();
+            policy[key] = entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| {
+                    let mut merged = laid_over(&template, entry);
+                    if key == "sources" {
+                        merged["requests"] = entry["requests"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|entry| laid_over(&request, entry))
+                            .collect();
+                    }
+                    merged
+                })
+                .collect();
+        }
+        fs::write(
+            project.join("casework.yaml"),
+            serde_norway::to_string(&policy).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn laid_over(template: &Value, entry: &Value) -> Value {
+        let mut merged = template.clone();
+        for (member, value) in entry.as_object().unwrap() {
+            merged[member] = value.clone();
+        }
+        merged
+    }
 
     fn set_source_description(project: &Path, description: &str) {
         let policy_path = project.join("casework.yaml");
@@ -3413,14 +3480,17 @@ mod tests {
     #[test]
     fn source_import_connects_the_breg_request_to_one_casework_producer() {
         let project = tempfile::tempdir().unwrap();
-        fs::write(project.path().join("casework.yaml"), serde_json::to_vec(&json!({
-            "sources": [{"id":"professional", "adapter":"breg", "requests":[{"entity":"correction"}]}],
-            "reviewKinds":[{"id":"registry-correction", "purpose":"approval", "contextStrategy":"source"}],
-            "reviewProducers":[{
-                "id":"registry-breg", "profile":"integration-requester", "recoveryDays":7,
-                "sourceNamespaces":["professional-licences"], "kinds":["registry-correction"]
-            }]
-        })).unwrap()).unwrap();
+        write_policy(
+            project.path(),
+            json!({
+                "sources": [{"id":"professional", "adapter":"breg", "requests":[{"entity":"correction"}]}],
+                "reviewKinds":[{"id":"registry-correction", "purpose":"approval", "contextStrategy":"source"}],
+                "reviewProducers":[{
+                    "id":"registry-breg", "profile":"integration-requester", "recoveryDays":7,
+                    "sourceNamespaces":["professional-licences"], "kinds":["registry-correction"]
+                }]
+            }),
+        );
         let report = json!({"explanation":{"requests":[{
             "requestEntity":"correction",
             "review":{"authority":"casework-main","policyId":"registry-correction"},
@@ -3446,23 +3516,22 @@ mod tests {
         );
     }
 
-    fn casework_policy_with_one_review_kind() -> Value {
-        json!({
-            "sources": [{"id":"professional", "adapter":"breg", "requests":[{"entity":"correction"}]}],
-            "reviewKinds":[{"id":"registry-correction", "purpose":"approval", "contextStrategy":"source"}],
-            "reviewProducers":[]
-        })
+    fn casework_policy_with_one_review_kind(project: &Path) {
+        write_policy(
+            project,
+            json!({
+                "sources": [{"id":"professional", "adapter":"breg", "requests":[{"entity":"correction"}]}],
+                "reviewKinds":[{"id":"registry-correction", "purpose":"approval", "contextStrategy":"source"}],
+                "reviewProducers":[{"kinds":["registry-correction"]}]
+            }),
+        );
     }
 
     #[test]
     fn unpaired_casework_review_policies_report_a_finding_when_a_sibling_entity_names_an_undeclared_policy(
     ) {
         let project = tempfile::tempdir().unwrap();
-        fs::write(
-            project.path().join("casework.yaml"),
-            serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
-        )
-        .unwrap();
+        casework_policy_with_one_review_kind(project.path());
         let authored = json!({"entities":[
             {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
             {"id":"address-correction", "changeRequest":{"review":{"authority":"casework","policyId":"missing-kind"}}}
@@ -3479,28 +3548,24 @@ mod tests {
         let [finding] = findings.as_slice() else {
             panic!("expected exactly one finding, got {findings:?}");
         };
-        assert_eq!(finding["severity"], "finding");
-        let message = finding["message"].as_str().unwrap();
-        assert!(message.contains("address-correction"), "{message}");
-        assert!(message.contains("missing-kind"), "{message}");
-        assert!(
-            message.contains("no reviewKinds[].id matching"),
-            "{message}"
-        );
-        assert_eq!(
-            finding["path"],
-            "registry.yaml:/entities/1/changeRequest/review/policyId"
-        );
+        assert_eq!(finding.severity, Severity::Warning);
+        assert_eq!(finding.code, "casework.source-add.review-policy-unresolved");
+        assert_eq!(finding.path, "/entities/1/changeRequest/review/policyId");
+        // The warning names the member and never repeats its value.
+        for value in ["address-correction", "missing-kind"] {
+            assert!(!finding.message.contains(value), "{}", finding.message);
+            assert!(
+                !finding.suggested_action.contains(value),
+                "{}",
+                finding.suggested_action
+            );
+        }
     }
 
     #[test]
     fn unpaired_casework_review_policies_leave_a_non_string_sibling_policy_id_to_bregctl_check() {
         let project = tempfile::tempdir().unwrap();
-        fs::write(
-            project.path().join("casework.yaml"),
-            serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
-        )
-        .unwrap();
+        casework_policy_with_one_review_kind(project.path());
         // `bregctl check` refuses a missing or non-string policyId before this
         // check runs, so it promises no finding for one.
         let authored = json!({"entities":[
@@ -3523,11 +3588,7 @@ mod tests {
     #[test]
     fn unpaired_casework_review_policies_ignore_the_paired_entity_and_other_authorities() {
         let project = tempfile::tempdir().unwrap();
-        fs::write(
-            project.path().join("casework.yaml"),
-            serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
-        )
-        .unwrap();
+        casework_policy_with_one_review_kind(project.path());
         let authored = json!({"entities":[
             {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"undeclared-but-paired-so-skipped"}}},
             {"id":"external-workflow", "changeRequest":{"review":{"authority":"external-reviewer","policyId":"anything"}}},
@@ -3548,11 +3609,7 @@ mod tests {
     #[test]
     fn unpaired_casework_review_policies_scan_siblings_of_every_paired_authority() {
         let project = tempfile::tempdir().unwrap();
-        fs::write(
-            project.path().join("casework.yaml"),
-            serde_json::to_vec(&casework_policy_with_one_review_kind()).unwrap(),
-        )
-        .unwrap();
+        casework_policy_with_one_review_kind(project.path());
         let authored = json!({"entities":[
             {"id":"correction", "changeRequest":{"review":{"authority":"casework","policyId":"registry-correction"}}},
             {"id":"renewal", "changeRequest":{"review":{"authority":"casework-renewals","policyId":"registry-correction"}}},
@@ -3570,13 +3627,7 @@ mod tests {
         let [finding] = findings.as_slice() else {
             panic!("expected exactly one finding, got {findings:?}");
         };
-        assert_eq!(
-            finding["path"],
-            "registry.yaml:/entities/2/changeRequest/review/policyId"
-        );
-        let message = finding["message"].as_str().unwrap();
-        assert!(message.contains("renewal-appeal"), "{message}");
-        assert!(message.contains("casework-renewals"), "{message}");
+        assert_eq!(finding.path, "/entities/2/changeRequest/review/policyId");
     }
 
     #[test]
@@ -3643,18 +3694,16 @@ mod tests {
     #[test]
     fn routing_projection_grants_only_declared_source_fields() {
         let project = tempfile::tempdir().unwrap();
-        let write_policy = |projection: Value| {
-            fs::write(
-                project.path().join("casework.yaml"),
-                serde_json::to_vec(&json!({
+        let with_projection = |projection: Value| {
+            write_policy(
+                project.path(),
+                json!({
                     "sources":[{"id":"professional", "requests":[{"entity":"request", "projection":projection}]}]
-                }))
-                .unwrap(),
-            )
-            .unwrap();
+                }),
+            );
         };
         let metadata = json!({"fields":[{"field":"region","apiName":"region"}, {"field":"private-note","apiName":"privateNote"}]});
-        write_policy(json!(["region"]));
+        with_projection(json!(["region"]));
         let projection =
             source_projection(project.path(), "professional", "request", &metadata).unwrap();
         let input = "# keep authored context\nentities:\n  - id: request\n    route: requests\naccessProfiles: [] # keep the profile context\n";
@@ -3679,9 +3728,9 @@ mod tests {
             json!(["record"])
         );
         assert!(!rendered.contains("private-note"));
-        write_policy(json!(["unknown"]));
+        with_projection(json!(["unknown"]));
         assert!(source_projection(project.path(), "professional", "request", &metadata).is_err());
-        write_policy(json!(["region", "region"]));
+        with_projection(json!(["region", "region"]));
         assert!(source_projection(project.path(), "professional", "request", &metadata).is_err());
     }
 
@@ -4272,14 +4321,16 @@ mod tests {
                 plan.findings
             );
         };
-        assert_eq!(finding["severity"], "finding");
+        assert_eq!(finding.severity, Severity::Warning);
         assert_eq!(
-            finding["path"],
-            "registry.yaml:/accessProfiles/0/permissions/0/rowBoundaries"
+            finding.path,
+            "/accessProfiles/0/permissions/0/rowBoundaries"
         );
-        let message = finding["message"].as_str().unwrap();
-        assert!(message.contains("reviewer"), "{message}");
-        assert!(message.contains("allowed_regions"), "{message}");
+        assert!(
+            !finding.message.contains("allowed_regions"),
+            "{}",
+            finding.message
+        );
 
         // The rowBoundaries claim is not fabricated for the local reviewer
         // clients: the profile is still granted as-is, and BReg's runtime
@@ -5036,23 +5087,18 @@ mod tests {
                 authority.row_boundary_findings
             );
         };
-        assert_eq!(finding["severity"], "finding");
+        assert_eq!(finding.severity, Severity::Warning);
         // "reviewer" is at index 1 in accessProfiles: the location must name
         // that real index, not the profile id, and the permissions[] entry
         // rowBoundaries is nested under.
         assert_eq!(
-            finding["path"],
-            "registry.yaml:/accessProfiles/1/permissions/0/rowBoundaries"
+            finding.path,
+            "/accessProfiles/1/permissions/0/rowBoundaries"
         );
-        let message = finding["message"].as_str().unwrap();
-        assert!(message.contains("reviewer"), "{message}");
-        assert!(message.contains("allowed_regions"), "{message}");
-        assert!(message.contains("string"), "{message}");
-        let suggested_action = finding["suggestedAction"].as_str().unwrap();
-        assert!(suggested_action.contains("reviewer"), "{suggested_action}");
         assert!(
-            suggested_action.contains("allowed_regions"),
-            "{suggested_action}"
+            finding.suggested_action.contains("string"),
+            "{}",
+            finding.suggested_action
         );
     }
 
@@ -5257,20 +5303,23 @@ mod tests {
     }
 
     fn two_entity_policy(project: &Path) {
-        fs::write(project.join("casework.yaml"), serde_json::to_vec(&json!({
-            "sources": [{"id":"farmers", "adapter":"breg", "requests":[
-                {"entity":"correction", "projection":["region"]},
-                {"entity":"renewal"}
-            ]}],
-            "reviewKinds":[
-                {"id":"registry-correction", "purpose":"approval", "contextStrategy":"source"},
-                {"id":"registry-renewal", "purpose":"approval", "contextStrategy":"source"}
-            ],
-            "reviewProducers":[{
-                "id":"registry-breg", "profile":"integration-requester", "recoveryDays":7,
-                "sourceNamespaces":["farmers"], "kinds":["registry-correction", "registry-renewal"]
-            }]
-        })).unwrap()).unwrap();
+        write_policy(
+            project,
+            json!({
+                "sources": [{"id":"farmers", "adapter":"breg", "requests":[
+                    {"entity":"correction", "projection":["region"]},
+                    {"entity":"renewal"}
+                ]}],
+                "reviewKinds":[
+                    {"id":"registry-correction", "purpose":"approval", "contextStrategy":"source"},
+                    {"id":"registry-renewal", "purpose":"approval", "contextStrategy":"source"}
+                ],
+                "reviewProducers":[{
+                    "id":"registry-breg", "profile":"integration-requester", "recoveryDays":7,
+                    "sourceNamespaces":["farmers"], "kinds":["registry-correction", "registry-renewal"]
+                }]
+            }),
+        );
     }
 
     fn two_entity_explanation() -> Value {
@@ -5341,12 +5390,12 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         two_entity_policy(project.path());
         let mut policy: Value =
-            serde_json::from_slice(&fs::read(project.path().join("casework.yaml")).unwrap())
+            serde_norway::from_slice(&fs::read(project.path().join("casework.yaml")).unwrap())
                 .unwrap();
         policy["sources"][0]["requests"][1]["entity"] = json!("correction");
         fs::write(
             project.path().join("casework.yaml"),
-            serde_json::to_vec(&policy).unwrap(),
+            serde_norway::to_string(&policy).unwrap(),
         )
         .unwrap();
 
@@ -5358,7 +5407,20 @@ mod tests {
         )
         .err()
         .expect("each request entity is named once");
-        assert!(format!("{error:#}").contains("correction"));
+        let report = crate::configuration_report(&error).unwrap();
+        let placed = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            placed,
+            [(
+                "casework.request.duplicate-entity",
+                "/sources/0/requests/1/entity"
+            )],
+            "{report}"
+        );
     }
 
     #[test]

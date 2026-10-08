@@ -1176,7 +1176,7 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         for (key, value) in fields {
             if matches!(
                 key.as_str(),
-                "ok" | "command" | "findings" | "diagnostics" | "filesChecked"
+                "ok" | "command" | "diagnostics" | "filesChecked"
             ) || value.is_null()
             {
                 continue;
@@ -1186,20 +1186,6 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
                 .map(str::to_owned)
                 .unwrap_or_else(|| value.to_string());
             writeln!(stdout, "{key}: {rendered}")?;
-        }
-    }
-    if let Some(findings) = report["findings"].as_array() {
-        for finding in findings {
-            writeln!(
-                stdout,
-                "finding[{}] {}: {}",
-                finding["code"].as_str().unwrap_or("casework.finding"),
-                finding["path"].as_str().unwrap_or("casework.yaml"),
-                finding["message"].as_str().unwrap_or("review required")
-            )?;
-            if let Some(action) = finding["suggestedAction"].as_str() {
-                writeln!(stdout, "  next: {action}")?;
-            }
         }
     }
     if let Some(diagnostics) = checked_diagnostics(report)? {

@@ -21,7 +21,6 @@ STRING_ARRAY = {"type": "array", "items": {"type": "string"}}
 OBJECT_ARRAY = {"type": "array", "items": {"type": "object"}}
 DIAGNOSTICS = {"$ref": "#/$defs/diagnostics"}
 WARNINGS = {"$ref": "#/$defs/warnings"}
-FINDINGS = {"$ref": "#/$defs/findings"}
 # A check reads the project file, the runtime configuration it is given, at
 # most MAXIMUM_SOURCES (64) source descriptions, and at most
 # MAXIMUM_DIRECTORY_FILES (1024) YAML files from each of the three offline
@@ -481,7 +480,7 @@ REPORTS = {
             "connection",
             "bregAuthoringChanges",
             "bregAuthoringPatch",
-            "findings",
+            "diagnostics",
             "activation",
             "next",
         ],
@@ -496,7 +495,7 @@ REPORTS = {
             "bregAuthoringChanges": ARRAY,
             "bregAuthoringPatch": OBJECT,
             "candidateRuntimeBinding": OBJECT,
-            "findings": FINDINGS,
+            "diagnostics": WARNINGS,
             "activation": {"const": "not_performed"},
             "next": STRING_ARRAY,
         },
@@ -682,10 +681,6 @@ DIAGNOSTIC_DEFS = {
             ],
             "unevaluatedProperties": False,
         },
-    },
-    "findings": {
-        "type": "array",
-        "items": {"$ref": "#/$defs/diagnostic"},
     },
 }
 

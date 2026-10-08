@@ -382,6 +382,30 @@ Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.displ
   A `warning` in a report's `diagnostics` is a closed object. A consumer that
   validates reports takes the regenerated schemas.
 
+## BREAKING: `source add` reports positioned warnings in `diagnostics`
+
+`caseworkctl source add --format json` reports the warnings it used to
+report as findings in the same `diagnostics` shape every other report uses.
+Neither warning blocks the pairing, and their codes are unchanged:
+`casework.source-add.review-policy-unresolved` and
+`casework.source-add.row-boundary-claim-unsupported`.
+
+| Before | After |
+|---|---|
+| `findings` | `diagnostics` |
+| `severity: finding` | `severity: warning` |
+| `path: registry.yaml:/entities/1/changeRequest/review/policyId` | `path: /entities/1/changeRequest/review/policyId`, with `source.file`, `source.line`, and `source.column` naming the BReg `registry.yaml` |
+| `artifact: breg_entity` or `breg_access_profile` | removed; the code and the path name the member |
+| a message naming the entity, policy, profile, or claims | a message naming no value; the path locates it |
+
+- `source add` reads `casework.yaml` through the project reader, so a
+  project `caseworkctl check` refuses is refused by `source add` with the
+  same positioned diagnostics. Migration: run `caseworkctl check` and fix
+  what it reports before pairing a source.
+- A consumer that reads `findings` reads `diagnostics` instead and takes the
+  regenerated `SourceAddReport.schema.json`. The `findings` definition is
+  removed from every report schema.
+
 ## Diagnostic codes
 
 | Old code | New code |

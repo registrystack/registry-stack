@@ -388,12 +388,6 @@
         "unevaluatedProperties": false
       }
     },
-    "findings": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/diagnostic"
-      }
-    },
     "activation": {
       "type": "object",
       "additionalProperties": false,

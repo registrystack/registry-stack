@@ -72,6 +72,13 @@
   1024 YAML files (`casework.project.too-many-files`), so `filesChecked`
   states its maximum. Migration steps are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: `caseworkctl source add` reports its warnings in `diagnostics`,
+  where it reported them in `findings`. Each is a `warning` placed at the
+  JSON pointer of the BReg `registry.yaml` member it concerns, with that
+  file's line and column under `source`; `artifact` is gone and the message
+  names no value. `source add` reads `casework.yaml` through the project
+  reader, so an invalid project is refused with positioned diagnostics.
+  Migration steps are in `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

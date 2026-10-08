@@ -189,12 +189,6 @@
         "unevaluatedProperties": false
       }
     },
-    "findings": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/diagnostic"
-      }
-    },
     "lifecycle": {
       "type": "object",
       "additionalProperties": false,

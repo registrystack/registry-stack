@@ -225,12 +225,6 @@
         ],
         "unevaluatedProperties": false
       }
-    },
-    "findings": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/diagnostic"
-      }
     }
   }
 }

@@ -252,12 +252,6 @@
         "unevaluatedProperties": false
       }
     },
-    "findings": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/diagnostic"
-      }
-    },
     "doctorChecks": {
       "type": "object",
       "additionalProperties": false,
