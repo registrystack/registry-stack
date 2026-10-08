@@ -44,6 +44,9 @@
 #                  CFG-ENV-6)
 #   exceptionClass external-format | exchange-model (the whole format is
 #                  outside the naming rules; see the convention's Exceptions)
+#   buildArtifact  true, or absent (a generated format its own product's build
+#                  writes and reads back and no one edits; the lint holds the
+#                  entry to the code and applies no authoring rule to it)
 #   whenOmitted    refused (the reader requires the member) | open (omitting
 #                  it widens access today) | closed (omitting it narrows
 #                  access) | unclassified (review owes the classification,
@@ -294,6 +297,7 @@ formats:
     syntax: json
     audience: generated
     stability: unpromised
+    buildArtifact: true
     current:
       apiVersion: id.registrystack.org/formats/breg/package/v2
       kind: BRegPackage

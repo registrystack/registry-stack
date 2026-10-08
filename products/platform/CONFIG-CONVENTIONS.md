@@ -39,6 +39,11 @@ In scope:
   (explain output, `--format json` reports); it is registered with
   `reader: none`, follows CFG-ENV, CFG-NAME, CFG-ID, CFG-QTY, and CFG-EMPTY,
   and is exempt from CFG-YAML-1, CFG-CHECK-1, CFG-SCHEMA-2, and CFG-SCHEMA-6.
+  A **build artifact** is a read-back format that its own product's build
+  writes and reads again and that no one edits (the compiled package model in
+  BReg's `package.json`). It is registered with `audience: generated` and
+  `buildArtifact: true`; the registry entry is held to the code like any
+  other, and no rule of this convention applies to the format.
 - Authored and operator **JSON** documents (scenarios, migration descriptors,
   backup bindings) follow every rule that is not YAML-specific, including the
   envelope. A JSON document that is a request or response body of a product

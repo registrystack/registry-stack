@@ -111,7 +111,7 @@ FORMAT_FIELDS = (
     "target", "schema", "reader", "check", "example", "conformance", "securityMembers",
     "restrictingMembers",
 )
-OPTIONAL_FORMAT_FIELDS = ("emittedBy", "exceptionClass", "topLevel", "notes")
+OPTIONAL_FORMAT_FIELDS = ("emittedBy", "exceptionClass", "topLevel", "buildArtifact", "notes")
 ENUMS = {
     "syntax": ("yaml", "json", "jsonl", "text"),
     "audience": ("authored", "operator", "generated"),
@@ -1022,6 +1022,11 @@ class Lint:
         self.findings.setdefault(finding.key, finding)
 
     def applies(self, entry: dict, rule: str) -> bool:
+        # A build artifact is written and read back by its own product's build,
+        # never edited by people, so no authoring rule reaches it; the registry
+        # accuracy checks still hold it to the code.
+        if entry.get("buildArtifact") is True:
+            return False
         exception = entry.get("exceptionClass")
         if exception == "external-format":
             return False
@@ -1379,6 +1384,11 @@ class Lint:
             for name, allowed in ENUMS.items():
                 if name in entry and entry[name] not in allowed:
                     self.error(f"{fid}: {name} {entry[name]!r} is not one of {', '.join(allowed)}")
+            if "buildArtifact" in entry:
+                if entry["buildArtifact"] is not True:
+                    self.error(f"{fid}: buildArtifact is true or absent; set it to true or remove it")
+                elif entry["audience"] != "generated":
+                    self.error(f"{fid}: buildArtifact is only for a generated format; set audience: generated or remove buildArtifact")
             if entry["product"] not in PREFIXES or not fid.startswith(f"{entry['product']}/"):
                 self.error(f"{fid}: the id does not start with a known product")
                 continue

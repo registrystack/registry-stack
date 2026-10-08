@@ -552,6 +552,14 @@ class RegistryAccuracyTests(ConventionsTestCase):
         self.repo.fmt()["reader"]["function"] = "parse"
         self.assertError(self.repo.run(), "does not define fn parse")
 
+    def test_cfg_schema_1_refuses_a_build_artifact_that_is_not_generated(self) -> None:
+        self.repo.fmt()["buildArtifact"] = True
+        self.assertError(self.repo.run(), "casework/project: buildArtifact is only for a generated format")
+
+    def test_cfg_schema_1_refuses_a_build_artifact_value_other_than_true(self) -> None:
+        self.repo.fmt(R)["buildArtifact"] = False
+        self.assertError(self.repo.run(), "casework/check-report: buildArtifact is true or absent")
+
     def test_cfg_schema_1_refuses_reader_type_outside_the_crate_closure(self) -> None:
         self.repo.fmt()["reader"]["type"] = "Missing"
         self.assertError(self.repo.run(), "type Missing is not defined")
@@ -1330,6 +1338,29 @@ class SourceLintTests(ConventionsTestCase):
             "\n#[derive(Deserialize)]\npub struct Extra {\n    names: std::collections::BTreeSet<String>,\n}\n"
         )
         self.assertFinding(self.repo.run(), "CFG-ID-6", P, at(CONFIG_RS, "Extra/names"))
+
+    def build_artifact(self) -> dict:
+        entry = self.repo.fmt()
+        entry.update(audience="generated", stability="unpromised")
+        del entry["topLevel"]
+        return entry
+
+    def test_build_artifact_skips_the_authoring_rules(self) -> None:
+        self.plant("\n#[derive(Deserialize)]\npub struct Extra {\n    names: std::collections::BTreeSet<String>,\n}\n")
+        self.repo.write(CONFIG_RS, (self.repo.root / CONFIG_RS).read_text().replace("registry_platform_yaml", "serde_yaml_ng"))
+        entry = self.build_artifact()
+        planted = {("CFG-ID-6", P, at(CONFIG_RS, "Extra/names")), ("CFG-YAML-1", P, at(CONFIG_RS, "load()"))}
+        self.assertLessEqual(planted, keys(self.repo.run().findings))
+        entry["buildArtifact"] = True
+        report = self.repo.run()
+        self.assertEqual(report.errors, [])
+        self.assertEqual(sorted(key for key in keys(report.findings) if key[1] == P), [])
+
+    def test_build_artifact_keeps_the_registry_accuracy_checks(self) -> None:
+        entry = self.build_artifact()
+        entry["buildArtifact"] = True
+        entry["reader"]["function"] = "parse"
+        self.assertError(self.repo.run(), "does not define fn parse")
 
     def test_cfg_schema_8_ignores_test_only_items(self) -> None:
         report = self.repo.run()
