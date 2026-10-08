@@ -1481,7 +1481,7 @@ formats:
       kind: CaseworkApplyReport
     schema:
       path: products/casework/contracts/cli/ApplyReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/ApplyReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/apply-report/apply-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1511,7 +1511,7 @@ formats:
       kind: CaseworkAttemptSettlementReport
     schema:
       path: products/casework/contracts/cli/AttemptSettlementReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/AttemptSettlementReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/attempt-settlement-report/attempt-settlement-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1541,7 +1541,7 @@ formats:
       kind: CaseworkAttemptUncertainMarkingReport
     schema:
       path: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/AttemptUncertainMarkingReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1571,7 +1571,7 @@ formats:
       kind: CaseworkCheckReport
     schema:
       path: products/casework/contracts/cli/CheckReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1601,7 +1601,7 @@ formats:
       kind: CaseworkDevEventsReport
     schema:
       path: products/casework/contracts/cli/DevEventsReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/DevEventsReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/dev-events-report/dev-events-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1631,7 +1631,7 @@ formats:
       kind: CaseworkDevGrantReport
     schema:
       path: products/casework/contracts/cli/DevGrantReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/DevGrantReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/dev-grant-report/dev-grant-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1661,7 +1661,7 @@ formats:
       kind: CaseworkDevIdentityReport
     schema:
       path: products/casework/contracts/cli/DevIdentityReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/DevIdentityReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/dev-identity-report/dev-identity-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1691,7 +1691,7 @@ formats:
       kind: CaseworkDevReport
     schema:
       path: products/casework/contracts/cli/DevReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/DevReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/dev-report/dev-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1721,7 +1721,7 @@ formats:
       kind: CaseworkDevTokenReport
     schema:
       path: products/casework/contracts/cli/DevTokenReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/DevTokenReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/dev-token-report/dev-token-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1751,7 +1751,7 @@ formats:
       kind: CaseworkDoctorReport
     schema:
       path: products/casework/contracts/cli/DoctorReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/DoctorReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/doctor-report/doctor-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1781,7 +1781,7 @@ formats:
       kind: CaseworkExplainReport
     schema:
       path: products/casework/contracts/cli/ExplainReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/ExplainReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/explain-report/explain-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1811,7 +1811,7 @@ formats:
       kind: CaseworkInitReport
     schema:
       path: products/casework/contracts/cli/InitReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/InitReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/init-report/init-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1841,7 +1841,7 @@ formats:
       kind: CaseworkLifecycleReport
     schema:
       path: products/casework/contracts/cli/LifecycleReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/LifecycleReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/lifecycle-report/lifecycle-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1871,7 +1871,7 @@ formats:
       kind: CaseworkPackageReport
     schema:
       path: products/casework/contracts/cli/PackageReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/PackageReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/package-report/package-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1901,7 +1901,7 @@ formats:
       kind: CaseworkPlanReport
     schema:
       path: products/casework/contracts/cli/PlanReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/PlanReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/plan-report/plan-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1931,7 +1931,7 @@ formats:
       kind: CaseworkRetentionEraseReport
     schema:
       path: products/casework/contracts/cli/RetentionEraseReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/RetentionEraseReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/retention-erase-report/retention-erase-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1961,7 +1961,7 @@ formats:
       kind: CaseworkSimulationReport
     schema:
       path: products/casework/contracts/cli/SimulationReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/SimulationReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/simulation-report/simulation-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -1991,7 +1991,7 @@ formats:
       kind: CaseworkSourceAddReport
     schema:
       path: products/casework/contracts/cli/SourceAddReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/SourceAddReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -2021,7 +2021,7 @@ formats:
       kind: CaseworkStatusReport
     schema:
       path: products/casework/contracts/cli/StatusReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/StatusReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/status-report/status-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -2051,7 +2051,7 @@ formats:
       kind: CaseworkTestReport
     schema:
       path: products/casework/contracts/cli/TestReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/TestReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/test-report/test-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none
@@ -2081,7 +2081,7 @@ formats:
       kind: CaseworkUsageReport
     schema:
       path: products/casework/contracts/cli/UsageReport.schema.json
-      id: https://registrystack.org/caseworkctl/v1alpha3/UsageReport.schema.json
+      id: https://id.registrystack.org/schemas/casework/usage-report/usage-report.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-caseworkctl/src/cli_contract_tests.rs
     reader: none

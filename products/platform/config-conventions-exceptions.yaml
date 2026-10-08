@@ -2969,13 +2969,6 @@ exceptions:
   wp: WP3
   reason: grantSourceIssuer is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-ENV-1
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/apply-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -2988,27 +2981,6 @@ exceptions:
   class: stable-move
   reason: kind is ApplyReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkApplyReport'
-- rule: CFG-QTY-4
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/$defs/activation/properties/applyOrder
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/oneOf/0/properties/applyOrder
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/oneOf/0/properties/schemaVersionsApplied/items
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: casework/apply-report
   location: products/platform/config-formats.yaml#/example
@@ -3016,55 +2988,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/ApplyReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/apply-report/apply-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/oneOf/0/properties/effects
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-VAL-6
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/$defs/activation/properties/packageDigest
-  class: pending
-  wp: WP6
-  reason: packageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/$defs/activation/properties/predecessorPackageDigest
-  class: pending
-  wp: WP6
-  reason: predecessorPackageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/oneOf/0/properties/packageDigest
-  class: pending
-  wp: WP6
-  reason: packageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: casework/apply-report
-  location: products/casework/contracts/cli/ApplyReport.schema.json#/oneOf/0/properties/predecessorPackageDigest
-  class: pending
-  wp: WP6
-  reason: predecessorPackageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-ENV-1
-  format: casework/attempt-settlement-report
-  location: products/casework/contracts/cli/AttemptSettlementReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/attempt-settlement-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3084,27 +3007,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/attempt-settlement-report
-  location: products/casework/contracts/cli/AttemptSettlementReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/AttemptSettlementReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/attempt-settlement-report/attempt-settlement-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/attempt-settlement-report
-  location: products/casework/contracts/cli/AttemptSettlementReport.schema.json#/oneOf/0/properties/report
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-ENV-1
-  format: casework/attempt-uncertain-marking-report
-  location: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/attempt-uncertain-marking-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3124,20 +3026,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/attempt-uncertain-marking-report
-  location: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/AttemptUncertainMarkingReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/attempt-uncertain-marking-report
-  location: products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json#/oneOf/0/properties/report
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: casework/breg-source-description
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3150,13 +3038,6 @@ exceptions:
   class: stable-move
   reason: kind is BRegCaseworkSourceDescription
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkBregSourceDescription'
-- rule: CFG-ENV-1
-  format: casework/check-report
-  location: products/casework/contracts/cli/CheckReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/check-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3176,34 +3057,13 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/check-report
-  location: products/casework/contracts/cli/CheckReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: casework/check-report
-  location: products/casework/contracts/cli/CheckReport.schema.json#/oneOf/0/properties/effective
+  location: products/casework/contracts/cli/CheckReport.schema.json#/$defs/checkedRequest/properties/target
   class: pending
   wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-VAL-6
-  format: casework/check-report
-  location: products/casework/contracts/cli/CheckReport.schema.json#/oneOf/0/properties/bregPackage/properties/packageDigest
-  class: pending
-  wp: WP6
-  reason: packageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-ENV-1
-  format: casework/dev-events-report
-  location: products/casework/contracts/cli/DevEventsReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
+  reason: the target a request checks names its record with an `id` that is not a LocalId, so the member stays open rather than declare an `id` the identifier rule refuses
+  resolution: Type the checked target's members once the target identifier grammar is settled, then close the object
 - rule: CFG-ENV-2
   format: casework/dev-events-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3223,20 +3083,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/dev-events-report
-  location: products/casework/contracts/cli/DevEventsReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/DevEventsReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/dev-events-report/dev-events-report.v1alpha3.schema.json
-- rule: CFG-ENV-1
-  format: casework/dev-grant-report
-  location: products/casework/contracts/cli/DevGrantReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/dev-grant-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3256,20 +3102,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/dev-grant-report
-  location: products/casework/contracts/cli/DevGrantReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/DevGrantReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/dev-grant-report/dev-grant-report.v1alpha3.schema.json
-- rule: CFG-ENV-1
-  format: casework/dev-identity-report
-  location: products/casework/contracts/cli/DevIdentityReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/dev-identity-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3289,20 +3121,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/dev-identity-report
-  location: products/casework/contracts/cli/DevIdentityReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/DevIdentityReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/dev-identity-report/dev-identity-report.v1alpha3.schema.json
-- rule: CFG-ENV-1
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/dev-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3315,20 +3133,6 @@ exceptions:
   class: stable-move
   reason: kind is DevReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevReport'
-- rule: CFG-QTY-4
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/directory/properties/revision
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/directory/properties/teams
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: casework/dev-report
   location: products/platform/config-formats.yaml#/example
@@ -3336,13 +3140,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/DevReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/dev-report/dev-report.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: casework/dev-report
   location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/clients/items
@@ -3357,27 +3154,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-VAL-7
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/caseworkUrl
-  class: pending
-  wp: WP6
-  reason: caseworkUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/issuer
-  class: pending
-  wp: WP6
-  reason: issuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-ENV-1
-  format: casework/dev-token-report
-  location: products/casework/contracts/cli/DevTokenReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/dev-token-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3397,20 +3173,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/dev-token-report
-  location: products/casework/contracts/cli/DevTokenReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/DevTokenReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/dev-token-report/dev-token-report.v1alpha3.schema.json
-- rule: CFG-ENV-1
-  format: casework/doctor-report
-  location: products/casework/contracts/cli/DoctorReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/doctor-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3430,48 +3192,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/doctor-report
-  location: products/casework/contracts/cli/DoctorReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/DoctorReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/doctor-report/doctor-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/doctor-report
-  location: products/casework/contracts/cli/DoctorReport.schema.json#/oneOf/0/properties/pinnedWork/properties/conflicts/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/doctor-report
-  location: products/casework/contracts/cli/DoctorReport.schema.json#/oneOf/0/properties/secretFileChecks/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/doctor-report
-  location: products/casework/contracts/cli/DoctorReport.schema.json#/oneOf/0/properties/sourceChecks/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-VAL-6
-  format: casework/doctor-report
-  location: products/casework/contracts/cli/DoctorReport.schema.json#/oneOf/0/properties/packageDigest
-  class: pending
-  wp: WP6
-  reason: packageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-ENV-1
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/explain-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3491,62 +3211,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/ExplainReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/explain-report/explain-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/oneOf/0/properties/accessProfiles/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/oneOf/0/properties/calendars/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/oneOf/0/properties/clocks/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/oneOf/0/properties/queues/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/oneOf/0/properties/requests/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/explain-report
-  location: products/casework/contracts/cli/ExplainReport.schema.json#/oneOf/0/properties/reviewKinds/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-ENV-1
-  format: casework/init-report
-  location: products/casework/contracts/cli/InitReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/init-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3566,20 +3230,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/init-report
-  location: products/casework/contracts/cli/InitReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/InitReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/init-report/init-report.v1alpha3.schema.json
-- rule: CFG-ENV-1
-  format: casework/lifecycle-report
-  location: products/casework/contracts/cli/LifecycleReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/lifecycle-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3616,20 +3266,6 @@ exceptions:
   class: stable-move
   reason: value review_request is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-QTY-4
-  format: casework/lifecycle-report
-  location: products/casework/contracts/cli/LifecycleReport.schema.json#/$defs/lifecycleState/properties/incomingTransitions
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/lifecycle-report
-  location: products/casework/contracts/cli/LifecycleReport.schema.json#/$defs/lifecycleState/properties/outgoingTransitions
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: casework/lifecycle-report
   location: products/platform/config-formats.yaml#/example
@@ -3637,20 +3273,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/lifecycle-report
-  location: products/casework/contracts/cli/LifecycleReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/LifecycleReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/lifecycle-report/lifecycle-report.v1alpha3.schema.json
-- rule: CFG-ENV-1
-  format: casework/package-report
-  location: products/casework/contracts/cli/PackageReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/package-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3670,34 +3292,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/package-report
-  location: products/casework/contracts/cli/PackageReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/PackageReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/package-report/package-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/package-report
-  location: products/casework/contracts/cli/PackageReport.schema.json#/oneOf/0/properties/files/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-VAL-6
-  format: casework/package-report
-  location: products/casework/contracts/cli/PackageReport.schema.json#/oneOf/0/properties/packageDigest
-  class: pending
-  wp: WP6
-  reason: packageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-ENV-1
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/plan-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3728,55 +3322,6 @@ exceptions:
   class: stable-move
   reason: value notRecorded is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-QTY-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/$defs/activation/properties/applyOrder
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/0/properties/pendingSchemaVersions/items
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/0/properties/schemaVersion
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/0/properties/supportedSchemaVersion
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/1/properties/pendingSchemaVersions/items
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/1/properties/schemaVersion
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/1/properties/supportedSchemaVersion
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: casework/plan-report
   location: products/platform/config-formats.yaml#/example
@@ -3784,55 +3329,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/PlanReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/plan-report/plan-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/0/properties/effects
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/1/properties/effects
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-VAL-6
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/$defs/activation/properties/packageDigest
-  class: pending
-  wp: WP6
-  reason: packageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/$defs/activation/properties/predecessorPackageDigest
-  class: pending
-  wp: WP6
-  reason: predecessorPackageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/0/properties/candidatePackageDigest
-  class: pending
-  wp: WP6
-  reason: candidatePackageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: casework/plan-report
-  location: products/casework/contracts/cli/PlanReport.schema.json#/oneOf/1/properties/candidatePackageDigest
-  class: pending
-  wp: WP6
-  reason: candidatePackageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
 - rule: CFG-ENV-2
   format: casework/project
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4001,13 +3497,6 @@ exceptions:
   class: stable-move
   reason: value awaitingApplicant is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value awaiting-applicant; awaitingApplicant is refused'
-- rule: CFG-ENV-1
-  format: casework/retention-erase-report
-  location: products/casework/contracts/cli/RetentionEraseReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/retention-erase-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4027,20 +3516,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/retention-erase-report
-  location: products/casework/contracts/cli/RetentionEraseReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/RetentionEraseReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/retention-erase-report/retention-erase-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/retention-erase-report
-  location: products/casework/contracts/cli/RetentionEraseReport.schema.json#/oneOf/0/properties/report
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-EMPTY-2
   format: casework/runtime
   location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
@@ -4101,13 +3576,6 @@ exceptions:
   class: stable-move
   reason: timeoutMilliseconds is a refused spelling of 'Time allowed for one outbound call or delivery attempt'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to attemptTimeoutMilliseconds'
-- rule: CFG-ENV-1
-  format: casework/simulation-report
-  location: products/casework/contracts/cli/SimulationReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/simulation-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4133,27 +3601,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/simulation-report
-  location: products/casework/contracts/cli/SimulationReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/SimulationReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/simulation-report/simulation-report.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: casework/simulation-report
-  location: products/casework/contracts/cli/SimulationReport.schema.json#/oneOf/0/properties/routing
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-ENV-1
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/source-add-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4179,13 +3626,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/SourceAddReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: casework/source-add-report
   location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/0/properties/bregAuthoringPatch
@@ -4200,20 +3640,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/0/properties/connection
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-ENV-1
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/status-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4226,27 +3652,6 @@ exceptions:
   class: stable-move
   reason: kind is StatusReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkStatusReport'
-- rule: CFG-QTY-4
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#/$defs/activation/properties/applyOrder
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#/oneOf/0/properties/schemaVersion
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#/oneOf/0/properties/supportedSchemaVersion
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: casework/status-report
   location: products/platform/config-formats.yaml#/example
@@ -4254,34 +3659,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/StatusReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/status-report/status-report.v1alpha3.schema.json
-- rule: CFG-VAL-6
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#/$defs/activation/properties/packageDigest
-  class: pending
-  wp: WP6
-  reason: packageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-6
-  format: casework/status-report
-  location: products/casework/contracts/cli/StatusReport.schema.json#/$defs/activation/properties/predecessorPackageDigest
-  class: pending
-  wp: WP6
-  reason: predecessorPackageDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-ENV-1
-  format: casework/test-report
-  location: products/casework/contracts/cli/TestReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/test-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4307,20 +3684,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/test-report
-  location: products/casework/contracts/cli/TestReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/TestReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/test-report/test-report.v1alpha3.schema.json
-- rule: CFG-ENV-1
-  format: casework/usage-report
-  location: products/casework/contracts/cli/UsageReport.schema.json#/properties
-  class: pending
-  wp: WP6
-  reason: the schema does not declare apiVersion
-  resolution: Declare apiVersion with const registry.registrystack.org/caseworkctl/v1alpha3
 - rule: CFG-ENV-2
   format: casework/usage-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4340,13 +3703,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: casework/usage-report
-  location: products/casework/contracts/cli/UsageReport.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/caseworkctl/v1alpha3/UsageReport.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/casework/usage-report/usage-report.v1alpha3.schema.json
 - rule: CFG-ENV-1
   format: discovery/evidence-mapping
   location: products/platform/config-formats.yaml#/current/apiVersion

@@ -3206,6 +3206,78 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/casework/apply-report/apply-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "ApplyReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/ApplyReport.schema.json",
+        "sha256": "e38c0172fe4dcb5853ab5078174f0383e91f4b7ff9aaffc8432640c75c0e2786",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/attempt-settlement-report/attempt-settlement-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "AttemptSettlementReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/AttemptSettlementReport.schema.json",
+        "sha256": "715ad39a301f115ff66fda4e6f26a3474ea444dc11710d8a1b474f52a0b66395",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "AttemptUncertainMarkingReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/AttemptUncertainMarkingReport.schema.json",
+        "sha256": "a576647e7a205a1948d385705d3aa402bb2faa810bd9b050e01513377dfc73b9",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "CheckReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/CheckReport.schema.json",
+        "sha256": "c1c38a154ba072030ab300691a61a1f55879b66cba7d963f7ff9cd5754154250",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/casework/dev-clients/dev-clients.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3220,6 +3292,132 @@
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
         "sha256": "d56bd456c1da60348e8983f4e5806c650ca1b6439e79bc026a373611d0e0a3a5",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/dev-events-report/dev-events-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "DevEventsReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/DevEventsReport.schema.json",
+        "sha256": "140a5311249dda027043a7e1d22500a56e290f8314118889ca5ca77f85ef9b1a",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/dev-grant-report/dev-grant-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "DevGrantReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/DevGrantReport.schema.json",
+        "sha256": "f1afae2e9e1ea7f9cec50a095c809680898560cec3d8b7ca0ed482c4a2913906",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/dev-identity-report/dev-identity-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "DevIdentityReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/DevIdentityReport.schema.json",
+        "sha256": "8272eb14d89fca473deb32492e7f721178693b1dbf00719bffc143ce4fb8b712",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/dev-report/dev-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "DevReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/DevReport.schema.json",
+        "sha256": "421b4576bc6c09ada0f566f5dd85616ae95f6bfa80b8227efe652a77b5e36332",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/dev-token-report/dev-token-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "DevTokenReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/DevTokenReport.schema.json",
+        "sha256": "344b78556d07612456635ec37d2574f36c2ceed43ad10f7006aa796be28e8313",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/doctor-report/doctor-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "DoctorReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/DoctorReport.schema.json",
+        "sha256": "e0baa17cf9d44288d580464e5fe2ffd181cc6102f6943180ef75e20c87996f4d",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/explain-report/explain-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "ExplainReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/ExplainReport.schema.json",
+        "sha256": "886cbc948605cf491ce7c2d0db6bd6861f09fad72b8339d055b79cf2a494bd45",
         "mediaType": "application/schema+json"
       }
     },
@@ -3260,6 +3458,78 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/casework/init-report/init-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "InitReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/InitReport.schema.json",
+        "sha256": "79f40a14fb762592e8f3b47cef6386fbe59b8432fae5ca8906f50b249b74aef1",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/lifecycle-report/lifecycle-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "LifecycleReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/LifecycleReport.schema.json",
+        "sha256": "4ba03ec9b1ad10e750632ae548ac2cbf95fdcbd61a3e53afb46caf89782648af",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/package-report/package-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "PackageReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/PackageReport.schema.json",
+        "sha256": "64a0774bb935d4794014a64b16fbfa095b9dead8a2db4c27b191d63a9b091301",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/plan-report/plan-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "PlanReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/PlanReport.schema.json",
+        "sha256": "f7660882b5299c290896c2e2766ac293fc7fe0e02a8bc2609a05641dfd19ad25",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3274,6 +3544,24 @@
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
         "sha256": "5f9511ec7dbc128e8913160e27dec2ebb4f60a060abb1ad9c20d8e5f2063cd56",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/retention-erase-report/retention-erase-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "RetentionEraseReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/RetentionEraseReport.schema.json",
+        "sha256": "40adb1b475b575f114e95298ba4bb8d03bda57b269fe4d213256314361f5eb48",
         "mediaType": "application/schema+json"
       }
     },
@@ -3296,6 +3584,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/casework/simulation-report/simulation-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "SimulationReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/SimulationReport.schema.json",
+        "sha256": "212b03a77fd26edae6d7d36d9507aadcadb86b70298e77c650e05613f167c967",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/casework/simulation/simulation.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3310,6 +3616,78 @@
       "artifact": {
         "path": "products/casework/generated/simulation/simulation.schema.json",
         "sha256": "0e62a5f699e85ed39ef1910e5f651618f66b955000a5a6453990b2222ef9bf7d",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "SourceAddReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/SourceAddReport.schema.json",
+        "sha256": "d22de5bbd0c85183083ea66593d8f482815de113159e1c2925dddcd498a02636",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/status-report/status-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "StatusReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/StatusReport.schema.json",
+        "sha256": "1b5eb31dc030958294a74509b19e9499edca403213c195a0534dc44deec89736",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/test-report/test-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "TestReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/TestReport.schema.json",
+        "sha256": "b533d816a63f5022b39c7a0e180096ab3c3802d534db428605c7ae1342ca5c2b",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/casework/usage-report/usage-report.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "casework",
+      "title": "UsageReport",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
+      "source": {
+        "path": "products/casework/scripts/generate_cli_schemas.py",
+        "sha256": "99aea9e9364bef5c7bb7db2b1045df076e3c1304f5ddca763464ee1fa0dca6ff"
+      },
+      "artifact": {
+        "path": "products/casework/contracts/cli/UsageReport.schema.json",
+        "sha256": "80d4f48118b7aea95eb98793523a2f87c157bd172f37cdbeec454e987a83efff",
         "mediaType": "application/schema+json"
       }
     },

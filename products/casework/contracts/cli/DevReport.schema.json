@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/DevReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/dev-report/dev-report.v1alpha3.schema.json",
   "title": "DevReport",
   "description": "Versioned JSON report emitted by caseworkctl for dev.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "DevReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -59,13 +73,13 @@
           "type": "string"
         },
         "caseworkUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "tokenEndpoint": {
           "type": "string"
         },
         "issuer": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "clientAssertionAudience": {
           "type": "string"
@@ -97,11 +111,14 @@
           ],
           "properties": {
             "revision": {
-              "type": "integer"
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "teams": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           }
         }
@@ -254,6 +271,13 @@
         ],
         "unevaluatedProperties": false
       }
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
     }
   }
 }

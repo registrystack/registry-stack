@@ -505,6 +505,65 @@ configuration reader, and is checked by `caseworkctl check`.
 
 Development state codes: `casework.dev-state.invalid-ownership`.
 
+## BREAKING: `caseworkctl` report schema identifiers
+
+The 21 schemas in `products/casework/contracts/cli/`, one per
+`caseworkctl --format json` report `kind`, are published in the identifier
+catalog under the `kind` in kebab case, as the table lists. The file names and the
+`apiVersion` the reports carry, `registry.registrystack.org/caseworkctl/v1alpha3`,
+are unchanged, and so is every report `caseworkctl` writes.
+
+| `kind` | Old `$id` | New `$id` |
+|---|---|---|
+| `ApplyReport` | `https://registrystack.org/caseworkctl/v1alpha3/ApplyReport.schema.json` | `https://id.registrystack.org/schemas/casework/apply-report/apply-report.v1alpha3.schema.json` |
+| `AttemptSettlementReport` | `https://registrystack.org/caseworkctl/v1alpha3/AttemptSettlementReport.schema.json` | `https://id.registrystack.org/schemas/casework/attempt-settlement-report/attempt-settlement-report.v1alpha3.schema.json` |
+| `AttemptUncertainMarkingReport` | `https://registrystack.org/caseworkctl/v1alpha3/AttemptUncertainMarkingReport.schema.json` | `https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json` |
+| `CheckReport` | `https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json` | `https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json` |
+| `DevEventsReport` | `https://registrystack.org/caseworkctl/v1alpha3/DevEventsReport.schema.json` | `https://id.registrystack.org/schemas/casework/dev-events-report/dev-events-report.v1alpha3.schema.json` |
+| `DevGrantReport` | `https://registrystack.org/caseworkctl/v1alpha3/DevGrantReport.schema.json` | `https://id.registrystack.org/schemas/casework/dev-grant-report/dev-grant-report.v1alpha3.schema.json` |
+| `DevIdentityReport` | `https://registrystack.org/caseworkctl/v1alpha3/DevIdentityReport.schema.json` | `https://id.registrystack.org/schemas/casework/dev-identity-report/dev-identity-report.v1alpha3.schema.json` |
+| `DevReport` | `https://registrystack.org/caseworkctl/v1alpha3/DevReport.schema.json` | `https://id.registrystack.org/schemas/casework/dev-report/dev-report.v1alpha3.schema.json` |
+| `DevTokenReport` | `https://registrystack.org/caseworkctl/v1alpha3/DevTokenReport.schema.json` | `https://id.registrystack.org/schemas/casework/dev-token-report/dev-token-report.v1alpha3.schema.json` |
+| `DoctorReport` | `https://registrystack.org/caseworkctl/v1alpha3/DoctorReport.schema.json` | `https://id.registrystack.org/schemas/casework/doctor-report/doctor-report.v1alpha3.schema.json` |
+| `ExplainReport` | `https://registrystack.org/caseworkctl/v1alpha3/ExplainReport.schema.json` | `https://id.registrystack.org/schemas/casework/explain-report/explain-report.v1alpha3.schema.json` |
+| `InitReport` | `https://registrystack.org/caseworkctl/v1alpha3/InitReport.schema.json` | `https://id.registrystack.org/schemas/casework/init-report/init-report.v1alpha3.schema.json` |
+| `LifecycleReport` | `https://registrystack.org/caseworkctl/v1alpha3/LifecycleReport.schema.json` | `https://id.registrystack.org/schemas/casework/lifecycle-report/lifecycle-report.v1alpha3.schema.json` |
+| `PackageReport` | `https://registrystack.org/caseworkctl/v1alpha3/PackageReport.schema.json` | `https://id.registrystack.org/schemas/casework/package-report/package-report.v1alpha3.schema.json` |
+| `PlanReport` | `https://registrystack.org/caseworkctl/v1alpha3/PlanReport.schema.json` | `https://id.registrystack.org/schemas/casework/plan-report/plan-report.v1alpha3.schema.json` |
+| `RetentionEraseReport` | `https://registrystack.org/caseworkctl/v1alpha3/RetentionEraseReport.schema.json` | `https://id.registrystack.org/schemas/casework/retention-erase-report/retention-erase-report.v1alpha3.schema.json` |
+| `SimulationReport` | `https://registrystack.org/caseworkctl/v1alpha3/SimulationReport.schema.json` | `https://id.registrystack.org/schemas/casework/simulation-report/simulation-report.v1alpha3.schema.json` |
+| `SourceAddReport` | `https://registrystack.org/caseworkctl/v1alpha3/SourceAddReport.schema.json` | `https://id.registrystack.org/schemas/casework/source-add-report/source-add-report.v1alpha3.schema.json` |
+| `StatusReport` | `https://registrystack.org/caseworkctl/v1alpha3/StatusReport.schema.json` | `https://id.registrystack.org/schemas/casework/status-report/status-report.v1alpha3.schema.json` |
+| `TestReport` | `https://registrystack.org/caseworkctl/v1alpha3/TestReport.schema.json` | `https://id.registrystack.org/schemas/casework/test-report/test-report.v1alpha3.schema.json` |
+| `UsageReport` | `https://registrystack.org/caseworkctl/v1alpha3/UsageReport.schema.json` | `https://id.registrystack.org/schemas/casework/usage-report/usage-report.v1alpha3.schema.json` |
+
+Each schema declares `apiVersion` and `kind` beside its variants and refuses
+a member no variant declares. The members the schemas left open are typed
+and closed: the attempt settlement, uncertain marking, and retention erasure
+detail; the effective project `check` reports; the `doctor` secret file and
+source checks and stranded work; the `explain` requests; the `package` files;
+the `simulate` routing; the `source add` connection; and the `plan` and
+`apply` effects. Every count states its maximum: the range of the Rust type
+`caseworkctl` writes, or 0 to 9007199254740991, the largest integer JSON
+carries exactly, where that type is wider. Where `caseworkctl` holds a
+tighter limit the schema states it: 64 sources per project, 64 routing
+rules per request, 1048576 bytes per package file, and 2147483647 consecutive
+reconciliation failures.
+
+`ExplainReport` and `CheckReport` refer to the project schema,
+`https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json`,
+for the queues, review kinds, review producers, inbox, routing rules, access
+profiles, calendars, and clocks they carry, rather than copying it.
+
+Migration: load the report schemas by their new identifiers. A validator
+checking an `explain` or `check` report needs the project schema,
+`products/casework/generated/project/project.schema.json`, loaded beside the
+report schema; the reference is relative, so it resolves to the copy
+published beside the report schema.
+
+The members still left open are listed in
+`products/casework/contracts/cli/README.md`.
+
 ## Diagnostic codes
 
 | Old code | New code |

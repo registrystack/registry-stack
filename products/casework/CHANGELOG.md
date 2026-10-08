@@ -107,6 +107,18 @@
   `casework.dev-state.invalid-ownership` for an owner, port, or container
   `caseworkctl` never writes. Migration: run `caseworkctl dev stop --remove`
   with the earlier `caseworkctl`, remove `.casework/dev`, and start again.
+- BREAKING: the 21 `caseworkctl --format json` report schemas are published
+  in the identifier catalog, `CheckReport` as
+  `https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json`
+  where it was `https://registrystack.org/caseworkctl/v1alpha3/CheckReport.schema.json`,
+  and declare their `apiVersion` and `kind` beside their variants. The members
+  they left open (attempt, retention, check, doctor, explain, package,
+  simulation, source add, plan, and apply detail) are now typed and closed,
+  and every count states its maximum. `ExplainReport` and `CheckReport` refer
+  to the project schema for the policy they carry. The reports themselves are
+  unchanged. Migration: load the schemas by their new identifiers, and give a
+  validator the project schema beside those two; the table is in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

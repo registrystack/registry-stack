@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/TestReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/test-report/test-report.v1alpha3.schema.json",
   "title": "TestReport",
   "description": "Versioned JSON report emitted by caseworkctl for test.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "TestReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",

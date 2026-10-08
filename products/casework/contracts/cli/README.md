@@ -24,9 +24,19 @@ that names its refusals, and otherwise the exit class of the failure:
 each diagnostic names a `suggestedAction`.
 
 `apiVersion` versions the complete CLI surface. `kind` selects one of the
-self-contained draft 2020-12 schemas in this directory. The schemas cover
-successful reports and the diagnostic refusal a parsed command can emit.
-Argument parsing failures use `UsageReport`.
+draft 2020-12 schemas in this directory. Each is published in the
+identifier catalog under the `kind` in kebab case: `CheckReport.schema.json`
+is
+`https://id.registrystack.org/schemas/casework/check-report/check-report.v1alpha3.schema.json`. The schemas cover successful reports and the diagnostic
+refusal a parsed command can emit. Argument parsing failures use
+`UsageReport`.
+
+`ExplainReport` and `CheckReport` carry part of the authored project and refer
+to the project schema's definitions of it,
+`../project/project.v1alpha1.schema.json`, rather than copying them. A
+validator for those two loads
+`products/casework/generated/project/project.schema.json` beside the report
+schema.
 
 Clap's `--help` and `--version` displays are command-line metadata, not command
 responses. Clap emits them as plain text before command dispatch, even when
@@ -66,29 +76,21 @@ because they are process-control implementation details and do not support
 ## Pinned and opaque fields
 
 A field is **pinned** when its schema names it, types it, and its containing
-object has `additionalProperties: false`. These fields are constructed
-explicitly by `registry-caseworkctl`; changing their name, type, presence, or
-closed value set changes this wire contract. Every report's top-level fields,
-the common diagnostic shape, doctor readiness keys, lifecycle descriptions,
-simulation subject, test fixture summary, and dev directory summary are
-pinned.
+object is closed. Changing a pinned field's name, type, presence, or closed
+value set changes this wire contract. Every field is pinned except the opaque
+ones listed below. A field typed by a project schema definition is pinned to
+that definition and changes when the project schema does.
 
 A field is **opaque** when the schema constrains it only as an object, array,
 or unconstrained JSON value. These nodes pass through a type owned by the
 Casework engine, a source adapter, or another product. Their interior is not a
 promise made by this CLI contract:
 
-- `AttemptSettlementReport.report`, `AttemptUncertainMarkingReport.report`,
-  and `RetentionEraseReport.report`
-- `CheckReport.effective`
-- `DoctorReport.secretFileChecks` and `DoctorReport.sourceChecks`
-- the policy arrays in `ExplainReport`
-- `PackageReport.files`
-- `SimulationReport.routing` and `SimulationReport.clock`
-- `SourceAddReport.connection`, `bregAuthoringChanges`,
-  `bregAuthoringPatch`, and `candidateRuntimeBinding`
+- the `target` of each request in `CheckReport.effective.sources`
+- `SimulationReport.clock`
+- `SourceAddReport.bregAuthoringChanges`, `bregAuthoringPatch`, and
+  `candidateRuntimeBinding`
 - `DevReport.sources` and `DevReport.clients`
-- `PlanReport.effects` and `ApplyReport.effects`
 
 Consumers of an opaque node must validate the fields they read. A stable
 `caseworkctl` `apiVersion` does not say that an opaque engine-owned structure

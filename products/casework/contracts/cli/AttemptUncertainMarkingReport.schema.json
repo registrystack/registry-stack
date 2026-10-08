@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/AttemptUncertainMarkingReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/attempt-uncertain-marking-report/attempt-uncertain-marking-report.v1alpha3.schema.json",
   "title": "AttemptUncertainMarkingReport",
   "description": "Versioned JSON report emitted by caseworkctl for attempt mark-uncertain.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "AttemptUncertainMarkingReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -40,7 +54,7 @@
           "type": "string"
         },
         "report": {
-          "type": "object"
+          "$ref": "#/$defs/uncertainMarking"
         }
       }
     },
@@ -191,6 +205,85 @@
         ],
         "unevaluatedProperties": false
       }
+    },
+    "uncertainMarking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attemptId",
+        "itemId",
+        "operation",
+        "bindingReference",
+        "reason",
+        "decidedBy",
+        "attemptState",
+        "itemState",
+        "applied",
+        "originalActor",
+        "originalProfileId"
+      ],
+      "properties": {
+        "attemptId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "itemId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "bindingReference": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "decidedBy": {
+          "type": "string"
+        },
+        "attemptState": {
+          "enum": [
+            "pending",
+            "uncertain",
+            "completed",
+            "refused"
+          ]
+        },
+        "itemState": {
+          "type": "string"
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "originalActor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "issuer",
+            "subject"
+          ],
+          "properties": {
+            "issuer": {
+              "$ref": "#/$defs/Url"
+            },
+            "subject": {
+              "type": "string"
+            }
+          }
+        },
+        "originalProfileId": {
+          "type": "string"
+        }
+      }
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
     }
   }
 }

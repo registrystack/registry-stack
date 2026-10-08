@@ -86,8 +86,21 @@ fn assert_matches_contract(label: &str, kind: &str, report: &Value) {
         &std::fs::read(&path).unwrap_or_else(|error| panic!("schema {path:?} reads: {error}")),
     )
     .unwrap_or_else(|error| panic!("schema {path:?} parses: {error}"));
+    // A report that carries part of the authored project refers to the
+    // project schema's definitions of it.
+    let project_path = repo_root().join("products/casework/generated/project/project.schema.json");
+    let project_schema: Value = serde_json::from_slice(
+        &std::fs::read(&project_path)
+            .unwrap_or_else(|error| panic!("schema {project_path:?} reads: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("schema {project_path:?} parses: {error}"));
+    let project_id = project_schema["$id"]
+        .as_str()
+        .expect("the project schema names its identifier")
+        .to_owned();
     let compiled = JSONSchema::options()
         .with_draft(Draft::Draft202012)
+        .with_document(project_id, project_schema)
         .compile(&schema)
         .unwrap_or_else(|error| panic!("schema {path:?} compiles: {error}"));
     let validation = compiled.validate(report);

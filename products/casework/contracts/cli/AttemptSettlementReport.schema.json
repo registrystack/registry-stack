@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/AttemptSettlementReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/attempt-settlement-report/attempt-settlement-report.v1alpha3.schema.json",
   "title": "AttemptSettlementReport",
   "description": "Versioned JSON report emitted by caseworkctl for attempt settle.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "AttemptSettlementReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -40,7 +54,7 @@
           "type": "string"
         },
         "report": {
-          "type": "object"
+          "$ref": "#/$defs/settlement"
         }
       }
     },
@@ -190,6 +204,61 @@
           }
         ],
         "unevaluatedProperties": false
+      }
+    },
+    "settlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attemptId",
+        "itemId",
+        "operation",
+        "bindingReference",
+        "reason",
+        "decidedBy",
+        "attemptState",
+        "itemState",
+        "applied",
+        "outcome"
+      ],
+      "properties": {
+        "attemptId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "itemId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "bindingReference": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "decidedBy": {
+          "type": "string"
+        },
+        "attemptState": {
+          "enum": [
+            "pending",
+            "uncertain",
+            "completed",
+            "refused"
+          ]
+        },
+        "itemState": {
+          "type": "string"
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "type": "string"
+        }
       }
     }
   }

@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/ExplainReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/explain-report/explain-report.v1alpha3.schema.json",
   "title": "ExplainReport",
   "description": "Versioned JSON report emitted by caseworkctl for explain.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "ExplainReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -49,37 +63,37 @@
         "requests": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/explainedRequest"
           }
         },
         "accessProfiles": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/AccessProfile"
           }
         },
         "queues": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/QueuePolicy"
           }
         },
         "reviewKinds": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/ReviewKindPolicy"
           }
         },
         "calendars": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/CalendarPolicy"
           }
         },
         "clocks": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/ClockPolicy"
           }
         },
         "networkAccess": {
@@ -236,6 +250,74 @@
           }
         ],
         "unevaluatedProperties": false
+      }
+    },
+    "explainedRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "entity",
+        "defaultQueue",
+        "projection",
+        "routing",
+        "clock",
+        "sourceStages",
+        "sourceFields"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "defaultQueue": {
+          "type": "string"
+        },
+        "projection": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "routing": {
+          "type": "array",
+          "items": {
+            "$ref": "../project/project.v1alpha1.schema.json#/$defs/RoutingRule"
+          }
+        },
+        "clock": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceStages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceFields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "field",
+              "apiName"
+            ],
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "apiName": {
+                "type": "string"
+              }
+            }
+          }
+        }
       }
     }
   }

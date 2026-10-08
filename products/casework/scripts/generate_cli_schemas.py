@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generate the self-contained caseworkctl JSON report schemas."""
+"""Generate the caseworkctl JSON report schemas.
+
+A report that carries part of the authored project, such as `explain` and
+`check`, refers to the project schema's definitions of it rather than
+copying them.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 
 API_VERSION = "registry.registrystack.org/caseworkctl/v1alpha3"
 OUTPUT = Path(__file__).resolve().parents[1] / "contracts" / "cli"
+SCHEMA_ID_BASE = "https://id.registrystack.org/schemas/"
+# The project schema, relative to a report schema's identifier.
+PROJECT_SCHEMA = "../project/project.v1alpha1.schema.json"
+# The largest integer JSON carries exactly: the stated maximum of a count,
+# version, or order whose Rust type is wider.
+JSON_INTEGER_MAXIMUM = 2**53 - 1
 
 STRING = {"type": "string"}
 BOOLEAN = {"type": "boolean"}
@@ -21,6 +33,10 @@ STRING_ARRAY = {"type": "array", "items": {"type": "string"}}
 OBJECT_ARRAY = {"type": "array", "items": {"type": "object"}}
 DIAGNOSTICS = {"$ref": "#/$defs/diagnostics"}
 WARNINGS = {"$ref": "#/$defs/warnings"}
+COUNT = {"type": "integer", "minimum": 0, "maximum": JSON_INTEGER_MAXIMUM}
+TIMESTAMP = {"type": "string", "format": "date-time"}
+NULLABLE_TIMESTAMP = {"type": ["string", "null"], "format": "date-time"}
+UUID = {"type": "string", "format": "uuid"}
 # A check reads the project file, the runtime configuration it is given, the
 # project's dev-clients.yaml, its retained development session state, at most
 # MAXIMUM_SOURCES (64) source descriptions, and at most
@@ -29,12 +45,13 @@ WARNINGS = {"$ref": "#/$defs/warnings"}
 FILES_CHECKED = {"type": "integer", "minimum": 1, "maximum": 1 + 1 + 1 + 1 + 64 + 3 * 1024}
 
 
-DIGEST = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+DIGEST = {"$ref": "#/$defs/Digest"}
+URL = {"$ref": "#/$defs/Url"}
 NULLABLE_STRING = {"type": ["string", "null"]}
 ROLE_MODE = {"enum": ["single", "split"]}
 PLAN_KIND = {"enum": ["initial", "successor"]}
-SCHEMA_VERSION = {"type": "integer", "minimum": 1}
-NULLABLE_SCHEMA_VERSION = {"type": ["integer", "null"], "minimum": 1}
+SCHEMA_VERSION = {"type": "integer", "minimum": 1, "maximum": JSON_INTEGER_MAXIMUM}
+NULLABLE_SCHEMA_VERSION = {"type": ["integer", "null"], "minimum": 1, "maximum": JSON_INTEGER_MAXIMUM}
 SINGLE_ROLE_STATEMENT = {"type": ["string", "null"]}
 ACTIVATION = {"$ref": "#/$defs/activation"}
 NULLABLE_ACTIVATION = {"oneOf": [ACTIVATION, {"type": "null"}]}
@@ -56,7 +73,7 @@ ACTIVATION_DEFS = {
         ],
         "properties": {
             "activationId": STRING,
-            "applyOrder": {"type": "integer", "minimum": 1},
+            "applyOrder": {"type": "integer", "minimum": 1, "maximum": JSON_INTEGER_MAXIMUM},
             "packageDigest": DIGEST,
             "predecessorPackageDigest": {"oneOf": [DIGEST, {"type": "null"}]},
             "databaseId": STRING,
@@ -73,6 +90,78 @@ ACTIVATION_DEFS = {
         "required": ["code", "path", "message"],
         "properties": {"code": STRING, "path": STRING, "message": STRING},
     },
+}
+# Pinned work a candidate package would hide or orphan. `reason` says which
+# of the other members are present; the counts carry no subject data.
+STRANDED_WORK = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["reason", "reviews"],
+    "properties": {
+        "reason": {
+            "enum": [
+                "queue-removed",
+                "profile-removed",
+                "review-kind-changed",
+                "source-removed",
+                "context-field-not-displayed",
+                "displayed-field-not-projected",
+            ]
+        },
+        "queue": STRING,
+        "profile": STRING,
+        "reviewKind": STRING,
+        "version": STRING,
+        "source": STRING,
+        "entity": STRING,
+        "field": STRING,
+        "reviews": COUNT,
+        "workItems": COUNT,
+    },
+}
+EFFECTS_DEFS = {
+    "effects": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["pinnedWork", "sourceGenerations", "taskTemplates"],
+        "properties": {
+            "pinnedWork": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["verdict", "stranded"],
+                "properties": {
+                    "verdict": {"enum": ["clear", "acknowledged", "refused"]},
+                    "stranded": {"type": "array", "items": {"$ref": "#/$defs/strandedWork"}},
+                },
+            },
+            "sourceGenerations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["sourceId", "change"],
+                    "properties": {
+                        "sourceId": STRING,
+                        "change": {"enum": ["registered", "unchanged", "changed"]},
+                    },
+                },
+            },
+            "taskTemplates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["templateId", "templateVersion", "change"],
+                    "properties": {
+                        "templateId": STRING,
+                        "templateVersion": STRING,
+                        "change": {"enum": ["added", "activated", "retained", "deactivated"]},
+                    },
+                },
+            },
+        },
+    },
+    "strandedWork": STRANDED_WORK,
 }
 ACTIVATION_FIELDS = [
     "activationId",
@@ -109,10 +198,143 @@ PLAN_PROPERTIES = {
     "schemaVersion": NULLABLE_SCHEMA_VERSION,
     "supportedSchemaVersion": SCHEMA_VERSION,
     "pendingSchemaVersions": {"type": "array", "items": SCHEMA_VERSION},
-    "effects": {"type": ["object", "null"]},
+    "effects": {"oneOf": [{"$ref": "#/$defs/effects"}, {"type": "null"}]},
     "refusals": {"type": "array", "items": {"$ref": "#/$defs/refusal"}},
     "runtimeRoleMode": {"oneOf": [ROLE_MODE, {"type": "null"}]},
     "changesPending": BOOLEAN,
+}
+
+
+# What an operator settled or marked about one source attempt. `outcome` is
+# `applied` or `not_applied`; `itemState` is the occurrence state the item
+# holds once the decision is applied.
+ATTEMPT_REPORT_PROPERTIES = {
+    "attemptId": UUID,
+    "itemId": UUID,
+    "operation": STRING,
+    "bindingReference": STRING,
+    "reason": STRING,
+    "decidedBy": STRING,
+    "attemptState": {"enum": ["pending", "uncertain", "completed", "refused"]},
+    "itemState": STRING,
+    "applied": BOOLEAN,
+}
+ATTEMPT_REPORT_REQUIRED = [
+    "attemptId",
+    "itemId",
+    "operation",
+    "bindingReference",
+    "reason",
+    "decidedBy",
+    "attemptState",
+    "itemState",
+    "applied",
+]
+SETTLEMENT = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [*ATTEMPT_REPORT_REQUIRED, "outcome"],
+    "properties": {**ATTEMPT_REPORT_PROPERTIES, "outcome": STRING},
+}
+UNCERTAIN_MARKING = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [*ATTEMPT_REPORT_REQUIRED, "originalActor", "originalProfileId"],
+    "properties": {
+        **ATTEMPT_REPORT_PROPERTIES,
+        "originalActor": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["issuer", "subject"],
+            "properties": {"issuer": URL, "subject": STRING},
+        },
+        "originalProfileId": STRING,
+    },
+}
+def project_definition(name: str) -> dict:
+    return {"$ref": f"{PROJECT_SCHEMA}#/$defs/{name}"}
+
+
+PROJECT_QUEUE = project_definition("QueuePolicy")
+PROJECT_REVIEW_KIND = project_definition("ReviewKindPolicy")
+PROJECT_REVIEW_PRODUCER = project_definition("ReviewProducerPolicy")
+PROJECT_INBOX = project_definition("InboxPolicy")
+# A project declares at most MAXIMUM_SOURCES sources and each request at most
+# MAXIMUM_ROUTING_RULES routing rules; check refuses more.
+MAXIMUM_SOURCES = 64
+MAXIMUM_ROUTING_RULES = 64
+
+# The connection `source add` reports for one request entity. `application`
+# names an executor and an access profile when its mode is `automatic`;
+# `completion` is null when the producer declares none.
+CONNECTION_PROPERTIES = {
+    "policy": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["authority", "kind"],
+        "properties": {"authority": STRING, "kind": STRING},
+    },
+    "producerAdmission": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["producerId", "profile", "recoveryDays", "completion"],
+        "properties": {
+            "producerId": STRING,
+            "profile": STRING,
+            "recoveryDays": COUNT,
+            "completion": {
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["destinationId", "recipientBinding"],
+                        "properties": {"destinationId": STRING, "recipientBinding": STRING},
+                    },
+                    {"type": "null"},
+                ]
+            },
+        },
+    },
+    "application": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["mode"],
+        "properties": {
+            "mode": {"enum": ["manual", "automatic"]},
+            "executor": STRING,
+            "accessProfile": STRING,
+        },
+    },
+}
+RETENTION_COUNTS = [
+    "blockedLiveAttempts",
+    "items",
+    "drafts",
+    "correctionContexts",
+    "attemptPayloads",
+    "receiptPayloads",
+    "historyDetails",
+    "eventDetails",
+    "idempotencyResponses",
+    "clockOccurrences",
+    "clockPreviews",
+]
+# A count-only erasure preview or report: no erased content and no local item
+# identifiers.
+RETENTION = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["selector", "applied", *RETENTION_COUNTS],
+    "properties": {
+        "selector": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["sourceId", "requestKind", "requestId"],
+            "properties": {"sourceId": STRING, "requestKind": STRING, "requestId": STRING},
+        },
+        "applied": BOOLEAN,
+        **{name: COUNT for name in RETENTION_COUNTS},
+    },
 }
 
 
@@ -120,12 +342,14 @@ REPORTS = {
     "AttemptSettlementReport": {
         "command": "attempt settle",
         "required": ["project", "runtimeConfig", "report"],
-        "properties": {"project": STRING, "runtimeConfig": STRING, "report": OBJECT},
+        "properties": {"project": STRING, "runtimeConfig": STRING, "report": {"$ref": "#/$defs/settlement"}},
+        "defs": {"settlement": SETTLEMENT},
     },
     "AttemptUncertainMarkingReport": {
         "command": "attempt mark-uncertain",
         "required": ["project", "runtimeConfig", "report"],
-        "properties": {"project": STRING, "runtimeConfig": STRING, "report": OBJECT},
+        "properties": {"project": STRING, "runtimeConfig": STRING, "report": {"$ref": "#/$defs/uncertainMarking"}},
+        "defs": {"uncertainMarking": UNCERTAIN_MARKING},
     },
     "CheckReport": {
         "command": "check",
@@ -142,7 +366,7 @@ REPORTS = {
         "properties": {
             "status": {"enum": ["complete", "incomplete"]},
             "project": STRING,
-            "effective": OBJECT,
+            "effective": {"$ref": "#/$defs/effective"},
             "profile": {"enum": ["authoring", "production"]},
             "filesChecked": FILES_CHECKED,
             "diagnostics": WARNINGS,
@@ -170,13 +394,78 @@ REPORTS = {
                 },
             },
         },
+        "defs": {
+            # A standalone project reports `mode`, `queues`, and
+            # `sourceConnections`; a project with sources reports `sources`,
+            # `sourceDescription` (`checked` or `pending_source_add`), and
+            # `limits`.
+            "effective": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["projectId", "inbox", "reviewKinds", "reviewProducers"],
+                "properties": {
+                    "projectId": STRING,
+                    "mode": {"const": "standalone"},
+                    "queues": {"type": "array", "items": PROJECT_QUEUE},
+                    "reviewKinds": {"type": "array", "items": PROJECT_REVIEW_KIND},
+                    "reviewProducers": {"type": "array", "items": PROJECT_REVIEW_PRODUCER},
+                    "inbox": PROJECT_INBOX,
+                    "sourceConnections": {"const": 0},
+                    "sources": {"type": "array", "items": {"$ref": "#/$defs/checkedSource"}},
+                    "sourceDescription": STRING,
+                    "limits": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["sources", "queues"],
+                        "properties": {
+                            "sources": {"type": "integer", "minimum": 0, "maximum": MAXIMUM_SOURCES},
+                            "queues": COUNT,
+                        },
+                    },
+                },
+            },
+            "checkedSource": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["sourceId", "sourceAdapter", "requests"],
+                "properties": {
+                    "sourceId": STRING,
+                    "sourceAdapter": STRING,
+                    "requests": {"type": "array", "items": {"$ref": "#/$defs/checkedRequest"}},
+                },
+            },
+            # `queueMode` is `default` or `first_match`. `target` is the
+            # authored passive target, or null when the request declares none.
+            "checkedRequest": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "entity",
+                    "queue",
+                    "queueMode",
+                    "routingRules",
+                    "applicationMode",
+                    "clock",
+                    "target",
+                ],
+                "properties": {
+                    "entity": STRING,
+                    "queue": STRING,
+                    "queueMode": STRING,
+                    "routingRules": {"type": "integer", "minimum": 0, "maximum": MAXIMUM_ROUTING_RULES},
+                    "applicationMode": NULLABLE_STRING,
+                    "clock": NULLABLE_STRING,
+                    "target": {"type": ["object", "null"]},
+                },
+            },
+        },
     },
     "PlanReport": {
         "command": "plan",
         "required": PLAN_REQUIRED,
         "properties": PLAN_PROPERTIES,
         "refusal_carries_report": True,
-        "defs": ACTIVATION_DEFS,
+        "defs": {**ACTIVATION_DEFS, **EFFECTS_DEFS},
     },
     "ApplyReport": {
         "command": "apply",
@@ -191,10 +480,10 @@ REPORTS = {
             "runtimeConfig": STRING,
             **ACTIVATION_DEFS["activation"]["properties"],
             "schemaVersionsApplied": {"type": "array", "items": SCHEMA_VERSION},
-            "effects": OBJECT,
+            "effects": {"$ref": "#/$defs/effects"},
             "singleRoleStatement": SINGLE_ROLE_STATEMENT,
         },
-        "defs": ACTIVATION_DEFS,
+        "defs": {**ACTIVATION_DEFS, **EFFECTS_DEFS},
     },
     "StatusReport": {
         "command": "status",
@@ -235,17 +524,17 @@ REPORTS = {
         "properties": {
             "runtimeConfig": STRING,
             "packageRoot": STRING,
-            "packageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "packageDigest": DIGEST,
             "checks": {"$ref": "#/$defs/doctorChecks"},
-            "secretFileChecks": OBJECT_ARRAY,
-            "sourceChecks": OBJECT_ARRAY,
+            "secretFileChecks": {"type": "array", "items": {"$ref": "#/$defs/secretFileCheck"}},
+            "sourceChecks": {"type": "array", "items": {"$ref": "#/$defs/sourceCheck"}},
             "pinnedWork": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["verdict", "conflicts"],
                 "properties": {
                     "verdict": {"enum": ["clear", "acknowledged"]},
-                    "conflicts": OBJECT_ARRAY,
+                    "conflicts": {"type": "array", "items": {"$ref": "#/$defs/strandedWork"}},
                 },
             },
             "eventWiringGuidance": STRING,
@@ -285,7 +574,61 @@ REPORTS = {
                         "reconciliation",
                     ]
                 },
-            }
+            },
+            # `refusal` says why an environment secret was not checked.
+            "secretFileCheck": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["setting", "provider", "status"],
+                "properties": {
+                    "setting": STRING,
+                    "provider": {"enum": ["file", "environment"]},
+                    "status": {"enum": ["ready", "not-checked"]},
+                    "refusal": STRING,
+                },
+            },
+            "sourceCheck": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "sourceId",
+                    "runtime",
+                    "readerProfile",
+                    "requiredGrants",
+                    "eventWiring",
+                    "reconciliation",
+                ],
+                "properties": {
+                    "sourceId": STRING,
+                    "runtime": {"const": "ready"},
+                    "readerProfile": {"const": "ready"},
+                    "requiredGrants": {"const": "ready"},
+                    "eventWiring": {"const": "unknown"},
+                    "reconciliation": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "consecutiveFailures",
+                            "lastSucceededAt",
+                            "lastFailedAt",
+                            "lastFailure",
+                        ],
+                        "properties": {
+                            # The store holds the count as a PostgreSQL integer.
+                            "consecutiveFailures": {"type": "integer", "minimum": 0, "maximum": 2**31 - 1},
+                            "lastSucceededAt": NULLABLE_TIMESTAMP,
+                            "lastFailedAt": NULLABLE_TIMESTAMP,
+                            "lastFailure": {
+                                "oneOf": [
+                                    {"enum": ["source-unavailable", "source-refused", "store", "configuration"]},
+                                    {"type": "null"},
+                                ]
+                            },
+                        },
+                    },
+                },
+            },
+            "strandedWork": STRANDED_WORK,
         },
     },
     "ExplainReport": {
@@ -305,14 +648,48 @@ REPORTS = {
         "properties": {
             "projectId": STRING,
             "policyVersion": STRING,
-            "requests": OBJECT_ARRAY,
-            "accessProfiles": OBJECT_ARRAY,
-            "queues": OBJECT_ARRAY,
-            "reviewKinds": OBJECT_ARRAY,
-            "calendars": OBJECT_ARRAY,
-            "clocks": OBJECT_ARRAY,
+            "requests": {"type": "array", "items": {"$ref": "#/$defs/explainedRequest"}},
+            "accessProfiles": {"type": "array", "items": project_definition("AccessProfile")},
+            "queues": {"type": "array", "items": PROJECT_QUEUE},
+            "reviewKinds": {"type": "array", "items": PROJECT_REVIEW_KIND},
+            "calendars": {"type": "array", "items": project_definition("CalendarPolicy")},
+            "clocks": {"type": "array", "items": project_definition("ClockPolicy")},
             "networkAccess": {"const": False},
             "databaseAccess": {"const": False},
+        },
+        "defs": {
+            "explainedRequest": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "source",
+                    "entity",
+                    "defaultQueue",
+                    "projection",
+                    "routing",
+                    "clock",
+                    "sourceStages",
+                    "sourceFields",
+                ],
+                "properties": {
+                    "source": STRING,
+                    "entity": STRING,
+                    "defaultQueue": STRING,
+                    "projection": STRING_ARRAY,
+                    "routing": {"type": "array", "items": project_definition("RoutingRule")},
+                    "clock": NULLABLE_STRING,
+                    "sourceStages": STRING_ARRAY,
+                    "sourceFields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["field", "apiName"],
+                            "properties": {"field": STRING, "apiName": STRING},
+                        },
+                    },
+                },
+            }
         },
     },
     "InitReport": {
@@ -377,8 +754,8 @@ REPORTS = {
                     "initial": BOOLEAN,
                     "terminal": BOOLEAN,
                     "unreachable": BOOLEAN,
-                    "incomingTransitions": {"type": "integer", "minimum": 0},
-                    "outgoingTransitions": {"type": "integer", "minimum": 0},
+                    "incomingTransitions": COUNT,
+                    "outgoingTransitions": COUNT,
                 },
             },
             "lifecycleTransition": {
@@ -425,9 +802,22 @@ REPORTS = {
             "project": STRING,
             "output": STRING,
             "dryRun": BOOLEAN,
-            "packageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "packageDigest": DIGEST,
             "revision": {"type": ["string", "null"]},
-            "files": OBJECT_ARRAY,
+            "files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["path", "sha256", "bytes"],
+                    "properties": {
+                        "path": STRING,
+                        "sha256": DIGEST,
+                        # A package input is at most one MiB.
+                        "bytes": {"type": "integer", "minimum": 0, "maximum": 1024 * 1024},
+                    },
+                },
+            },
             "runtimeConfigurationIncluded": {"const": False},
             "secretsIncluded": {"const": False},
             "networkAccess": {"const": False},
@@ -437,7 +827,8 @@ REPORTS = {
     "RetentionEraseReport": {
         "command": "retention erase",
         "required": ["project", "runtimeConfig", "report"],
-        "properties": {"project": STRING, "runtimeConfig": STRING, "report": OBJECT},
+        "properties": {"project": STRING, "runtimeConfig": STRING, "report": {"$ref": "#/$defs/retention"}},
+        "defs": {"retention": RETENTION},
     },
     "SimulationReport": {
         "command": "simulate",
@@ -463,7 +854,12 @@ REPORTS = {
                 "required": ["entity", "id", "version"],
                 "properties": {"entity": STRING, "id": STRING, "version": STRING},
             },
-            "routing": OBJECT,
+            "routing": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["queue"],
+                "properties": {"queue": STRING, "ruleId": STRING, "because": STRING},
+            },
             "clock": {},
             "networkAccess": {"const": False},
             "databaseAccess": {"const": False},
@@ -492,13 +888,30 @@ REPORTS = {
             "project": STRING,
             "sourceDescription": STRING,
             "bregRuntimeBinding": STRING,
-            "connection": OBJECT,
+            # One request entity reports its connection here; several report
+            # one connection per entity under `requests`.
+            "connection": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    **CONNECTION_PROPERTIES,
+                    "requests": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/requestConnection"}},
+                },
+            },
             "bregAuthoringChanges": ARRAY,
             "bregAuthoringPatch": OBJECT,
             "candidateRuntimeBinding": OBJECT,
             "diagnostics": WARNINGS,
             "activation": {"const": "not_performed"},
             "next": STRING_ARRAY,
+        },
+        "defs": {
+            "requestConnection": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["entity", *CONNECTION_PROPERTIES],
+                "properties": {"entity": STRING, **CONNECTION_PROPERTIES},
+            }
         },
     },
     "TestReport": {
@@ -566,9 +979,9 @@ REPORTS = {
             "project": STRING,
             "stateFile": STRING,
             "operatorConfig": STRING,
-            "caseworkUrl": STRING,
+            "caseworkUrl": URL,
             "tokenEndpoint": STRING,
-            "issuer": STRING,
+            "issuer": URL,
             "clientAssertionAudience": STRING,
             "resource": STRING,
             "audience": STRING,
@@ -580,8 +993,8 @@ REPORTS = {
                 "additionalProperties": False,
                 "required": ["revision", "teams"],
                 "properties": {
-                    "revision": {"type": "integer"},
-                    "teams": {"type": "integer", "minimum": 0},
+                    "revision": COUNT,
+                    "teams": COUNT,
                 },
             },
         },
@@ -724,6 +1137,27 @@ def object_schema(kind: str, report: dict, ok: bool, carries_report: bool = Fals
     }
 
 
+VALUE_DEFS = {
+    "Digest": {
+        "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string",
+    },
+    "Url": {
+        "description": "An absolute http or https URL with a host and no user information.",
+        "format": "uri",
+        "maxLength": 2048,
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+        "type": "string",
+    },
+}
+
+
+def format_name(kind: str) -> str:
+    """`CheckReport` is the format `check-report`."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", kind).lower()
+
+
 def schema(kind: str, report: dict) -> dict:
     variants = [object_schema(kind, report, False)]
     if report.get("refusal_carries_report"):
@@ -734,11 +1168,20 @@ def schema(kind: str, report: dict) -> dict:
         variants.insert(0, object_schema(kind, report, True))
     defs = dict(DIAGNOSTIC_DEFS)
     defs.update(report.get("defs", {}))
+    used = json.dumps([variants, defs])
+    defs.update({name: value for name, value in VALUE_DEFS.items() if f'"#/$defs/{name}"' in used})
+    name = format_name(kind)
+    # The envelope members are declared beside the variants, each of which
+    # repeats them, so the envelope is visible without choosing a variant.
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": f"https://registrystack.org/caseworkctl/v1alpha3/{kind}.schema.json",
+        "$id": SCHEMA_ID_BASE + f"casework/{name}/{name}.v1alpha3.schema.json",
         "title": kind,
         "description": f"Versioned JSON report emitted by caseworkctl for {report['command']}.",
+        "type": "object",
+        "required": ["apiVersion", "kind"],
+        "properties": {"apiVersion": {"const": API_VERSION}, "kind": {"const": kind}},
+        "unevaluatedProperties": False,
         "oneOf": variants,
         "$defs": defs,
     }

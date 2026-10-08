@@ -1,8 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/caseworkctl/v1alpha3/SimulationReport.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/simulation-report/simulation-report.v1alpha3.schema.json",
   "title": "SimulationReport",
   "description": "Versioned JSON report emitted by caseworkctl for simulate.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/caseworkctl/v1alpha3"
+    },
+    "kind": {
+      "const": "SimulationReport"
+    }
+  },
+  "unevaluatedProperties": false,
   "oneOf": [
     {
       "type": "object",
@@ -72,7 +86,22 @@
           }
         },
         "routing": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "queue"
+          ],
+          "properties": {
+            "queue": {
+              "type": "string"
+            },
+            "ruleId": {
+              "type": "string"
+            },
+            "because": {
+              "type": "string"
+            }
+          }
         },
         "clock": {},
         "networkAccess": {

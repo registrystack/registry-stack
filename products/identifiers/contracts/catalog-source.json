@@ -234,6 +234,14 @@
       "description": "Registry Casework development clients JSON Schema."
     },
     {
+      "glob": "products/casework/contracts/cli/*.schema.json",
+      "sourcePath": "products/casework/scripts/generate_cli_schemas.py",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test."
+    },
+    {
       "glob": "products/scheduling/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-scheduling/src/schema.rs",
       "owner": "scheduling",
