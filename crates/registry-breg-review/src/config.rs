@@ -166,23 +166,33 @@ pub struct AuditConfig {
     /// Where audit lines go: `file` or `stdout`.
     #[serde(default)]
     pub destination: AuditDestinationKind,
-    /// The absolute path of the active audit file, for a `file` destination.
+    /// The absolute path of the active audit file. Required for a `file`
+    /// destination, and refused with `stdout`.
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "PathBuf"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "PathBuf", skip_serializing_if = "Option::is_none")
+    )]
     pub path: Option<PathBuf>,
     /// Size at which the active file rotates, in bytes, for a `file`
     /// destination. Default: 100 MiB.
     #[serde(default)]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>")
+        schemars(
+            with = "BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     pub rotate_bytes: Option<BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>>,
     /// Days a rotated file is kept, for a `file` destination. Default: 90.
     #[serde(default)]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>")
+        schemars(
+            with = "BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     pub retention_days: Option<BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>>,
 }

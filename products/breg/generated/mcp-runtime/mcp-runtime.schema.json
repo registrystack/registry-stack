@@ -63,13 +63,11 @@
           "description": "Secret reference to the audit hash key."
         },
         "path": {
-          "default": null,
-          "description": "The absolute path of the active audit file, for a `file` destination.",
+          "description": "The absolute path of the active audit file. Required for a `file`\ndestination, and refused with `stdout`.",
           "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
           "type": "string"
         },
         "retentionDays": {
-          "default": null,
           "description": "Days a rotated file is kept, for a `file` destination. Default: 90.",
           "format": "uint32",
           "maximum": 36500,
@@ -77,7 +75,6 @@
           "type": "integer"
         },
         "rotateBytes": {
-          "default": null,
           "description": "Size at which the active file rotates, in bytes, for a `file`\ndestination. Default: 100 MiB.",
           "format": "uint64",
           "maximum": 4294967295,
@@ -149,16 +146,8 @@
       "description": "The gateway's own client identity, used only to exchange a verified\ninbound token for a delegated registry token.",
       "properties": {
         "assertionAudience": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ExternalId"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The client-assertion audience, when the authorization server expects\none other than its token endpoint."
+          "$ref": "#/$defs/ExternalId",
+          "description": "The client-assertion audience, when the authorization server expects\none other than its token endpoint. Omitted, the assertion names the\ntoken endpoint."
         },
         "clientId": {
           "$ref": "#/$defs/ExternalId",

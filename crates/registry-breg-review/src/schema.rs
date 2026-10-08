@@ -176,6 +176,52 @@ mod tests {
         }
     }
 
+    /// The reader refuses `null` in every member this crate defines, so the
+    /// schema never offers it as a value or a default there: an omitted member
+    /// is described instead. The shared platform blocks are the platform's,
+    /// embedded unchanged, so their shape is checked where they are generated.
+    #[test]
+    fn no_member_accepts_or_defaults_to_null() {
+        fn visit(node: &Value, at: &str) {
+            match node {
+                Value::Object(object) => {
+                    assert_ne!(
+                        object.get("default"),
+                        Some(&Value::Null),
+                        "default null at {at}"
+                    );
+                    assert_ne!(
+                        object.get("type"),
+                        Some(&json!("null")),
+                        "null type at {at}"
+                    );
+                    if let Some(Value::Array(types)) = object.get("type") {
+                        assert!(!types.contains(&json!("null")), "nullable type at {at}");
+                    }
+                    for (key, value) in object {
+                        visit(value, &format!("{at}/{key}"));
+                    }
+                }
+                Value::Array(items) => {
+                    for (index, value) in items.iter().enumerate() {
+                        visit(value, &format!("{at}/{index}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let canonical: Value = serde_json::from_str(include_str!(
+            "../../../products/platform/generated/runtime-config-blocks.schema.json"
+        ))
+        .unwrap();
+        let mut document: Value =
+            serde_json::from_str(&schema_documents().unwrap()[RUNTIME_SCHEMA_FILE]).unwrap();
+        let definitions = document["$defs"].as_object_mut().unwrap();
+        definitions.retain(|definition, _| canonical["$defs"].get(definition).is_none());
+        assert!(!definitions.is_empty(), "the crate defines its own members");
+        visit(&document, "");
+    }
+
     #[test]
     fn shared_blocks_are_embedded_unchanged() {
         let canonical: Value = serde_json::from_str(include_str!(

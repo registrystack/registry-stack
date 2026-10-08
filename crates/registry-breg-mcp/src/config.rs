@@ -71,8 +71,7 @@ const RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 const RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] = &[RetiredApiVersion {
     api_version: "registry.registrystack.org/breg-mcp-runtime/v1alpha1",
     replacement: "Write apiVersion id.registrystack.org/formats/breg/mcp-runtime/v1alpha1, then \
-                  rename resourceServer.jwks to resourceServer.jwksSource, \
-                  resourceServer.maxTokenLifetimeSeconds to \
+                  rename resourceServer.maxTokenLifetimeSeconds to \
                   resourceServer.maximumTokenLifetimeSeconds, \
                   registry.requestTimeoutMilliseconds to registry.attemptTimeoutMilliseconds, \
                   limits.maxRequestBodyBytes to limits.maximumRequestBytes, and \
@@ -81,10 +80,6 @@ const RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] = &[RetiredApi
 
 /// Keys an earlier runtime file carried, each refused with its replacement.
 const REMOVED_KEYS: &[RemovedKey] = &[
-    RemovedKey {
-        path: "resourceServer.jwks",
-        replacement: "declare resourceServer.jwksSource instead",
-    },
     RemovedKey {
         path: "resourceServer.maxTokenLifetimeSeconds",
         replacement: "declare resourceServer.maximumTokenLifetimeSeconds instead",
@@ -96,10 +91,6 @@ const REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "limits.maxRequestBodyBytes",
         replacement: "declare limits.maximumRequestBytes instead",
-    },
-    RemovedKey {
-        path: "audit.maximumFileBytes",
-        replacement: "declare audit.rotateBytes instead",
     },
     RemovedKey {
         path: "audit.retainDays",
@@ -248,8 +239,13 @@ pub struct ExchangeConfig {
     /// assertions with, under a declared provider.
     pub private_key_ref: SecretReference,
     /// The client-assertion audience, when the authorization server expects
-    /// one other than its token endpoint.
+    /// one other than its token endpoint. Omitted, the assertion names the
+    /// token endpoint.
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "ExternalId", skip_serializing_if = "Option::is_none")
+    )]
     pub assertion_audience: Option<ExternalId>,
 }
 
@@ -308,23 +304,33 @@ pub struct AuditConfig {
     /// Where audit lines go: `file` or `stdout`.
     #[serde(default)]
     pub destination: AuditDestinationKind,
-    /// The absolute path of the active audit file, for a `file` destination.
+    /// The absolute path of the active audit file. Required for a `file`
+    /// destination, and refused with `stdout`.
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(with = "PathBuf"))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "PathBuf", skip_serializing_if = "Option::is_none")
+    )]
     pub path: Option<PathBuf>,
     /// Size at which the active file rotates, in bytes, for a `file`
     /// destination. Default: 100 MiB.
     #[serde(default)]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>")
+        schemars(
+            with = "BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     pub rotate_bytes: Option<BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>>,
     /// Days a rotated file is kept, for a `file` destination. Default: 90.
     #[serde(default)]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>")
+        schemars(
+            with = "BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>",
+            skip_serializing_if = "Option::is_none"
+        )
     )]
     pub retention_days: Option<BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>>,
 }
@@ -1154,7 +1160,6 @@ rateLimits:
     #[test]
     fn each_removed_key_is_refused_with_its_replacement() {
         for (from, to, path) in [
-            ("jwksSource:", "jwks:", "/resourceServer/jwks"),
             (
                 "  requiredScopes: [address-correction:self]\n",
                 "  requiredScopes: [address-correction:self]\n  maxTokenLifetimeSeconds: 60\n",
@@ -1172,11 +1177,6 @@ rateLimits:
             ),
             (
                 "  path: /var/lib/breg-mcp/audit/audit.jsonl\n",
-                "  path: /var/lib/breg-mcp/audit/audit.jsonl\n  maximumFileBytes: 1048576\n",
-                "/audit/maximumFileBytes",
-            ),
-            (
-                "  path: /var/lib/breg-mcp/audit/audit.jsonl\n",
                 "  path: /var/lib/breg-mcp/audit/audit.jsonl\n  retainDays: 30\n",
                 "/audit/retainDays",
             ),
@@ -1186,6 +1186,28 @@ rateLimits:
             let found = findings_of(&text);
             assert!(
                 found.contains(&("config.removed-key".to_owned(), path.to_owned())),
+                "{path}: {found:?}"
+            );
+        }
+    }
+
+    /// Keys that predate the predecessor release carry no named guidance:
+    /// the closed document shape refuses them as unknown keys.
+    #[test]
+    fn keys_older_than_the_predecessor_release_are_unknown() {
+        for (from, to, path) in [
+            ("jwksSource:", "jwks:", "/resourceServer/jwks"),
+            (
+                "  path: /var/lib/breg-mcp/audit/audit.jsonl\n",
+                "  path: /var/lib/breg-mcp/audit/audit.jsonl\n  maximumFileBytes: 1048576\n",
+                "/audit/maximumFileBytes",
+            ),
+        ] {
+            let text = document().replacen(from, to, 1);
+            assert_ne!(text, document(), "{to}");
+            let found = findings_of(&text);
+            assert!(
+                found.contains(&("config.unknown-key".to_owned(), path.to_owned())),
                 "{path}: {found:?}"
             );
         }
