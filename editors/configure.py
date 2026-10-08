@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 MANAGED = ".registry-stack-editor"
 PRODUCT_FILES = {
     "breg": "registry.yaml",
+    "breg-mcp": "runtime.yaml",
+    "breg-review": "runtime.yaml",
     "casework": "casework.yaml",
     "scheduling": "scheduling.yaml",
     "messaging": "messaging.yaml",
@@ -37,6 +39,8 @@ SCHEMAS = {
         ("products/breg/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/breg/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
     ),
+    "breg-mcp": (("products/breg/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),),
+    "breg-review": (("products/breg/generated/review-runtime/review-runtime.schema.json", "runtime.yaml"),),
     "casework": (
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
@@ -70,6 +74,8 @@ SCHEMAS = {
 }
 CHECKS = {
     "breg": ("bregctl", "check", "{project}"),
+    "breg-mcp": ("breg-mcp", "--runtime-config", "{entry}", "check"),
+    "breg-review": ("breg-review", "--runtime-config", "{entry}", "check"),
     "casework": ("caseworkctl", "check", "{project}"),
     "scheduling": ("schedulingctl", "check", "{project}"),
     "messaging": ("messagingctl", "check", "--project", "{project}"),
@@ -188,7 +194,10 @@ def task_for(product: str, project: Path, document: Path | None) -> tuple[dict[s
         return None
     command = spec[0]
     args = [
-        str(project) if arg == "{project}" else str(document) if arg == "{document}" else arg
+        str(project) if arg == "{project}"
+        else str(document) if arg == "{document}"
+        else str(project / PRODUCT_FILES[product]) if arg == "{entry}"
+        else arg
         for arg in spec[1:]
     ]
     label = f"Registry Stack: check {product} ({project})"

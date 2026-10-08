@@ -247,11 +247,36 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(task["command"], "evidencectl")
         self.assertEqual(task["options"]["cwd"], str(project))
 
+    def test_breg_services_map_their_runtime_schemas_beside_each_other(self):
+        services = {
+            "breg-mcp": ("gateway", "products/breg/generated/mcp-runtime/mcp-runtime.schema.json"),
+            "breg-review": ("review", "products/breg/generated/review-runtime/review-runtime.schema.json"),
+        }
+        projects = {}
+        for product, (name, _) in services.items():
+            example = f"products/breg/examples/{product.removeprefix('breg-')}-runtime/runtime.yaml"
+            projects[product] = self.project(name, "runtime.yaml", example)
+            configure.configure(product, projects[product], self.workspace, None)
+        settings = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
+        self.assertEqual(len(settings["yaml.schemas"]), 2)
+        self.assertEqual({task["command"] for task in tasks}, set(services))
+        for product, (_, source) in services.items():
+            with self.subTest(product=product):
+                project = projects[product]
+                schema = project / ".registry-stack-editor/schemas" / Path(source).name
+                self.assertEqual(schema.read_bytes(), (ROOT / source).read_bytes())
+                self.assertEqual(settings["yaml.schemas"][schema.as_uri()], [str(project / "runtime.yaml")])
+        with self.assertRaisesRegex(configure.SetupError, "breg-mcp project needs runtime.yaml"):
+            configure.configure("breg-mcp", self.project("empty", "other.yaml"), self.workspace, None)
+
     def test_check_task_uses_product_cli_shape(self):
         project = self.workspace / "sample"
         document = project / "metadata.yaml"
         expected = {
             "breg": ["check", str(project)],
+            "breg-mcp": ["--runtime-config", str(project / "runtime.yaml"), "check"],
+            "breg-review": ["--runtime-config", str(project / "runtime.yaml"), "check"],
             "casework": ["check", str(project)],
             "scheduling": ["check", str(project)],
             "messaging": ["check", "--project", str(project)],

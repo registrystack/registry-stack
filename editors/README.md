@@ -63,10 +63,12 @@ python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/
 ```
 
 The product argument also accepts `casework`, `messaging`, `discovery`,
-`render`, `evidence`, and `platform` (a directory holding a task connection
-file, `task-connection.yaml`). Manifest and wallet-delivery setup records the
-selected document in `.registry-stack-editor/project.json`, so an arbitrary
-configuration filename can be recognized without claiming unrelated YAML.
+`render`, `evidence`, `platform` (a directory holding a task connection file,
+`task-connection.yaml`), and `breg-mcp` and `breg-review` (a directory holding
+the citizen MCP gateway's or review page's `runtime.yaml`). Manifest and
+wallet-delivery setup records the selected document in
+`.registry-stack-editor/project.json`, so an arbitrary configuration filename
+can be recognized without claiming unrelated YAML.
 
 Setup copies maintained schemas from this checkout and adds a **Registry Stack:
 check** task where the product supplies a validation command. Use **Tasks: Run
