@@ -115,7 +115,8 @@ docker compose run --rm evidence \
   check --runtime-config /etc/registry-evidence/runtime.yaml --require-runtime-dependencies
 ```
 
-It prints one line and exits zero:
+It prints one line on standard output, a `0 errors, 0 warnings` summary on standard error, and
+exits zero:
 
 ```text
 Evidence package <package-digest> passed check (<count> requirements)
@@ -124,14 +125,16 @@ Evidence package <package-digest> passed check (<count> requirements)
 The digest is your own package's, and the count is the number of requirements in that package, so
 the line will not match anyone else's.
 
-Both forms of the command compile the verified package, compile the source plans, refuse a mounted extract
-already older than its source allows, validate the mounted secret material, and initialize the
+Without the flag, `evidence check` verifies and compiles the package and checks every binding
+between the runtime file and the bundle offline: it reads no secret material and contacts no
+service. `--require-runtime-dependencies` adds what serving needs. It refuses a mounted extract
+already older than its source allows, validates the mounted secret material, and initializes the
 configured signer, which signs a self-test message through the Transit proxy and verifies it
 against the governed public JWK. That is why the proxy starts first: without a reachable socket
-either form stops at `evidence: runtime signing initialization failed: the Transit provider did not
-answer on the configured Unix socket (missing socket, refused connection, or timeout)`.
+the check reports `evidence.deployment.signing-unavailable`, naming the Transit provider that did
+not answer on the configured Unix socket, and exits `3`.
 
-`--require-runtime-dependencies` adds the dependencies a served request would need. It opens the
+The flag also adds the dependencies a served request would need. It opens the
 configured audit writer exactly as `serve` would: creating the audit file and its lock if they are
 not already there, and deleting any sealed file already past `audit.retainDays`. It fetches the
 access-token issuer key set fail-closed and resolves every configured source credential. It appends

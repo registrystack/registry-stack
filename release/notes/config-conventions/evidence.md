@@ -471,3 +471,187 @@ validity-exceeds-signing-maximum}`, `evidence.question.derivation-*` and
 `evidence.target.{required, incomplete, production-profile-required,
 source-connection-required, assurance-profile, authority-profiles,
 publication-invalid, signing-key-missing}`.
+
+## Evidence runtime
+
+Track: the `evidence` runtime binary and the files it reads (the deployment
+bundle, the runtime file, code lists, fixtures, fact schemas, and the two
+verification policies).
+
+### BREAKING changes
+
+Promised spellings are unchanged in this release; the section "Respellings
+held for the stable release" lists them.
+
+1. **Plain `evidence check` is offline.** It reads the runtime file, verifies
+   the package `package.root` names, loads and compiles the bundle, reads
+   each CA bundle a trust profile names, and checks every binding between the
+   runtime file and the bundle. It no longer reads secret material, checks
+   file modes or immutability, checks extract freshness, runs the signer
+   self-test, opens the audit destination, or contacts the network. Exit
+   codes: 0 clean, 1 refused (or a warning with `--deny-warnings`), 2 usage,
+   3 an input could not be read. Migration: on the target host, run
+   `evidence check --require-runtime-dependencies --runtime-config <path>`
+   (with `--require-audit-under <directory>` where you used it) for the proof
+   the previous `evidence check` gave. `evidencectl doctor` treats exit 3 as
+   a dependency failure. `evidence evaluate` and `evidence serve` still
+   refuse a writable runtime file, bundle, or CA bundle.
+2. **`evidence check` output.** One run reports every problem it finds
+   instead of stopping at the first. The human output on standard error
+   prints each diagnostic in the shared shape
+   (`error[code] file:line:col /pointer`, the message, then `next:` with the
+   fix) and ends with a summary line (`0 errors, 0 warnings in N files`); a
+   passing check still prints
+   `Evidence package <digest> passed check (<n> requirements)` on standard
+   output. `--format json` writes one JSON document on standard output with
+   `ok`, `command`, `status` (`complete`, `domain-refusal`,
+   `operational-failure`), `filesChecked`, and `diagnostics`.
+   `--deny-warnings` turns a warning into exit 1. `--environment` fills
+   `${NAME}` expressions from the process environment and checks the values
+   they fill; without it an expression is checked by its syntax and position
+   only, and a warning (`evidence.runtime.not-checked`,
+   `evidence.package.not-checked`) says what was skipped. Every diagnostic
+   carries a three-segment code. Migration: a script that matched message
+   text should match the code instead; the table in "Diagnostic codes, old
+   to new" maps each previous message to its code.
+3. **The bundle (`evidence.yaml`) and the runtime file are read by the shared
+   configuration reader.** They accept only the shared YAML subset (no
+   anchors, aliases, tags, merge keys, duplicate keys, or more than one
+   document) and refuse an unknown key at its line and column with the
+   closest declared key. A null or a quoted value where an integer belongs is
+   refused. A key an earlier grammar accepted is refused as
+   `config.removed-key` with its replacement. A `${...}` expression in the
+   bundle is refused as `config.substitution-not-allowed`. Every integer in
+   both files is bounded, and a value outside its range is refused as
+   `config.out-of-range` with the allowed range. The warning for a burst
+   below the largest request cost names that cost and the key to raise, not
+   the configured values. Migration: remove anchors, aliases, tags, merge
+   keys, duplicate keys, and unknown keys; write each integer unquoted and
+   within its range; move a removed key to the replacement the diagnostic
+   names.
+4. **URL members are typed.** `service.publicOrigin`,
+   `publication.endpointUrl`, and each source's and source connection's
+   `baseUrl` refuse userinfo, a scheme other than `http` or `https`, or more
+   than 2048 characters, as `config.invalid-value`. Migration: write a plain
+   `https` URL without credentials.
+5. **The fixture header is an envelope.** A fixture opens with
+   `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and
+   `kind: EvidenceFixture` in place of `fixture: <id>`. A file with only the
+   old header is refused as `config.missing-envelope`; `fixture:` beside the
+   envelope is refused as `config.removed-key`. Migration: replace the
+   `fixture: <id>` line with the two envelope lines, then rebuild the package
+   with `evidencectl package`.
+6. **Code lists are read by the shared reader.** An unknown key, a
+   `${...}` expression, or a repeated code is refused (`config.unknown-key`,
+   `config.substitution-not-allowed`, `config.duplicate-item`). A code list
+   declares `codes`, or `entries` with `allowed_outputs`, and not both
+   (`evidence.codelist.invalid-form`); each list or mapping holds from 1 to
+   4096 items (`evidence.codelist.invalid-size`); a mapping names only
+   outputs `allowed_outputs` lists (`evidence.codelist.output-not-allowed`).
+   Migration: remove empty lists and repeated codes, and correct the file as
+   the diagnostic names.
+7. **Fact schemas are read by the shared reader** and accept only the shared
+   YAML subset. Migration: remove anchors, aliases, tags, merge keys, and
+   duplicate keys.
+8. **Verification and holder-bound verification policies are read by the
+   shared reader.** An unknown member, a `${...}` expression, a duplicate
+   item, or a count outside its bounds is refused. `evidence verify` and
+   `evidence verify-presentation` still report a refused policy as
+   `stored response verification failed (malformed)`. Migration: run the new
+   `evidence check-policy --verification-policy <file>` (or
+   `--holder-bound-policy <file>`) and correct the policy as it reports.
+9. **`--runtime` and `REGISTRY_EVIDENCE_RUNTIME` are usage errors.** Both
+   were already refused; the exit status is now 2 (usage), where it was 1.
+   Migration: pass `--runtime-config <file>` and unset the variable.
+
+### Other changes
+
+- `evidence check-policy --verification-policy FILE` or
+  `--holder-bound-policy FILE` checks one policy offline exactly as `verify`
+  or `verify-presentation` reads it, reports every problem with the shared
+  diagnostics, and exits 0 clean, 1 refused, 2 usage, 3 the file could not
+  be read. `--format json` writes the same document shape as
+  `evidence check`.
+- The code list JSON Schema is generated from the reader types and held
+  byte-identical by `products/evidence/scripts/check-contracts.sh`.
+- `editors/configure.py` maps the deployment-project files (`evidence.yaml`,
+  `runtime.yaml`, and `codelists/*.yaml`) to their schemas for editors.
+
+### Diagnostic codes, old to new
+
+Before this release no `evidence check` diagnostic carried a code: the
+command printed one sentence on standard error and stopped. Codes now follow
+CFG-DIAG-3 (`evidence.<area>.<condition>`) beside the shared reader's
+`yaml.*` and `config.*` codes. The runtime's HTTP problem codes are
+unchanged.
+
+| Before (message, no code) | Code now |
+|---|---|
+| `configuration YAML does not match the Evidence Version 1 schema: ...` | the reader's `yaml.*` and `config.*` codes, for example `yaml.duplicate-key`, `yaml.anchor`, `yaml.tag`, `config.unknown-key`, `config.missing-key`, `config.null-value`, `config.expected-integer`, `config.invalid-type`, `config.unknown-variant`, `config.wrong-kind`, `config.missing-envelope` |
+| `... key is no longer accepted` | `config.removed-key` |
+| `configuration exceeds the Evidence Version 1 size limit` | `yaml.too-large` (runtime file); `evidence.bundle.invalid-configuration` (bundle) |
+| `configuration violates the Evidence Version 1 contract: ...` (bundle) | `config.out-of-range`, `config.invalid-value`, or the section's code: `evidence.bundle.invalid-service`, `evidence.bundle.invalid-issuer`, `evidence.bundle.invalid-publication`, `evidence.bundle.invalid-authentication`, `evidence.bundle.invalid-subject-binding`, `evidence.bundle.invalid-signing`, `evidence.bundle.invalid-response-formats`, `evidence.bundle.invalid-selector-profile`, `evidence.bundle.invalid-source`, `evidence.bundle.invalid-source-connection`, `evidence.bundle.invalid-authority-profile`, `evidence.bundle.invalid-acquisition-capabilities`, `evidence.bundle.invalid-requirement`, `evidence.bundle.invalid-configuration` |
+| `configuration violates the Evidence Version 1 contract: ...` (runtime file) | `config.out-of-range`, `config.invalid-value`, or the block's code: `evidence.runtime.invalid-package`, `evidence.runtime.invalid-listener`, `evidence.runtime.invalid-metrics-listener`, `evidence.runtime.invalid-secret-providers`, `evidence.runtime.invalid-signer`, `evidence.runtime.invalid-audit`, `evidence.runtime.invalid-outbound-tls`, `evidence.runtime.invalid-source-extract`, `evidence.runtime.invalid-acquisition-capabilities`, `evidence.runtime.invalid` |
+| `deployment input is unavailable` | `evidence.runtime.unavailable` (runtime file), `evidence.bundle.unavailable` (package file), `evidence.runtime.ca-bundle-unavailable` (CA bundle); `evidence.deployment.unavailable` (with `--require-runtime-dependencies`) |
+| `deployment input is not immutable: ...` | `evidence.deployment.not-immutable` (with `--require-runtime-dependencies`); `evidence.bundle.not-immutable` (package file) |
+| another deployment input refusal while proving runtime dependencies | `evidence.deployment.invalid-input` |
+| `deployment contains an unsupported entry` | `evidence.bundle.unsupported-entry` |
+| `deployment contains an invalid path binding` | `evidence.bundle.invalid-path` |
+| `deployment artifact closure is invalid: ...` | `evidence.bundle.unknown-file` |
+| `deployment exceeds a Version 1 size bound` | `evidence.bundle.too-large` |
+| `deployment configuration is invalid: ...` | `evidence.bundle.invalid-configuration` |
+| `deployment artifact is invalid: ...` | `evidence.bundle.invalid-artifact`; for a code list `evidence.codelist.invalid-form`, `evidence.codelist.invalid-size`, `evidence.codelist.output-not-allowed`; for a fixture `evidence.fixture.not-synthetic`, `evidence.fixture.missing-cases`, `evidence.fixture.invalid-case-count`, `evidence.fixture.invalid-case`, `evidence.fixture.invalid-case-id`, `evidence.fixture.unresolved-not-declared`, `evidence.fixture.invalid-unresolved-marker`, `evidence.fixture.incomplete-coverage`; for a CA bundle `evidence.runtime.invalid-ca-bundle` |
+| `deployment artifact is invalid: runtime signer kind does not match the bundle assurance profile` | `evidence.runtime.signer-assurance-mismatch` |
+| `deployment artifact is invalid: a bundle secret reference names a provider ...` | `evidence.runtime.secret-provider-not-enabled` |
+| `deployment artifact is invalid: the local signing key reference must be distinct ...` | `evidence.runtime.signing-key-shared` |
+| `deployment artifact is invalid: the audit file path must not resolve to configured secret material` | `evidence.runtime.audit-path-is-secret` |
+| `deployment artifact is invalid: the runtime configuration does not bind a TLS trust profile the bundle names` | `evidence.runtime.trust-profile-unbound` |
+| `deployment artifact is invalid: the runtime configuration binds a TLS trust profile the bundle does not name` | `evidence.runtime.trust-profile-unused` |
+| `deployment artifact is invalid: the runtime configuration binds no file for a source extract profile ...` | `evidence.runtime.source-extract-unbound` |
+| `deployment artifact is invalid: the runtime configuration binds a source extract profile no bundle source names` | `evidence.runtime.source-extract-unused` |
+| `deployment artifact is invalid: the runtime configuration does not enable an acquisition capability ...` | `evidence.runtime.acquisition-capability-missing` |
+| `deployment script is invalid: ...` | `evidence.bundle.invalid-script` |
+| a package refusal (`the package at <root> ...`) | `evidence.package.invalid-root`, `evidence.package.sum-file-missing`, `evidence.package.invalid-sum-file`, `evidence.package.mismatch`, `evidence.package.unsafe-entry`, `evidence.package.too-large`, `evidence.package.unavailable`, `evidence.package.empty`, `evidence.package.digest-mismatch`, `evidence.package.invalid`; `evidence.deployment.package-refused` (with `--require-runtime-dependencies`) |
+| `bundle compilation failed: ...` | `evidence.bundle.compile-refused` |
+| `source plan compilation failed` | `evidence.source.plan-refused` |
+| `bound extract is stale for source ...` | `evidence.deployment.stale-extract` |
+| `runtime bundle initialization failed` | `evidence.deployment.refused` |
+| `runtime secret initialization failed` | `evidence.deployment.secret-unavailable` |
+| `runtime audit initialization failed: ...` | `evidence.deployment.audit-refused` (the audit block), `evidence.deployment.audit-unavailable` (key, file, or storage) |
+| `runtime signing initialization failed: ...` | `evidence.deployment.signing-unavailable` (key or provider not available), `evidence.deployment.signing-refused` (a key that is not the governed one) |
+| `runtime source initialization failed` | `evidence.deployment.source-unavailable` |
+| `runtime rate-limit initialization failed` | `evidence.deployment.rate-limit-unavailable` |
+| `runtime authentication initialization failed: ...` | `evidence.deployment.refused` |
+| `a required runtime dependency is unavailable` | `evidence.deployment.dependency-unavailable` |
+| `audit destination check failed: ...` | `evidence.deployment.audit-outside-root` |
+| `--require-audit-under needs a file audit destination; ...` | `evidence.deployment.audit-not-a-file` |
+| `evidence: warning: rateLimits.burstPerPrincipal is <n>, below <m>, ...` | `evidence.bundle.burst-below-largest-request` (warning) |
+| (offline check skipped a substituted value, new) | `evidence.runtime.not-checked`, `evidence.package.not-checked` (warnings) |
+| (verification policy refusals, new with `check-policy`) | the reader's `yaml.*` and `config.*` codes, `evidence.policy.invalid-count`, `evidence.policy.unpaired-list-form`, `evidence.policy.not-verifiable`, `evidence.policy.unavailable` |
+
+### Respellings held for the stable release (WP11)
+
+These promised spellings stay as they are now; the stable release moves them
+and refuses the old spelling with a diagnostic naming the new one.
+
+| Format | Now | Stable release |
+|---|---|---|
+| bundle (`evidence.yaml`) | `version: 1`, no `apiVersion` or `kind` | `apiVersion: id.registrystack.org/formats/evidence/bundle/v1`, `kind: EvidenceBundle` |
+| bundle | `concurrencyLimit` (fixed requests, statement requests, source connections) | `maximumConcurrency` |
+| bundle | `timeoutMilliseconds` (fixed requests, statement requests) | `attemptTimeoutMilliseconds` |
+| bundle | untagged variants (acquisitions, fixed requests, path bindings, sources, source authentication, statement parameter bindings, concept forms) | a `type` member, or single-key mappings |
+| bundle | untyped identifier keys and members (sources, source connections, selector profiles, authority profiles, requirement and concept ids, issuer id, parameter maps) | typed as `LocalId` or `ExternalId` |
+| bundle | `...Ref` secret members (audit hash key, source authentication, subject binding) | typed as `SecretReference` |
+| runtime file | `apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1` | `apiVersion: id.registrystack.org/formats/evidence/runtime/v1alpha1` (the old value refused as `config.retired-api-version`) |
+| runtime file | `audit.retainDays` | `audit.retentionDays` |
+| runtime file | `signer.timeoutMilliseconds` | `signer.attemptTimeoutMilliseconds` |
+| runtime file | `signer` tagged by `kind` | tagged by `type` |
+| runtime file | `outboundTls.trustProfiles` and `sourceExtracts` keys | typed as `LocalId` |
+| runtime file | `signer.privateKeyRef` | typed as `SecretReference` |
+| code list | no `apiVersion` or `kind` | `apiVersion: id.registrystack.org/formats/evidence/codelist/v1alpha1`, `kind: EvidenceCodelist` |
+| code list | `allowed_outputs` | `allowedOutputs` |
+| code list | `id` (a URI) | an `ExternalId` member |
+| code list | code list and mapping forms told apart by their members | a `type` member |
+| verification policy | no `apiVersion` or `kind` | `apiVersion: id.registrystack.org/formats/evidence/verification-policy/v1`, `kind: EvidenceVerificationPolicy` |
+| holder-bound verification policy | no `apiVersion` or `kind` | `apiVersion: id.registrystack.org/formats/evidence/holder-bound-verification-policy/v1`, `kind: EvidenceHolderBoundVerificationPolicy` |
+| both policies | untagged expected forms | a `type` member |

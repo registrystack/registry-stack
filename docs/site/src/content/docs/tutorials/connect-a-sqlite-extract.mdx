@@ -146,10 +146,11 @@ evidencectl package registry-status \
 
 evidencectl doctor --runtime-config "$(pwd)/registry-status/deployment-targets/staging/runtime.yaml"
 evidencectl test registry-status --target registry-status/deployment-targets/staging
-evidence check --runtime-config registry-status/deployment-targets/staging/runtime.yaml
+evidence check --runtime-config registry-status/deployment-targets/staging/runtime.yaml \
+  --require-runtime-dependencies
 ```
 
-The last command opens the bound extract, validates its metadata and fixed statement, and refuses
+The last command proves the deployment on the target host: it opens the bound extract, validates its metadata and fixed statement, and refuses
 an extract that is already older than `maximumExtractAgeSeconds`. Start the service only after
 that check passes. Route traffic after `/ready` and one authorized synthetic-subject request pass,
 then verify the signed response with independently pinned policy and public keys.

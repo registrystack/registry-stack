@@ -1091,8 +1091,11 @@ parses, and that the authorizer accepts it. It cannot settle columns,
 parameters, metadata, or age, because only the extract can. That check never
 reports a false failure, only an incomplete pass. `evidencectl test`
 reaches `bundle-check` the same way, but only for an editable project; run
-against a deployment project like this one, it instead runs `evidence check`
-with the runtime file's real bindings, which is the check described above.
+against a deployment project like this one, it instead runs the offline
+`evidence check` against the runtime file, which settles the same statement
+properties without opening the extract. The check against the real extract
+described above runs at startup and under
+`evidence check --require-runtime-dependencies` on the target host.
 
 The internal `evidence bundle-check --bundle <directory> --json` tooling seam
 returns `packageDigest` and a `requirements` array of `id` and
@@ -1434,22 +1437,24 @@ secret root and the secret files inside it are judged on their mode bits alone,
 read-only mount as on any other, because those modes bound who may read a
 secret rather than who may write it.
 
-`evidence check` refuses a non-conforming runtime file, bundle artifact, CA
-bundle file, or secret root before the listener binds. When the fault is
-bound to one artifact, the printed message names it, for example `evidence:
-deployment input is not immutable: artifact runtime.yaml: the runtime file is
-writable`, or, for a writable bound extract, the distinct `evidence:
-deployment artifact is invalid: artifact sourceExtracts/<profile>: the source
-extract the runtime file names is writable`. The CA bundle and secret root
-checks are not bound to an artifact, so their messages carry a bare cause
-instead, for example `evidence: deployment input is not immutable: the secret
-root directory the runtime file names is reachable by group or other`.
+`evidence check --require-runtime-dependencies` refuses a non-conforming
+runtime file, bundle artifact, CA bundle file, or secret root on the target
+host. Freezing is a property of that host, so the offline `evidence check`
+leaves it to this form. Each fault is one diagnostic with exit `1`: a writable
+input reports `evidence.deployment.not-immutable` with the file it names, for
+example `runtime.yaml` and the cause `the runtime file is writable`, and a
+writable bound extract reports the distinct `evidence.deployment.invalid-input`
+with the cause `the source extract the runtime file names is writable`. The CA
+bundle and secret root checks are not bound to an artifact, so their
+diagnostics name the package instead and carry a bare cause, for example `the
+secret root directory the runtime file names is reachable by group or other`.
 Process startup (`evidence serve`) refuses the same non-conforming inputs
 before the listener binds but collapses every cause to `runtime bundle
 initialization failed`, naming neither the artifact nor the cause. Write
 `runtime.yaml`, make it non-writable (for example `chmod 400`), and run
-`evidence check` before `evidence serve` so a fault surfaces with its artifact
-and cause instead of only as `runtime bundle initialization failed`.
+`evidence check --require-runtime-dependencies` before `evidence serve` so a
+fault surfaces with its artifact and cause instead of only as `runtime bundle
+initialization failed`.
 
 A bundle source may name one `tlsTrustProfile`, and so may
 `authentication.oidc` for the connection that fetches the access-token issuer's

@@ -34,6 +34,39 @@
   `--production` requires `--target`. `release/notes/config-conventions/evidence.md`
   ("Evidence authoring tools") gives each migration and the full code table.
 
+### Evidence runtime
+
+- BREAKING: plain `evidence check` is offline. It reads the runtime file,
+  verifies and compiles the package, reads each CA bundle, and checks the
+  bindings between them, and reads no secret material, file modes, extract
+  freshness, signer, audit destination, or network. Run
+  `evidence check --require-runtime-dependencies` on the target host for the
+  full proof. Exit codes: 0 clean, 1 refused, 2 usage, 3 an input could not
+  be read.
+- BREAKING: `evidence check` reports every problem in the shared diagnostic
+  shape with a three-segment code and a summary line, writes one JSON
+  document with `--format json`, and adds `--deny-warnings` and
+  `--environment`.
+- BREAKING: the bundle, the runtime file, code lists, fixtures, fact schemas,
+  and both verification policies are read by the shared configuration
+  reader: the shared YAML subset, unknown keys refused at their line and
+  column, `${...}` refused in the bundle, code lists, and policies, and every
+  bundle and runtime integer bounded.
+- BREAKING: `service.publicOrigin`, `publication.endpointUrl`, and each
+  `baseUrl` refuse userinfo, a scheme other than `http` or `https`, or more
+  than 2048 characters.
+- BREAKING: a fixture opens with
+  `apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1` and
+  `kind: EvidenceFixture` in place of `fixture: <id>`.
+- BREAKING: `--runtime` and `REGISTRY_EVIDENCE_RUNTIME` exit 2 (usage).
+- `evidence check-policy` checks one verification or holder-bound
+  verification policy offline, as `verify` and `verify-presentation` read it.
+- The code list JSON Schema is generated from the reader types, and
+  `editors/configure.py` maps deployment-project files to their schemas.
+
+Migration steps and the diagnostic code table:
+`release/notes/config-conventions/evidence.md`, section "Evidence runtime".
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: before 1.0, a release reads only the state its immediate

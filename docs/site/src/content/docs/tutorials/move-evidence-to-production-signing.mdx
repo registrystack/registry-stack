@@ -234,10 +234,11 @@ Start the proxy before checking Evidence Gateway. Run the checks from the final 
 the commands see the same socket, public keys, paths, ownership, and secret roots as the service:
 
 ```sh
-evidence check --runtime-config "<deployment-target>/runtime.yaml"
+evidence check --runtime-config "<deployment-target>/runtime.yaml" --require-runtime-dependencies
 ```
 
-Each check reads provider metadata, verifies the pinned version and custody controls, compares the
+Without `--require-runtime-dependencies` the check stays offline and never contacts the provider.
+With it, each check reads provider metadata, verifies the pinned version and custody controls, compares the
 provider public key with the governed JWK, and performs a sign-and-verify self-test. A mismatch,
 timeout, malformed response, or unavailable proxy fails the check.
 

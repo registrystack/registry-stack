@@ -206,8 +206,10 @@ provider token and auto-auth state; Evidence Gateway receives only access to the
 socket. Its non-exportable signing key remains in Transit.
 Make the installed package and target runtime non-writable to the Evidence Gateway service identity,
 for example `chmod -R a-w "<package.root>" && chmod 444 "<deployment-target>/runtime.yaml"`. `evidencectl test` below runs
-`evidence check` first, which refuses a writable runtime file, bundle artifact, or CA bundle file,
-a secret root reachable by group or other, or a writable extract, before it evaluates any fixture.
+the offline `evidence check` first, then evaluates each fixture through `evidence evaluate`, which
+loads the target as startup does and refuses a writable runtime file, bundle artifact, or CA bundle
+file before it evaluates any case. `evidence check --require-runtime-dependencies` on the target
+host also refuses a secret root reachable by group or other, or a writable extract.
 
 Start the workload-local Transit proxy. Run the grouped offline ceremony once after the candidate,
 runtime bindings, trust files, secrets, and proxy socket are in place:

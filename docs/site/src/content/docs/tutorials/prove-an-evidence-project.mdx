@@ -170,13 +170,20 @@ evidence check --runtime-config "<deployment-target>/runtime.yaml"
 ```
 
 This validates the complete captured bundle, scripts, schemas, codelists, key references, and
-runtime bindings, and it initializes the configured signer, so a production or evidence-grade
-candidate needs its Transit proxy already running. Source credentials are checked by readiness when
-the service starts, not by the offline fixture runner.
+runtime bindings offline, and reports every problem it finds with its file, line, and column. It
+reads no secret material and contacts no service, so it runs the same anywhere.
 
 During local authoring, keep the project writable so changes are convenient. Freeze inputs only
 for the deployable revision: make the runtime and bundle non-writable to the service identity, or
-mount them read-only, then rerun the check against those exact bytes.
+mount them read-only, then prove those exact bytes on the target host:
+
+```sh
+evidence check --runtime-config "<deployment-target>/runtime.yaml" --require-runtime-dependencies
+```
+
+The target-host proof also refuses writable inputs, reads the secret material, initializes the
+configured signer, so a production or evidence-grade candidate needs its Transit proxy already
+running, and checks the source credentials and access-token JWKS the service needs.
 
 ## Hand off the reviewed inputs
 
@@ -187,7 +194,8 @@ from the editable project and one explicit production target.
 Build and hand off only when these facts are recorded together:
 
 1. The fixture suite passed against the editable inputs and generated package.
-2. `evidence check` accepted the exact installed package and target runtime.
+2. `evidence check --require-runtime-dependencies` accepted the exact installed package and target
+   runtime on the target host.
 3. A reviewer approved the source projection, cardinality mapping, requirement, derivation,
    codelists, purposes, audiences, and privacy expectations.
 4. The environment supplies a governed public signing key and matching Transit binding, plus

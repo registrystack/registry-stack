@@ -121,8 +121,9 @@ complete authoring and deployment path.
 [Configuration files](../configuration-files/) describes the YAML rules and environment
 substitution that apply when the runtime reads its runtime file.
 
-A key path that this page lists is not a deployment that runs. `evidence check` is the authoritative
-runtime acceptance gate. `evidencectl artifact inspect <deployment-target>` reports custody for the target and installed package, and
+A key path that this page lists is not a deployment that runs. `evidence check` proves the
+configuration offline, and `evidence check --require-runtime-dependencies` on the target host is
+the authoritative runtime acceptance gate. `evidencectl artifact inspect <deployment-target>` reports custody for the target and installed package, and
 `evidencectl doctor --runtime-config <absolute-file>` performs the live startup dependency
 preflight without opening the public listener or sending an Evidence request. `evidencectl test`
 invokes the real Evidence checks before evaluating fixtures offline.

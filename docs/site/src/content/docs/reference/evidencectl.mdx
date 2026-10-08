@@ -148,7 +148,7 @@ requirements. It accepts logical `secret:file/<name>` references, not values or 
 paths.
 
 The output runtime document is copied byte-for-byte. Its paths and secret posture are accepted only
-by the final target-host `evidence check`.
+by the final target-host `evidence check --require-runtime-dependencies`.
 
 The maintained reference layout keeps the editable project under `shared/evidence-project/` and each
 complete deployment target under `environments/<target>/evidence/`. That layout is a repository

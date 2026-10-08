@@ -11,18 +11,30 @@ and serves those items at its own paths.
 The `evidence` binary takes a runtime file and one subcommand:
 
 ```text
-evidence check --runtime-config <path>
+evidence check --runtime-config <path> [--format human|json] [--require-runtime-dependencies]
 evidence evaluate --runtime-config <path> --fixture <bundle-relative path>
 evidence serve --runtime-config <path>
 evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]
+evidence check-policy --verification-policy <file> | --holder-bound-policy <file>
 ```
 
-`check` validates and compiles the complete immutable bundle. `evaluate` runs
+`check` validates and compiles the complete bundle and the runtime file's
+bindings offline: it reads no secret material, contacts no service, and
+reports every problem it finds with its file, line, column, and code, exiting
+`0`, `1` when refused, `2` on a usage error, and `3` when an input could not be
+read. `--require-runtime-dependencies` adds, on the target host, what startup
+proves: read-only inputs, secret material, extract freshness, audit
+writability, signer readiness, source credentials, and access-token JWKS
+reachability. `evaluate` runs
 one bundle-owned fixture without source or credential access. `verify`
 re-verifies a stored signed response offline against a pinned trusted JWKS
 file and a complete relying-procedure policy document, reporting cryptographic
 authenticity separately from current validity; it needs no runtime file and
-never touches the network. `serve` starts the native HTTP service:
+never touches the network. `check-policy` reads one verification policy, or
+one holder-bound policy, exactly as `verify` or `verify-presentation` reads
+it, and reports every problem with its line and column instead of the closed
+`malformed` class those commands return. `serve` starts the native HTTP
+service:
 
 ```text
 POST /v1/evidence
