@@ -2900,6 +2900,42 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/breg/mcp-runtime/mcp-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine MCP gateway runtime configuration",
+      "description": "Base Registry Engine citizen MCP gateway runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg-mcp/src/schema.rs",
+        "sha256": "3e23892d238d9ae9f0fe5b88af8ff394e07891dec5d9c60fb04026c08edce6c2"
+      },
+      "artifact": {
+        "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
+        "sha256": "7d814d1869c5cc4f3e6922f14b756d9d1d75962a4095310e6a6ee58160593196",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/review-runtime/review-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine citizen review page runtime configuration",
+      "description": "Base Registry Engine citizen review page runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg-review/src/schema.rs",
+        "sha256": "2c69c0a44d136648b6d7b851a9bb92967d9df6bbcec8c3c7befe04b941ed21af"
+      },
+      "artifact": {
+        "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
+        "sha256": "381d40a7355046b0ad353b131ea5d68a4d6bdfdbf75fa848b528dd8104c3a874",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",

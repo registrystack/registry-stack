@@ -147,6 +147,22 @@
       "description": "Base Registry Engine runtime configuration JSON Schema."
     },
     {
+      "glob": "products/breg/generated/mcp-runtime/*.schema.json",
+      "sourcePath": "crates/registry-breg-mcp/src/schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine citizen MCP gateway runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/breg/generated/review-runtime/*.schema.json",
+      "sourcePath": "crates/registry-breg-review/src/schema.rs",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine citizen review page runtime configuration JSON Schema."
+    },
+    {
       "glob": "products/casework/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-casework/src/schema.rs",
       "owner": "casework",
