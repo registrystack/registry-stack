@@ -3407,9 +3407,10 @@ exceptions:
 - rule: CFG-EMPTY-2
   format: casework/runtime
   location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: decision
-  reason: 'assertionIssuers is a member of the shared OidcClientsConfig block, which every token-exchanging runtime embeds unchanged and which documents an empty map as applying no rule; refusing a written {} changes the shared block for every product, not Casework alone'
-  resolution: 'Decision for Jeremi and the platform track raised 2026-10-08 by the Casework track: either the shared OidcClientsConfig refuses a written empty assertionIssuers (omitted applies no rule, written lists at least one client) and every product embedding it inherits the refusal, or the platform records the empty map as the explicit "no rule" spelling; Casework adopts whichever the shared block decides'
+  class: pending
+  wp: WP8
+  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty default ({})
+  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
 - rule: CFG-ENV-2
   format: casework/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion
