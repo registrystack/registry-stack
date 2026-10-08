@@ -29,7 +29,7 @@ def prepare_spatial(fixture: Path, project: Path):
     shutil.copytree(fixture, project); replace_package(project)
     for child in (project / "registry.yaml", project / "tests/journeys.yaml"):
         text = child.read_text(encoding="utf-8")
-        for old, new in (("service-sites:map.read", "service-sites:map:read"), ("service-sites:directory.read", "service-sites:directory:read"), ("service-sites:site.read", "service-sites:site:read")):
+        for old, new in (("service-sites:map.read", "service-sites:map:read"), ("service-sites:directory.read", "service-sites:directory:read"), ("service-sites:site.read", "service-sites:site:read"), ("service-sites:public.read", "service-sites:public:read")):
             text = text.replace(old, new)
         child.write_text(text, encoding="utf-8")
     (project/'dev-clients.yaml').write_text('''apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
@@ -51,6 +51,14 @@ clients:
     accessProfiles: [get-only-map-reader]
     scopes: [service-sites:site:read]
     claims: {registry_principal: synthetic-site-reader, registry_purpose: service-site-map}
+  - id: public-map-reader
+    accessProfiles: [map-reader]
+    scopes: [service-sites:public:read]
+    claims: {registry_principal: synthetic-public-map, registry_purpose: service-site-public-map}
+  - id: public-directory-reader
+    accessProfiles: [directory-reader]
+    scopes: [service-sites:public:read]
+    claims: {registry_principal: synthetic-public-directory, registry_purpose: service-site-public-directory}
 ''')
 
 def authorization(root: Path, name='operator'):
