@@ -50,6 +50,7 @@ use crate::{
     keygen, OutputFormat,
 };
 use registry_evidence_authoring::model::{AccessPolicy, AccessTaskGrant};
+use registry_platform_yaml::LocalId;
 
 const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v6";
 const CONTROL_SOCKET_NAME: &str = "control.sock";
@@ -777,7 +778,7 @@ fn client_task_sources(
                 if !registration.requester_tags.contains(&policy.requester_tag) {
                     bail!("task grant requester is not assigned its access policy");
                 }
-                task_sources.insert(task.source_issuer.clone());
+                task_sources.insert(task.source_issuer.as_str().to_owned());
             }
         }
     }
@@ -1462,7 +1463,7 @@ fn valid_access_policy_state(
             .iter()
             .all(|question| question_aliases.contains(question.as_str()))
         && crate::authoring::access_policy_requester_tag_for(&AccessPolicy {
-            id: policy.id.clone(),
+            id: LocalId::new(policy.id.clone()).expect("a validated local identifier"),
             questions: policy.questions.clone(),
             task_grant: policy.task_grant.clone(),
         })
@@ -1709,7 +1710,7 @@ fn authority_profile_matches(
     }
     if let Some(task) = task_grant {
         if profile["requesterClients"] != json!(task.requester_clients)
-            || profile["grantSourceIssuer"] != task.source_issuer
+            || profile["grantSourceIssuer"] != task.source_issuer.as_str()
         {
             return false;
         }
@@ -3784,14 +3785,15 @@ mod tests {
         let question = QuestionState::from(&compiled(Path::new("/tmp/unused")).questions[0]);
         let task = AccessTaskGrant {
             kind: "delegated".to_owned(),
-            source_issuer: "https://casework.invalid".to_owned(),
+            source_issuer: registry_platform_yaml::Url::new("https://casework.invalid")
+                .expect("a URL"),
             requester_clients: vec!["task-agent".to_owned()],
             bindings: vec![registry_evidence_authoring::model::AccessTaskBinding {
                 question: "adult-status".to_owned(),
                 role: "person".to_owned(),
                 selector_profile: "local-subject-adult-status-v1".to_owned(),
                 value_claims: BTreeMap::from([(
-                    "person_id".to_owned(),
+                    LocalId::new("person_id").expect("a local id"),
                     "identity.person_reference".to_owned(),
                 )]),
             }],
@@ -4698,7 +4700,7 @@ requirements:
                 questions: vec!["lot-status".into()],
                 task_grant: Some(AccessTaskGrant {
                     kind: "institutional".into(),
-                    source_issuer: source.into(),
+                    source_issuer: registry_platform_yaml::Url::new(source).expect("a URL"),
                     requester_clients: vec!["assistant".into()],
                     bindings: Vec::new(),
                 }),

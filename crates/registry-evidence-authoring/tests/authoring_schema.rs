@@ -20,7 +20,9 @@
 use jsonschema::{Draft, JSONSchema};
 use registry_evidence_authoring::{
     formats::check_question,
-    schema::{documents, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE},
+    schema::{
+        documents, ACCESS_POLICY_SCHEMA_FILE, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE,
+    },
 };
 use registry_platform_yaml::Reader;
 use serde_json::Value;
@@ -286,11 +288,15 @@ fn question_is_accepted_by_the_checks(document: &str) -> bool {
 }
 
 #[test]
-fn the_generated_set_is_exactly_the_two_documents_a_rust_type_stands_behind() {
+fn the_generated_set_is_exactly_the_documents_a_rust_type_stands_behind() {
     let documents = documents().expect("the authoring schemas generate");
     assert_eq!(
         documents.keys().copied().collect::<Vec<_>>(),
-        vec![PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE],
+        vec![
+            ACCESS_POLICY_SCHEMA_FILE,
+            PROJECT_MARKER_SCHEMA_FILE,
+            QUESTION_SCHEMA_FILE
+        ],
     );
 }
 
@@ -465,4 +471,22 @@ fn a_question_the_schema_accepts_may_still_be_turned_away_by_the_checks() {
         !question_is_accepted_by_the_checks(&document),
         "the checks must still turn this document away; the schema is structural, not semantic",
     );
+}
+
+#[test]
+fn an_access_policy_the_schema_turns_away_is_turned_away_by_the_reader() {
+    let documents = documents().expect("the authoring schemas generate");
+    let schema = compile(&documents[ACCESS_POLICY_SCHEMA_FILE]);
+    let accepted = yaml_as_json(
+        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
+         kind: EvidenceAccessPolicy\nid: readers\nquestions: [record-status]\n",
+    );
+    assert!(schema.is_valid(&accepted));
+    for refused in [
+        "kind: EvidenceAccessPolicy\nid: readers\nquestions: []\n",
+        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: readers\nquestions: []\nextra: 1\n",
+        "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nquestions: []\n",
+    ] {
+        assert!(!schema.is_valid(&yaml_as_json(refused)), "{refused}");
+    }
 }

@@ -98,9 +98,15 @@ struct EditorSchema {
 //
 // The catalogue holds only the document kinds a Rust type stands behind. The
 // other authored parts of a project (sources, selectors, derivations, answer
-// schemas, fixtures, access policies) get no mapping, because a schema written
+// schemas, fixtures) get no mapping, because a schema written
 // by hand for one of them would drift from the checks the moment either moved.
-const EDITOR_SCHEMA_CATALOG: [EditorSchema; 2] = [
+const EDITOR_SCHEMA_CATALOG: [EditorSchema; 3] = [
+    EditorSchema {
+        name: "access-policy",
+        filename: "access-policy.schema.json",
+        file_glob: "access/policies/*.yaml",
+        document: include_str!("../schemas/authoring/access-policy.schema.json"),
+    },
     EditorSchema {
         name: "project-marker",
         filename: "project-marker.schema.json",
@@ -1172,8 +1178,9 @@ mod tests {
     use registry_evidence_authoring::default_project_marker_document;
 
     /// The complete set of files one run owns, as an author would list them.
-    const MANAGED_FILES: [&str; 6] = [
+    const MANAGED_FILES: [&str; 7] = [
         ".evidence-editor/manifest.json",
+        ".evidence-editor/schemas/access-policy.schema.json",
         ".evidence-editor/schemas/project-marker.schema.json",
         ".evidence-editor/schemas/question.schema.json",
         ".vscode/extensions.json",

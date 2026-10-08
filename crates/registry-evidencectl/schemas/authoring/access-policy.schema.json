@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "AccessTaskBinding": {
+      "additionalProperties": false,
+      "description": "Exact authored selector field to verified-token claim path binding.",
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "selectorProfile": {
+          "type": "string"
+        },
+        "valueClaims": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "question",
+        "role",
+        "selectorProfile",
+        "valueClaims"
+      ],
+      "type": "object"
+    },
+    "AccessTaskGrant": {
+      "additionalProperties": false,
+      "description": "Optional trusted task-grant origin for every question in one local policy.",
+      "properties": {
+        "bindings": {
+          "items": {
+            "$ref": "#/$defs/AccessTaskBinding"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "requesterClients": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sourceIssuer": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "kind",
+        "sourceIssuer",
+        "requesterClients",
+        "bindings"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/access-policy/access-policy.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One authored access policy: its stable identifier and the questions a\ncaller assigned this policy may ask. The format version is the document's\n`apiVersion`.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/access-policy/v1alpha1",
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "kind": {
+      "const": "EvidenceAccessPolicy",
+      "type": "string"
+    },
+    "questions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "taskGrant": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AccessTaskGrant"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "id",
+    "questions"
+  ],
+  "title": "Evidence local access policy",
+  "type": "object"
+}

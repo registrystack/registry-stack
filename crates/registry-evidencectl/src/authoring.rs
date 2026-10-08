@@ -25,7 +25,7 @@ use url::{Host, Url};
 use registry_evidence_authoring::formats::{
     check_access_policy, check_question, diagnostic_near, scan_authored,
 };
-use registry_platform_yaml::{Document, Node, NodeValue, Severity};
+use registry_platform_yaml::{Document, LocalId, Node, NodeValue, Severity};
 
 use crate::authored::{self, Gathered};
 use crate::evidence_binary::{EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND};
@@ -1534,7 +1534,7 @@ fn read_access_policies(
         }
         let requester_tag = access_policy_requester_tag_for(&policy)?;
         policies.push(AuthoredAccessPolicy {
-            id: policy.id,
+            id: policy.id.as_str().to_owned(),
             requester_tag,
             questions: policy.questions,
             task_grant: policy.task_grant,
@@ -4019,7 +4019,11 @@ fn render_policy_authority_profile<'a>(
                         subject.role.as_str(),
                         selector.profile.as_str(),
                     ),
-                    selector.fields.iter().collect::<BTreeSet<_>>(),
+                    selector
+                        .fields
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>(),
                 );
             }
         }
@@ -4034,7 +4038,11 @@ fn render_policy_authority_profile<'a>(
                     binding.role.as_str(),
                     binding.selector_profile.as_str(),
                 ),
-                binding.value_claims.keys().collect::<BTreeSet<_>>(),
+                binding
+                    .value_claims
+                    .keys()
+                    .map(LocalId::as_str)
+                    .collect::<BTreeSet<_>>(),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -4076,7 +4084,7 @@ fn render_policy_authority_profile<'a>(
         "kind": task.kind,
         "requesterTags": [policy.requester_tag],
         "requesterClients": task.requester_clients,
-        "grantSourceIssuer": task.source_issuer,
+        "grantSourceIssuer": task.source_issuer.as_str(),
         "grants": grants,
     }))
 }

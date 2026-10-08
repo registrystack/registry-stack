@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use registry_platform_yaml::{BoundedU64, Invalid, LocalId, UniqueList};
+use registry_platform_yaml::{BoundedU64, Invalid, LocalId, UniqueList, Url};
 use serde::{Deserialize, Serialize};
 
 /// The longest validity window a question may declare, in seconds: one year,
@@ -18,9 +18,10 @@ pub const MAX_VALIDITY_SECONDS: u64 = 31_536_000;
 /// caller assigned this policy may ask. The format version is the document's
 /// `apiVersion`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AccessPolicy {
-    pub id: String,
+    pub id: LocalId,
     pub questions: Vec<String>,
     #[serde(rename = "taskGrant", skip_serializing_if = "Option::is_none")]
     pub task_grant: Option<AccessTaskGrant>,
@@ -28,22 +29,24 @@ pub struct AccessPolicy {
 
 /// Optional trusted task-grant origin for every question in one local policy.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessTaskGrant {
     pub kind: String,
-    pub source_issuer: String,
+    pub source_issuer: Url,
     pub requester_clients: Vec<String>,
     pub bindings: Vec<AccessTaskBinding>,
 }
 
 /// Exact authored selector field to verified-token claim path binding.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessTaskBinding {
     pub question: String,
     pub role: String,
     pub selector_profile: String,
-    pub value_claims: BTreeMap<String, String>,
+    pub value_claims: BTreeMap<LocalId, String>,
 }
 
 /// One authored question: what is asked, of which subjects, from which source,

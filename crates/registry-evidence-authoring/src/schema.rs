@@ -34,11 +34,12 @@ use serde_json::{Map, Value};
 
 use crate::{
     formats::{
+        ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND, ACCESS_POLICY_SCHEMA_ID,
         AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND, AUTHORING_PROJECT_SCHEMA_ID,
         QUESTION_API_VERSION, QUESTION_KIND, QUESTION_SCHEMA_ID,
     },
     marker::ProjectMarker,
-    model::Question,
+    model::{AccessPolicy, Question},
 };
 
 /// The JSON Schema dialect every generated document declares.
@@ -46,6 +47,10 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 /// The schema for one authored question, the documents under `questions/`.
 pub const QUESTION_SCHEMA_FILE: &str = "question.schema.json";
+
+/// The schema for one local access policy, the documents under
+/// `access/policies/`.
+pub const ACCESS_POLICY_SCHEMA_FILE: &str = "access-policy.schema.json";
 
 /// The schema for the marker that anchors a project root.
 pub const PROJECT_MARKER_SCHEMA_FILE: &str = "project-marker.schema.json";
@@ -58,6 +63,13 @@ pub const PROJECT_MARKER_SCHEMA_FILE: &str = "project-marker.schema.json";
 /// would mean `schemars` produced a value this crate cannot serialize.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let entries = [
+        (
+            ACCESS_POLICY_SCHEMA_FILE,
+            "Evidence local access policy",
+            ACCESS_POLICY_SCHEMA_ID,
+            (ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND),
+            serde_json::to_value(schemars::schema_for!(AccessPolicy))?,
+        ),
         (
             QUESTION_SCHEMA_FILE,
             "Evidence authored question",
@@ -76,10 +88,66 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
     entries
         .into_iter()
         .map(|(file, title, schema_id, envelope, derived)| {
-            let enveloped = with_envelope(derived, envelope);
+            let enveloped = with_envelope(type_map_keys(derived)?, envelope);
             Ok((file, render(published(enveloped, title, schema_id))?))
         })
         .collect()
+}
+
+/// Schemars writes a map keyed by `LocalId` as `patternProperties` under the
+/// identifier's pattern, which drops its other bounds. State the key as the
+/// identifier itself (CFG-SCHEMA-4, CFG-ID-1): `propertyNames` naming
+/// `$defs/LocalId`, and `additionalProperties` carrying the value schema.
+fn type_map_keys(mut derived: Value) -> Result<Value, serde_json::Error> {
+    let identifier = serde_json::to_value(
+        <registry_platform_yaml::LocalId as schemars::JsonSchema>::json_schema(
+            &mut schemars::SchemaGenerator::default(),
+        ),
+    )?;
+    let Some(pattern) = identifier.get("pattern").and_then(Value::as_str) else {
+        return Ok(derived);
+    };
+    let pattern = pattern.to_owned();
+    if retype_maps(&mut derived, &pattern) {
+        if let Some(Value::Object(defs)) = derived.get_mut("$defs") {
+            defs.entry("LocalId").or_insert(identifier);
+        }
+    }
+    Ok(derived)
+}
+
+/// Rewrite every map keyed under `pattern`; true when one was rewritten.
+fn retype_maps(schema: &mut Value, pattern: &str) -> bool {
+    let mut rewritten = false;
+    match schema {
+        Value::Object(object) => {
+            let value = match object.get("patternProperties") {
+                Some(Value::Object(patterns)) if patterns.len() == 1 => {
+                    patterns.get(pattern).cloned()
+                }
+                _ => None,
+            };
+            if let Some(value) = value {
+                object.remove("patternProperties");
+                object.insert(
+                    "propertyNames".to_owned(),
+                    serde_json::json!({"$ref": "#/$defs/LocalId"}),
+                );
+                object.insert("additionalProperties".to_owned(), value);
+                rewritten = true;
+            }
+            for member in object.values_mut() {
+                rewritten |= retype_maps(member, pattern);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                rewritten |= retype_maps(item, pattern);
+            }
+        }
+        _ => {}
+    }
+    rewritten
 }
 
 /// State the envelope a format is read with: `apiVersion` and `kind`, each a
@@ -144,14 +212,17 @@ fn render(value: Value) -> Result<String, serde_json::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{documents, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE};
+    use super::{
+        documents, ACCESS_POLICY_SCHEMA_FILE, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE,
+    };
 
     #[test]
     fn both_documents_are_generated_under_their_committed_filenames() {
         let documents = documents().expect("the authoring schemas generate");
         assert!(documents.contains_key(QUESTION_SCHEMA_FILE));
         assert!(documents.contains_key(PROJECT_MARKER_SCHEMA_FILE));
-        assert_eq!(documents.len(), 2);
+        assert!(documents.contains_key(ACCESS_POLICY_SCHEMA_FILE));
+        assert_eq!(documents.len(), 3);
     }
 
     #[test]

@@ -41,6 +41,9 @@ pub const AUTHORING_PROJECT_SCHEMA_ID: &str =
 /// The published `$id` of a question's JSON Schema.
 pub const QUESTION_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json";
+/// The published `$id` of a local access policy's JSON Schema.
+pub const ACCESS_POLICY_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/access-policy/access-policy.v1alpha1.schema.json";
 /// The `apiVersion` of a local access policy under `access/policies/`.
 pub const ACCESS_POLICY_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/access-policy/v1alpha1";

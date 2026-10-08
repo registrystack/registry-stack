@@ -14,14 +14,14 @@ use std::{
     process::ExitCode,
 };
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{anyhow, bail, Context as _, Result};
 use clap::{Args, Subcommand};
 use registry_evidence_authoring::formats::{
     decode_authored, envelope_lines, read_authored, ACCESS_CLIENT, ACCESS_CLIENT_API_VERSION,
     ACCESS_CLIENT_KIND, ACCESS_POLICY, ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND, QUESTION,
 };
 use registry_platform_crypto::{PrivateJwk, PublicJwk};
-use registry_platform_yaml::{FormatSpec, NodeValue};
+use registry_platform_yaml::{FormatSpec, LocalId, NodeValue};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -263,7 +263,8 @@ fn add_policy(args: &PolicyAddArgs, format: OutputFormat) -> Result<ExitCode> {
     }
     let path = directory.join(format!("{}.yaml", args.policy));
     let document = AccessPolicyDocument {
-        id: args.policy.clone(),
+        id: LocalId::new(args.policy.clone())
+            .map_err(|_| anyhow!("access policy id must be a lowercase local identifier"))?,
         questions,
         task_grant: None,
     };
@@ -620,7 +621,7 @@ pub(crate) fn load_active_clients(
     }
     for policy in policies.values() {
         let expected = authoring::access_policy_requester_tag_for(policy)?;
-        if policy_tags.get(&policy.id) != Some(&expected) {
+        if policy_tags.get(policy.id.as_str()) != Some(&expected) {
             bail!(
                 "editable access policy {} differs from the active generation",
                 policy.id
@@ -731,7 +732,10 @@ fn load_policy_documents_if_present(
             validate_identifier(question, "question")?;
             validate_authored_question(project, question)?;
         }
-        if policies.insert(document.id.clone(), document).is_some() {
+        if policies
+            .insert(document.id.as_str().to_owned(), document)
+            .is_some()
+        {
             bail!("access policy ids must be unique");
         }
     }
