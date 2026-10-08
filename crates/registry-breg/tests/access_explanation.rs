@@ -72,7 +72,7 @@ fn membership_source() -> Value {
     let grant = &mut source["accessProfiles"][0]["permissions"][0];
     grant["operations"] = json!(["get", "list"]);
     grant["writableFields"] = json!([]);
-    grant["rowBoundaries"] = json!([]);
+    grant["rowBoundaries"] = json!("unrestricted");
     grant["membershipBoundaries"] = json!([{
         "field":"organization", "membershipEntity":"membership",
         "membershipKeyField":"organization", "principalField":"principal", "activeField":"active"
@@ -110,7 +110,7 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
         .contains("not evaluated"));
 
     let mut broad = source();
-    broad["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!([]);
+    broad["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
     let registry = compile(&broad);
     assert!(registry
         .findings()
@@ -201,7 +201,7 @@ fn access_explanation_includes_nested_target_authority_and_owner_read_limits() {
 #[test]
 fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
     for (boundaries, rows, direct_claims) in [
-        (json!([]), "membership_bound", 0),
+        (json!("unrestricted"), "membership_bound", 0),
         (
             json!([{"field":"district", "claim":"districts", "operator":"in"}]),
             "claim_and_membership_bound",

@@ -37,11 +37,12 @@ accessProfiles:
   - id: operator
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: asset
         operations: [get, lookup]
         readableFields: [label]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         lookups:
           - selector: label
             valueOrigin: verified_claim
@@ -52,11 +53,12 @@ accessProfiles:
   - id: reviewer
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: correction
         operations: [get, submit_request, apply_request]
         readableFields: [asset, label]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         applyTargets:
           - entity: asset
             rowBoundaries: [{field: label, claim: apply_label, operator: equals}]

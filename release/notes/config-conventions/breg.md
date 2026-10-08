@@ -1614,6 +1614,79 @@ To migrate a registry that served anonymous callers:
 4. Replace alerts on `breg_anonymous_refusals_total`, and update scripts that
    expected `404` from a request without a token to expect `401`.
 
+### BREAKING: an access member says `unrestricted` or names what it restricts
+
+An empty list no longer means "no restriction" in an access profile. A
+member that grants reach takes the keyword `unrestricted` or a list of at
+least one item, a member that only narrows is omitted when it narrows
+nothing, and `[]` is refused in both places as `config.invalid-value` at the
+member when the file is read. The diagnostic names the fix.
+
+| File | Member | Accepted | Refused |
+|---|---|---|---|
+| `registry.yaml` | `/accessProfiles/*/requiredScopes` | `unrestricted`, or a list of at least one scope | omitted (`config.missing-key`), `[]` |
+| `registry.yaml` | `/accessProfiles/*/requiredPurposes` | omitted, or a list of at least one purpose | `[]`, `unrestricted` |
+| `registry.yaml` | `/accessProfiles/*/requesterClients` | omitted, or a list of at least one OAuth client | `[]`, `unrestricted` |
+| `registry.yaml` | `/accessProfiles/*/permissions/*/rowBoundaries` on an entity permission | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
+| `registry.yaml` | `/accessProfiles/*/permissions/*/applyTargets/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
+| `registry.yaml` | `/accessProfiles/*/permissions/*/requestPresence/*/rowBoundaries` | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
+| `registry.yaml` | `/accessProfiles/*/permissions/*/targets/*/rowBoundaries` on an action permission | `unrestricted`, or a list of at least one row boundary | omitted, `[]` |
+| `registry.yaml`, `module.yaml` | `/entities/*/accessRequirements/requiredScopes`, `allowedPurposes`, `rowBoundaries` | omitted, or a list of at least one item | `[]`, `unrestricted` |
+| `module.yaml` | `/extendEntities/*/accessRequirements/requiredScopes`, `allowedPurposes`, `rowBoundaries` | omitted, or a list of at least one item | `[]`, `unrestricted` |
+
+`requiredScopes` on a profile is now required, so a profile states whether
+it demands a scope. `requiredPurposes` and `requesterClients` stay optional
+and do not take the keyword: omitting one applies no restriction on that
+dimension, as it did. An access requirement never grants, so it has nothing
+to write `unrestricted` for.
+
+The authorization a registry enforces does not change. `unrestricted`
+compiles to what `[]` compiled to, so a project rewritten this way keeps its
+compiled revision, its tables, its row policies, and its action
+fingerprints, and a package an earlier release built still reads as a
+predecessor.
+
+Two findings are removed and two are added:
+
+| Finding | Change |
+|---|---|
+| `breg.access.profile-no-required-scope` | Removed. The profile now writes `requiredScopes: unrestricted`, so the file states the decision the finding asked about. |
+| `breg.access.action-no-required-scope` | Removed for the same reason. |
+| `breg.access.profile-subsumes-narrower` | Added, a warning at `project.accessProfiles[id=...].requiredScopes`. A profile written `unrestricted` admits every token that another profile admits, so a caller admitted there also reaches what the unrestricted profile grants by selecting it. Two unrestricted profiles behind the same gates are each reported. |
+| `breg.access.wildcard-spelled-item` | Added, a warning at the member. An item spelled `*` or `unrestricted` in a profile's `requiredScopes`, `requiredPurposes`, or `requesterClients`, or in an access requirement's `requiredScopes` or `allowedPurposes`, names one entry and matches nothing else. |
+
+A `--deny-warnings` gate that passed can now fail on either added finding,
+and a gate that listed the two removed codes no longer sees them.
+
+A module's digest is taken over the module as `bregctl` writes it, and an
+access requirement member that holds nothing is no longer written. A module
+that declares `accessRequirements` without all three members gets a new
+digest: run `bregctl project lock` in each project that locks it.
+
+Module entity profiles under `/entities/*/accessProfiles` and
+`/extendEntities/*/accessProfiles` in `module.yaml` are unchanged: they
+still write `rowBoundaries: []` for every row and may omit `requiredScopes`.
+
+`bregctl init`, `bregctl init --from publicschema`, the consent module, and
+the source `bregctl dev` prepares write the new spelling. `caseworkctl
+source add` reads `requiredScopes: unrestricted` from a registry project as
+no scope and refuses any other non-list value.
+
+To migrate a registry project:
+
+1. In every profile under `accessProfiles`, replace `requiredScopes: []`
+   with `requiredScopes: unrestricted`, and add `requiredScopes:
+   unrestricted` to a profile that has no `requiredScopes`. Prefer naming a
+   scope the profile's callers carry.
+2. Delete `requiredPurposes: []` and `requesterClients: []`.
+3. Replace `rowBoundaries: []` with `rowBoundaries: unrestricted` in entity
+   permissions, action `targets`, `applyTargets`, and `requestPresence`.
+4. Under `accessRequirements`, in `registry.yaml` and in every module,
+   delete each member written as `[]`, then run `bregctl project lock`.
+5. Run `bregctl check`. Review each `breg.access.profile-subsumes-narrower`
+   finding: give the unrestricted profile a scope, or accept that its grants
+   are reachable by every caller of the narrower profile.
+
 ## BReg citizen services
 
 This section covers the runtime files of the two citizen services beside the

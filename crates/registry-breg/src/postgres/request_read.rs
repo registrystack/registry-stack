@@ -1817,19 +1817,19 @@ mod tests {
                 "fields":[{"id":"label","type":"string","maxLength":64,"classification":"internal"}]
               }],
               "accessProfiles":[{
-                "id":"reader","principalClaim":"principal","permissions":[{
+                "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"request","operations":["get"],"readableFields":["label"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               },{
-                "id":"empty-editor","principalClaim":"principal","permissions":[{
+                "id":"empty-editor","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               },{
-                "id":"editor","default":true,"principalClaim":"principal","permissions":[{
+                "id":"editor","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               }]
             }"#,

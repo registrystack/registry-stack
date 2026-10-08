@@ -118,12 +118,12 @@ accessProfiles:
         operations: [get, list, patch]
         readableFields: [code, label, district, owner]
         writableFields: [label]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
       - entity: reviewed-record
         operations: [create, get, list]
         readableFields: [code, label, district]
         writableFields: [code, label, district]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: auditor
     principalClaim: registry_principal
     requiredScopes: [record:audit]

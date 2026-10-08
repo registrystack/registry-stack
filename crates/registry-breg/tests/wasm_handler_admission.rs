@@ -114,10 +114,10 @@ fn wasm_project() -> Value {
             }
           }],
           "accessProfiles":[{
-            "id":"registrar","default":true,"principalClaim":"registry_principal",
+            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{
               "action":"register-person","operations":["invoke"],
-              "targets":[{"entity":"person","rowBoundaries":[]}],
+              "targets":[{"entity":"person","rowBoundaries":"unrestricted"}],
               "results":["person"]
             }]
           }]
@@ -425,7 +425,7 @@ fn the_per_package_wasm_module_count_is_bounded() {
         }));
         permissions.push(json!({
             "action": id, "operations":["invoke"],
-            "targets":[{"entity":"person","rowBoundaries":[]}],
+            "targets":[{"entity":"person","rowBoundaries":"unrestricted"}],
             "results":["person"]
         }));
     }

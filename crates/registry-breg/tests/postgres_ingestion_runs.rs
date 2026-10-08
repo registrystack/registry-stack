@@ -4651,7 +4651,7 @@ const FIXTURE_HEAD: &str = r#"{
 
 const FIXTURE_TAIL: &str = r#"
   "accessProfiles":[{
-    "id":"operator","default":true,"principalClaim":"registry_principal",
+    "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
     "permissions":[{
       "entity":"widget","operations":["create","get","patch","batch"],
@@ -4660,7 +4660,7 @@ const FIXTURE_TAIL: &str = r#"
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]
   },{
-    "id":"operator-minimal","principalClaim":"registry_principal",
+    "id":"operator-minimal","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management"],
     "permissions":[{
       "entity":"widget","operations":["create","patch","batch"],
@@ -4669,12 +4669,12 @@ const FIXTURE_TAIL: &str = r#"
       "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
     }]
   },{
-    "id":"reader","principalClaim":"registry_principal",
+    "id":"reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["public-reading"],
     "permissions":[{
       "entity":"widget","operations":["get","list"],
       "readableFields":["label"],
-      "rowBoundaries":[]
+      "rowBoundaries":"unrestricted"
     }]
   }]
 }"#;
@@ -4756,7 +4756,7 @@ fn patch_only_registry() -> Arc<registry_breg::CompiledRegistry> {
         ]
       }],
       "accessProfiles":[{
-        "id":"patcher","default":true,"principalClaim":"registry_principal",
+        "id":"patcher","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["case-management"],
         "permissions":[
           {

@@ -460,7 +460,7 @@ fn registry(plan: &Plan) -> String {
             .map(|field| field.id.as_str())
             .collect();
         yaml.entry(3, "- entity", &entity.id);
-        yaml.line(4, "rowBoundaries: []");
+        yaml.line(4, "rowBoundaries: unrestricted");
         yaml.line(4, "operations: [create, get, list, patch]");
         yaml.line(4, &format!("readableFields: {}", flow_list(&all)));
         yaml.line(4, &format!("writableFields: {}", flow_list(&all)));
@@ -491,7 +491,7 @@ fn registry(plan: &Plan) -> String {
                 .map(|field| field.id.as_str())
                 .collect();
             yaml.entry(3, "- entity", &entity.id);
-            yaml.line(4, "rowBoundaries: []");
+            yaml.line(4, "rowBoundaries: unrestricted");
             yaml.line(4, "operations: [get, list]");
             yaml.line(4, &format!("readableFields: {}", flow_list(&readable)));
             yaml.line(

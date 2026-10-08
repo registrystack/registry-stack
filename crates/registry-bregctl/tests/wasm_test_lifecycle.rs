@@ -327,9 +327,9 @@ accessProfiles:
     permissions:
       - action: create-fixed-record
         operations: [invoke]
-        targets: [{entity: record, rowBoundaries: []}]
+        targets: [{entity: record, rowBoundaries: unrestricted}]
         results: [record]
-      - {entity: record, operations: [get, list], readableFields: [code], rowBoundaries: []}
+      - {entity: record, operations: [get, list], readableFields: [code], rowBoundaries: unrestricted}
 "#
 }
 

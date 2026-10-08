@@ -452,25 +452,25 @@ const UNGRANTED_TARGET_PROJECT: &str = r#"{
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":[
         {
-          "entity":"household","rowBoundaries":[],"operations":["create","get","list"],
+          "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
           "readableFields":["household-code"],"writableFields":["household-code"],
           "readPaths":[{"path":"people","readableFields":["person-code"]}]
         },
-        {"entity":"membership","rowBoundaries":[],"operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]}
+        {"entity":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]}
       ]
     },
     {
       "id":"writer","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":[
-        {"entity":"person","rowBoundaries":[],"operations":["create","get","list"],"readableFields":["person-code"],"writableFields":["person-code"]}
+        {"entity":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],"readableFields":["person-code"],"writableFields":["person-code"]}
       ]
     },
     {
       "id":"viewer","principalClaim":"registry_principal",
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":[
-        {"entity":"household","rowBoundaries":[],"operations":["get","list"],"readableFields":["household-code"]}
+        {"entity":"household","rowBoundaries":"unrestricted","operations":["get","list"],"readableFields":["household-code"]}
       ]
     }
   ]
@@ -514,11 +514,11 @@ const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":[
         {
-          "entity":"household","rowBoundaries":[],"operations":["create","get","list"],
+          "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
           "readableFields":["household-code"],"writableFields":["household-code"],
           "readPaths":[{"path":"claims","readableFields":["reason"]}]
         },
-        {"entity":"claim-link","rowBoundaries":[],"operations":["create"],"readableFields":["household","claim"],"writableFields":["household","claim"]}
+        {"entity":"claim-link","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","claim"],"writableFields":["household","claim"]}
       ]
     },
     {
@@ -526,7 +526,7 @@ const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":[
         {
-          "entity":"claim","rowBoundaries":[],"operations":["create","get","list","submit_request"],
+          "entity":"claim","rowBoundaries":"unrestricted","operations":["create","get","list","submit_request"],
           "readableFields":["household","proposed-code","reason"],"writableFields":["household","proposed-code","reason"],
           "requestVisibility":"owner"
         }
@@ -537,9 +537,9 @@ const CHANGE_REQUEST_TARGET_PROJECT: &str = r#"{
       "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
       "permissions":[
         {
-          "entity":"claim","rowBoundaries":[],"operations":["get","apply_request"],
+          "entity":"claim","rowBoundaries":"unrestricted","operations":["get","apply_request"],
           "readableFields":["household","proposed-code","reason"],
-          "applyTargets":[{"entity":"household","rowBoundaries":[]}]
+          "applyTargets":[{"entity":"household","rowBoundaries":"unrestricted"}]
         }
       ]
     }
@@ -614,13 +614,13 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
             "permissions":[
               {
-                "entity":"household","rowBoundaries":[],"operations":["create","get","list"],
+                "entity":"household","rowBoundaries":"unrestricted","operations":["create","get","list"],
                 "readableFields":["household-code"],"writableFields":["household-code"],
                 "readPaths":[{"path":"people","readableFields":["person-code"],"sortableFields":["person-code"],"allowCount":true}]
               },
-              {"entity":"membership","rowBoundaries":[],"operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]},
+              {"entity":"membership","rowBoundaries":"unrestricted","operations":["create"],"readableFields":["household","person"],"writableFields":["household","person"]},
               {
-                "entity":"person","rowBoundaries":[],"operations":["create","get","list"],
+                "entity":"person","rowBoundaries":"unrestricted","operations":["create","get","list"],
                 "readableFields":["sensitive-note"],"writableFields":["person-code","sensitive-note"]
               }
             ]

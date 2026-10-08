@@ -183,7 +183,7 @@ accessProfiles:
     requiredPurposes: [asset-correction]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
         readableFields: [placement, proposed-site, reason]
         writableFields: [placement, proposed-site, reason]
@@ -194,7 +194,7 @@ accessProfiles:
     requiredPurposes: [asset-correction-review]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [placement, proposed-site, reason]
         readableRequestFields: [reason, review_state]
@@ -204,12 +204,12 @@ accessProfiles:
     requiredPurposes: [asset-correction-apply]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, apply_request]
         readableFields: [placement, proposed-site, reason]
         applyTargets:
           - entity: asset-placement
-            rowBoundaries: []
+            rowBoundaries: unrestricted
 ```
 
 The submitter is the default for shared request reads.
@@ -324,7 +324,7 @@ accessProfiles:
         readableFields: [record, licensed-activities]
         writableFields: [record, licensed-activities]
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         submitterTargets: [professional-license]
 ```
 

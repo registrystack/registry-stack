@@ -820,7 +820,7 @@ const FIXTURE_HEAD: &str = r#"{
 
 const FIXTURE_TAIL: &str = r#"
   "accessProfiles":[{
-    "id":"operator","default":true,"principalClaim":"registry_principal",
+    "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
     "requiredPurposes":["case-management","case-review"],
     "permissions":[{
       "entity":"widget","operations":["create","get","patch","batch"],

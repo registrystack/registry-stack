@@ -4270,7 +4270,7 @@ fn statistics_registry_source() -> Value {
             ]
         }],
         "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","permissions":[{
+            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
                 "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,
@@ -4279,18 +4279,18 @@ fn statistics_registry_source() -> Value {
             {"id":"analyst-wide","principalClaim":"principal","requiredScopes":["statistics.wide"],"permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
-                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":[]
+                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
             }]},
             {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":[{
                 "entity":"record","operations":["list"],
                 "readableFields":["subject","active","category","event-date","jurisdiction"],
-                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":[]
+                "filterableFields":["subject","active","category","event-date","jurisdiction"],"allowCount":true,"rowBoundaries":"unrestricted"
             }]},
-            {"id":"seed","principalClaim":"principal","permissions":[{
+            {"id":"seed","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["create"],
-                "writableFields":["subject","active","category","event-date","jurisdiction"],"rowBoundaries":[]
+                "writableFields":["subject","active","category","event-date","jurisdiction"],"rowBoundaries":"unrestricted"
             }]},
-            {"id":"reader","principalClaim":"principal","permissions":[]}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}
         ],
         "vocabularies":[
             {"id":"category","values":["a","b"]},
@@ -4328,15 +4328,15 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[
-            {"id":"analyst","default":true,"principalClaim":"principal","permissions":[{
+            {"id":"analyst","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
-                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":[]
+                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
             }]},
             {"id":"publisher","principalClaim":"principal","requiredScopes":["statistics.publish"],"permissions":[{
                 "entity":"record","operations":["list"],"readableFields":["active","category","event-date"],
-                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":[]
+                "filterableFields":["active","category","event-date"],"allowCount":true,"rowBoundaries":"unrestricted"
             }]},
-            {"id":"reader","principalClaim":"principal","permissions":[]}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}
         ],
         "vocabularies":[{"id":"category","values":codes}],
         "statisticalDatasets":[{

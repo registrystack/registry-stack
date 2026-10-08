@@ -494,21 +494,21 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
             "permissions":[{
               "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             },{
               "entity":"child","operations":["create","get"],"readableFields":["parent","alternate-parent","name"],"writableFields":["parent","alternate-parent","name"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             },{
               "entity":"unique-entry","operations":["create","get"],"readableFields":["scope","code"],"writableFields":["scope","code"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             },{
               "entity":"period","operations":["create","get"],
               "readableFields":["scope","valid-from","valid-to"],
               "writableFields":["scope","valid-from","valid-to"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,

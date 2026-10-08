@@ -329,7 +329,8 @@ fn self_issued_consent_binds_the_subject_through_the_principal_link() {
 
     // The link must be bound to the caller's principal in every permission.
     let mut value = self_issued_project();
-    value["accessProfiles"][3]["permissions"][0]["targets"][0]["rowBoundaries"] = json!([]);
+    value["accessProfiles"][3]["permissions"][0]["targets"][0]["rowBoundaries"] =
+        json!("unrestricted");
     assert_refused(&value, "breg.consent.issuer-self-binding");
 
     // The subject must come from the input the link requirement checks.
@@ -441,7 +442,10 @@ fn gated_permissions_are_read_only() {
 #[test]
 fn gated_profiles_declare_purposes_from_the_record_vocabulary() {
     let mut value = source();
-    value["accessProfiles"][FOOD_TARGETING]["requiredPurposes"] = json!([]);
+    value["accessProfiles"][FOOD_TARGETING]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
     assert_refused(&value, "breg.consent.require-purpose");
 
     let mut value = source();
@@ -488,7 +492,7 @@ fn consent_key_references_the_consent_subject_entity() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity": "household-member", "rowBoundaries": [], "operations": ["get"],
+            "entity": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
             "readableFields": ["household"],
             "requireConsent": [{"record": "consent-decision", "on": "household"}]
         }));
@@ -562,7 +566,7 @@ fn read_paths_cannot_reach_a_gated_entity() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "entity": "household-member", "rowBoundaries": [], "operations": ["get"],
+            "entity": "household-member", "rowBoundaries": "unrestricted", "operations": ["get"],
             "readableFields": ["household"],
             "requireConsent": [{"record": "consent-decision", "on": "id"}]
         }));
@@ -747,7 +751,7 @@ fn consent_claim_lookup(field: &str, claim: &str) -> Value {
         "requesterClients": ["wfp-scope"], "requiredScopes": ["consent:read"],
         "permissions": [{
             "entity": "consent-decision", "operations": ["lookup"],
-            "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": [],
+            "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": "unrestricted",
             "lookups": [{"selector": field, "valueOrigin": "verified_claim", "claimMapping": {field: claim}}]
         }]
     }));
@@ -815,20 +819,20 @@ fn change_request_project(apply_claim: &str, presence_claim: &str) -> Value {
             }
         }],
         "accessProfiles": [{
-            "id": "asset-reader", "principalClaim": "principal",
+            "id": "asset-reader", "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "asset", "operations": ["get"], "readableFields": ["label"],
-                "rowBoundaries": [],
+                "rowBoundaries": "unrestricted",
                 "requestPresence": [{"requestType": "asset-request", "rowBoundaries": [
                     {"field": "label", "claim": presence_claim, "operator": "in"}
                 ]}]
             }]
         }, {
-            "id": "reviewer", "default": true, "principalClaim": "principal",
+            "id": "reviewer", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "asset-request", "operations": ["get", "submit_request", "apply_request"],
                 "readableFields": ["asset", "label"], "writableFields": ["asset", "label"],
-                "rowBoundaries": [],
+                "rowBoundaries": "unrestricted",
                 "applyTargets": [{"entity": "asset", "rowBoundaries": [
                     {"field": "label", "claim": apply_claim, "operator": "in"}
                 ]}]

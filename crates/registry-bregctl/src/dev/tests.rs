@@ -2562,11 +2562,11 @@ fn a_comment_in_a_handler_script_is_a_change_because_the_package_ships_its_bytes
     let (_temporary, project) = write_init_project();
     edit_authored(
         &project.join("registry.yaml"),
-        "    permissions:\n      - entity: record-group\n        rowBoundaries: []\n        \
+        "    permissions:\n      - entity: record-group\n        rowBoundaries: unrestricted\n        \
          operations: [create, get, list]\n",
         "    permissions:\n      - action: create-record-group\n        operations: [invoke]\n        \
-         targets: [{entity: record-group, rowBoundaries: []}]\n        results: [group]\n      \
-         - entity: record-group\n        rowBoundaries: []\n        \
+         targets: [{entity: record-group, rowBoundaries: unrestricted}]\n        results: [group]\n      \
+         - entity: record-group\n        rowBoundaries: unrestricted\n        \
          operations: [create, get, list]\n",
     );
     append_comment(
@@ -3774,7 +3774,7 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
         "readableFields":["code", "label"],
         "writableFields":["code", "label"],
         "requestVisibility":"owner",
-        "rowBoundaries":[]
+        "rowBoundaries":"unrestricted"
     }));
     definition["accessProfiles"]
         .as_array_mut()
@@ -3790,8 +3790,8 @@ fn local_review_executor_uses_refreshing_service_identity_for_this_registry() {
                 "entity":"record-change",
                 "operations":["get", "apply_request"],
                 "readableFields":["code", "label"],
-                "rowBoundaries":[],
-            "applyTargets":[{"entity":"automatic-record", "rowBoundaries":[]}],
+                "rowBoundaries":"unrestricted",
+            "applyTargets":[{"entity":"automatic-record", "rowBoundaries":"unrestricted"}],
                 "readableRequestFields":["review_state"]
             }]
         }));

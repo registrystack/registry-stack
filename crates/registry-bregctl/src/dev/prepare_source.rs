@@ -593,6 +593,13 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     if registry["accessProfiles"].is_null() {
         registry["accessProfiles"] = json!([]);
     }
+    // A row reach that binds no row is written as the keyword, never as an
+    // empty list.
+    let row_boundaries = if row_boundaries.is_empty() {
+        json!("unrestricted")
+    } else {
+        Value::Array(row_boundaries)
+    };
     registry["accessProfiles"].as_array_mut().context("access profiles missing")?.push(json!({
         "id":args.access_profile,"principalClaim":"registry_principal","requiredScopes":[scope],"requiredPurposes":["evidence-source-read"],
         "permissions":[{"entity":entity_id,"operations":["lookup"],"readableFields":grant_fields,
@@ -966,6 +973,11 @@ mod tests {
                 .unwrap();
             let mut permission = permissions.as_array_mut().unwrap().remove(0);
             permission.as_object_mut().unwrap().remove("entity");
+            // A module entity profile takes the compiled row reach, where an
+            // empty list reaches every row.
+            if permission["rowBoundaries"] == json!("unrestricted") {
+                permission["rowBoundaries"] = json!([]);
+            }
             operator
                 .as_object_mut()
                 .unwrap()

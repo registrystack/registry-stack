@@ -557,7 +557,7 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
         }],
         "accessProfiles": [
             {
-                "id": "operator", "default": true, "principalClaim": "registry_principal",
+                "id": "operator", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "requiredPurposes": ["case-management"],
                 "permissions": [{
                     "entity": "widget", "operations": ["create", "get", "patch", "batch"],
@@ -569,11 +569,11 @@ fn fixture_registry(batch_maximum_bytes: u32) -> Arc<registry_breg::CompiledRegi
                 }]
             },
             {
-                "id": "label-reader", "principalClaim": "registry_principal",
+                "id": "label-reader", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": "widget", "operations": ["get", "list"],
                     "readableFields": ["label"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             }
         ]

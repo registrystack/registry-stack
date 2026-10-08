@@ -1233,7 +1233,7 @@ fn complete_extension_surface_modules_are_order_independent() {
     let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "rowBoundaries": []}],"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"kind":"url","destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{"rowBoundaries": "unrestricted", "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -1833,12 +1833,13 @@ fn vocabulary_registry(vocabulary: &str, values: &[&str]) -> CompiledRegistry {
             "id": "writer",
             "default": true,
             "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["status"],
                 "writableFields": ["status"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -1902,12 +1903,13 @@ fn field_registry(field: serde_json::Value) -> CompiledRegistry {
             "id": "writer",
             "default": true,
             "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": ["note"],
                 "writableFields": ["note"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -2417,10 +2419,10 @@ fn project_planner_build_request() -> PackageBuildRequest {
             }}
           }}],
           "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"principal","permissions":[
-              {{"rowBoundaries": [], "entity":"target","operations":["get","list"],"readableFields":["label"]}},
-              {{"rowBoundaries": [], "entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
-                "applyTargets":[{{"rowBoundaries": [], "entity":"target"}}]
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[
+              {{"rowBoundaries": "unrestricted", "entity":"target","operations":["get","list"],"readableFields":["label"]}},
+              {{"rowBoundaries": "unrestricted", "entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
+                "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"target"}}]
               }}
             ]
           }}]
@@ -3027,7 +3029,7 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
     source["accessProfiles"].as_array_mut().unwrap().push(serde_json::json!({
         "id":"source","principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
         "permissions":[{"entity":"record","operations":["lookup"],"readableFields":["code","status"],
-            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":[]}]}));
+            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":"unrestricted"}]}));
     let candidate = compile(&source);
     let changes = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
     let plan = change_set_to_applicable_migration_plan(&changes)
@@ -3063,8 +3065,8 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
                       {"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
     source["accessProfiles"][0]["permissions"].as_array_mut().unwrap().extend([
-        serde_json::json!({"entity":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":[]}),
-        serde_json::json!({"entity":"link","operations":["get"],"readableFields":["record","child"],"rowBoundaries":[]})
+        serde_json::json!({"entity":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":"unrestricted"}),
+        serde_json::json!({"entity":"link","operations":["get"],"readableFields":["record","child"],"rowBoundaries":"unrestricted"})
     ]);
     let compile = |source: &serde_json::Value| {
         let project = parse_project_yaml(&serde_json::to_vec(source).unwrap()).unwrap();

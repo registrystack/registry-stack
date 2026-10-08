@@ -56,7 +56,7 @@ Normal stop/start preserves records, package, and credentials. Do not remove dat
 or change the retained registry's model or client declarations to add Evidence.
 
 The source profile intentionally permits registry-wide exact lookups in this
-synthetic model, expressed as `rowBoundaries: []`. It cannot create or patch
+synthetic model, expressed as `rowBoundaries: unrestricted`. It cannot create or patch
 records, and cannot read `label`. The operator profile can maintain those fields.
 The export requests `status` and only the chosen selector's identity field;
 `registration-number` remains the logical identifier while `registrationNumber`

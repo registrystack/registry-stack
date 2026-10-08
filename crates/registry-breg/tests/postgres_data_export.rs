@@ -377,7 +377,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "hooks":[{"phase":"after","id":"entry-created","trigger":"created","projection":["code"]}]
         }],
         "accessProfiles":[{
-            "id":PROFILE, "principalClaim":"registry_principal",
+            "id":PROFILE, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["data-export"],
             "permissions":[{
                 "entity":"entry",

@@ -1054,7 +1054,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
           ],
           "accessProfiles":[
             {{
-              "id":"steward","default":true,"principalClaim":"registry_principal",
+              "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
@@ -1072,7 +1072,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
               }}]
             }},
             {{
-              "id":"submitter","default":true,"principalClaim":"registry_principal",
+              "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
@@ -1083,7 +1083,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
               }}]
             }},
             {{
-              "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
+              "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
               "permissions":[{{
                 "entity":"correction-request",
                 "operations":["get","list"],
@@ -1092,7 +1092,7 @@ fn project_bytes_for_variant(variant: Variant) -> Vec<u8> {
               }}]
             }},
             {{
-              "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+              "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
               "permissions":[{{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],

@@ -604,7 +604,7 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
             ]
           }}],
           "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{{
               "entity":"widget","operations":[{operations}],

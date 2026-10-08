@@ -51,15 +51,15 @@ fn change_control_direct_write_grant_identifies_entity_and_profile() {
               "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"asset-operator","principalClaim":"principal","permissions":[{
+            "id":"asset-operator","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -91,10 +91,10 @@ fn change_control_required_for_empty_identifies_entity() {
               "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -126,10 +126,10 @@ fn change_request_review_authority_invalid_identifies_entity_and_binding() {
               "review":{"authority":"Casework","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -163,10 +163,10 @@ fn change_request_effect_paths_use_index_when_id_missing_and_id_when_present() {
             ],"review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","apply_request"],"readableFields":["asset","label"],
-              "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"asset", "rowBoundaries": "unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -202,9 +202,9 @@ fn change_request_submit_operation_missing_identifies_entity() {
               "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
           }],
           "accessProfiles":[{
-            "id":"asset-placement-reader","default":true,"principalClaim":"principal","permissions":[{
+            "id":"asset-placement-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"asset-placement-request","operations":["get"],"readableFields":["asset","label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,

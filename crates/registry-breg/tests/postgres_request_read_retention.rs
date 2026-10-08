@@ -1577,7 +1577,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           ],
           "accessProfiles":[
             {
-              "id":"operator","default":true,"principalClaim":"registry_principal",
+              "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"site",
                 "operations":["create","get","list"],
@@ -1600,7 +1600,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"request-only","principalClaim":"registry_principal",
+              "id":"request-only","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get"],
@@ -1609,22 +1609,22 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               }]
             },
             {
-              "id":"public-request","principalClaim":"registry_principal",
+              "id":"public-request","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
               }]
             },
             {
-              "id":"snapshot-reader","principalClaim":"registry_principal",
+              "id":"snapshot-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
               "permissions":[{
                 "entity":"correction-request",
                 "operations":["snapshot"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
                 "allowCount":true,
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
               }]
             }
           ]

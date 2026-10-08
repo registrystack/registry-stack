@@ -160,6 +160,7 @@ accessProfiles:
   - id: operator
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
       - entity: holder
@@ -173,7 +174,7 @@ accessProfiles:
         rowBoundaries:
           - {field: jurisdiction, claim: jurisdiction, operator: equals}
       - entity: note
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [text]
         writableFields: [text]
@@ -196,6 +197,7 @@ accessProfiles:
               - {field: jurisdiction, claim: jurisdiction, operator: equals}
   - id: applier
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [case-management]
     permissions:
       - entity: dossier-request

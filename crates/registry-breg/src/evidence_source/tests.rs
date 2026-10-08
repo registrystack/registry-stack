@@ -276,7 +276,7 @@ fn membership_behavior_reaches_helper_semantics_source_fields_and_select_authori
     );
     let mut changed_policy = original.clone();
     changed_policy["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({
-        "entity":"membership","operations":["get"],"readableFields":["active"],"rowBoundaries":[]
+        "entity":"membership","operations":["get"],"readableFields":["active"],"rowBoundaries":"unrestricted"
     }));
     assert_ne!(
         before.behavior_revision,
@@ -320,7 +320,7 @@ fn reached_derived_source_consumes_its_membership_helper() {
             {"id":"enabled","type":"boolean","classification":"internal"}]
     }));
     original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({
-        "entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":[],
+        "entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted",
         "membershipBoundaries":boundary
     }));
     let sql = "SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
@@ -393,12 +393,12 @@ fn reached_source_select_authority_is_part_of_consumed_behavior() {
     original["entities"].as_array_mut().unwrap().push(json!({"id":"flag","primaryDataset":"test-dataset","route":"flags","mutationMode":"mutable","fields":[
         {"id":"code","type":"string","maxLength":32,"classification":"internal"},
         {"id":"enabled","type":"boolean","classification":"internal"}]}));
-    original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({"entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":[]}));
+    original["accessProfiles"][0]["permissions"].as_array_mut().unwrap().push(json!({"entity":"flag","operations":["get"],"readableFields":["code","enabled"],"rowBoundaries":"unrestricted"}));
     let sql="SELECT r.id AS id, f.enabled AS active FROM registry_source.record r JOIN registry_source.flag f ON f.code = r.code";
     let mut selection = options();
     selection.fields = vec!["active".into()];
     let before = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
-    original["accessProfiles"][0]["permissions"][1] = json!({"entity":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":[]});
+    original["accessProfiles"][0]["permissions"][1] = json!({"entity":"flag","operations":["create"],"writableFields":["code","enabled"],"rowBoundaries":"unrestricted"});
     let after = export_evidence_source(&compiled(&original, sql), &selection).unwrap();
     assert_ne!(
         before.behavior_revision, after.behavior_revision,
@@ -510,17 +510,17 @@ fn refuses_change_request_lifecycle_entities() {
         .as_array_mut()
         .unwrap()
         .push(json!({"id":"record-request-steward","principalClaim":"principal","requiredScopes":["registry.write"],
-            "permissions":[{"entity":"record-request","rowBoundaries":[],
+            "permissions":[{"entity":"record-request","rowBoundaries":"unrestricted",
                 "operations":["create","get","submit_request","apply_request"],
                 "readableFields":["code","subject","new-status"],
                 "writableFields":["code","subject","new-status"],
-                "applyTargets":[{"entity":"record","rowBoundaries":[]}]}]}));
+                "applyTargets":[{"entity":"record","rowBoundaries":"unrestricted"}]}]}));
     original["accessProfiles"][0]["permissions"]
         .as_array_mut()
         .unwrap()
         .push(
             json!({"entity":"record-request","operations":["lookup"],"readableFields":["code"],
-            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":[]}),
+            "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":"unrestricted"}),
         );
     let mut selection = options();
     selection.entity = "record-request".into();

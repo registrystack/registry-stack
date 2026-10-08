@@ -1029,7 +1029,7 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
         "permissions":[{
           "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
           "filterableFields":["household-code","jurisdiction"],"sortableFields":["household-code"],"allowCount":true,
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }]
       }]
     }"#

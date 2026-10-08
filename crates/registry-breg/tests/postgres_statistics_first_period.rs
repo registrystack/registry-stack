@@ -36,7 +36,7 @@ async fn moving_first_period_forward_hides_old_releases_without_changing_the_def
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
         "registry":{"id":"statistics-load","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://load.example.test"},
         "entities":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable","fields":[{"id":"active","type":"boolean","required":true,"classification":"internal"},{"id":"event-date","type":"date","required":true,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"publisher","principalClaim":"principal","permissions":[{"entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":[],"readableFields":["active","event-date"],"filterableFields":["active","event-date"]}]},{"id":"reader","principalClaim":"principal","permissions":[]}],
+        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted","readableFields":["active","event-date"],"filterableFields":["active","event-date"]}]},{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}],
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null","period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},"dimensions":["active"],"disclosure":{"minimumCount":5,"roundingBase":5},"live":["publisher"],"releases":{"publisher":"publisher","readers":["reader"]}}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();

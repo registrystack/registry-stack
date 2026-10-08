@@ -74,13 +74,8 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
     let mutations = [
         (
             "/accessProfiles/0/requiredScopes",
-            json!([]),
+            json!("unrestricted"),
             "breg.access.requirements-scope-missing",
-        ),
-        (
-            "/accessProfiles/0/requiredPurposes",
-            json!([]),
-            "breg.access.requirements-purpose-widened",
         ),
         (
             "/accessProfiles/0/requiredPurposes",
@@ -89,7 +84,7 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
         ),
         (
             "/accessProfiles/0/permissions/0/rowBoundaries",
-            json!([]),
+            json!("unrestricted"),
             "breg.access.requirements-row-boundary-missing",
         ),
         (
@@ -108,6 +103,12 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
         *value.pointer_mut(path).unwrap() = replacement;
         assert_refused(&value, code);
     }
+    let mut unnarrowed = source();
+    unnarrowed["accessProfiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
+    assert_refused(&unnarrowed, "breg.access.requirements-purpose-widened");
     let mut stricter = source();
     stricter["entities"][0]["accessRequirements"]["allowedPurposes"] =
         json!(["administration", "review"]);
@@ -205,7 +206,7 @@ fn additional_profile_cannot_omit_entity_requirements() {
     let mut value = source();
     let mut additional = value["accessProfiles"][0].clone();
     additional["id"] = json!("another-reader");
-    additional["requiredScopes"] = json!([]);
+    additional["requiredScopes"] = json!("unrestricted");
     value["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -324,7 +325,7 @@ fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
     });
 
     compile(&value).unwrap();
-    value["accessProfiles"][0]["requiredScopes"] = json!([]);
+    value["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
     assert_refused(&value, "breg.access.requirements-scope-missing");
 }
 
@@ -335,12 +336,11 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
-    value["accessProfiles"][0]["requiredScopes"] = json!([]);
-    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!([]);
+    value["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
+    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
     value["accessProfiles"][0]["permissions"][0]["allowDataExport"] = json!(true);
     let compiled = compile(&value).unwrap();
     for code in [
-        "breg.access.profile-no-required-scope",
         "breg.access.profile-unrestricted-collection",
         "breg.access.profile-data-export",
     ] {
@@ -550,9 +550,12 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
         .as_object_mut()
         .unwrap()
         .remove("accessRequirements");
-    value["accessProfiles"][0]["requiredScopes"] = json!([]);
-    value["accessProfiles"][0]["requiredPurposes"] = json!([]);
-    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!([]);
+    value["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
+    value["accessProfiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
+    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!("unrestricted");
     value["accessProfiles"][0]["permissions"][0]["allowDataExport"] = json!(true);
     let candidate = compile(&value).unwrap();
     let diff =

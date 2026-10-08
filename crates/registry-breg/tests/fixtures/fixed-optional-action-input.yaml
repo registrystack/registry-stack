@@ -21,8 +21,9 @@ accessProfiles:
   - id: registrar
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - action: create-entry
         operations: [invoke]
-        targets: [{entity: entry, rowBoundaries: []}]
+        targets: [{entity: entry, rowBoundaries: unrestricted}]
         results: [created]

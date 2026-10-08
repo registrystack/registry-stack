@@ -69,7 +69,7 @@ fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
     reviewer["permissions"][1]["applyTargets"]
         .as_array_mut()
         .expect("reviewer apply targets")
-        .push(json!({"entity":"enrolment", "rowBoundaries":[]}));
+        .push(json!({"entity":"enrolment", "rowBoundaries":"unrestricted"}));
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("source parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("create-only request with guarded owner target compiles")

@@ -41,7 +41,7 @@ fn create_only_guard_source() -> Value {
     reviewer["permissions"][1]["applyTargets"]
         .as_array_mut()
         .expect("reviewer apply targets")
-        .push(json!({"entity":"enrolment", "rowBoundaries":[]}));
+        .push(json!({"entity":"enrolment", "rowBoundaries":"unrestricted"}));
     candidate
 }
 

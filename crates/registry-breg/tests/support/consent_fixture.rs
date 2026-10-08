@@ -98,8 +98,8 @@ pub fn self_issued_project() -> Value {
             "action": "withdraw-consent", "operations": ["invoke"],
             "targets": [
                 {"entity": "consent-subject-link", "rowBoundaries": [{"field": "principal", "claim": "principal", "operator": "equals"}]},
-                {"entity": "person", "rowBoundaries": []},
-                {"entity": "consent-decision", "rowBoundaries": []}
+                {"entity": "person", "rowBoundaries": "unrestricted"},
+                {"entity": "consent-decision", "rowBoundaries": "unrestricted"}
             ],
             "results": ["decision"]
         }]

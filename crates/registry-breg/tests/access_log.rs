@@ -55,31 +55,34 @@ fn source() -> Value {
                 "id": "subject",
                 "default": true,
                 "principalClaim": "registry_principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": "person",
                     "operations": ["get", "list"],
                     "readableFields": ["citizen-id", "display-name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             },
             {
                 "id": "investigator",
                 "principalClaim": "registry_principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": "person",
                     "operations": ["get"],
                     "readableFields": ["display-name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             },
             {
                 "id": "writer",
                 "principalClaim": "registry_principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": "person",
                     "operations": ["create"],
                     "writableFields": ["citizen-id", "display-name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             }
         ]
@@ -139,11 +142,12 @@ fn add_relationship_reader(value: &mut Value) {
     let profile = json!({
         "id": "relationship-investigator",
         "principalClaim": "registry_principal",
+        "requiredScopes": "unrestricted",
         "permissions": [{
             "entity": "case",
             "operations": ["get"],
             "readableFields": ["case-code"],
-            "rowBoundaries": [],
+            "rowBoundaries": "unrestricted",
             "readPaths": [{"path": "people", "readableFields": ["display-name"]}]
         }]
     });

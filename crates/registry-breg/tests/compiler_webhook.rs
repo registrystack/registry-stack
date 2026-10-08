@@ -132,31 +132,34 @@ fn change_request_event_project() -> Value {
             "id":"submitter",
             "default":true,
             "principalClaim":"registry_principal",
+            "requiredScopes":"unrestricted",
             "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
                 "readableFields":["placement","proposed-site","reason"],
                 "writableFields":["placement","proposed-site","reason"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         },{
             "id":"reviewer",
             "principalClaim":"registry_principal",
+            "requiredScopes":"unrestricted",
             "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["get","list"],
                 "readableFields":["placement","proposed-site","reason"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         },{
             "id":"applier",
             "principalClaim":"registry_principal",
+            "requiredScopes":"unrestricted",
             "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["get","list","apply_request"],
                 "readableFields":["placement","proposed-site","reason"],
-                "applyTargets":[{"entity":"asset-placement","rowBoundaries":[]}],
-              "rowBoundaries": []
+                "applyTargets":[{"entity":"asset-placement","rowBoundaries":"unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
         }]
     })

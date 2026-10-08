@@ -1635,13 +1635,13 @@ mod tests {
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["review"],
             "permissions":[{
               "entity":"entry","operations":["create"],
               "readableFields":["tenant","serial-code"],
               "writableFields":["tenant","serial-code"],
-              "rowBoundaries":[]
+              "rowBoundaries":"unrestricted"
             }]
           }]
         }"#;
@@ -1764,13 +1764,13 @@ mod tests {
                 "fields":[{fields}]
               }}],
               "accessProfiles":[{{
-                "id":"operator","default":true,"principalClaim":"registry_principal",
+                "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "requiredPurposes":["review"],
                 "permissions":[{{
                   "entity":"entry","operations":["create"],
                   "readableFields":[{readable}],
                   "writableFields":[{readable}],
-                  "rowBoundaries":[]
+                  "rowBoundaries":"unrestricted"
                 }}]
               }}]
             }}"#

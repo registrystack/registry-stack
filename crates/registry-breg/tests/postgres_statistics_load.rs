@@ -50,11 +50,11 @@ async fn million_unit_three_dimension_statistics_measurement() {
                 {"id":"event-date","type":"date","required":true,"classification":"internal"}]}],
         "vocabularies":[{"id":"category","values":["a","b","c","d"]},
             {"id":"region","values":["north","south","east","west"]}],
-        "accessProfiles":[{"id":"publisher","principalClaim":"principal","permissions":[{
-            "entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":[],
+        "accessProfiles":[{"id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":"unrestricted",
             "readableFields":["active","category","region","event-date"],
             "filterableFields":["active","category","region","event-date"]}]},
-            {"id":"reader","principalClaim":"principal","permissions":[]}],
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}],
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null",
             "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["active","category","region"],

@@ -566,12 +566,12 @@ mod tests {
         }
         if trigger == EventTrigger::RequestLifecycle {
             project["accessProfiles"] = json!([{
-                "id":"operator", "default":true, "principalClaim":"registry_principal",
+                "id":"operator", "default":true, "principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "permissions":[{
                     "entity":"record", "operations":["create", "get", "list", "patch", "submit_request", "apply_request"],
                     "readableFields":["label", "target", "proposed-label"],
-                    "writableFields":["label", "target", "proposed-label"], "rowBoundaries":[],
-                    "applyTargets":[{"entity":"target-record", "rowBoundaries":[]}]
+                    "writableFields":["label", "target", "proposed-label"], "rowBoundaries":"unrestricted",
+                    "applyTargets":[{"entity":"target-record", "rowBoundaries":"unrestricted"}]
                 }]
             }]);
         }

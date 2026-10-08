@@ -50,9 +50,9 @@ accessProfiles:
             rowBoundaries:
               - {field: owner, claim: registry_principal, operator: equals}
           - entity: initial-operator-assignment
-            rowBoundaries: []
+            rowBoundaries: unrestricted
           - entity: operator
-            rowBoundaries: []
+            rowBoundaries: unrestricted
         results: [facility, initial-assignment]
   - id: facility-transfer
     principalClaim: registry_principal
@@ -83,7 +83,7 @@ accessProfiles:
     requiredPurposes: [facility-administration]
     permissions:
       - entity: operator
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, patch]
         readableFields: [operator-code, status]
         writableFields: [operator-code, status]

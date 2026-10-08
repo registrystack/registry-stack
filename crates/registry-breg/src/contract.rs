@@ -20,6 +20,8 @@ use serde_json::Value;
 use crate::diagnostics::{CompileFailure, Diagnostic};
 pub use crate::unique_set::UniqueSet;
 
+mod sentinel;
+
 /// Serialize a union read by `tagged_union!` in its authored form: one
 /// mapping whose `tag` member names the variant. `external` is the variant as
 /// serde's externally tagged form produces it, the shape the `remote = "Self"`
@@ -602,7 +604,16 @@ pub struct EntitySource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<GeoJsonSource>,
     /// Mandatory request-access requirements checked against every profile, including module contributions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "sentinel::access_requirements",
+        serialize_with = "sentinel::serialize_access_requirements",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<sentinel::AuthoredAccessRequirements>")
+    )]
     pub access_requirements: Option<AccessRequirementsSource>,
     /// Subject-facing record access history, separate from the operational audit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -826,7 +837,16 @@ pub struct EntityExtensionSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geojson: Option<GeoJsonSource>,
     /// Add mandatory requirements only when the entity has none; replacing them is refused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "sentinel::access_requirements",
+        serialize_with = "sentinel::serialize_access_requirements",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<sentinel::AuthoredAccessRequirements>")
+    )]
     pub access_requirements: Option<AccessRequirementsSource>,
     #[serde(default)]
     pub fields: Vec<FieldSource>,
@@ -3222,6 +3242,10 @@ pub struct MembershipBoundarySource {
 }
 
 /// Compile-time requirements, not grants. Profiles must explicitly satisfy them.
+///
+/// This is the form the compiler holds and compiled artifacts carry, where an
+/// empty member demands nothing. An author writes
+/// `sentinel::AuthoredAccessRequirements`, which omits such a member.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -3444,17 +3468,39 @@ pub struct ProjectAccessProfileSource {
     pub default: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
-    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    /// The OAuth clients whose tokens may select this profile. Omit to accept every client.
+    #[serde(
+        default,
+        deserialize_with = "sentinel::profile_clients",
+        skip_serializing_if = "UniqueSet::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "sentinel::Listed<UniqueSet<String>, sentinel::ProfileClients>")
+    )]
     pub requester_clients: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_grant: Option<TaskGrantSource>,
     #[serde(default)]
     pub principal_claim: Option<String>,
-    #[serde(default)]
-    /// All listed scopes must be present in the verified token.
+    /// The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present.
+    // Held as the listed scopes, so `unrestricted` is the empty set.
+    #[serde(
+        deserialize_with = "sentinel::required_scopes",
+        serialize_with = "sentinel::serialize_required_scopes"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "sentinel::RequiredScopes"))]
     pub required_scopes: UniqueSet<String>,
-    #[serde(default)]
-    /// The verified token's purpose must match one listed value. Empty means no purpose restriction.
+    /// The verified token's purpose must match one listed value. Omit to accept every purpose.
+    #[serde(
+        default,
+        deserialize_with = "sentinel::profile_purposes",
+        skip_serializing_if = "UniqueSet::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "sentinel::Listed<UniqueSet<String>, sentinel::ProfilePurposes>")
+    )]
     pub required_purposes: UniqueSet<String>,
     #[serde(default)]
     pub permissions: Vec<AccessPermissionSource>,
@@ -3509,7 +3555,8 @@ pub struct AccessPermissionSource {
     pub sortable_fields: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<SpatialQueryPermissionSource>,
-    #[serde(default)]
+    /// Row reach, written as `unrestricted` when it holds no boundary.
+    #[serde(serialize_with = "sentinel::serialize_row_boundaries")]
     pub row_boundaries: Vec<RowBoundarySource>,
     /// Current active membership required for each stored reference key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3524,12 +3571,20 @@ pub struct AccessPermissionSource {
     pub lookups: Vec<LookupPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        serialize_with = "sentinel::serialize_apply_targets",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub apply_targets: Vec<ApplyTargetPermissionSource>,
     /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub submitter_targets: BTreeSet<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        serialize_with = "sentinel::serialize_request_presence",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<ActionTargetPermissionSource>,
@@ -3569,7 +3624,7 @@ struct RawAccessPermissionSource {
     sortable_fields: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spatial_queries: Option<SpatialQueryPermissionSource>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "sentinel::written_row_boundaries")]
     row_boundaries: Option<Vec<RowBoundarySource>>,
     #[serde(default)]
     membership_boundaries: Vec<MembershipBoundarySource>,
@@ -3582,11 +3637,11 @@ struct RawAccessPermissionSource {
     lookups: Vec<LookupPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     read_paths: Vec<ReadPathPermissionSource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, deserialize_with = "sentinel::apply_targets")]
     apply_targets: Vec<ApplyTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
     submitter_targets: UniqueSet<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, deserialize_with = "sentinel::request_presence")]
     request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     targets: Vec<ActionTargetPermissionSource>,
@@ -3613,7 +3668,7 @@ impl<'de> Deserialize<'de> for AccessPermissionSource {
         if !raw.entity.is_empty() && raw.row_boundaries.is_none() {
             return Err(Invalid::expected(
                 "an entity permission with rowBoundaries",
-                "Declare rowBoundaries on the permission; an explicit empty list grants every row.",
+                "Declare rowBoundaries on the permission: list the row boundaries that bind rows to the caller's claims, or write unrestricted to reach every row.",
             )
             .into_error());
         }
@@ -3693,7 +3748,8 @@ struct EntityAccessPermissionSourceSchema {
     sortable_fields: UniqueSet<String>,
     #[serde(default)]
     spatial_queries: Option<SpatialQueryPermissionSource>,
-    row_boundaries: Vec<RowBoundarySource>,
+    /// Row reach: `unrestricted`, or a list of at least one row boundary.
+    row_boundaries: sentinel::RowBoundaries,
     /// Current active membership required for each stored reference key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     membership_boundaries: Vec<MembershipBoundarySource>,
@@ -3707,11 +3763,11 @@ struct EntityAccessPermissionSourceSchema {
     #[serde(default)]
     read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default)]
-    apply_targets: Vec<ApplyTargetPermissionSource>,
+    apply_targets: Vec<sentinel::AuthoredApplyTarget>,
     #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
     submitter_targets: UniqueSet<String>,
     #[serde(default)]
-    request_presence: Vec<RequestPresencePermissionSource>,
+    request_presence: Vec<sentinel::AuthoredRequestPresence>,
     #[serde(default)]
     allow_count: bool,
     #[serde(default)]
@@ -3813,7 +3869,12 @@ pub enum RequestVisibilitySource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionTargetPermissionSource {
     pub entity: String,
-    /// Explicit row reach; an empty array intentionally permits all rows.
+    /// Row reach: `unrestricted`, or a list of at least one row boundary.
+    #[serde(
+        deserialize_with = "sentinel::row_boundaries",
+        serialize_with = "sentinel::serialize_row_boundaries"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "sentinel::RowBoundaries"))]
     pub row_boundaries: Vec<RowBoundarySource>,
 }
 

@@ -69,7 +69,7 @@ accessProfiles:
             claim: planning_zones
             operator: in
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, lookup]
         readableFields: [household-code]
         lookups:
@@ -83,7 +83,7 @@ accessProfiles:
     requiredScopes: [registry:sites:directory]
     permissions:
       - entity: asset-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [site-code, label]
 ```
@@ -93,10 +93,13 @@ Profile members:
 | Member | Effect |
 |---|---|
 | `principalClaim` | The explicitly selected token claim that identifies the caller in audit and workflow decisions. Required on every profile; it must match the runtime principal mapping. |
-| `requiredScopes`, `requiredPurposes` | Every listed scope, and one of the listed purposes, must be present in the token. Empty lists impose no restriction for that dimension. |
+| `requiredScopes` | Required on every profile. Every listed scope must be present in the token. Write `unrestricted` to require no scope; an empty list is refused. |
+| `requiredPurposes`, `requesterClients` | Optional. The token's purpose must be one of the listed purposes, and its client one of the listed clients. Omit a member to apply no restriction for that dimension; an empty list is refused, and so is `unrestricted`. |
 | `default: true` | The profile selected when a request names none. At most one default may expose a route. If several profiles expose a route and none is default, the request must name its profile. A sole profile is selected automatically. |
 
-A profile with no required scope raises `breg.access.profile-no-required-scope`, because any authenticated principal satisfying its purpose and row claims could then select it.
+A profile written with `requiredScopes: unrestricted` can be selected by any authenticated principal that satisfies its purpose, client, and row claims, so the breadth is a decision the file states.
+`check` reports `breg.access.profile-subsumes-narrower` when such a profile admits every token that another profile admits: a caller admitted there also reaches what the unrestricted profile grants by selecting it.
+An item spelled `*` or `unrestricted` inside a list of scopes, purposes, or clients names one entry, not a wildcard, and raises `breg.access.wildcard-spelled-item`.
 
 ## Grant operations, fields, and rows
 
@@ -109,8 +112,8 @@ Field ids in permissions are the authored ids, `asset-code`, not the API names, 
 A profile that grants `create` or `patch` without any writable field raises `breg.access.profile-no-writable-fields`, because every write naming a field would then be refused.
 
 Every entity permission declares `rowBoundaries` explicitly, as do action targets, review targets, apply targets, and request-presence permissions.
-Write `rowBoundaries: []` when the permission intentionally has no row restriction; omitting the member is an error.
-An empty list grants all rows within the other permissions, so use it only where that breadth is intended.
+Write `rowBoundaries: unrestricted` when the permission intentionally has no row restriction; omitting the member is an error, and so is an empty list.
+`unrestricted` grants all rows within the other permissions, so use it only where that breadth is intended.
 
 A row boundary compares a declared field with a verified token claim: `equals` against one claim value, or `in` against a claim carrying a list, which the token issuer must then issue as a JSON array.
 On reads, rows outside the boundary do not exist for the caller: a get returns 404, and a list omits them.
@@ -243,7 +246,7 @@ Add it to a read-only profile for the recipient's client:
       - entity: record
         operations: [get, list]
         readableFields: [code, label, status]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         requireConsent:
           - {record: record-consent-decision, on: id}
 ```

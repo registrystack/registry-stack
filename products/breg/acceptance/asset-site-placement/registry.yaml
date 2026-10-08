@@ -147,11 +147,12 @@ accessProfiles:
   - id: asset-operator
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes:
       - asset-management
     permissions:
       - entity: asset-item
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -167,7 +168,7 @@ accessProfiles:
           - label
           - asset-class
       - entity: asset-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -180,7 +181,7 @@ accessProfiles:
           - site-code
           - label
       - entity: asset-placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -197,7 +198,7 @@ accessProfiles:
           - valid-from
           - valid-to
       - entity: inspection-event
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -212,11 +213,12 @@ accessProfiles:
           - result
   - id: site-planner
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes:
       - site-planning
     permissions:
       - entity: asset-item
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - get
           - list
@@ -226,7 +228,7 @@ accessProfiles:
         filterableFields:
           - asset-code
       - entity: asset-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - get
           - list
@@ -236,7 +238,7 @@ accessProfiles:
         filterableFields:
           - site-code
       - entity: asset-placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get

@@ -2276,18 +2276,18 @@ fn change_request_project(
             }}
           }}{extra_entity}],
           "accessProfiles":[{{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
               "entity":"placement-correction-request",
               "operations":["get","list","submit_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}]
             }}]
           }},{{
-            "id":"request-applier","principalClaim":"principal","permissions":[{{
+            "id":"request-applier","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{{
               "entity":"placement-correction-request","operations":["get","apply_request"],
               "readableFields":["tenant","placement"],
               "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}],
-              "applyTargets":[{{"rowBoundaries": [], "entity":"placement"}}]
+              "applyTargets":[{{"rowBoundaries": "unrestricted", "entity":"placement"}}]
             }}]
           }}]
         }}"#

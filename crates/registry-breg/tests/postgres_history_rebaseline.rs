@@ -1341,13 +1341,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "id":"writer",
             "default":true,
             "principalClaim":"registry_principal",
+            "requiredScopes":"unrestricted",
             "requiredPurposes":["operations"],
             "permissions":[{
               "entity":"membership",
               "operations":["create","get","list","patch","snapshot"],
               "readableFields":["person","household","valid-from","valid-to"],
               "writableFields":["person","household","valid-from","valid-to"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,

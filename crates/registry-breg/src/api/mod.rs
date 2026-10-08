@@ -5780,8 +5780,8 @@ mod held_body_encryption_tests {
                     secret
                 ]
             }],
-            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","permissions":[{
-                "entity":"case","rowBoundaries":[],"operations":["get","list","create","patch"],
+            "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+                "entity":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
                 "readableFields":["label","secret"],"writableFields":["label","secret"]
             }]}]
         });

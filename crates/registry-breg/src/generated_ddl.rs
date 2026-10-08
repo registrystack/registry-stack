@@ -4489,10 +4489,10 @@ mod tests {
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"map-reader","default":true,"principalClaim":"principal","permissions":[{
+                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"site","operations":["get","list"],"readableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               }]
             }"#,

@@ -3501,11 +3501,11 @@ mod tests {
                 }
               ],
               "accessProfiles":[{
-                "id":"typed","default":true,"principalClaim":"registry_principal",
+                "id":"typed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                 "permissions":[
                   {
                     "entity":"parent-entry","operations":["get"],"readableFields":["name"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   },
                   {
                     "entity":"typed-entry","operations":["get"],
@@ -3741,6 +3741,7 @@ mod tests {
                 "id":"contact-registrar",
                 "default":true,
                 "principalClaim":"registry_principal",
+                "requiredScopes":"unrestricted",
                 "requiredPurposes":["contact-registration"],
                 "permissions":[{
                   "action":"rename-household-local",
@@ -3799,36 +3800,36 @@ mod tests {
               ],
               "accessProfiles":[
                 {
-                  "id":"steward","default":true,"principalClaim":"registry_principal",
+                  "id":"steward","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                   "permissions":[{
                     "entity":"asset-placement",
                     "operations":["get","list"],
                     "readableFields":["tenant","site"],
                     "requestPresence":[{"requestType":"placement-correction-request","rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]}],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 },
                 {
-                  "id":"submitter","default":true,"principalClaim":"registry_principal",
+                  "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
                   "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["create","get","list","patch","submit_request","revise_request"],
                     "readableFields":["placement","proposed-site","reason"],
                     "writableFields":["placement","proposed-site","reason"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 },
                 {
-                  "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
+                  "id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["review"],
                   "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["get","list"],
                     "readableFields":["placement","proposed-site","reason"],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 },
                 {
-                  "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
+                  "id":"applier","principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["apply"],
                   "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["get","apply_request"],
@@ -3837,7 +3838,7 @@ mod tests {
                       "entity":"asset-placement",
                       "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
                     }],
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                   }]
                 }
               ]

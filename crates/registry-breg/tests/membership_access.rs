@@ -51,12 +51,12 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         ),
         (
             "/accessProfiles/0/permissions/0/applyTargets",
-            json!([{"entity":"facility","rowBoundaries":[]}]),
+            json!([{"entity":"facility","rowBoundaries":"unrestricted"}]),
             "breg.access.membership-read-only",
         ),
         (
             "/accessProfiles/0/permissions/0/requestPresence",
-            json!([{"requestType":"request","rowBoundaries":[]}]),
+            json!([{"requestType":"request","rowBoundaries":"unrestricted"}]),
             "breg.access.membership-read-only",
         ),
         (

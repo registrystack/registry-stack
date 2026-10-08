@@ -217,7 +217,7 @@ accessProfiles:
           - produced-on
           - variety
           - source-lot
-        rowBoundaries: []
+        rowBoundaries: unrestricted
       - entity: plant-variety
         operations:
           - get
@@ -225,7 +225,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - variety-denomination
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -247,7 +247,7 @@ accessProfiles:
           - produced-on
           - variety
           - source-lot
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -266,7 +266,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - variety-denomination
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -290,7 +290,7 @@ accessProfiles:
           - reason
           - supporting-reference
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state
@@ -314,7 +314,7 @@ accessProfiles:
           - produced-on
           - variety
           - source-lot
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: plant-variety
         operations:
@@ -324,7 +324,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - variety-denomination
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: lot-number-correction
         operations:
@@ -335,10 +335,10 @@ accessProfiles:
           - lot-number
           - reason
           - supporting-reference
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         applyTargets:
           - entity: seed-lot
-            rowBoundaries: []
+            rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state

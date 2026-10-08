@@ -62,7 +62,7 @@ accessProfiles:
     requiredScopes: [registry.public]
     permissions:
       - entity: case
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]

@@ -142,11 +142,11 @@ fn compiled_spatial_registry() -> registry_breg::CompiledRegistry {
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"map-reader","default":true,"principalClaim":"principal","permissions":[{
+                "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"site","operations":["create","get","list","patch","tombstone"],
                   "readableFields":["code","location"],"writableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               }]
             }"#,
@@ -177,14 +177,14 @@ fn compiled_spatial_derived_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","permissions":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"site","operations":["create","get","list","patch"],
               "readableFields":["code","location","map-label"],
               "writableFields":["code","location"],
               "filterableFields":["map-label"],
               "sortableFields":["map-label"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -229,10 +229,10 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRe
             }]
           }],
           "accessProfiles":[{
-            "id":"map-reader","default":true,"principalClaim":"principal","permissions":[{
+            "id":"map-reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"zone","operations":["create","get","list"],
               "readableFields":["code","label"],"writableFields":["code","label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             },{
               "entity":"site","operations":["create","get","list","patch"],
               "readableFields":["code","zone","location","map-label"],
@@ -240,7 +240,7 @@ fn compiled_spatial_cross_entity_derived_registry() -> registry_breg::CompiledRe
               "filterableFields":["map-label"],
               "sortableFields":["map-label"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -377,9 +377,9 @@ fn crs84_point_without_bbox_keeps_non_gis_ddl_and_inventory_stable() {
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"reader","default":true,"principalClaim":"principal","permissions":[{
+                "id":"reader","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                   "entity":"site","operations":["get","list"],"readableFields":["code","location"],
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
               }]
             }"#,

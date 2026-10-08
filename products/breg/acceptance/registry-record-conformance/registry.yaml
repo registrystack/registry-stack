@@ -70,7 +70,7 @@ accessProfiles:
     requiredPurposes: [public-read]
     permissions:
       - entity: public-unit
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label]
   - id: protected-reader
@@ -80,7 +80,7 @@ accessProfiles:
     requiredPurposes: [bounded-read]
     permissions:
       - entity: protected-unit
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label]
   - id: fixture-writer
@@ -90,12 +90,12 @@ accessProfiles:
     requiredPurposes: [fixture-setup]
     permissions:
       - entity: public-unit
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create]
         readableFields: [label]
         writableFields: [label]
       - entity: protected-unit
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create]
         readableFields: [label]
         writableFields: [label]

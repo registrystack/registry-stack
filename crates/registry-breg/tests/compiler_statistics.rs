@@ -38,23 +38,23 @@ fn source() -> Value {
         }],
         "accessProfiles": [
             {
-                "id":"analyst","principalClaim":"principal","permissions":[{
+                "id":"analyst","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                     "entity":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
-                    "allowCount":true,"rowBoundaries":[]
+                    "allowCount":true,"rowBoundaries":"unrestricted"
                 }]
             },
             {
-                "id":"publisher","principalClaim":"principal","permissions":[{
+                "id":"publisher","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                     "entity":"record","operations":["list"],
                     "readableFields":["active","category","event-date","valid-from","valid-to"],
                     "filterableFields":["active","category","event-date","valid-from","valid-to"],
-                    "allowCount":true,"rowBoundaries":[]
+                    "allowCount":true,"rowBoundaries":"unrestricted"
                 }]
             },
-            {"id":"reader","principalClaim":"principal","permissions":[]},
-            {"id":"other-reader","principalClaim":"principal","permissions":[]}
+            {"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]},
+            {"id":"other-reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[]}
         ],
         "vocabularies": [{"id":"category","values":["a","b"]}],
         "statisticalDatasets": [{
@@ -1340,7 +1340,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         .unwrap()
         .push(json!({
             "entity":"lookup","operations":["list"],"readableFields":["flag"],
-            "filterableFields":["flag"],"allowCount":true,"rowBoundaries":[]
+            "filterableFields":["flag"],"allowCount":true,"rowBoundaries":"unrestricted"
         }));
     value["statisticalDatasets"][0]["dimensions"] = json!(["evaluated-category"]);
     let sql = "SELECT r.id AS id, CASE WHEN l.flag AND r.event_date <= registry_context.evaluation_date() THEN 'a' ELSE 'b' END AS evaluated_category FROM registry_source.record r JOIN registry_source.lookup l ON l.id = r.id";
@@ -1373,7 +1373,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     batch_select["entities"][1]["batch"] = json!({"maximumItems": 10, "maximumBytes": 4096});
     batch_select["accessProfiles"][1]["permissions"][1] = json!({
         "entity":"lookup","operations":["patch","batch"],"writableFields":["flag"],
-        "rowBoundaries":[]
+        "rowBoundaries":"unrestricted"
     });
     let batch_select = compile_with_sql(&batch_select, sql)
         .expect("batch supplies ordinary dependency SELECT visibility");
@@ -1398,11 +1398,11 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     for permission in [
         json!({
             "entity":"lookup","operations":["create"],"writableFields":["flag"],
-            "rowBoundaries":[]
+            "rowBoundaries":"unrestricted"
         }),
         json!({
             "entity":"lookup","operations":["patch"],"writableFields":["flag"],
-            "rowBoundaries":[]
+            "rowBoundaries":"unrestricted"
         }),
     ] {
         let mut mutation_only_dependency = value.clone();

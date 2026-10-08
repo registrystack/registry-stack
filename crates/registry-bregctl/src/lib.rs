@@ -8930,13 +8930,13 @@ accessProfiles:
     requiredPurposes: [registry-operations]
     permissions:
       - entity: record-group
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [code, label]
         writableFields: [code, label]
         filterableFields: [code]
       - entity: record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch]
         readableFields: [code, label, group, status]
         writableFields: [code, label, group, status]
@@ -8982,7 +8982,7 @@ accessProfiles:
     requiredPurposes: [evidence-source-read]
     permissions:
       - entity: record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [lookup]
         readableFields: [code, status]
         lookups:
@@ -15424,6 +15424,7 @@ mod tests {
                 "profiles": [{
                     "id": "record-reader",
                     "principalClaim": "registry_principal",
+                    "requiredScopes": "unrestricted",
                 }],
             }],
         });
@@ -15584,10 +15585,11 @@ entities:
 accessProfiles:
   - id: operator
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [operations]
     permissions:
       - entity: record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch]
         readableFields: [code]
         writableFields: [code]

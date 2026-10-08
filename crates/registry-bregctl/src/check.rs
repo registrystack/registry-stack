@@ -1007,7 +1007,7 @@ mod tests {
     #[test]
     fn an_entity_access_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    permissions:\n      - entity: other\n        operations: [get]\n        rowBoundaries: []\n      - entity: record\n        operations: [get]\n        rowBoundaries: []\n",
+            "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: clerk\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      - entity: other\n        operations: [get]\n        rowBoundaries: unrestricted\n      - entity: record\n        operations: [get]\n        rowBoundaries: unrestricted\n",
         );
         let steps = parse_steps("entities[id=record].accessProfiles[id=clerk].operations");
         let found = alternatives(&steps)
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn an_action_permission_path_is_found_under_the_profile_that_grants_it() {
         let project = document(
-            "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    permissions: []\n  - id: steward\n    principalClaim: registry_principal\n    permissions:\n      - entity: record\n        operations: [get]\n        rowBoundaries: []\n      - action: import-record\n        operations: [invoke]\n        targets:\n          - {entity: other, rowBoundaries: []}\n          - {entity: record, rowBoundaries: []}\n",
+            "apiVersion: registry.registrystack.org/v1alpha1\nkind: RegistryProject\nregistry:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions: []\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      - entity: record\n        operations: [get]\n        rowBoundaries: unrestricted\n      - action: import-record\n        operations: [invoke]\n        targets:\n          - {entity: other, rowBoundaries: unrestricted}\n          - {entity: record, rowBoundaries: unrestricted}\n",
         );
         let steps = parse_steps(
             "actions[id=import-record].permissions[profile=steward].targets[entity=record].rowBoundaries",

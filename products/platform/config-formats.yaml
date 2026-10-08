@@ -101,11 +101,11 @@ formats:
       reference: /accessProfiles/0/permissions/0/entity
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
-        whenOmitted: open
+        whenOmitted: refused
       - pointer: /accessProfiles/*/requiredPurposes
         whenOmitted: open
       - pointer: /accessProfiles/*/requesterClients
-        whenOmitted: unclassified
+        whenOmitted: open
       - pointer: /entities/*/accessRequirements/requiredScopes
         whenOmitted: open
     restrictingMembers: [/accessProfiles/*/requiredScopes, /accessProfiles/*/requiredPurposes, /accessProfiles/*/requesterClients, /entities/*/accessRequirements/requiredScopes]

@@ -701,7 +701,7 @@ accessProfiles:
     requiredPurposes: [registry-operations]
     permissions:
       - entity: business-identifier
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields:
           - holder
@@ -710,7 +710,7 @@ accessProfiles:
           - replaces
         filterableFields: [namespace, value]
       - entity: operator-assignment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields:
           - establishment
@@ -719,7 +719,7 @@ accessProfiles:
           - valid-to
         filterableFields: [establishment]
       - entity: discharge-declaration
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields:
           - facility
@@ -731,7 +731,7 @@ accessProfiles:
           - correction-of
         filterableFields: [reporting-period]
       - entity: facility-source-contribution
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields:
           - facility
@@ -741,7 +741,7 @@ accessProfiles:
           - mapping-version
         filterableFields: [source-system, source-record-id]
       - entity: inspection-document
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields:
           - inspection

@@ -81,6 +81,7 @@ pub(super) const PROJECT: &str = r#"{
       "id":"steward",
       "default":true,
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "permissions":[
         {
           "entity":"asset-site",
@@ -104,6 +105,7 @@ pub(super) const PROJECT: &str = r#"{
       "id":"submitter",
       "default":true,
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "permissions":[
         {
           "entity":"correction-request",
@@ -122,6 +124,7 @@ pub(super) const PROJECT: &str = r#"{
     {
       "id":"applier",
       "principalClaim":"sub",
+      "requiredScopes":"unrestricted",
       "requiredPurposes":["apply"],
       "permissions":[
         {

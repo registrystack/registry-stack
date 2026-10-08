@@ -38,7 +38,7 @@ boundary joins them inside the facility's read grant:
 ```yaml
 permissions:
   - entity: facility
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list, lookup, snapshot, revisions]
     readableFields: [label]
     allowCount: true
@@ -58,7 +58,7 @@ missing membership, a null value, an inactive membership, or another principal d
 declared fields are authorization inputs, not an additional readable-field grant.
 
 Every listed membership boundary and every ordinary `rowBoundaries` predicate must hold. Declare
-`rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: []`
+`rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: unrestricted`
 adds no direct claim predicate and leaves the membership checks in force. A permission carries at most
 eight boundaries, reported as `breg.access.membership-limit`. Configure the identity claim from a trusted
 issuer, and never accept a caller-submitted principal as authority.

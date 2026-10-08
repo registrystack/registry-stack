@@ -465,14 +465,14 @@ def _local_project(
     if fixture_kind == "asset-site":
         source = _replace_once(
             source,
-            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
             "asset-site fixture no longer has the expected asset-operator access profile",
         )
         source = _replace_once(
             source,
-            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: site-planner\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_PLANNER_SCOPE}]\n    requiredPurposes:",
             "asset-site fixture no longer has the expected site-planner access profile",
@@ -523,14 +523,14 @@ def _local_project(
     elif fixture_kind == "asset-change-request":
         source = _replace_once(
             source,
-            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: asset-operator\n    default: true\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_OPERATOR_SCOPE}]\n    requiredPurposes:",
             "asset change-request fixture no longer has the expected asset-operator access profile",
         )
         source = _replace_once(
             source,
-            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: site-planner\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: site-planner\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{ASSET_PLANNER_SCOPE}]\n    requiredPurposes:",
             "asset change-request fixture no longer has the expected site-planner access profile",
@@ -552,7 +552,7 @@ def _local_project(
     elif fixture_kind == "facility":
         source = _replace_once(
             source,
-            "  - id: facility-operator\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: facility-operator\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: facility-operator\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{FACILITY_OPERATOR_SCOPE}]\n    requiredPurposes:",
             "facility fixture no longer has the expected operator access profile",
@@ -586,7 +586,7 @@ def _local_project(
     elif fixture_kind == "inspection":
         source = _replace_once(
             source,
-            "  - id: inspection-inspector\n    principalClaim: registry_principal\n    requiredPurposes:",
+            "  - id: inspection-inspector\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes:",
             "  - id: inspection-inspector\n    principalClaim: registry_principal\n"
             f"    requiredScopes: [{INSPECTION_INSPECTOR_SCOPE}]\n    requiredPurposes:",
             "inspection fixture no longer has the expected inspector access profile",

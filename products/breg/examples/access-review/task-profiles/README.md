@@ -22,7 +22,7 @@ target/debug/bregctl explain access products/breg/examples/access-review/task-pr
 target/debug/bregctl explain change-requests products/breg/examples/access-review/task-profiles
 ```
 
-The supervisor deliberately has `rowBoundaries: []`, and the auditor has history
+The supervisor deliberately has `rowBoundaries: unrestricted`, and the auditor has history
 access. Review these findings rather than using `--deny-warnings` for this
 project. The submitter can write its district boundary when drafting a request;
 that field and every applied target must still satisfy the caller's district

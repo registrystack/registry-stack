@@ -3484,7 +3484,7 @@ fn row_boundary_batch_registry() -> registry_breg::CompiledRegistry {
             ]
           }],
           "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal",
+            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","batch"],
@@ -3518,7 +3518,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
             ]
           }],
           "accessProfiles":[{
-            "id":"writer","default":true,"principalClaim":"registry_principal",
+            "id":"writer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","batch"],
@@ -3529,7 +3529,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"keeper","principalClaim":"registry_principal",
+            "id":"keeper","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-review"],
             "permissions":[{
               "entity":"widget","operations":["get","list","patch"],
@@ -3540,7 +3540,7 @@ fn located_refusal_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"drafter","principalClaim":"registry_principal",
+            "id":"drafter","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-drafting"],
             "permissions":[{
               "entity":"widget","operations":["create","get"],
@@ -3947,7 +3947,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             ]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management","case-review"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","tombstone"],
@@ -3956,7 +3956,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"review-operator","principalClaim":"registry_principal",
+            "id":"review-operator","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","tombstone"],
@@ -3965,14 +3965,14 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"label-reader","principalClaim":"registry_principal",
+            "id":"label-reader","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "permissions":[{
               "entity":"widget","operations":["get","list"],
               "readableFields":["label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"label-editor","principalClaim":"registry_principal",
+            "id":"label-editor","principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"widget","operations":["get","patch"],
@@ -3981,7 +3981,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
-            "id":"case-operator","default":true,"principalClaim":"registry_principal",
+            "id":"case-operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
             "requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"log","operations":["create","get","list"],

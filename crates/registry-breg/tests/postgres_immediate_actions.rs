@@ -3115,6 +3115,7 @@ const ACTION_PROJECT: &[u8] = br#"{
           },{
             "id":"household-seed-writer",
             "principalClaim":"registry_principal",
+            "requiredScopes":"unrestricted",
             "permissions":[{
               "entity":"household",
               "operations":["create"],

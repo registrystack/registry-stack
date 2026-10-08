@@ -1102,7 +1102,7 @@ fn candidate_fragments(entity_id: &str, reader: &ReaderGrant) -> (Value, Value) 
         json!({
             "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
-            "permissions":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
+            "permissions":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":"unrestricted"}]
         }),
     )
 }
@@ -1260,7 +1260,7 @@ fn reader_permission_yaml(indent: usize, entity_id: &str, reader: &ReaderGrant) 
     let fields = serde_json::to_string(&reader.fields)?;
     let pad = " ".repeat(indent);
     let entity_id = yaml_string(entity_id);
-    Ok(format!("{pad}- entity: {entity_id}\n{pad}  operations: [get, list]\n{pad}  readableFields: {fields}\n{pad}  readableRequestFields: [review_state]\n{pad}  rowBoundaries: []\n"))
+    Ok(format!("{pad}- entity: {entity_id}\n{pad}  operations: [get, list]\n{pad}  readableFields: {fields}\n{pad}  readableRequestFields: [review_state]\n{pad}  rowBoundaries: unrestricted\n"))
 }
 
 /// Append this entity's permission to the block `permissions` list of an
@@ -1458,9 +1458,11 @@ fn reviewer_authority(
             &row_boundary_locations,
         )?);
         let required_scopes = match profile.get("requiredScopes") {
-            None | Some(Value::Null) => &[][..],
+            Some(Value::String(written)) if written == "unrestricted" => &[][..],
             Some(Value::Array(scopes)) => scopes.as_slice(),
-            Some(_) => bail!("BReg access profile {id} requiredScopes must be an array"),
+            _ => bail!(
+                "BReg access profile {id} requiredScopes must be unrestricted or a list of scopes"
+            ),
         };
         for scope in required_scopes {
             scopes.insert(
@@ -5018,8 +5020,8 @@ mod tests {
     fn reviewer_authority_accepts_unrestricted_purpose_profiles() {
         let unrestricted = json!({
             "accessProfiles": [
-                {"id":"reviewer","principalClaim":"registry_principal","actorKind":"human","requesterClients":["staff","supervisor"]},
-                {"id":"approver","principalClaim":"registry_principal","actorKind":"human","requesterClients":["staff","supervisor"],"requiredScopes":[],"requiredPurposes":[]}
+                {"id":"reviewer","principalClaim":"registry_principal","requiredScopes":"unrestricted","actorKind":"human","requesterClients":["staff","supervisor"]},
+                {"id":"approver","principalClaim":"registry_principal","actorKind":"human","requesterClients":["staff","supervisor"],"requiredScopes":"unrestricted"}
             ]
         });
         let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[{"profile":"approver"}]});
@@ -5055,12 +5057,14 @@ mod tests {
                 {
                     "id":"operator",
                     "principalClaim":"registry_principal",
+                    "requiredScopes":"unrestricted",
                     "actorKind":"human",
                     "requesterClients":["staff","supervisor"]
                 },
                 {
                     "id":"reviewer",
                     "principalClaim":"registry_principal",
+                    "requiredScopes":"unrestricted",
                     "actorKind":"human",
                     "requesterClients":["staff","supervisor"],
                     "permissions":[{

@@ -64,42 +64,42 @@ fn project() -> Value {
         ],
         "accessProfiles": [
             {
-                "id": "clerk", "default": true, "principalClaim": "registry_principal",
+                "id": "clerk", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "actorKind": "human", "requesterClients": ["clerk-portal"],
                 "permissions": [
                     {
                         "entity": "case",
                         "operations": ["create", "get", "list", "import"],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
                     },
                     {
                         "entity": "correction",
                         "operations": ["create", "get", "list", "patch", "submit_request", "revise_request", "cancel_request", "apply_request"],
-                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": [],
-                        "applyTargets": [{"entity": "case", "rowBoundaries": []}]
+                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted",
+                        "applyTargets": [{"entity": "case", "rowBoundaries": "unrestricted"}]
                     },
                     {
                         "entity": "note",
                         "operations": ["create", "get", "list", "patch", "tombstone", "batch"],
-                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []
+                        "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"
                     },
                     {
                         "action": "relabel-note", "operations": ["invoke"],
-                        "targets": [{"entity": "note", "rowBoundaries": []}], "results": ["relabelled"]
+                        "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
                     }
                 ]
             },
             {
-                "id": "assistant", "principalClaim": "registry_principal",
+                "id": "assistant", "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
                 "actorKind": "agent", "requesterClients": ["assistant-client"],
                 "permissions": [
-                    {"entity": "case", "operations": ["get", "list"], "readableFields": ["label"], "rowBoundaries": []},
+                    {"entity": "case", "operations": ["get", "list"], "readableFields": ["label"], "rowBoundaries": "unrestricted"},
                     {
                         "entity": "correction",
                         "operations": ["create", "get", "list", "patch"],
-                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": []
+                        "readableFields": ["case", "label"], "writableFields": ["case", "label"], "rowBoundaries": "unrestricted"
                     },
-                    {"entity": "note", "operations": ["get", "list"], "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": []}
+                    {"entity": "note", "operations": ["get", "list"], "readableFields": ["label"], "writableFields": ["label"], "rowBoundaries": "unrestricted"}
                 ]
             }
         ]
@@ -236,7 +236,7 @@ fn with_assistant_action(value: &mut Value) {
         .expect("permissions array")
         .push(json!({
             "action": "relabel-note", "operations": ["invoke"],
-            "targets": [{"entity": "note", "rowBoundaries": []}], "results": ["relabelled"]
+            "targets": [{"entity": "note", "rowBoundaries": "unrestricted"}], "results": ["relabelled"]
         }));
 }
 

@@ -147,7 +147,7 @@ Add `requireConsent` to a read permission:
       operations: [get, list]
       readableFields: [person-code, legal-name, district]
       allowCount: true
-      rowBoundaries: []
+      rowBoundaries: unrestricted
       requireConsent:
         - {record: person-consent-decision, on: id}
 ```

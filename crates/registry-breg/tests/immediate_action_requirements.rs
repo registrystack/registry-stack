@@ -159,7 +159,7 @@ fn action_requirements_keep_mandatory_scope_and_processing_boundaries() {
     );
     let mut source = support::project();
     source["accessProfiles"][0]["permissions"][0]["targets"] =
-        json!([{"entity": "child", "rowBoundaries": []}]);
+        json!([{"entity": "child", "rowBoundaries": "unrestricted"}]);
     assert!(
         compile(source).is_err(),
         "requirements cannot invent processing authority"

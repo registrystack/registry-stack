@@ -282,7 +282,7 @@ accessProfiles:
           - local-identifier
           - name
           - description
-        rowBoundaries: []
+        rowBoundaries: unrestricted
       - entity: institutional-relationship
         operations:
           - get
@@ -293,7 +293,7 @@ accessProfiles:
           - relationship-type
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -312,7 +312,7 @@ accessProfiles:
           - local-identifier
           - name
           - description
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -330,7 +330,7 @@ accessProfiles:
           - relationship-type
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - institution-from
@@ -357,7 +357,7 @@ accessProfiles:
           - reason
           - supporting-reference
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state
@@ -386,7 +386,7 @@ accessProfiles:
           - reason
           - supporting-reference
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state
@@ -407,7 +407,7 @@ accessProfiles:
           - local-identifier
           - name
           - description
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: institutional-relationship
         operations:
@@ -420,7 +420,7 @@ accessProfiles:
           - relationship-type
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: name-correction
         operations:
@@ -431,10 +431,10 @@ accessProfiles:
           - name
           - reason
           - supporting-reference
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         applyTargets:
           - entity: public-organization
-            rowBoundaries: []
+            rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state
@@ -450,10 +450,10 @@ accessProfiles:
           - start-date
           - reason
           - supporting-reference
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         applyTargets:
           - entity: institutional-relationship
-            rowBoundaries: []
+            rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state

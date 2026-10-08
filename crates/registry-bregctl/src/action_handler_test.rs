@@ -480,11 +480,12 @@ accessProfiles:
   - id: registrar
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - action: register-person
         operations: [invoke]
         targets:
-          - {entity: person, rowBoundaries: []}
+          - {entity: person, rowBoundaries: unrestricted}
         results: [person]
 "#;
 

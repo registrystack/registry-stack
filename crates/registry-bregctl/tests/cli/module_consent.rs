@@ -60,11 +60,11 @@ accessProfiles:
   requiredPurposes: [food-assistance]
   permissions:
   - entity: person
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list]
     readableFields: [given-name, district]
   - entity: household
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [get, list]
     readableFields: [head, label]
 - id: registrar
@@ -74,12 +74,12 @@ accessProfiles:
   requiredScopes: [records:manage]
   permissions:
   - entity: person
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get, patch]
     readableFields: [given-name, district]
     writableFields: [given-name, district]
   - entity: household
-    rowBoundaries: []
+    rowBoundaries: unrestricted
     operations: [create, get, patch]
     readableFields: [head, label]
     writableFields: [head, label]
@@ -369,8 +369,8 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
         "{record: person-consent-decision, on: id}",
     );
     let gated = gated.replacen(
-        "  - entity: household\n    rowBoundaries: []\n    operations: [get, list]\n    readableFields: [head, label]\n",
-        "  - entity: household\n    rowBoundaries: []\n    operations: [get, list]\n    readableFields: [head, label]\n    requireConsent:\n    - {record: person-consent-decision, on: head}\n",
+        "  - entity: household\n    rowBoundaries: unrestricted\n    operations: [get, list]\n    readableFields: [head, label]\n",
+        "  - entity: household\n    rowBoundaries: unrestricted\n    operations: [get, list]\n    readableFields: [head, label]\n    requireConsent:\n    - {record: person-consent-decision, on: head}\n",
         1,
     );
     fs::write(project.path().join("registry.yaml"), gated).expect("gated project writes");

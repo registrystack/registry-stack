@@ -174,7 +174,7 @@ accessProfiles:
       - business-administration
     permissions:
       - entity: establishment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -204,7 +204,7 @@ accessProfiles:
         sortableFields:
           - establishment-code
       - entity: business
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get
@@ -267,7 +267,7 @@ accessProfiles:
               - establishment-code
             allowCount: true
       - entity: operator-assignment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations:
           - create
           - get

@@ -81,7 +81,7 @@ accessProfiles:
       - entity: case
         operations: [get]
         readableFields: [label]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: caseworker
     principalClaim: registry_principal
     requiredScopes: [registry.read]
@@ -117,6 +117,7 @@ accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: case
         operations: [get]
@@ -147,17 +148,19 @@ accessProfiles:
     requiredScopes: [registry.read]
     requiredPurposes: [record-review]
     permissions:
-      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: []}
+      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: standing-agent
     principalClaim: sub
+    requiredScopes: unrestricted
     actorKind: agent
     requesterClients: [agent-client]
     requiredPurposes: [citizen-self-service]
     permissions:
-      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: []}
+      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: unrestricted}
   - id: delegated-agent
     default: true
     principalClaim: sub
+    requiredScopes: unrestricted
     actorKind: agent
     requesterClients: [agent-client]
     requiredPurposes: [record-review]
@@ -870,7 +873,7 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
             "        applyTargets:\n          - entity: asset\n            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n",
             "",
         )
-        + "  - id: applier\n    principalClaim: registry_principal\n    permissions:\n      - entity: correction\n        operations: [apply_request]\n        readableFields: [asset, label]\n        rowBoundaries: []\n        applyTargets:\n          - entity: asset\n            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n";
+        + "  - id: applier\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      - entity: correction\n        operations: [apply_request]\n        readableFields: [asset, label]\n        rowBoundaries: unrestricted\n        applyTargets:\n          - entity: asset\n            rowBoundaries: [{field: label, claim: apply_label, operator: equals}]\n";
     let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("governed request draft create and patch remain available");

@@ -2636,7 +2636,7 @@ mod ingestion_context_tests {
         "fields":[{"id":"tenant","type":"string","minLength":1,"maxLength":64,"required":true,"classification":"internal"}]
       }],
       "accessProfiles":[{
-        "id":"operator","default":true,"principalClaim":"registry_principal",
+        "id":"operator","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted",
         "requiredPurposes":["review"],
         "permissions":[{
           "entity":"entry","operations":["get"],

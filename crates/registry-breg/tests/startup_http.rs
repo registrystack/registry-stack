@@ -76,10 +76,10 @@ accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: public-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields: [label]
 "#;

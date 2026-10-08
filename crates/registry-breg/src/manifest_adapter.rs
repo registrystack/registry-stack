@@ -700,8 +700,8 @@ mod tests {
              ]}
           ],
           "accessProfiles":[
-            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":[]}]},
-            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":[]}]}
+            {"id":"public-reader","principalClaim":"sub","requiredScopes":["public.read"],"permissions":[{"entity":"public-case","operations":["get"],"readableFields":["status"],"rowBoundaries":"unrestricted"}]},
+            {"id":"protected-reader","principalClaim":"sub","requiredScopes":["protected.read"],"permissions":[{"entity":"protected-case","operations":["get"],"readableFields":["status","sealing-reason"],"rowBoundaries":"unrestricted"}]}
           ]
         });
         let project =

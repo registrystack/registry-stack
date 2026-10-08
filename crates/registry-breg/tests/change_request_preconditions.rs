@@ -96,11 +96,11 @@ fn project() -> Value {
                 }}
             }
         }],
-        "accessProfiles":[{"id":"reviewer", "default":true, "principalClaim":"principal", "permissions":[{
+        "accessProfiles":[{"id":"reviewer", "default":true, "principalClaim":"principal","requiredScopes":"unrestricted", "permissions":[{
             "entity":"release-request",
             "operations":["get","submit_request","apply_request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],
-            "applyTargets":[{"entity":"lot", "rowBoundaries":[]}], "rowBoundaries":[]
+            "applyTargets":[{"entity":"lot", "rowBoundaries":"unrestricted"}], "rowBoundaries":"unrestricted"
         }]}]
     })
 }

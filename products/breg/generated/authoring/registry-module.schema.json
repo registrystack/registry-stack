@@ -84,29 +84,29 @@
       "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
       "properties": {
         "allowedPurposes": {
-          "default": [],
-          "description": "When nonempty, every profile must restrict purpose to a nonempty subset of these values. Empty imposes no purpose requirement.",
+          "description": "Every profile must restrict purpose to a subset of these values. Omit to demand no purpose.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "requiredScopes": {
-          "default": [],
-          "description": "Every profile must require all these scopes. Requirements never grant access.",
+          "description": "Every profile must require all these scopes. Requirements never grant access. Omit to demand no scope.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "rowBoundaries": {
-          "default": [],
-          "description": "Every profile must include these exact field, verified-claim, and operator bindings.",
+          "description": "Every profile must include these exact field, verified-claim, and operator bindings. Omit to demand no row boundary.",
           "items": {
             "$ref": "#/$defs/RowBoundarySource"
           },
+          "minItems": 1,
           "type": "array"
         }
       },

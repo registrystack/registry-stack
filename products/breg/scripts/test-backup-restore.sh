@@ -738,7 +738,7 @@ insert_after("accessProfiles:\n",
              "    requiredPurposes: [registry-operations]\n"
              "    permissions:\n"
              "      - entity: record-group\n"
-             "        rowBoundaries: []\n"
+             "        rowBoundaries: unrestricted\n"
              "        operations: [import]\n"
              "        readableFields: [code, label]\n"
              "        writableFields: [code, label]\n")

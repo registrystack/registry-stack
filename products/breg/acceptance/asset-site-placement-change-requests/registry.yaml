@@ -114,51 +114,53 @@ accessProfiles:
   - id: asset-operator
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [asset-management]
     permissions:
-      - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class], rowBoundaries: []}
-      - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label], rowBoundaries: []}
+      - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class], rowBoundaries: unrestricted}
+      - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label], rowBoundaries: unrestricted}
       - entity: asset-placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [asset, site, valid-from, valid-to]
         writableFields: [asset, site, valid-from, valid-to]
         requestPresence:
-          - {requestType: placement-correction-request, rowBoundaries: []}
-      - {entity: inspection-event, operations: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result], rowBoundaries: []}
+          - {requestType: placement-correction-request, rowBoundaries: unrestricted}
+      - {entity: inspection-event, operations: [create, get, list], readableFields: [asset, observed-at, result], writableFields: [asset, observed-at, result], rowBoundaries: unrestricted}
   - id: site-planner
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [site-planning]
     permissions:
-      - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code], rowBoundaries: []}
-      - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code], rowBoundaries: []}
+      - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code], rowBoundaries: unrestricted}
+      - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code], rowBoundaries: unrestricted}
       - entity: asset-placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [asset, site, valid-from, valid-to]
         writableFields: [asset, site, valid-from, valid-to]
         filterableFields: [asset, site, valid-from]
         requestPresence:
-          - {requestType: placement-correction-request, rowBoundaries: []}
+          - {requestType: placement-correction-request, rowBoundaries: unrestricted}
   - id: correction-submitter
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:submit]
     requiredPurposes: [asset-correction]
     permissions:
       - entity: asset-item
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [asset-code, label]
       - entity: asset-placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields: [asset, valid-from, valid-to]
       - entity: asset-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields: [site-code]
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch, submit_request, revise_request, cancel_request]
         readableFields: [placement, proposed-site, reason]
         readableRequestFields: [reason, review_state]
@@ -171,7 +173,7 @@ accessProfiles:
     requiredPurposes: [asset-correction-review]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [placement, proposed-site, reason]
         readableRequestFields: [reason, review_state]
@@ -181,12 +183,12 @@ accessProfiles:
     requiredPurposes: [asset-correction-apply]
     permissions:
       - entity: placement-correction-request
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, apply_request]
         readableFields: [placement, proposed-site, reason]
         readableRequestFields: [reason, review_state]
         applyTargets:
-          - {entity: asset-placement, rowBoundaries: []}
+          - {entity: asset-placement, rowBoundaries: unrestricted}
 vocabularies:
   - {id: asset-classification, values: [equipment, vehicle, furniture]}
   - {id: inspection-result, values: [passed, failed]}

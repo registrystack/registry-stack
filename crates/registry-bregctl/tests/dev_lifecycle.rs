@@ -208,7 +208,7 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
         "readableFields":["code", "label"],
         "writableFields":["code", "label"],
         "requestVisibility":"owner",
-        "rowBoundaries":[]
+        "rowBoundaries":"unrestricted"
     }));
     definition["accessProfiles"]
         .as_array_mut()
@@ -224,8 +224,8 @@ fn author_automatic_review_executor(project: &Path, authority_port: u16) {
                 "entity":"record-change",
                 "operations":["get", "apply_request"],
                 "readableFields":["code", "label"],
-                "rowBoundaries":[],
-                "applyTargets":[{"entity":"automatic-record", "rowBoundaries":[]}],
+                "rowBoundaries":"unrestricted",
+                "applyTargets":[{"entity":"automatic-record", "rowBoundaries":"unrestricted"}],
                 "readableRequestFields":["review_state"]
             }]
         }));
@@ -488,19 +488,19 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
     operator["permissions"].as_array_mut().unwrap().extend([
         json!({
             "entity": "restricted-change",
-            "rowBoundaries": [],
+            "rowBoundaries": "unrestricted",
             "operations": ["create", "get", "patch", "submit_request", "apply_request"],
             "readableFields": ["code", "label", "note"],
             "writableFields": ["code", "label", "note"],
-            "applyTargets": [{"entity":"record", "rowBoundaries":[]}]
+            "applyTargets": [{"entity":"record", "rowBoundaries":"unrestricted"}]
         }),
         json!({
             "entity": "public-change",
-            "rowBoundaries": [],
+            "rowBoundaries": "unrestricted",
             "operations": ["create", "get", "patch", "submit_request", "apply_request"],
             "readableFields": ["code", "label"],
             "writableFields": ["code", "label"],
-            "applyTargets": [{"entity":"record-group", "rowBoundaries":[]}]
+            "applyTargets": [{"entity":"record-group", "rowBoundaries":"unrestricted"}]
         }),
     ]);
     write(

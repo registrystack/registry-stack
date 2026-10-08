@@ -1169,7 +1169,7 @@ accessProfiles:
     requiredScopes: [registry:sites:read]
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [code, label, location]
         spatialQueries:
@@ -1178,16 +1178,18 @@ accessProfiles:
             maximumLatitudeSpanDegrees: 2
   - id: get-only
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [code, label, location]
   - id: no-bbox
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [code, label, location]
 "#;

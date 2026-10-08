@@ -316,7 +316,8 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "../../../products/breg/examples/access-review/registry.yaml"
     ))
     .unwrap();
-    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = serde_json::json!([]);
+    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
+        serde_json::json!("unrestricted");
     fs::write(
         project.path().join("registry.yaml"),
         serde_json::to_vec(&source).unwrap(),
@@ -580,9 +581,9 @@ accessProfiles:
       - action: register-household-contact
         operations: [invoke]
         targets:
-          - {entity: household, rowBoundaries: []}
-          - {entity: person, rowBoundaries: []}
-          - {entity: group-membership, rowBoundaries: []}
+          - {entity: household, rowBoundaries: unrestricted}
+          - {entity: person, rowBoundaries: unrestricted}
+          - {entity: group-membership, rowBoundaries: unrestricted}
         results: [person, membership, household]
   - id: contact-auditor
     principalClaim: other_private_claim
@@ -592,9 +593,9 @@ accessProfiles:
       - action: register-household-contact
         operations: [invoke]
         targets:
-          - {entity: household, rowBoundaries: []}
-          - {entity: person, rowBoundaries: []}
-          - {entity: group-membership, rowBoundaries: []}
+          - {entity: household, rowBoundaries: unrestricted}
+          - {entity: person, rowBoundaries: unrestricted}
+          - {entity: group-membership, rowBoundaries: unrestricted}
         results: [household]
 "#
 }
@@ -633,21 +634,23 @@ accessProfiles:
   - id: household-reader
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [household-read]
     permissions:
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [household-code]
         writableFields: []
   - id: household-archiver
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes: [household-archive]
     permissions:
       - action: archive-household
         operations: [invoke]
         targets:
-          - {entity: household, rowBoundaries: []}
+          - {entity: household, rowBoundaries: unrestricted}
         results: [household]
 "#
 }
@@ -1861,11 +1864,12 @@ entities:
 accessProfiles:
   - id: reader
     principalClaim: "registry_principal\n  error  forged.code  forged"
+    requiredScopes: unrestricted
     permissions:
       - entity: record
         operations: [get]
         readableFields: [code]
-        rowBoundaries: []
+        rowBoundaries: unrestricted
 "#,
     );
 
@@ -3263,11 +3267,12 @@ accessProfiles:
   - id: registrar
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - action: register-person
         operations: [invoke]
         targets:
-          - {entity: person, rowBoundaries: []}
+          - {entity: person, rowBoundaries: unrestricted}
         results: [person]
 "#
 }
@@ -3422,9 +3427,10 @@ entities:
 accessProfiles:
   - id: reader
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
       - entity: typed-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [list]
         readableFields: [label, score, enabled, observed-on, observed-at]
         filterableFields: [label, score, enabled, observed-on, observed-at]
@@ -3492,17 +3498,19 @@ accessProfiles:
   - id: map-reader
     default: true
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
       - entity: service-site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [location]
         spatialQueries:
           bbox: {maximumLongitudeSpanDegrees: 0.5, maximumLatitudeSpanDegrees: 0.25}
   - id: geometry-reader
     principalClaim: principal
+    requiredScopes: unrestricted
     permissions:
-      - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: []}
+      - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: unrestricted}
 "#,
     );
     let output = bregctl(&[

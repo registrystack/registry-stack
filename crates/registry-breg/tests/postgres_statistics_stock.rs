@@ -317,7 +317,7 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
             ]
         }],
         "accessProfiles":[{
-            "id":"facility-operator","default":true,"principalClaim":"principal","permissions":[{
+            "id":"facility-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"permit","operations":["list"],
                 "readableFields":["permit-type","valid-from","administrative-boundary"],
                 "filterableFields":["permit-type","valid-from","administrative-boundary"],

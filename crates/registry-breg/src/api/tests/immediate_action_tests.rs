@@ -59,7 +59,7 @@ accessProfiles:
     permissions:
       - action: rename-case
         operations: [invoke]
-        targets: [{entity: case, rowBoundaries: []}]
+        targets: [{entity: case, rowBoundaries: unrestricted}]
         results: []
   - id: client-human
     principalClaim: registry_principal

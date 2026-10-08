@@ -402,8 +402,9 @@ fn project_bytes(source_revision: &str) -> Vec<u8> {
   "accessProfiles": [{{
     "id": "reader",
     "principalClaim": "principal",
+    "requiredScopes": "unrestricted",
     "permissions": [{{
-      "rowBoundaries": [], "entity": "case",
+      "rowBoundaries": "unrestricted", "entity": "case",
       "operations": ["get", "list"],
       "readableFields": ["code"]
     }}]

@@ -715,22 +715,24 @@ fn reviewed_planner_allows_a_separate_manual_apply_profile() {
     profiles.push(json!({
         "id": "source-reader-without-apply",
         "principalClaim": "registry_principal",
+        "requiredScopes": "unrestricted",
         "permissions": [{
             "entity": "person-name-change-request",
             "operations": ["get"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }]
     }));
     profiles.push(json!({
         "id": "separate-manual-applier",
         "principalClaim": "registry_principal",
+        "requiredScopes": "unrestricted",
         "permissions": [{
             "entity": "person-name-change-request",
             "operations": ["get", "apply_request"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
-            "applyTargets": [{"entity": "person", "rowBoundaries": []}],
-          "rowBoundaries": []
+            "applyTargets": [{"entity": "person", "rowBoundaries": "unrestricted"}],
+          "rowBoundaries": "unrestricted"
         }]
     }));
     let project = registry_breg::contract::parse_project_json(

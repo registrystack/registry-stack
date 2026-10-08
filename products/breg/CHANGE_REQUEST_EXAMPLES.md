@@ -119,7 +119,7 @@ permissions:
     operations: [get, list]
     readableFields: [placement, proposed-site, reason]
     readableRequestFields: [reason, review_state]
-    rowBoundaries: []
+    rowBoundaries: unrestricted
 ```
 
 The closed review projection identifies the frozen authority and policy,

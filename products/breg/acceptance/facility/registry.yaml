@@ -279,6 +279,7 @@ entities:
 accessProfiles:
   - id: facility-operator
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     requiredPurposes:
       - facility-registry
     permissions:
@@ -410,6 +411,7 @@ accessProfiles:
             operator: in
   - id: statistics-publisher
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: permit
         operations:
@@ -427,7 +429,7 @@ accessProfiles:
           - administrative-boundary
           - expiring-soon
         allowCount: true
-        rowBoundaries: []
+        rowBoundaries: unrestricted
       - entity: discharge-report
         operations:
           - list
@@ -443,9 +445,10 @@ accessProfiles:
           - administrative-boundary
           - has-measured-quantity
         allowCount: true
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: statistics-reader
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions: []
 statisticalDatasets:
   - id: monthly-discharge-reports

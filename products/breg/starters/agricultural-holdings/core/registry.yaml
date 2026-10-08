@@ -387,7 +387,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
   - id: editor
     default: true
     principalClaim: registry_principal
@@ -405,7 +405,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -420,7 +420,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -435,7 +435,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -450,7 +450,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - local-identifier
@@ -467,7 +467,7 @@ accessProfiles:
           - holder-person
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - holder-farm
@@ -486,7 +486,7 @@ accessProfiles:
           - holder-organization
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - holder-farm
@@ -505,7 +505,7 @@ accessProfiles:
           - holder-group
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
         writableFields:
           - holder-farm
@@ -531,7 +531,7 @@ accessProfiles:
           - reason
           - supporting-reference
         requestVisibility: owner
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state
@@ -551,7 +551,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: person
         operations:
@@ -561,7 +561,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: organization
         operations:
@@ -571,7 +571,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: informal-group
         operations:
@@ -581,7 +581,7 @@ accessProfiles:
         readableFields:
           - local-identifier
           - name
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: person-agricultural-holder-role
         operations:
@@ -593,7 +593,7 @@ accessProfiles:
           - holder-person
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: organization-agricultural-holder-role
         operations:
@@ -605,7 +605,7 @@ accessProfiles:
           - holder-organization
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: group-agricultural-holder-role
         operations:
@@ -617,7 +617,7 @@ accessProfiles:
           - holder-group
           - start-date
           - end-date
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         revisionAccess: true
       - entity: name-correction
         operations:
@@ -628,10 +628,10 @@ accessProfiles:
           - name
           - reason
           - supporting-reference
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         applyTargets:
           - entity: farm
-            rowBoundaries: []
+            rowBoundaries: unrestricted
         readableRequestFields:
           - reason
           - review_state

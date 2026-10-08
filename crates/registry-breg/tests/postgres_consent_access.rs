@@ -1075,7 +1075,7 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
             "requesterClients": [BETA_CLIENT], "requiredScopes": ["consent:read"],
             "permissions": [{
                 "entity": "consent-decision", "operations": ["lookup"],
-                "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": [],
+                "readableFields": ["subject", "recipient", "decision"], "rowBoundaries": "unrestricted",
                 "lookups": [{
                     "selector": "recipient", "valueOrigin": "verified_claim",
                     "claimMapping": {"recipient": "registry:recipients"}

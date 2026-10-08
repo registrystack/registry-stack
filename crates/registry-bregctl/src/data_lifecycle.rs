@@ -1742,13 +1742,14 @@ mod tests {
             "accessProfiles": [{
                 "id": PROFILE,
                 "principalClaim": "principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": ENTITY,
                     "operations": operations,
                     "readableFields": ["code"],
                     "writableFields": ["code"],
                     "allowDataExport": true,
-                  "rowBoundaries": []
+                  "rowBoundaries": "unrestricted"
                 }]
             }]
         });
@@ -2231,13 +2232,14 @@ mod tests {
             "accessProfiles": [{
                 "id": PROFILE,
                 "principalClaim": "principal",
+                "requiredScopes": "unrestricted",
                 "permissions": [{
                     "entity": ENTITY,
                     "operations": ["create", "batch", "list"],
                     "readableFields": ["payload"],
                     "writableFields": ["payload"],
                     "allowDataExport": true,
-                    "rowBoundaries": []
+                    "rowBoundaries": "unrestricted"
                 }]
             }]
         });

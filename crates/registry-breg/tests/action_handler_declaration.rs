@@ -74,10 +74,10 @@ fn project_with_handler(handler: Value) -> Value {
             "handler": handler
         }],
         "accessProfiles": [{
-            "id": "registrar", "default": true, "principalClaim": "registry_principal",
+            "id": "registrar", "default": true, "principalClaim": "registry_principal", "requiredScopes": "unrestricted",
             "permissions": [{
                 "action": "register-person", "operations": ["invoke"],
-                "targets": [{"entity": "person", "rowBoundaries": []}],
+                "targets": [{"entity": "person", "rowBoundaries": "unrestricted"}],
                 "results": ["person"]
             }]
         }]

@@ -1849,34 +1849,6 @@ exceptions:
   class: stable-move
   reason: a comparison literal accepts null as a record value through $defs/DataLiteral
   resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
-- rule: CFG-EMPTY-2
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/AccessRequirementsSource/properties/requiredScopes
-  class: pending
-  wp: WP9
-  reason: the restricting member /entities/*/accessRequirements/requiredScopes accepts an empty default ([])
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-EMPTY-2
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProjectAccessProfileSource/properties/requesterClients
-  class: pending
-  wp: WP9
-  reason: the restricting member /accessProfiles/*/requesterClients accepts an empty list
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-EMPTY-2
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProjectAccessProfileSource/properties/requiredPurposes
-  class: pending
-  wp: WP9
-  reason: the restricting member /accessProfiles/*/requiredPurposes accepts an empty default ([])
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-EMPTY-2
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ProjectAccessProfileSource/properties/requiredScopes
-  class: pending
-  wp: WP9
-  reason: the restricting member /accessProfiles/*/requiredScopes accepts an empty default ([])
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
 - rule: CFG-ENV-2
   format: breg/project
   location: products/platform/config-formats.yaml#/current/apiVersion

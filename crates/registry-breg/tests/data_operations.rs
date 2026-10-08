@@ -52,13 +52,14 @@ fn compiled(allow_data_export: bool) -> registry_breg::CompiledRegistry {
         "accessProfiles": [{
             "id": PROFILE,
             "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["code", "count", "readonly"],
                 "writableFields": ["code", "count"],
                 "allowDataExport": allow_data_export,
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -112,13 +113,14 @@ fn wide_export_registry() -> registry_breg::CompiledRegistry {
         "accessProfiles": [{
             "id": PROFILE,
             "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": WIDE_ENTITY,
                 "operations": ["list"],
                 "readableFields": ["payload"],
                 "writableFields": [],
                 "allowDataExport": true,
-                "rowBoundaries": []
+                "rowBoundaries": "unrestricted"
             }]
         }]
     });
@@ -179,9 +181,9 @@ fn data_export_requires_explicit_profile_permission() {
                             "classification": "internal"}]
             }],
             "accessProfiles": [{
-                "id": PROFILE, "principalClaim": "principal",
+                "id": PROFILE, "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": [{
-                    "rowBoundaries": [], "entity": ENTITY,
+                    "rowBoundaries": "unrestricted", "entity": ENTITY,
                     "operations": operations, "readableFields": readable,
                     "allowDataExport": true
                 }]
@@ -210,9 +212,9 @@ fn data_export_requires_explicit_profile_permission() {
         "kind": "RegistryProject",
         "registry": {"id": "project-export", "version": "1", "defaultLanguage": "en", "canonicalBaseIri": "https://authoring.example.test"},
         "accessProfiles": [{
-            "id": "project-exporter", "principalClaim": "principal",
+            "id": "project-exporter", "principalClaim": "principal", "requiredScopes": "unrestricted",
             "permissions": [{"entity": ENTITY, "operations": ["list"],
-                        "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": []}]
+                        "readableFields": ["code"], "allowDataExport": true, "rowBoundaries": "unrestricted"}]
         }],
         "entities": [{
             "id": ENTITY, "primaryDataset": "test-dataset", "route": "records", "mutationMode": "create_only",
@@ -342,10 +344,10 @@ fn data_validate_and_chunk_plan_reuse_runtime_rules_and_compiled_batch_bounds() 
                 "batch":{"maximumItems":2,"maximumBytes":100},
                 "fields":[{"id":"code","type":"text","maxLength":1000,"required":true,
                            "classification":"internal"}]}],
-            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","permissions":[{
+            "accessProfiles":[{"id":PROFILE,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                     "entity":ENTITY,
                     "operations":["create","batch"],"readableFields":["code"],
-                    "writableFields":["code"], "rowBoundaries": []}]}]
+                    "writableFields":["code"], "rowBoundaries": "unrestricted"}]}]
         });
         compile_source(source).unwrap()
     };
@@ -393,13 +395,14 @@ fn data_lifecycle_uses_exact_compiled_api_names() {
         "accessProfiles": [{
             "id": PROFILE,
             "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
             "permissions": [{
                 "entity": ENTITY,
                 "operations": ["create", "patch", "batch", "list"],
                 "readableFields": ["record-code"],
                 "writableFields": ["record-code"],
                 "allowDataExport": true,
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         }]
     }))

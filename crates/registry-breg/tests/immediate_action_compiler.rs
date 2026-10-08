@@ -301,9 +301,9 @@ fn household_contact_project(extra: &str) -> String {
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
-                {"entity":"household","rowBoundaries":[]},
-                {"entity":"person","rowBoundaries":[]},
-                {"entity":"group-membership","rowBoundaries":[]}
+                {"entity":"household","rowBoundaries":"unrestricted"},
+                {"entity":"person","rowBoundaries":"unrestricted"},
+                {"entity":"group-membership","rowBoundaries":"unrestricted"}
               ],
               "results":["person","membership","household"]
             }]
@@ -489,12 +489,12 @@ fn action_grants_refuse_request_metadata_projection_overrides() {
 fn action_grants_must_cover_every_derived_target_and_result() {
     let source = household_contact_project("").replace(
         r#""targets":[
-                {"entity":"household","rowBoundaries":[]},
-                {"entity":"person","rowBoundaries":[]},
-                {"entity":"group-membership","rowBoundaries":[]}
+                {"entity":"household","rowBoundaries":"unrestricted"},
+                {"entity":"person","rowBoundaries":"unrestricted"},
+                {"entity":"group-membership","rowBoundaries":"unrestricted"}
               ],
               "results":["person","membership","household"]"#,
-        r#""targets":[{"entity":"household","rowBoundaries":[]}],
+        r#""targets":[{"entity":"household","rowBoundaries":"unrestricted"}],
               "results":["person","missing"]"#,
     );
 
@@ -524,7 +524,7 @@ fn action_grants_refuse_unused_target_locks() {
     source["accessProfiles"][0]["permissions"][0]["targets"]
         .as_array_mut()
         .unwrap()
-        .push(serde_json::json!({"entity":"unused-record", "rowBoundaries":[]}));
+        .push(serde_json::json!({"entity":"unused-record", "rowBoundaries":"unrestricted"}));
 
     let failure = compile_json(&serde_json::to_vec(&source).unwrap())
         .expect_err("a target lock without an action target use is refused");
@@ -576,17 +576,17 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
         "effects":[{"id":"request","target":{"entity":"record-change"},"operation":"create","set":{"record":{"fromField":"record"},"label":{"fromField":"label"}}}]
       }],
       "accessProfiles":[{
-        "id":"operator","default":true,"principalClaim":"principal",
+        "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
         "permissions":[{
           "entity":"record-change",
           "operations":["get","submit_request","apply_request"],
           "readableFields":["record","label"],
-          "applyTargets":[{"entity":"record","rowBoundaries":[]}],
-          "rowBoundaries": []
+          "applyTargets":[{"entity":"record","rowBoundaries":"unrestricted"}],
+          "rowBoundaries": "unrestricted"
         },{
           "action":"create-record-change-directly",
           "operations":["invoke"],
-          "targets":[{"entity":"record-change","rowBoundaries":[]}]
+          "targets":[{"entity":"record-change","rowBoundaries":"unrestricted"}]
         }]
       }]
     }"#;
@@ -657,10 +657,10 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
           "set":{"label":{"fromField":"label"},"alpha":{"fromEffect":"alpha"}}
         }]
       }],
-      "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{
+      "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
         "action":"make-cycle",
         "operations":["invoke"],
-        "targets":[{"entity":"alpha","rowBoundaries":[]},{"entity":"beta","rowBoundaries":[]}]
+        "targets":[{"entity":"alpha","rowBoundaries":"unrestricted"},{"entity":"beta","rowBoundaries":"unrestricted"}]
       }]}]
     }"#;
     let failure = compile_json(cycle).expect_err("create dependencies cannot cycle");
@@ -687,10 +687,10 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "effects":[{"id":"asset","target":{"entity":"asset"},"operation":"create","set":{"kind":{"fromField":"kind"}}}]
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
             "action":"create-asset",
             "operations":["invoke"],
-            "targets":[{"entity":"asset","rowBoundaries":[]}],
+            "targets":[{"entity":"asset","rowBoundaries":"unrestricted"}],
             "results":["asset"]
           }]}]
         }"#,
@@ -720,10 +720,10 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "effects":[{"id":"asset","target":{"entity":"asset"},"operation":"create","set":{"kind":{"fromField":"kind"}}}]
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
             "action":"create-asset",
             "operations":["invoke"],
-            "targets":[{"entity":"asset","rowBoundaries":[]}]
+            "targets":[{"entity":"asset","rowBoundaries":"unrestricted"}]
           }]}]
         }"#,
     )
@@ -747,7 +747,7 @@ fn action_bounds_apply_before_runtime_target_work() {
         effects.push(format!(
             r#"{{"target":{{"fromField":"{input}"}},"operation":"patch","set":{{"label":{{"fromField":"label"}}}}}}"#
         ));
-        targets.push(r#"{"entity":"record","rowBoundaries":[]}"#.to_owned());
+        targets.push(r#"{"entity":"record","rowBoundaries":"unrestricted"}"#.to_owned());
     }
     inputs.push(
         r#"{"id":"label","type":"string","maxLength":32,"required":true,"classification":"internal"}"#
@@ -761,7 +761,7 @@ fn action_bounds_apply_before_runtime_target_work() {
           "entities":[{{"id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"mutable",
             "fields":[{{"id":"label","type":"string","maxLength":32,"classification":"internal"}}]}}],
           "actions":[{{"id":"bulk-fix","inputs":[{}],"effects":[{}]}}],
-          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal",
+          "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted",
             "permissions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}]
         }}"#,
         inputs.join(","),
@@ -825,10 +825,10 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
                 }]
             }],
             "accessProfiles": [{
-                "id": "operator", "default": true, "principalClaim": "principal",
+                "id": "operator", "default": true, "principalClaim": "principal", "requiredScopes": "unrestricted",
                 "permissions": [{
                     "action": "create-bounded-record", "operations": ["invoke"],
-                    "targets": [{"entity": "bounded-record", "rowBoundaries": []}]
+                    "targets": [{"entity": "bounded-record", "rowBoundaries": "unrestricted"}]
                 }]
             }]
         });

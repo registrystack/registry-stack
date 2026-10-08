@@ -61,10 +61,10 @@ accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: case
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]
@@ -84,7 +84,7 @@ accessProfiles:
         rowBoundaries:
           - {field: jurisdiction, claim: jurisdictions, operator: in}
       - entity: protected-note
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list]
         readableFields: [text]
         writableFields: [text]
@@ -140,7 +140,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, lookup, list]
         readableFields: [household-code, administrative-area, local-household-number]
         filterableFields: [household-code, administrative-area, local-household-number]
@@ -155,7 +155,7 @@ accessProfiles:
             sortableFields: [person-code]
             allowCount: true
       - entity: person
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [sensitive-note]
         filterableFields: [sensitive-note]
@@ -207,7 +207,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: benefit-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, eligibility-score]
 "#;
@@ -256,10 +256,10 @@ accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: public-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label]
         filterableFields: [label]
@@ -270,13 +270,13 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: public-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, restricted-canary-field]
         filterableFields: [label]
         sortableFields: [label]
       - entity: protected-ledger
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [classified-status, valid-from, valid-to]
         filterableFields: [classified-status]
@@ -308,10 +308,10 @@ accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: logical-record
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [household-code, household-kind-code]
 vocabularies:
@@ -414,36 +414,36 @@ accessProfiles:
   - id: operator
     default: true
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: permit
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [import-source, source-record-id, permit-number, display-token, valid-from, valid-to]
       - entity: inspection
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [import-source, source-record-id, inspection-code, valid-from, valid-to]
         filterableFields: [inspection-code]
         sortableFields: [inspection-code]
       - entity: finding
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [inspection]
       - entity: certificate
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [import-source, certificate-code]
   - id: redacted-reader
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: inspection
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [import-source, valid-from]
       - entity: finding
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [inspection]
 "#;
@@ -471,10 +471,10 @@ accessProfiles:
   - id: map-reader
     default: true
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [code, location]
         filterableFields: [code]
@@ -484,10 +484,10 @@ accessProfiles:
             maximumLatitudeSpanDegrees: 2
   - id: tabular
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
       - entity: site
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [code]
 "#;
@@ -577,7 +577,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     permissions:
       - entity: assignment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, starts, ends]
   - id: revision-only
@@ -585,7 +585,7 @@ accessProfiles:
     requiredScopes: [registry.read]
     permissions:
       - entity: assignment
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [revisions]
         revisionAccess: true
         readableFields: [label]
@@ -629,36 +629,36 @@ accessProfiles:
   - id: public
     default: true
     principalClaim: registry_principal
-    requiredScopes: []
+    requiredScopes: unrestricted
     permissions:
-      - {entity: placement-correction, rowBoundaries: [], operations: [get, list], readableFields: [target, proposed-site]}
+      - {entity: placement-correction, rowBoundaries: unrestricted, operations: [get, list], readableFields: [target, proposed-site]}
   - id: correction-officer
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
       - entity: placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [site]
       - entity: placement-correction
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [create, get, list, patch, submit_request, apply_request]
         readableFields: [target, proposed-site]
         writableFields: [target, proposed-site]
         applyTargets:
-          - {entity: placement, rowBoundaries: []}
+          - {entity: placement, rowBoundaries: unrestricted}
   - id: checkpoint-reader
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
     permissions:
       - entity: placement
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [site]
       - entity: placement-correction
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [target, proposed-site]
         readableRequestFields: [reason, review_state]
@@ -668,7 +668,7 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: placement-correction
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [target, proposed-site]
 "#;
@@ -1657,7 +1657,7 @@ async fn lookup_route_conceals_a_substituted_access_profile_selection() {
     requiredPurposes: [case-management]
     permissions:
       - entity: household
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get]
         readableFields: [household-code]
 "
@@ -4212,7 +4212,7 @@ async fn workspace_metadata_lookup_claim_origin_exposes_no_private_claim_mapping
 
 #[tokio::test]
 async fn workspace_references_require_independent_same_profile_target_operations() {
-    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        rowBoundaries: []\n        operations: [get, list]", "      - entity: membership\n        rowBoundaries: []\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        rowBoundaries: []\n        operations: [get, list]");
+    let source = LOOKUP_PATH_PROJECT.replace("      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]", "      - entity: membership\n        rowBoundaries: unrestricted\n        operations: [get]\n        readableFields: [person]\n      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]");
     let harness = Harness::from_project(&source, true);
     let document = body_json(
         harness
@@ -4235,7 +4235,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         assert_eq!(operation["labelFields"], json!(["sensitive-note"]));
         assert_ne!(operation["operationId"], "records.household.path.people");
     }
-    let path_only = source.replace("      - entity: person\n        rowBoundaries: []\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
+    let path_only = source.replace("      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [sensitive-note]\n        filterableFields: [sensitive-note]\n        sortableFields: [sensitive-note]\n", "");
     let harness = Harness::from_project(&path_only, true);
     let document = body_json(
         harness
@@ -4257,7 +4257,7 @@ async fn workspace_references_require_independent_same_profile_target_operations
         .any(|operation| operation["readPath"]["id"] == "people"));
     // The no-profile request can have different compiled defaults per route.
     // Even a visible direct operation in another profile cannot label this reference.
-    let other_profile = format!("{path_only}      - entity: person\n        rowBoundaries: []\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
+    let other_profile = format!("{path_only}      - entity: person\n        rowBoundaries: unrestricted\n        operations: [get, list]\n        readableFields: [sensitive-note]\n");
     let harness = Harness::from_project(&other_profile, true);
     let document = body_json(
         harness
@@ -4527,15 +4527,16 @@ accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
+    requiredScopes: unrestricted
     permissions:
       - entity: holder
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [label, secret]
         filterableFields: [label]
         sortableFields: [label]
       - entity: note
-        rowBoundaries: []
+        rowBoundaries: unrestricted
         operations: [get, list]
         readableFields: [text]
         filterableFields: [text]

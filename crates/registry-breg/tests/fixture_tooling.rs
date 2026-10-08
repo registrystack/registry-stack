@@ -1175,20 +1175,20 @@ fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
             }
           }],
           "accessProfiles":[{
-            "id":"submitter","default":true,"principalClaim":"registry_principal","permissions":[{
+            "id":"submitter","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"correction-request","operations":["create","submit_request","revise_request","cancel_request"],"readableFields":["target","value"],"writableFields":["target","value"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"reviewer","default":true,"principalClaim":"registry_principal","permissions":[{
+            "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"correction-request","operations":["get","list"],"readableFields":["target","value"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
           },{
-            "id":"applier","default":true,"principalClaim":"registry_principal","permissions":[{
+            "id":"applier","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"correction-request","operations":["apply_request"],"readableFields":["target"],
-              "applyTargets":[{"entity":"target","rowBoundaries":[]}],
-              "rowBoundaries": []
+              "applyTargets":[{"entity":"target","rowBoundaries":"unrestricted"}],
+              "rowBoundaries": "unrestricted"
             }]
           }]
         }"#,
@@ -1213,7 +1213,7 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
             "constraints":[{"kind":"unique","fields":["person-code"]}]
           }],
           "accessProfiles":[{
-            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
+            "id":"registrar","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"person","operations":["create","get","list","patch"],
               "readableFields":["jurisdiction","person-code","legal-name"],
@@ -1277,7 +1277,7 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
             ]
           }],
           "accessProfiles":[{
-            "id":"household-seed","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
+            "id":"household-seed","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],
               "writableFields":["jurisdiction","household-code"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -1295,7 +1295,7 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
               "results":["person","household"]
             }]
           },{
-            "id":"person-reader","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
+            "id":"person-reader","default":true,"principalClaim":"registry_principal","requiredScopes":"unrestricted","requiredPurposes":["case-management"],
             "permissions":[{
               "entity":"person","operations":["get"],"readableFields":["jurisdiction","person-code","legal-name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -1363,11 +1363,11 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
             {"id":"map-reader","default":true,"principalClaim":"sub","requiredScopes":["sites.read"],"permissions":[{
               "entity":"site","operations":["get","list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]},
             {"id":"directory-reader","principalClaim":"sub","requiredScopes":["sites.read"],"permissions":[{
               "entity":"site","operations":["list"],"readableFields":["code"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]}
           ]
         }"#,

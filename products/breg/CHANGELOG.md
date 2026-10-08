@@ -215,6 +215,23 @@
   and a baseline package that granted unauthenticated access is refused.
   Migration steps are in `release/notes/config-conventions/breg.md`, section
   "BReg access".
+- BREAKING: an access profile in `registry.yaml` says `unrestricted` or names
+  what it restricts, and an empty list is refused when the file is read.
+  `requiredScopes` is required on every profile and takes `unrestricted` or a
+  list of at least one scope; `rowBoundaries` on an entity permission, an
+  action target, an `applyTargets` entry, and a `requestPresence` entry takes
+  `unrestricted` or a list of at least one row boundary. `requiredPurposes`,
+  `requesterClients`, and the members of `accessRequirements` only narrow:
+  omit one to apply no restriction, and `[]` or `unrestricted` there is
+  refused naming that fix. Enforcement does not change and a rewritten
+  project keeps its compiled revision. The findings
+  `breg.access.profile-no-required-scope` and
+  `breg.access.action-no-required-scope` are removed;
+  `breg.access.profile-subsumes-narrower` and
+  `breg.access.wildcard-spelled-item` are added. A module that declares
+  `accessRequirements` without all three members gets a new digest. Migration
+  steps are in `release/notes/config-conventions/breg.md`, section "BReg
+  access".
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up

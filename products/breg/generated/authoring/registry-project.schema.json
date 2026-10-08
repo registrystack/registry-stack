@@ -94,29 +94,29 @@
       "description": "Compile-time requirements, not grants. Profiles must explicitly satisfy them.",
       "properties": {
         "allowedPurposes": {
-          "default": [],
-          "description": "When nonempty, every profile must restrict purpose to a nonempty subset of these values. Empty imposes no purpose requirement.",
+          "description": "Every profile must restrict purpose to a subset of these values. Omit to demand no purpose.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "requiredScopes": {
-          "default": [],
-          "description": "Every profile must require all these scopes. Requirements never grant access.",
+          "description": "Every profile must require all these scopes. Requirements never grant access. Omit to demand no scope.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "rowBoundaries": {
-          "default": [],
-          "description": "Every profile must include these exact field, verified-claim, and operator bindings.",
+          "description": "Every profile must include these exact field, verified-claim, and operator bindings. Omit to demand no row boundary.",
           "items": {
             "$ref": "#/$defs/RowBoundarySource"
           },
+          "minItems": 1,
           "type": "array"
         }
       },
@@ -651,11 +651,8 @@
           "type": "string"
         },
         "rowBoundaries": {
-          "description": "Explicit row reach; an empty array intentionally permits all rows.",
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "type": "array"
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
         }
       },
       "required": [
@@ -703,11 +700,8 @@
           "type": "string"
         },
         "rowBoundaries": {
-          "description": "Explicit row reach; an empty array intentionally permits all rows.",
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "type": "array"
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
         }
       },
       "required": [
@@ -2182,10 +2176,8 @@
           "type": "boolean"
         },
         "rowBoundaries": {
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "type": "array"
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
         },
         "sortableFields": {
           "default": [],
@@ -3338,36 +3330,34 @@
           "type": "string"
         },
         "requesterClients": {
+          "description": "The OAuth clients whose tokens may select this profile. Omit to accept every client.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "requiredPurposes": {
-          "default": [],
-          "description": "The verified token's purpose must match one listed value. Empty means no purpose restriction.",
+          "description": "The verified token's purpose must match one listed value. Omit to accept every purpose.",
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
         "requiredScopes": {
-          "default": [],
-          "description": "All listed scopes must be present in the verified token.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
+          "$ref": "#/$defs/RequiredScopes",
+          "description": "The scopes the verified token must carry: `unrestricted`, or a list of at least one scope, all of which must be present."
         },
         "taskGrant": {
           "$ref": "#/$defs/TaskGrantSource"
         }
       },
       "required": [
-        "id"
+        "id",
+        "requiredScopes"
       ],
       "type": "object"
     },
@@ -3597,11 +3587,8 @@
           "type": "string"
         },
         "rowBoundaries": {
-          "description": "Explicit row reach; an empty array intentionally permits all rows.",
-          "items": {
-            "$ref": "#/$defs/RowBoundarySource"
-          },
-          "type": "array"
+          "$ref": "#/$defs/RowBoundaries",
+          "description": "Row reach: `unrestricted`, or a list of at least one row boundary."
         }
       },
       "required": [
@@ -3614,6 +3601,43 @@
       "const": "owner",
       "description": "Expose only requests created by the current authenticated principal.",
       "type": "string"
+    },
+    "RequiredScopes": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Require no scope.",
+          "type": "string"
+        },
+        {
+          "description": "Require every listed scope.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "The scopes a token must carry to select a profile: the keyword\n`unrestricted`, or a list of at least one scope."
+    },
+    "RowBoundaries": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Reach every row.",
+          "type": "string"
+        },
+        {
+          "description": "Reach the rows every listed boundary binds to the caller's claims.",
+          "items": {
+            "$ref": "#/$defs/RowBoundarySource"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "The rows a permission reaches: the keyword `unrestricted`, or a list of at\nleast one row boundary."
     },
     "RowBoundarySource": {
       "additionalProperties": false,

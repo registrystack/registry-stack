@@ -29,7 +29,7 @@ fn project() -> Value {
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":"unrestricted"}],"results":["person","friend","existing"]}]}]
     })
 }
 fn compile(source: Value, script: &str) -> Result<CompiledAction, registry_breg::CompileFailure> {
@@ -1124,7 +1124,7 @@ fn handler_rejects_reference_to_a_create_of_an_incompatible_entity() {
     source["accessProfiles"][0]["permissions"][0]["targets"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"entity":"organization","rowBoundaries":[]}));
+        .push(json!({"entity":"organization","rowBoundaries":"unrestricted"}));
     let script = result(
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"friend",set:#{name:"Company"}}]}"#,
     );

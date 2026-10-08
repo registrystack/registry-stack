@@ -7,8 +7,9 @@ use serde::Serialize;
 
 use crate::compiler::operation_id;
 use crate::contract::{
-    AccessProfileSource, AccessRequirementsSource, Classification, ConsentIssuerSource,
-    EntitySource, FieldTypeSource, MembershipBoundarySource, Operation, RowBoundarySource,
+    AccessProfileSource, AccessRequirementsSource, ActorKindSource, Classification,
+    ConsentIssuerSource, EntitySource, FieldTypeSource, MembershipBoundarySource, Operation,
+    ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{CompiledActionInventory, CompiledEntity, CompiledRegistry};
@@ -139,10 +140,6 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
     for entity in entities.values() {
         for profile in &entity.access_profiles {
             let path = profile_path(&entity.id, &profile.id);
-            if profile.required_scopes.is_empty() {
-                findings.push(Diagnostic::finding("breg.access.profile-no-required-scope", format!("{path}.requiredScopes"),
-                    "no scope restricts who may select this profile; any authenticated principal satisfying its purpose and row claims qualifies. Add a required scope unless this is intended"));
-            }
             if entity.classification != Classification::Public
                 && profile.operations.contains(&Operation::List)
                 && profile.row_boundaries.is_empty()
@@ -292,16 +289,94 @@ pub(crate) fn compiled_access_findings(
     for entity in entities.values() {
         ungated_client_findings(entity, &mut findings);
     }
-    for action in &actions.actions {
-        for grant in &action.permissions {
-            if grant.required_scopes.is_empty() {
-                findings.push(Diagnostic::finding("breg.access.action-no-required-scope",
-                    format!("actions[id={}].permissions[profile={}].requiredScopes", action.id, grant.profile_id),
-                    "no scope restricts who may select this action profile; any authenticated principal satisfying its purpose and target claims qualifies. Add a required scope unless this is intended"));
+    findings
+}
+
+/// Findings on the access decisions a project writes, read before they are
+/// copied onto each entity.
+pub(crate) fn project_access_findings(
+    project: &RegistryProject,
+    entities: &BTreeMap<String, EntitySource>,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for profile in &project.access_profiles {
+        let path = format!("project.accessProfiles[id={}]", profile.id);
+        if profile.required_scopes.is_empty() {
+            let narrower = project
+                .access_profiles
+                .iter()
+                .filter(|other| other.id != profile.id && admits_every_token_of(profile, other))
+                .map(|other| format!("`{}`", other.id))
+                .collect::<Vec<_>>();
+            if !narrower.is_empty() {
+                findings.push(Diagnostic::finding("breg.access.profile-subsumes-narrower", format!("{path}.requiredScopes"), &format!(
+                    "this profile requires no scope and admits every token admitted by {}, so a caller admitted there also reaches what this profile grants by selecting it. Review what this profile grants, or require a scope here",
+                    narrower.join(", "))));
+            }
+        }
+        for (member, items) in [
+            ("requiredScopes", &profile.required_scopes),
+            ("requiredPurposes", &profile.required_purposes),
+            ("requesterClients", &profile.requester_clients),
+        ] {
+            wildcard_spelled_finding(items, format!("{path}.{member}"), &mut findings);
+        }
+    }
+    for entity in entities.values() {
+        if let Some(requirements) = &entity.access_requirements {
+            let path = format!("entities[id={}].accessRequirements", entity.id);
+            for (member, items) in [
+                ("requiredScopes", &requirements.required_scopes),
+                ("allowedPurposes", &requirements.allowed_purposes),
+            ] {
+                wildcard_spelled_finding(items, format!("{path}.{member}"), &mut findings);
             }
         }
     }
     findings
+}
+
+/// Whether `open`, a profile that requires no scope, admits every token
+/// `narrower` admits, whatever scopes `narrower` requires. It mirrors the
+/// request-time profile gates: a member `open` leaves out admits everything,
+/// a member it writes must cover what `narrower` writes, and a profile bound
+/// to a task grant admits no token another profile admits.
+fn admits_every_token_of(
+    open: &ProjectAccessProfileSource,
+    narrower: &ProjectAccessProfileSource,
+) -> bool {
+    let covers = |open: &BTreeSet<String>, narrower: &BTreeSet<String>| {
+        open.is_empty() || (!narrower.is_empty() && narrower.is_subset(open))
+    };
+    // A delegated token is admitted only by an agent profile, and an agent
+    // profile admits no other kind.
+    let same_actors = open.actor_kind == narrower.actor_kind
+        || (open.actor_kind.is_none() && narrower.actor_kind != Some(ActorKindSource::Agent));
+    open.principal_claim == narrower.principal_claim
+        && covers(&open.required_purposes, &narrower.required_purposes)
+        && covers(&open.requester_clients, &narrower.requester_clients)
+        && same_actors
+        && open.task_grant.is_none()
+        && narrower.task_grant.is_none()
+}
+
+/// An allow-list item spelled like a wildcard is one name. Nothing here
+/// matches by pattern, so it grants and restricts exactly as any other item.
+fn wildcard_spelled_finding(
+    items: &BTreeSet<String>,
+    path: String,
+    findings: &mut Vec<Diagnostic>,
+) {
+    if items
+        .iter()
+        .any(|item| matches!(item.as_str(), "*" | "unrestricted"))
+    {
+        findings.push(Diagnostic::finding(
+            "breg.access.wildcard-spelled-item",
+            path,
+            "The item is spelled like a wildcard but names one entry: `*` and `unrestricted` match nothing else in this list.",
+        ));
+    }
 }
 
 /// A client that may read a gated entity through a profile without consent

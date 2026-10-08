@@ -34,8 +34,8 @@ fn encrypted_project() -> Value {
                  "lookup":{"normalization":["trim","uppercase"],"unique":true}}
             ]
         }],
-        "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","permissions":[{
-            "entity":"case","rowBoundaries":[],"operations":["get","list","create","patch"],
+        "accessProfiles":[{"id":"caseworker","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
+            "entity":"case","rowBoundaries":"unrestricted","operations":["get","list","create","patch"],
             "readableFields":["label","secret"],"writableFields":["label","secret"]
         }]}]
     })
@@ -666,11 +666,11 @@ fn change_request_project() -> Value {
                 }}
             }
         }],
-        "accessProfiles":[{"id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+        "accessProfiles":[{"id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
             "entity":"release-request",
             "operations":["get","submit_request","apply_request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],
-            "applyTargets":[{"entity":"lot","rowBoundaries":[]}],"rowBoundaries":[]
+            "applyTargets":[{"entity":"lot","rowBoundaries":"unrestricted"}],"rowBoundaries":"unrestricted"
         }]}]
     })
 }

@@ -114,15 +114,15 @@ permissions:
     readableFields: [record, licensed-activities]
     writableFields: [record, licensed-activities]
     requestVisibility: owner
-    rowBoundaries: []
+    rowBoundaries: unrestricted
   - entity: scope-correction
     operations: [get, apply_request]
     readableFields: [record, licensed-activities]
     readableRequestFields: [review_state]
     applyTargets:
       - entity: professional-license
-        rowBoundaries: []
-    rowBoundaries: []
+        rowBoundaries: unrestricted
+    rowBoundaries: unrestricted
 ```
 
 Casework reviewer profiles and stages belong in the Casework project. Do not duplicate them as

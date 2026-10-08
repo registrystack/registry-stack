@@ -31,13 +31,13 @@ fn source() -> Value {
             }
         }],
         "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","permissions":[{
+            "id":"operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
                 "entity":"request",
                 "operations":["get","list","create","patch","submit_request","apply_request"],
                 "readableFields":["item","label","supporting-file"],
                 "writableFields":["item","label","supporting-file"],
-                "applyTargets":[{"entity":"item","rowBoundaries":[]}],
-                "rowBoundaries":[]
+                "applyTargets":[{"entity":"item","rowBoundaries":"unrestricted"}],
+                "rowBoundaries":"unrestricted"
             }]
         }]
     })

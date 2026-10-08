@@ -59,15 +59,15 @@ fn governed_project(required_for: &[&str], loader_operations: &[&str]) -> Value 
           "review":{"authority":"casework-main","policyId":"request-review"},"onApproved":{"mode":"manual"}}
       }],
       "accessProfiles":[{
-        "id":"loader","principalClaim":"principal","permissions":[{
+        "id":"loader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
           "entity":"enrollment","operations":loader_operations,"readableFields":["label"],"writableFields":["label"],
-          "rowBoundaries": []
+          "rowBoundaries": "unrestricted"
         }]
       },{
-        "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
+        "id":"reviewer","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
           "entity":"enrollment-change","operations":["get","submit_request","apply_request"],"readableFields":["enrollment","label"],
-          "applyTargets":[{"entity":"enrollment", "rowBoundaries": []}],
-          "rowBoundaries": []
+          "applyTargets":[{"entity":"enrollment", "rowBoundaries": "unrestricted"}],
+          "rowBoundaries": "unrestricted"
         }]
       }]
     })
@@ -193,9 +193,9 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
         .as_array_mut()
         .expect("profiles")
         .push(json!({
-            "id":"bulk-writer","principalClaim":"principal","permissions":[{
+            "id":"bulk-writer","principalClaim":"principal","requiredScopes":"unrestricted","permissions":[{
               "entity":"enrollment","operations":["create","batch"],"readableFields":["label"],"writableFields":["label"],
-              "rowBoundaries": []
+              "rowBoundaries": "unrestricted"
             }]
         }));
     let failure =

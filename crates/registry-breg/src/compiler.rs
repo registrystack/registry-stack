@@ -277,6 +277,7 @@ pub fn compile_project_with_assets(
     crate::membership::validate(&sources, &mut diagnostics);
     crate::consent::validate(project, &sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
+    findings.extend(crate::access::project_access_findings(project, &sources));
     findings.extend(create_required_field_findings(&sources));
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
