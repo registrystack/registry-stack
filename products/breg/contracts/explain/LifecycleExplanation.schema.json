@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha3.schema.json",
   "title": "LifecycleExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain lifecycle`, which reports the request lifecycle the engine enforces. This kind is pinned in full, identifiers and positions included: the request machine does not vary by project, so its own id, its four states with every fact derived from the edge list pinned to the value that derivation must produce, its six edges, and its twenty-one enforcement layers, each with the exact event list it runs for, are all constrained here by position and unconditionally, and a rename, a reordering, or a dropped entry fails the contract test rather than passing it. `LifecycleDescription` in `registry-breg` exists to be this payload rather than to model anything the engine computes, so a change to its fields is a deliberate change to this contract and not the incidental drift that makes a compiled-model passthrough opaque. `lifecycle` is the one subject that takes no PROJECT: the lifecycle is engine behaviour and does not vary by project, so the report carries no `revision`.",
   "type": "object",
@@ -19,6 +19,7 @@
       "minItems": 1,
       "maxItems": 1,
       "items": {
+        "unevaluatedProperties": false,
         "allOf": [
           {
             "$ref": "#/$defs/lifecycle"
@@ -32,16 +33,19 @@
   },
   "$defs": {
     "requestLifecyclePin": {
-      "$comment": "Applied unconditionally to the single entry `bregctl explain lifecycle` emits, never behind an `if` on the value being pinned: a condition keyed on `id` goes false the moment the machine is renamed, so the rename the constraint exists to reject would fall through to the generic shape and validate. Every list is pinned with `prefixItems` and `items: false` rather than an enum over its vocabulary: an enum admits the same names in a different order, or one entry duplicated in place of another, and each of those is a different machine reported under the same names. The request lifecycle is engine behaviour rather than project configuration, so its id, its states, its edges, and the order of its enforcement layers are wire contract in the same way the field names are, and changing any of them is a breaking change for every consumer that must fail here rather than merely update a Rust unit test alongside the change.",
+      "$comment": "Applied unconditionally to the single entry `bregctl explain lifecycle` emits, never behind an `if` on the value being pinned: a condition keyed on `id` goes false the moment the machine is renamed, so the rename the constraint exists to reject would fall through to the generic shape and validate. Every list is pinned with `prefixItems` and `items: false` rather than an enum over its vocabulary: an enum admits the same names in a different order, or one entry duplicated in place of another, and each of those is a different machine reported under the same names. The request lifecycle is engine behaviour rather than project configuration, so its id, its states, its edges, and the order of its enforcement layers are wire contract in the same way the field names are, and changing any of them is a breaking change for every consumer that must fail here rather than merely update a Rust unit test alongside the change. The pin and each pinned entry are closed objects; a member the pin leaves free, such as a transition's `guard`, is declared `true` here and typed by its `$defs` shape.",
       "type": "object",
+      "additionalProperties": false,
       "required": ["id", "states", "transitions", "enforcement"],
       "properties": {
         "id": {
           "const": "request"
         },
+        "label": true,
         "states": {
           "prefixItems": [
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "const": "draft"
@@ -54,6 +58,7 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "const": "submitted"
@@ -66,6 +71,7 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "const": "cancelled"
@@ -78,6 +84,7 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "const": "applied"
@@ -96,7 +103,9 @@
         "transitions": {
           "prefixItems": [
             {
+              "additionalProperties": false,
               "properties": {
+                "guard": true,
                 "from": {
                   "const": "draft"
                 },
@@ -109,7 +118,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "guard": true,
                 "from": {
                   "const": "submitted"
                 },
@@ -122,7 +133,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "guard": true,
                 "from": {
                   "const": "submitted"
                 },
@@ -135,7 +148,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "guard": true,
                 "from": {
                   "const": "draft"
                 },
@@ -148,7 +163,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "guard": true,
                 "from": {
                   "const": "submitted"
                 },
@@ -161,7 +178,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "guard": true,
                 "from": {
                   "const": "submitted"
                 },
@@ -180,7 +199,9 @@
         "enforcement": {
           "prefixItems": [
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "caller_authentication"
                 },
@@ -198,7 +219,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "route_admission"
                 },
@@ -216,7 +239,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "review_evidence_load"
                 },
@@ -230,7 +255,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "apply_evidence_acquisition"
                 },
@@ -244,7 +271,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "apply_preflight"
                 },
@@ -258,7 +287,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "request_header_lookup"
                 },
@@ -276,7 +307,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "submit_preparation"
                 },
@@ -290,7 +323,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "idempotency_replay"
                 },
@@ -308,7 +343,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "row_visibility"
                 },
@@ -326,7 +363,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "submitter_targets"
                 },
@@ -342,7 +381,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "applied_recovery"
                 },
@@ -356,7 +397,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "action_etag"
                 },
@@ -374,7 +417,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "request_ownership"
                 },
@@ -391,7 +436,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "task_grant"
                 },
@@ -409,7 +456,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "review_outcome"
                 },
@@ -424,7 +473,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "submit_commit_preconditions"
                 },
@@ -438,7 +489,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "apply_target_authorization"
                 },
@@ -452,7 +505,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "apply_preconditions"
                 },
@@ -466,7 +521,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "apply_target_persistence"
                 },
@@ -480,7 +537,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "workflow_transition"
                 },
@@ -498,7 +557,9 @@
               }
             },
             {
+              "additionalProperties": false,
               "properties": {
+                "description": true,
                 "id": {
                   "const": "persist_policy"
                 },
@@ -616,11 +677,13 @@
         "incomingTransitions": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 9007199254740991,
           "description": "Count of transitions whose `to` is this state, self-transitions included."
         },
         "outgoingTransitions": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 9007199254740991,
           "description": "Count of transitions whose `from` is this state, self-transitions included."
         }
       }

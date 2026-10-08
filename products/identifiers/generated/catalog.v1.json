@@ -2864,74 +2864,56 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/mcp-runtime/mcp-runtime.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha1",
+      "compatibilityLine": "v1alpha3",
       "owner": "breg",
-      "title": "Base Registry Engine MCP gateway runtime configuration",
-      "description": "Base Registry Engine citizen MCP gateway runtime configuration JSON Schema.",
+      "title": "AccessExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
-        "path": "crates/registry-breg-mcp/src/schema.rs",
-        "sha256": "3e23892d238d9ae9f0fe5b88af8ff394e07891dec5d9c60fb04026c08edce6c2"
+        "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
+        "sha256": "f3b98a600cc215ec8ddd013abed03ab5affd9e24680c1162ff895f5bc9df68b7"
       },
       "artifact": {
-        "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "6ba42582e6752b3cb70a3fd52a9996055730f9178a60e6e198365e56a0ea444f",
+        "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
+        "sha256": "f3b98a600cc215ec8ddd013abed03ab5affd9e24680c1162ff895f5bc9df68b7",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha3.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha1",
+      "compatibilityLine": "v1alpha3",
       "owner": "breg",
-      "title": "Base Registry Engine authored module",
-      "description": "Base Registry Engine project authoring JSON Schema.",
+      "title": "AccessPreview",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
-        "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "858d4a8829acb5edae174abc0091083c1835ccf469abe4037422b77e96ce61d4"
+        "path": "products/breg/contracts/explain/AccessPreview.schema.json",
+        "sha256": "31086ad811e6ea2db050e3cb6f4c39853ecef1b857123fe374d3aa94c3bb91f0"
       },
       "artifact": {
-        "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "ae9225f9f1796761215939e6ba2443f454d988dadf76e9f01a37c44721a24d52",
+        "path": "products/breg/contracts/explain/AccessPreview.schema.json",
+        "sha256": "31086ad811e6ea2db050e3cb6f4c39853ecef1b857123fe374d3aa94c3bb91f0",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha3.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha1",
+      "compatibilityLine": "v1alpha3",
       "owner": "breg",
-      "title": "Base Registry Engine authored project",
-      "description": "Base Registry Engine project authoring JSON Schema.",
+      "title": "ActionsExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
-        "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "858d4a8829acb5edae174abc0091083c1835ccf469abe4037422b77e96ce61d4"
+        "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
+        "sha256": "a4f42043eb93f59903501d655ce65eb26c7bfff016651f3c3d079c157f5eebca"
       },
       "artifact": {
-        "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "c238ca2b51678993adefcd74d4c463998659908d6320f919b92c398bbe23a41e",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/breg/review-runtime/review-runtime.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "breg",
-      "title": "Base Registry Engine citizen review page runtime configuration",
-      "description": "Base Registry Engine citizen review page runtime configuration JSON Schema.",
-      "source": {
-        "path": "crates/registry-breg-review/src/schema.rs",
-        "sha256": "2c69c0a44d136648b6d7b851a9bb92967d9df6bbcec8c3c7befe04b941ed21af"
-      },
-      "artifact": {
-        "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "381d40a7355046b0ad353b131ea5d68a4d6bdfdbf75fa848b528dd8104c3a874",
+        "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
+        "sha256": "a4f42043eb93f59903501d655ce65eb26c7bfff016651f3c3d079c157f5eebca",
         "mediaType": "application/schema+json"
       }
     },
@@ -2950,6 +2932,42 @@
       "artifact": {
         "path": "products/breg/generated/tools/backup-binding.v1alpha1.schema.json",
         "sha256": "f52ad0028a6479717062d38de052df5c1d8e1b0c8b63c478980a3897cc2675cd",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "breg",
+      "title": "ChangeRequestsExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/explain/ChangeRequestsExplanation.schema.json",
+        "sha256": "a1ccb34fa56ee200e06f2eb6e201b722d7011aae0d779745344cd0434a0a01e8"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/explain/ChangeRequestsExplanation.schema.json",
+        "sha256": "a1ccb34fa56ee200e06f2eb6e201b722d7011aae0d779745344cd0434a0a01e8",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "breg",
+      "title": "EventsExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/explain/EventsExplanation.schema.json",
+        "sha256": "fc9da921af4d644b473a9f083faf53b237ce19df6a196690f5557091d84bd57e"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/explain/EventsExplanation.schema.json",
+        "sha256": "fc9da921af4d644b473a9f083faf53b237ce19df6a196690f5557091d84bd57e",
         "mediaType": "application/schema+json"
       }
     },
@@ -2990,6 +3008,60 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "breg",
+      "title": "LifecycleExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
+        "sha256": "a21d029ebf084ef46cc08815abba86428cfbcdfb21456bb7c25aa308e700473f"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
+        "sha256": "a21d029ebf084ef46cc08815abba86428cfbcdfb21456bb7c25aa308e700473f",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/mcp-runtime/mcp-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine MCP gateway runtime configuration",
+      "description": "Base Registry Engine citizen MCP gateway runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg-mcp/src/schema.rs",
+        "sha256": "3e23892d238d9ae9f0fe5b88af8ff394e07891dec5d9c60fb04026c08edce6c2"
+      },
+      "artifact": {
+        "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
+        "sha256": "6ba42582e6752b3cb70a3fd52a9996055730f9178a60e6e198365e56a0ea444f",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "breg",
+      "title": "ModelExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
+        "sha256": "b18fd8933162294f8ad944dddfc7404a9738afe9b0c6ded93d2adae397a7b949"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
+        "sha256": "b18fd8933162294f8ad944dddfc7404a9738afe9b0c6ded93d2adae397a7b949",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3004,6 +3076,96 @@
       "artifact": {
         "path": "products/breg/generated/tools/model-selection.v1alpha1.schema.json",
         "sha256": "b022348727ac7a855a6d83d0eb533a1f3dbaa388060a4ecc790500f99a6f823c",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine authored module",
+      "description": "Base Registry Engine project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "858d4a8829acb5edae174abc0091083c1835ccf469abe4037422b77e96ce61d4"
+      },
+      "artifact": {
+        "path": "products/breg/generated/authoring/registry-module.schema.json",
+        "sha256": "ae9225f9f1796761215939e6ba2443f454d988dadf76e9f01a37c44721a24d52",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine authored project",
+      "description": "Base Registry Engine project authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg/src/schema.rs",
+        "sha256": "858d4a8829acb5edae174abc0091083c1835ccf469abe4037422b77e96ce61d4"
+      },
+      "artifact": {
+        "path": "products/breg/generated/authoring/registry-project.schema.json",
+        "sha256": "c238ca2b51678993adefcd74d4c463998659908d6320f919b92c398bbe23a41e",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "breg",
+      "title": "QueriesExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/explain/QueriesExplanation.schema.json",
+        "sha256": "1f7b952cfa31da5f511755d3570a1f92f29800fd2af48aa3f5a58560ed27e067"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/explain/QueriesExplanation.schema.json",
+        "sha256": "1f7b952cfa31da5f511755d3570a1f92f29800fd2af48aa3f5a58560ed27e067",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/review-runtime/review-runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Base Registry Engine citizen review page runtime configuration",
+      "description": "Base Registry Engine citizen review page runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-breg-review/src/schema.rs",
+        "sha256": "2c69c0a44d136648b6d7b851a9bb92967d9df6bbcec8c3c7befe04b941ed21af"
+      },
+      "artifact": {
+        "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
+        "sha256": "381d40a7355046b0ad353b131ea5d68a4d6bdfdbf75fa848b528dd8104c3a874",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha3.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "owner": "breg",
+      "title": "RoutesExplanation",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/explain/RoutesExplanation.schema.json",
+        "sha256": "b5859ff87f94031ef91b433f647c9aca85df53e9ad5a7491eea35d02ad4e9449"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/explain/RoutesExplanation.schema.json",
+        "sha256": "b5859ff87f94031ef91b433f647c9aca85df53e9ad5a7491eea35d02ad4e9449",
         "mediaType": "application/schema+json"
       }
     },

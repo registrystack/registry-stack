@@ -1045,10 +1045,10 @@ This section covers the files `bregctl` reads and writes beside a registry
 project: the fixture journeys, the schema-test credentials and receipt, the
 development client and state files, the example scenarios, the data import
 and export checkpoints, the migration descriptor and rehearsal receipt, the
-backup binding, the model selection, the Evidence source export, and the
-`--format json` reports and `explain` outputs. None of them is a promised
-format; each now carries a Registry Stack header, is read by the shared
-reader, and is refused with the reader's codes and positions.
+backup binding, the model selection, and the Evidence source export, which
+are unpromised formats, and the promised `explain` outputs. Each unpromised
+file now carries a Registry Stack header, is read by the shared reader, and
+is refused with the reader's codes and positions.
 
 ### BREAKING: fixture journeys version 1 (`tests/journeys.yaml`)
 
@@ -1507,3 +1507,32 @@ identifier names the format and its version, for example
 editing aid: `bregctl check --file` remains the check, and it also refuses
 what a schema cannot express, such as a journey that names a route its
 project does not declare.
+
+### BREAKING: `explain` output schema identifiers
+
+The nine `bregctl explain` output schemas under
+`products/breg/contracts/explain/` take their identifiers from the Registry
+Stack identifier catalog. A consumer that resolves these schemas by `$id`, or
+pins the old identifiers, replaces each with its new one:
+
+| `kind` | Old `$id` | New `$id` |
+|---|---|---|
+| `AccessExplanation` | `https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json` |
+| `AccessPreview` | `https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json` | `https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha3.schema.json` |
+| `ActionsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha3.schema.json` |
+| `ChangeRequestsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha3.schema.json` |
+| `EventsExplanation` | `https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha3.schema.json` |
+| `LifecycleExplanation` | `https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha3.schema.json` |
+| `ModelExplanation` | `https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha3.schema.json` |
+| `QueriesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha3.schema.json` |
+| `RoutesExplanation` | `https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json` | `https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha3.schema.json` |
+
+The schemas also state what `bregctl` already writes. Every integer has a
+minimum and a maximum: the range of the Rust type `bregctl` writes, or 0 to
+9007199254740991, the largest integer JSON carries exactly, where that type
+is wider. Lists that are sets declare `uniqueItems`, a module digest is
+`sha256:` followed by 64 lowercase hex digits, the request lifecycle pin
+refuses a member the lifecycle does not declare, and
+`requests[].fields[].schema` is marked as an embedded JSON Schema. The
+output and its `apiVersion`, `registry.registrystack.org/breg-explain/v1alpha3`,
+are unchanged.

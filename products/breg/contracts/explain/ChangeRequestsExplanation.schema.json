@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha3.schema.json",
   "title": "ChangeRequestsExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain change-requests`. Every node is reconstructed field by field by bregctl and is pinned in full, except `application` and `onApproved`, which are raw passthroughs of compiled-model values, and `fields[].schema`, which is a JSON Schema fragment read from the generated entity schema artifact; all three are declared opaque.",
   "type": "object",
@@ -50,7 +50,7 @@
         "properties": {
           "entity": { "type": "string" },
           "route": { "type": "string" },
-          "requiredFor": { "type": "array", "items": { "$ref": "#/$defs/operation" } },
+          "requiredFor": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/operation" } },
           "eligibleRequestTypes": { "type": "array", "items": { "type": "string" } },
           "directWriteRestriction": { "type": "string" }
         }
@@ -81,6 +81,7 @@
                 "apiName": { "type": "string" },
                 "schema": {
                   "type": "object",
+                  "x-registry-foreign": "json-schema-2020-12",
                   "description": "JSON Schema fragment for this field, read from the entity's generated schema artifact. Outside this contract version."
                 }
               }
@@ -91,9 +92,9 @@
             "additionalProperties": false,
             "required": ["maximumTargets", "maximumFieldMutations", "maximumSnapshotBytes"],
             "properties": {
-              "maximumTargets": { "type": "integer" },
-              "maximumFieldMutations": { "type": "integer" },
-              "maximumSnapshotBytes": { "type": "integer" }
+              "maximumTargets": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "maximumFieldMutations": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "maximumSnapshotBytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
             }
           },
           "planner": {
@@ -149,17 +150,17 @@
                       "maximumMapEntries", "maximumModules"
                     ],
                     "properties": {
-                      "maximumTargets": { "type": "integer" },
-                      "maximumFieldMutations": { "type": "integer" },
-                      "maximumSnapshotBytes": { "type": "integer" },
-                      "maximumSourceBytes": { "type": "integer" },
-                      "maximumOperations": { "type": "integer" },
-                      "maximumCallDepth": { "type": "integer" },
-                      "maximumExpressionDepth": { "type": "integer" },
-                      "maximumStringBytes": { "type": "integer" },
-                      "maximumArrayItems": { "type": "integer" },
-                      "maximumMapEntries": { "type": "integer" },
-                      "maximumModules": { "type": "integer" }
+                      "maximumTargets": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                      "maximumFieldMutations": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                      "maximumSnapshotBytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+                      "maximumSourceBytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+                      "maximumOperations": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+                      "maximumCallDepth": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                      "maximumExpressionDepth": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                      "maximumStringBytes": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+                      "maximumArrayItems": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                      "maximumMapEntries": { "type": "integer", "minimum": 0, "maximum": 65535 },
+                      "maximumModules": { "type": "integer", "minimum": 0, "maximum": 65535 }
                     }
                   },
                   "possibleWrites": {

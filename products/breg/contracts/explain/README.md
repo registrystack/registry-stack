@@ -61,7 +61,10 @@ same reason: there is no compiled project to name.
 
 Each schema file is draft 2020-12, self-contained (its own `$defs`, no
 cross-file `$ref`), and is validated against every fixture the gate covers by
-`crates/registry-bregctl/tests/explain_contract.rs`.
+`crates/registry-bregctl/tests/explain_contract.rs`. Its `$id` is its
+identifier in the Registry Stack identifier catalog, named for the kind and
+the version, for example
+`https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json`.
 
 ## What is pinned, what is opaque, and why
 
@@ -69,6 +72,11 @@ A key is **pinned** (named in `required`, typed, `additionalProperties:
 false` on its containing object) when bregctl's `explain_*` function
 reconstructs it key by key: each output key is an explicit line of Rust in
 `lib.rs` that names the key and picks the value.
+
+A pinned integer states a minimum and a maximum: the range of the Rust type
+`bregctl` writes it from, or 0 to 9007199254740991, the largest integer JSON
+carries exactly, where that type is wider. The bound is the type's range
+rather than today's engine constant, so retuning a limit changes no schema.
 
 A key is declared **opaque** (`type: "object"` or `"array"`, with a
 description, and no further `required`/`additionalProperties` constraint)

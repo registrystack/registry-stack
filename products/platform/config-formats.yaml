@@ -860,7 +860,7 @@ formats:
       kind: BRegAccessExplanation
     schema:
       path: products/breg/contracts/explain/AccessExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -890,7 +890,7 @@ formats:
       kind: BRegAccessPreview
     schema:
       path: products/breg/contracts/explain/AccessPreview.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json
+      id: https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -920,7 +920,7 @@ formats:
       kind: BRegActionsExplanation
     schema:
       path: products/breg/contracts/explain/ActionsExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -950,7 +950,7 @@ formats:
       kind: BRegChangeRequestsExplanation
     schema:
       path: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -980,7 +980,7 @@ formats:
       kind: BRegEventsExplanation
     schema:
       path: products/breg/contracts/explain/EventsExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1010,7 +1010,7 @@ formats:
       kind: BRegLifecycleExplanation
     schema:
       path: products/breg/contracts/explain/LifecycleExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1040,7 +1040,7 @@ formats:
       kind: BRegModelExplanation
     schema:
       path: products/breg/contracts/explain/ModelExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1070,7 +1070,7 @@ formats:
       kind: BRegQueriesExplanation
     schema:
       path: products/breg/contracts/explain/QueriesExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1100,7 +1100,7 @@ formats:
       kind: BRegRoutesExplanation
     schema:
       path: products/breg/contracts/explain/RoutesExplanation.schema.json
-      id: https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json
+      id: https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none

@@ -126,6 +126,13 @@
   release kept it as literal text. Write the value, or in the credentials
   and development clients a secret reference, in its place. The same
   fragment section has the details.
+- BREAKING: the nine `bregctl explain` output schemas take identifiers from
+  the Registry Stack identifier catalog in place of their
+  `registrystack.org/breg-explain/v1alpha3/<Kind>.schema.json` identifiers; a
+  consumer that resolves them by `$id` replaces each old identifier with the
+  new one the same fragment section lists. The schemas also state bounds,
+  set uniqueness, and the digest pattern for what `bregctl` already writes;
+  the output and its `apiVersion` are unchanged.
 - `bregctl check --file <FILE>` checks one BReg tool file offline, chosen by
   its `kind`, without reading a secret, database, or network. It exits 1 on
   a refusal, or on a warning under `--deny-warnings`, 2 on a usage error, and

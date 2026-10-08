@@ -179,6 +179,13 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1."
     },
     {
+      "glob": "products/breg/contracts/explain/*.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha3",
+      "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
+    },
+    {
       "glob": "products/casework/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-casework/src/schema.rs",
       "owner": "casework",

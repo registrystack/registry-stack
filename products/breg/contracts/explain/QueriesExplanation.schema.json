@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha3.schema.json",
   "title": "QueriesExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain queries`. Every node is reconstructed field by field by bregctl and is pinned in full, except `fieldType`, which is a passthrough of the compiled field-type source and is declared opaque wherever it appears.",
   "type": "object",
@@ -59,12 +59,14 @@
                 "fieldType": { "$ref": "#/$defs/fieldType" },
                 "operators": {
                   "type": "array",
+                  "uniqueItems": true,
                   "items": {
                     "enum": ["equals", "in", "range", "is_null", "is_not_null", "prefix", "contains"]
                   }
                 },
                 "wireOperators": {
                   "type": "array",
+                  "uniqueItems": true,
                   "items": {
                     "enum": ["eq", "ne", "in", "ge", "gt", "le", "lt", "eq null", "ne null", "startswith", "contains"]
                   }
@@ -83,7 +85,7 @@
                 "apiName": { "type": "string" },
                 "field": { "type": "string" },
                 "fieldType": { "$ref": "#/$defs/fieldType" },
-                "directions": { "type": "array", "items": { "enum": ["asc"] } },
+                "directions": { "type": "array", "uniqueItems": true, "items": { "enum": ["asc"] } },
                 "examples": { "type": "array", "items": { "type": "string" } }
               }
             }
@@ -103,8 +105,8 @@
               "pageSize": { "const": "$top" },
               "count": { "const": "$count" },
               "cursor": { "const": "$skiptoken" },
-              "accessProfile": { "const": "accessProfile" },
-              "asOf": { "const": "asOf" },
+              "accessProfile": { "const": "accessProfile", "x-registry-member-names": true },
+              "asOf": { "const": "asOf", "x-registry-member-names": true },
               "bbox": { "const": "bbox" }
             }
           },
@@ -116,14 +118,14 @@
               "maxFilterDepth", "maxFilterNodes", "maxFilterPredicates", "maxInValues"
             ],
             "properties": {
-              "maxPageSize": { "type": "integer" },
-              "maxTop": { "type": "integer" },
-              "maxSelectedFields": { "type": "integer" },
-              "maxFilterPayloadBytes": { "type": "integer" },
-              "maxFilterDepth": { "type": "integer" },
-              "maxFilterNodes": { "type": "integer" },
-              "maxFilterPredicates": { "type": "integer" },
-              "maxInValues": { "type": "integer" }
+              "maxPageSize": { "type": "integer", "minimum": 0, "maximum": 65535 },
+              "maxTop": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+              "maxSelectedFields": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maxFilterPayloadBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maxFilterDepth": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maxFilterNodes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maxFilterPredicates": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "maxInValues": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
             }
           },
           "spatialQueries": {

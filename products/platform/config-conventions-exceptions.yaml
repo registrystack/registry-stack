@@ -144,13 +144,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/access-explanation
-  location: products/breg/contracts/explain/AccessExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/access-explanation
   location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/actions
@@ -217,13 +210,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/access-preview
-  location: products/breg/contracts/explain/AccessPreview.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/AccessPreview.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/access-preview/access-preview.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/access-preview
   location: products/breg/contracts/explain/AccessPreview.schema.json#/properties/effectiveProfile
@@ -261,20 +247,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-6
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/handler/properties/outcomes
-  class: pending
-  wp: WP6
-  reason: a list of values or identifiers that accepts duplicates
-  resolution: 'Declare uniqueItems: true and read it with UniqueList'
-- rule: CFG-ID-6
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/permissions/items/properties/operations
-  class: pending
-  wp: WP6
-  reason: a list of values or identifiers that accepts duplicates
-  resolution: 'Declare uniqueItems: true and read it with UniqueList'
 - rule: CFG-ID-7
   format: breg/actions-explanation
   location: products/breg/contracts/explain/ActionsExplanation.schema.json#/$defs/actionTargetSource
@@ -359,97 +331,6 @@ exceptions:
   class: stable-move
   reason: stem retention uses Seconds here and Days in 2 other places
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to retentionDays, or move every use of the stem to one unit'
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/bounds/properties/maximumFieldMutations
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/bounds/properties/maximumSnapshotBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/bounds/properties/maximumTargets
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/clockSkewSeconds
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/defaultActionDeadlineMilliseconds
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/maximumAssertionLifetimeSeconds
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/maximumCalls
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/maximumCallsPerCapability
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/maximumConcurrentEvaluations
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/maximumObservationAgeSeconds
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/maximumResponseBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/maximumRetainedBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/retentionSeconds
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: breg/actions-explanation
   location: products/platform/config-formats.yaml#/example
@@ -457,13 +338,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/ActionsExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/actions-explanation
   location: products/breg/contracts/explain/ActionsExplanation.schema.json#/$defs/fieldType
@@ -499,13 +373,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-EMBED-2
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/fields/items/properties/schema
-  class: pending
-  wp: WP6
-  reason: schema embeds a foreign document without the marker
-  resolution: 'Mark the member with x-registry-foreign: json-schema-2020-12 or openapi-3.1'
 - rule: CFG-ENV-2
   format: breg/change-requests-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -530,13 +397,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-6
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/controlledWrites/items/properties/requiredFor
-  class: pending
-  wp: WP6
-  reason: a list of values or identifiers that accepts duplicates
-  resolution: 'Declare uniqueItems: true and read it with UniqueList'
 - rule: CFG-ID-7
   format: breg/change-requests-explanation
   location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/effects/items/properties/fields/items
@@ -609,104 +469,6 @@ exceptions:
   class: protocol-constant
   reason: POST is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/bounds/properties/maximumFieldMutations
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/bounds/properties/maximumSnapshotBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/bounds/properties/maximumTargets
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumArrayItems
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumCallDepth
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumExpressionDepth
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumFieldMutations
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumMapEntries
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumModules
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumOperations
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumSnapshotBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumSourceBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumStringBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/planner/oneOf/1/properties/limits/properties/maximumTargets
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: breg/change-requests-explanation
   location: products/platform/config-formats.yaml#/example
@@ -714,13 +476,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/ChangeRequestsExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/change-requests-explanation/change-requests-explanation.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/change-requests-explanation
   location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/application
@@ -787,13 +542,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/events-explanation
-  location: products/breg/contracts/explain/EventsExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/EventsExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/events-explanation/events-explanation.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/events-explanation
   location: products/breg/contracts/explain/EventsExplanation.schema.json#/properties/deliveries/items
@@ -1134,20 +882,6 @@ exceptions:
   class: stable-move
   reason: value submitter_targets is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-QTY-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/state/properties/incomingTransitions
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/state/properties/outgoingTransitions
-  class: pending
-  wp: WP6
-  reason: an integer without a stated maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: breg/lifecycle-explanation
   location: products/platform/config-formats.yaml#/example
@@ -1155,244 +889,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/LifecycleExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha3.schema.json
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/0
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/1
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/10
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/11
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/12
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/13
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/14
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/15
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/16
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/17
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/18
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/19
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/2
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/20
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/3
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/4
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/5
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/6
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/7
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/8
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/enforcement/prefixItems/9
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/states/prefixItems/0
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/states/prefixItems/1
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/states/prefixItems/2
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/states/prefixItems/3
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/transitions/prefixItems/0
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/transitions/prefixItems/1
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/transitions/prefixItems/2
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/transitions/prefixItems/3
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/transitions/prefixItems/4
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/$defs/requestLifecyclePin/properties/transitions/prefixItems/5
-  class: pending
-  wp: WP6
-  reason: the object declares members without closing them
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/lifecycle-explanation
-  location: products/breg/contracts/explain/LifecycleExplanation.schema.json#/properties/lifecycles/items
-  class: pending
-  wp: WP6
-  reason: 'members spread across allOf without unevaluatedProperties: false'
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-SCHEMA-8
   format: breg/mcp-runtime
   location: crates/registry-platform-config/src/blocks.rs#JwksSource
@@ -1469,13 +965,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/model-explanation
-  location: products/breg/contracts/explain/ModelExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/ModelExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/model-explanation
   location: products/breg/contracts/explain/ModelExplanation.schema.json#/properties/entities
@@ -1504,13 +993,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-VAL-6
-  format: breg/model-explanation
-  location: products/breg/contracts/explain/ModelExplanation.schema.json#/properties/moduleClosure/items/properties/digest
-  class: pending
-  wp: WP6
-  reason: digest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
 - rule: CFG-EMPTY-1
   format: breg/module
   location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionRequirementSource/properties/equals
@@ -3131,27 +2613,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-6
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/filterable/items/properties/operators
-  class: pending
-  wp: WP6
-  reason: a list of values or identifiers that accepts duplicates
-  resolution: 'Declare uniqueItems: true and read it with UniqueList'
-- rule: CFG-ID-6
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/filterable/items/properties/wireOperators
-  class: pending
-  wp: WP6
-  reason: a list of values or identifiers that accepts duplicates
-  resolution: 'Declare uniqueItems: true and read it with UniqueList'
-- rule: CFG-ID-6
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/sortable/items/properties/directions
-  class: pending
-  wp: WP6
-  reason: a list of values or identifiers that accepts duplicates
-  resolution: 'Declare uniqueItems: true and read it with UniqueList'
 - rule: CFG-NAME-2
   format: breg/queries-explanation
   location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/filterable/items/properties/operators/items/enum/is_not_null
@@ -3188,20 +2649,6 @@ exceptions:
   class: protocol-constant
   reason: CRS84 is written as OGC CRS84 coordinate reference system defines it
   resolution: Permanent.
-- rule: CFG-NAME-2
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/wire/properties/accessProfile/const/accessProfile
-  class: pending
-  wp: WP6
-  reason: value accessProfile is not lowercase kebab-case
-  resolution: 'Mark the value with x-registry-member-names: true; it names a wire parameter'
-- rule: CFG-NAME-2
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/wire/properties/asOf/const/asOf
-  class: pending
-  wp: WP6
-  reason: value asOf is not lowercase kebab-case
-  resolution: 'Mark the value with x-registry-member-names: true; it names a wire parameter'
 - rule: CFG-NAME-2
   format: breg/queries-explanation
   location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/wire/properties/count/const/$count
@@ -3286,62 +2733,6 @@ exceptions:
   class: stable-move
   reason: maxFilterPayloadBytes is a refused spelling of 'Largest accepted body or file'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximumFilterPayloadBytes'
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxFilterDepth
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxFilterNodes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxFilterPayloadBytes
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxFilterPredicates
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxInValues
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxPageSize
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxSelectedFields
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/properties/operations/items/properties/bounds/properties/maxTop
-  class: pending
-  wp: WP6
-  reason: an integer without a stated minimum and maximum
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-SCHEMA-1
   format: breg/queries-explanation
   location: products/platform/config-formats.yaml#/example
@@ -3349,13 +2740,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/QueriesExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/queries-explanation/queries-explanation.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/queries-explanation
   location: products/breg/contracts/explain/QueriesExplanation.schema.json#/$defs/fieldType
@@ -3448,13 +2832,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/breg-explain/v1alpha3/RoutesExplanation.schema.json
-  resolution: Set $id to https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha3.schema.json
 - rule: CFG-SCHEMA-4
   format: breg/routes-explanation
   location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/0

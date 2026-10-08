@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/breg-explain/v1alpha3/AccessExplanation.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json",
   "title": "AccessExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. The evaluation-rule strings are hand-authored constants and are pinned; `routes`, `entities`, `actions`, `rowReach`, `claimContract`, and `claimContractError` are passthroughs of compiled-model values and are declared opaque, except `routes.entries[].entityId`, which is pinned because consumers read it today. `consent` is pinned in full: its structure exists only to be this payload.",
   "type": "object",
