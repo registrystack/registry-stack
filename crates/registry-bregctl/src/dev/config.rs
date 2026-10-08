@@ -11,6 +11,7 @@ use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
     Severity,
 };
+use registry_platform_yaml::{ExternalId, LocalId, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -84,6 +85,81 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
     ],
 };
 
+/// The JSON Schema of the development clients members the reader decodes. The
+/// header is checked and removed before decoding, so the publisher adds it.
+#[cfg(feature = "schema")]
+pub(crate) fn clients_schema() -> schemars::Schema {
+    schemars::schema_for!(Clients)
+}
+
+/// Members that name something by a local identifier, an outside identifier,
+/// or an absolute URL decode through the reader's own types, so a refusal
+/// carries its code and position.
+fn local_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    LocalId::deserialize(deserializer).map(LocalId::into_string)
+}
+
+fn url<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Url::deserialize(deserializer).map(Url::into_string)
+}
+
+fn local_id_keys<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    let map = BTreeMap::<LocalId, V>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
+}
+
+fn external_id_keys<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    let map = BTreeMap::<ExternalId, V>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
+}
+
+/// An id-keyed mapping: `propertyNames` and the item schema (CFG-ID-1).
+#[cfg(feature = "schema")]
+fn keyed_schema<K: schemars::JsonSchema, V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<K>(),
+        "additionalProperties": generator.subschema_for::<V>(),
+    })
+}
+
+/// Claim values are written into the development token as given.
+#[cfg(feature = "schema")]
+fn claims_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<ExternalId>(),
+        "additionalProperties": true,
+        "x-registry-passthrough": "Claim values are written into the development token as given.",
+    })
+}
+
+/// The record body is sent to the registry as given; the registry validates it.
+#[cfg(feature = "schema")]
+fn seed_data_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "additionalProperties": true,
+        "x-registry-passthrough": "The record body is sent to the registry as given; the registry validates it.",
+    })
+}
+
 fn api_version() -> String {
     API_VERSION.to_owned()
 }
@@ -93,6 +169,7 @@ fn kind() -> String {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Clients {
     #[serde(skip_deserializing, default = "api_version")]
@@ -109,20 +186,37 @@ pub(super) struct Clients {
     #[serde(default)]
     pub issuer: IssuerComposition,
     /// Optional exact local webhook bindings. An empty map keeps the inbox.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, LocalEventDestination>")
+    )]
     pub event_destinations: BTreeMap<String, LocalEventDestination>,
     /// Exact local Evidence provider bindings for governed action packages.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, LocalEvidenceProvider>")
+    )]
     pub evidence_providers: BTreeMap<String, LocalEvidenceProvider>,
     /// Exact local Casework review-authority bindings for governed proposals.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, LocalReviewAuthority>")
+    )]
     pub review_authorities: BTreeMap<String, LocalReviewAuthority>,
     /// Exact local service clients that apply approved change requests.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, LocalReviewExecutor>")
+    )]
     pub review_executors: BTreeMap<String, LocalReviewExecutor>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalEventDestination {
     pub origin: String,
@@ -131,8 +225,11 @@ pub(super) struct LocalEventDestination {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalEvidenceProvider {
+    #[serde(deserialize_with = "url")]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub base_url: String,
     pub trust_binding_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,6 +244,7 @@ pub(super) struct LocalEvidenceProvider {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalEvidencePrivateKeyJwt {
     pub token_endpoint: String,
@@ -163,6 +261,7 @@ fn recovery_days<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u3
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalReviewAuthority {
     pub endpoint: String,
@@ -170,6 +269,7 @@ pub(super) struct LocalReviewAuthority {
     pub profile: String,
     pub producer_id: String,
     #[serde(deserialize_with = "recovery_days")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 90)))]
     pub recovery_days: u32,
     /// Logical client from this same closed file. Its generated key is copied
     /// into the private runtime secret tree and is never written to this file.
@@ -181,6 +281,7 @@ pub(super) struct LocalReviewAuthority {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalReviewExecutor {
     /// The one service-only apply_request profile selected by the worker.
@@ -191,6 +292,7 @@ pub(super) struct LocalReviewExecutor {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct IssuerComposition {
     #[serde(default)]
@@ -205,7 +307,11 @@ pub(super) struct IssuerComposition {
     #[serde(default)]
     pub synthetic_users: Vec<BrowserUser>,
     /// Client IDs mapped to a non-default resource audience.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, String>")
+    )]
     pub client_resources: BTreeMap<String, String>,
     /// Clients with one bootstrap scope that may exchange signed assertions.
     #[serde(default)]
@@ -213,6 +319,7 @@ pub(super) struct IssuerComposition {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct IssuerResource {
     pub audience: String,
@@ -220,9 +327,14 @@ pub(super) struct IssuerResource {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct IssuerConnection {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "url")]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub issuer: String,
     pub jwks_endpoint: String,
     pub mapping: IssuerConnectionMapping,
@@ -232,21 +344,40 @@ pub(super) struct IssuerConnection {
     /// this connection projects.
     #[serde(default)]
     pub clients: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "external_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<ExternalId, ExchangeAttributeKindSchema>")
+    )]
     pub token_attributes:
         BTreeMap<String, registry_thunderid_tooling::description::ExchangeAttributeKind>,
 }
 
+/// The schema of `ExchangeAttributeKind`, which lives in a crate that does not
+/// derive schemas.
+#[cfg(feature = "schema")]
+#[derive(schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)]
+enum ExchangeAttributeKindSchema {
+    String,
+    StringArray,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
 pub(super) enum IssuerConnectionMapping {
     InstitutionalGrant,
     FirstParty,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct BrowserApplication {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     pub client_secret_ref: SecretReference,
     pub origin: String,
@@ -260,11 +391,17 @@ pub(super) struct BrowserApplication {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct BrowserUser {
     pub username: String,
     pub email: String,
     pub password_ref: SecretReference,
+    #[serde(deserialize_with = "external_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<ExternalId, String>")
+    )]
     pub attributes: BTreeMap<String, String>,
     /// Explicit permissions granted to this user, per resource audience.
     #[serde(default)]
@@ -272,6 +409,7 @@ pub(super) struct BrowserUser {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalPermissionGrant {
     /// Omit for the owner BREG resource; otherwise use a declared audience.
@@ -281,8 +419,11 @@ pub(super) struct LocalPermissionGrant {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Client {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     /// The access profiles this client is the one local binding for. Empty
     /// means no journey step resolves to it and no seed may reference it.
@@ -297,6 +438,8 @@ pub(super) struct Client {
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_human_fixture: bool,
     pub scopes: Vec<String>,
+    #[serde(deserialize_with = "external_id_keys")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "claims_schema"))]
     pub claims: BTreeMap<String, Value>,
     /// Exact schema-test steps that use this claim variant. Runtime requests
     /// still select an authored access profile; this field only disambiguates
@@ -412,6 +555,7 @@ fn evidence_secrets<'a>(id: &str, provider: &'a LocalEvidenceProvider) -> Vec<Ev
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct TestBinding {
     pub journey_id: String,
@@ -419,18 +563,23 @@ pub(super) struct TestBinding {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Seed {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
     pub client: String,
     pub entity: String,
     pub access_profile: String,
     #[serde(default)]
     pub operation: SeedOperation,
+    #[cfg_attr(feature = "schema", schemars(schema_with = "seed_data_schema"))]
     pub data: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub(super) enum SeedOperation {
     #[default]

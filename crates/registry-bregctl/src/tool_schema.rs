@@ -27,7 +27,7 @@ struct Tool {
     members: fn() -> schemars::Schema,
 }
 
-fn tools() -> [Tool; 5] {
+fn tools() -> [Tool; 6] {
     [
         Tool {
             format: "journeys",
@@ -46,6 +46,12 @@ fn tools() -> [Tool; 5] {
             title: "Base Registry Engine model selection",
             spec: init_from_model::SELECTION_FORMAT,
             members: init_from_model::selection_schema,
+        },
+        Tool {
+            format: "dev-clients",
+            title: "Base Registry Engine development clients",
+            spec: dev::config::DEV_CLIENTS_FORMAT,
+            members: dev::config::clients_schema,
         },
         Tool {
             format: "example-scenarios",

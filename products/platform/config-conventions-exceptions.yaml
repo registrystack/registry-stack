@@ -377,20 +377,6 @@ exceptions:
   class: stable-move
   reason: the format carries no kind
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: BRegCtlReport'
-- rule: CFG-SCHEMA-2
-  format: breg/dev-clients
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: breg/dev-clients
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-ENV-2
   format: breg/events-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion

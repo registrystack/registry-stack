@@ -570,7 +570,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
       kind: BRegDevClients
-    schema: none
+    schema:
+      path: products/breg/generated/tools/dev-clients.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-bregctl --features schema --example tool-schema -- --output products/breg/generated/tools
+      driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
       file: crates/registry-bregctl/src/dev/config.rs

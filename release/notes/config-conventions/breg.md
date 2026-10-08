@@ -1501,18 +1501,44 @@ database, or network. It prints the diagnostics in the human form, or with
 passes, 1 when it is refused or, with `--deny-warnings`, when it carries a
 warning, 2 for a usage error, and 3 when the file cannot be read.
 
-### Published JSON Schemas for five tool files
+### Published JSON Schemas for the tool files
 
-The fixture journeys, schema-test credentials, model selection, example
-scenarios, and backup binding each publish a JSON Schema generated from the
-types `bregctl` decodes, under `products/breg/generated/tools/`. Each
-identifier names the format and its version, for example
+The fixture journeys, schema-test credentials, model selection, development
+clients, example scenarios, and backup binding each publish a JSON Schema
+generated from the types `bregctl` decodes, under
+`products/breg/generated/tools/`. Each identifier names the format and its
+version, for example
 `https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json`.
-`editors/configure.py` maps the three YAML formats (`tests/journeys.yaml`,
-`credentials.yaml`, `model/selection.yaml`) for editors. The schema is an
-editing aid: `bregctl check --file` remains the check, and it also refuses
-what a schema cannot express, such as a journey that names a route its
-project does not declare.
+`editors/configure.py` maps the YAML formats (`tests/journeys.yaml`,
+`credentials.yaml`, `model/selection.yaml`, `dev-clients.yaml`) and the JSON
+formats (`*-binding.json`, `examples/scenarios.json`) for editors; a JSON
+format goes through `json.schemas` in VS Code and the `json-language-server`
+settings in Zed. The schema is an editing aid: `bregctl check --file` remains
+the check, and it also refuses what a schema cannot express, such as a
+journey that names a route its project does not declare.
+
+### BREAKING: development clients identifiers, URLs, and exchange mapping (`dev-clients.yaml`)
+
+The development clients schema states the reader's types, so the reader now
+decodes these members through the shared types and refuses a value they
+refuse, with the reader's code, path, and fix:
+
+- `clients[].id`, `seed[].id`, `issuer.exchangeIssuers[].id`, and
+  `issuer.interactiveApplications[].id`, and the keys of `eventDestinations`,
+  `evidenceProviders`, `reviewAuthorities`, `reviewExecutors`, and
+  `issuer.clientResources`, are local identifiers: a lowercase letter, then up
+  to 63 lowercase letters, digits, `_`, or `-`. An identifier that starts with
+  a digit is refused.
+- `issuer.exchangeIssuers[].issuer` and `evidenceProviders.*.baseUrl` are
+  absolute `http` or `https` URLs with a host and no user information.
+  Migration: write the issuer as its URL, not a URN.
+- The keys of `clients[].claims`, `issuer.exchangeIssuers[].tokenAttributes`,
+  and `issuer.syntheticUsers[].attributes` are non-empty text without control
+  characters.
+- `issuer.exchangeIssuers[].mapping` is spelled `institutional-grant` or
+  `first-party`. Migration: replace `institutional_grant` with
+  `institutional-grant` and `first_party` with `first-party`; the old
+  spellings are refused.
 
 ### BREAKING: `explain` output schema identifiers
 <!-- upgrade: no-file -->

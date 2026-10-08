@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: `dev-clients.yaml` has a published JSON Schema, and `bregctl dev`
+  decodes its identifiers, issuer and Evidence provider URLs, and mapping keys
+  through the shared types. `issuer.exchangeIssuers[].mapping` is spelled
+  `institutional-grant` or `first-party` (was `institutional_grant` and
+  `first_party`), an identifier that starts with a digit is refused, and an
+  issuer or `baseUrl` must be an absolute `http` or `https` URL. Migration
+  steps are in `release/notes/config-conventions/breg.md`.
+- `editors/configure.py` maps the JSON formats `*-binding.json` and
+  `examples/scenarios.json` beside the YAML formats for VS Code and Zed.
 - BREAKING: `registry.yaml` and `module.yaml` are read by the shared
   configuration reader. A file that writes null, an unquoted number where text
   is expected (`version: 1`), an ambiguous number, or a YAML anchor, alias,

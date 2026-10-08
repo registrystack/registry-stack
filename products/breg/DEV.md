@@ -333,7 +333,7 @@ distinct claim names of all of them together, counting `registry_actor_kind`,
 `registry_purpose`, and `scope`, may number at most 16, and a multi-purpose
 client cannot also be listed on any authored exchange connection. That signer
 makes the client first-party, so the issuer projects the purpose connection's
-claims into its exchanged tokens: through an `institutional_grant` connection
+claims into its exchanged tokens: through an `institutional-grant` connection
 they would lack the `registry_grant_*` claims the registry requires. Both are
 refused when the clients file is read.
 
@@ -491,12 +491,12 @@ issuer:
     - id: casework
       issuer: https://casework.example.test
       jwksEndpoint: http://host.docker.internal:8094/oauth2/jwks
-      mapping: institutional_grant
+      mapping: institutional-grant
       clients: [task-agent]
     - id: portal
       issuer: http://127.0.0.1:8095
       jwksEndpoint: http://host.docker.internal:8095/oauth2/jwks
-      mapping: first_party
+      mapping: first-party
       clients: [portal-exchange]
       tokenAttributes:
         registry_principal: string
@@ -524,9 +524,9 @@ scopes and claims. `exchangeClients` must have one bootstrap scope, and the
 external authority must be pre-registered. List each exchange client under
 every connection whose authority it may present: the local resource servers
 read that pairing and refuse a token exchanged from any other authority, so a
-client named by no connection is refused before startup. A `first_party`
+client named by no connection is refused before startup. A `first-party`
 connection's `clients` list also selects the claims that connection projects;
-an `institutional_grant` connection projects none. Local browser applications use
+an `institutional-grant` connection projects none. Local browser applications use
 authorization code with PKCE and explicit redirect URIs. Their secrets and
 synthetic passwords are copied into the owner's private issuer state. Explicit
 app and user grants render issuer role assignments for the matching

@@ -1,0 +1,680 @@
+{
+  "$defs": {
+    "BrowserApplication": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "clientSecretRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "grants": {
+          "default": [],
+          "description": "Explicit permissions granted to this application, per resource audience.",
+          "items": {
+            "$ref": "#/$defs/LocalPermissionGrant"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "redirectUris": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenAttributes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "clientSecretRef",
+        "origin",
+        "redirectUris",
+        "tokenAttributes"
+      ],
+      "type": "object"
+    },
+    "BrowserUser": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        },
+        "email": {
+          "type": "string"
+        },
+        "grants": {
+          "default": [],
+          "description": "Explicit permissions granted to this user, per resource audience.",
+          "items": {
+            "$ref": "#/$defs/LocalPermissionGrant"
+          },
+          "type": "array"
+        },
+        "passwordRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "email",
+        "passwordRef",
+        "attributes"
+      ],
+      "type": "object"
+    },
+    "Client": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfiles": {
+          "description": "The access profiles this client is the one local binding for. Empty\nmeans no journey step resolves to it and no seed may reference it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowBregAccess": {
+          "description": "Explicitly admits a profile-free integration client to BReg's\n`allowedClients`. The default is false, so a client carrying scopes or\nclaims for another product cannot call BReg accidentally.",
+          "type": "boolean"
+        },
+        "allowHumanFixture": {
+          "description": "Explicitly permits this local teaching client to carry the human actor\nmarker. This does not admit the client to BReg's allowedClients.",
+          "type": "boolean"
+        },
+        "assertionKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Existing ES256 assertion key, for a client whose key is already\ngoverned by another local tool such as Evidence access."
+        },
+        "claims": {
+          "additionalProperties": true,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-passthrough": "Claim values are written into the development token as given."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "testBindings": {
+          "default": [],
+          "description": "Exact schema-test steps that use this claim variant. Runtime requests\nstill select an authored access profile; this field only disambiguates\ncredentials for maintained local journeys.",
+          "items": {
+            "$ref": "#/$defs/TestBinding"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "accessProfiles",
+        "scopes",
+        "claims"
+      ],
+      "type": "object"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExchangeAttributeKindSchema": {
+      "description": "The schema of `ExchangeAttributeKind`, which lives in a crate that does not\nderive schemas.",
+      "enum": [
+        "string",
+        "string-array"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "IssuerComposition": {
+      "additionalProperties": false,
+      "properties": {
+        "browserClients": {
+          "default": [],
+          "description": "Owner-registered browser app IDs this borrower admits at its BREG resource.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "clientResources": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Client IDs mapped to a non-default resource audience.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "exchangeClients": {
+          "default": [],
+          "description": "Clients with one bootstrap scope that may exchange signed assertions.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "exchangeIssuers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IssuerConnection"
+          },
+          "type": "array"
+        },
+        "interactiveApplications": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BrowserApplication"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IssuerResource"
+          },
+          "type": "array"
+        },
+        "syntheticUsers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BrowserUser"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "IssuerConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "clients": {
+          "default": [],
+          "description": "The exchange clients paired with this connection's authority. A\nresource server refuses every other authority's assertion from them,\nand under first-party mapping these are also the clients whose claims\nthis connection projects.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "jwksEndpoint": {
+          "type": "string"
+        },
+        "mapping": {
+          "$ref": "#/$defs/IssuerConnectionMapping"
+        },
+        "tokenAttributes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ExchangeAttributeKindSchema"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "issuer",
+        "jwksEndpoint",
+        "mapping"
+      ],
+      "type": "object"
+    },
+    "IssuerConnectionMapping": {
+      "enum": [
+        "institutional-grant",
+        "first-party"
+      ],
+      "type": "string"
+    },
+    "IssuerResource": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "audience",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "LocalEventDestination": {
+      "additionalProperties": false,
+      "properties": {
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "path",
+        "hmacSha256KeyRef"
+      ],
+      "type": "object"
+    },
+    "LocalEvidencePrivateKeyJwt": {
+      "additionalProperties": false,
+      "properties": {
+        "assertionAudience": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "privateKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenEndpoint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientId",
+        "privateKeyRef",
+        "assertionAudience",
+        "resource",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "LocalEvidenceProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "caBundleRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "privateKeyJwt": {
+          "$ref": "#/$defs/LocalEvidencePrivateKeyJwt"
+        },
+        "revokedKeyIds": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "trustBindingId": {
+          "type": "string"
+        },
+        "trustedJwksRef": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "trustBindingId",
+        "trustedJwksRef"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "LocalPermissionGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "description": "Omit for the owner BREG resource; otherwise use a declared audience.",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "LocalReviewAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "description": "Logical client from this same closed file. Its generated key is copied\ninto the private runtime secret tree and is never written to this file.",
+          "type": "string"
+        },
+        "completionRecipient": {
+          "type": "string"
+        },
+        "completionTokenRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "producerId": {
+          "type": "string"
+        },
+        "profile": {
+          "description": "Casework requester access profile selected on every authority exchange.",
+          "type": "string"
+        },
+        "recoveryDays": {
+          "format": "uint32",
+          "maximum": 90,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "endpoint",
+        "profile",
+        "producerId",
+        "recoveryDays",
+        "client"
+      ],
+      "type": "object"
+    },
+    "LocalReviewExecutor": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "description": "The one service-only apply_request profile selected by the worker.",
+          "type": "string"
+        },
+        "client": {
+          "description": "Logical client from this same closed file. Its retained issuer key is\ncopied into the private runtime secret tree.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accessProfile",
+        "client"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "Seed": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "type": "string"
+        },
+        "client": {
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true,
+          "type": "object",
+          "x-registry-passthrough": "The record body is sent to the registry as given; the registry validates it."
+        },
+        "entity": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "operation": {
+          "$ref": "#/$defs/SeedOperation",
+          "default": "create"
+        }
+      },
+      "required": [
+        "id",
+        "client",
+        "entity",
+        "accessProfile",
+        "data"
+      ],
+      "type": "object"
+    },
+    "SeedOperation": {
+      "enum": [
+        "create",
+        "import"
+      ],
+      "type": "string"
+    },
+    "TestBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "journeyId": {
+          "type": "string"
+        },
+        "stepId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "journeyId",
+        "stepId"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/breg/dev-clients/v1alpha1",
+      "description": "The format and version this file is written in.",
+      "type": "string"
+    },
+    "clients": {
+      "items": {
+        "$ref": "#/$defs/Client"
+      },
+      "type": "array"
+    },
+    "eventDestinations": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LocalEventDestination"
+      },
+      "default": {},
+      "description": "Optional exact local webhook bindings. An empty map keeps the inbox.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "evidenceProviders": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LocalEvidenceProvider"
+      },
+      "default": {},
+      "description": "Exact local Evidence provider bindings for governed action packages.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "issuer": {
+      "$ref": "#/$defs/IssuerComposition",
+      "default": {
+        "browserClients": [],
+        "clientResources": {},
+        "exchangeClients": [],
+        "exchangeIssuers": [],
+        "interactiveApplications": [],
+        "resources": [],
+        "syntheticUsers": []
+      }
+    },
+    "kind": {
+      "const": "BRegDevClients",
+      "description": "The kind of document this file is.",
+      "type": "string"
+    },
+    "reviewAuthorities": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LocalReviewAuthority"
+      },
+      "default": {},
+      "description": "Exact local Casework review-authority bindings for governed proposals.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "reviewExecutors": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LocalReviewExecutor"
+      },
+      "default": {},
+      "description": "Exact local service clients that apply approved change requests.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig",
+      "description": "The providers that resolve this file's secret references. Required\nonce any member names a secret."
+    },
+    "seed": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Seed"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "clients"
+  ],
+  "title": "Base Registry Engine development clients",
+  "type": "object"
+}

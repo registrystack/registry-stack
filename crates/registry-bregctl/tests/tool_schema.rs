@@ -23,6 +23,10 @@ const EXAMPLES: &[(&str, &str)] = &[
         "crates/registry-linkml/publicschema/starters/household.yaml",
     ),
     (
+        "dev-clients.v1alpha1.schema.json",
+        "products/breg/acceptance/facility/dev-clients.yaml",
+    ),
+    (
         "example-scenarios.v1alpha1.schema.json",
         "products/breg/starters/seed-lots/core/examples/scenarios.json",
     ),
@@ -120,6 +124,12 @@ fn every_committed_journeys_file_and_example_catalogue_satisfies_its_schema() {
             20,
         ),
         (
+            "dev-clients.v1alpha1.schema.json",
+            "products/breg",
+            "dev-clients.yaml",
+            5,
+        ),
+        (
             "example-scenarios.v1alpha1.schema.json",
             "products/breg",
             "scenarios.json",
@@ -173,8 +183,9 @@ fn a_wrong_header_a_missing_header_and_an_explicit_null_are_refused() {
 }
 
 /// The identifiers the catalog records, in file-name order.
-const IDENTIFIERS: [&str; 5] = [
+const IDENTIFIERS: [&str; 6] = [
     "https://id.registrystack.org/schemas/breg/backup-binding/backup-binding.v1alpha1.schema.json",
+    "https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/example-scenarios/example-scenarios.v1alpha1.schema.json",
     "https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json",
     "https://id.registrystack.org/schemas/breg/model-selection/model-selection.v1alpha1.schema.json",
@@ -194,5 +205,21 @@ fn each_identifier_names_the_format_and_its_version() {
             value["$schema"],
             "https://json-schema.org/draft/2020-12/schema"
         );
+    }
+}
+
+#[test]
+fn the_dev_clients_schema_refuses_an_unknown_member_and_a_retired_key() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["dev-clients.v1alpha1.schema.json"]);
+    let valid = example("products/breg/acceptance/facility/dev-clients.yaml");
+    assert!(schema.is_valid(&valid));
+    for (member, value) in [
+        ("unknownMember", Value::from(true)),
+        ("version", Value::from(1)),
+    ] {
+        let mut changed = valid.clone();
+        changed[member] = value;
+        assert!(!schema.is_valid(&changed), "{member} was accepted");
     }
 }

@@ -5,7 +5,7 @@
 //! start or stop is the container whose random ownership label and immutable
 //! Docker ID match its private journal. There is intentionally no reset.
 
-mod config;
+pub(crate) mod config;
 mod events;
 pub mod examples;
 mod export_client;

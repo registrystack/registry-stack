@@ -966,7 +966,7 @@ fn borrowed_issuer_refuses_owner_only_declarations_before_preparation() {
     state.issuer_project = Some(state.project.join("missing-owner"));
     for declaration in [
         json!({"resources": [{"audience": "urn:example:resource", "scopes": ["example:read"]}]}),
-        json!({"exchangeIssuers": [{"id": "example", "issuer": "urn:example:issuer", "jwksEndpoint": "http://127.0.0.1/jwks", "mapping": "first_party"}]}),
+        json!({"exchangeIssuers": [{"id": "example", "issuer": "https://issuer.example", "jwksEndpoint": "http://127.0.0.1/jwks", "mapping": "first-party"}]}),
         json!({"interactiveApplications": [{"id": "example", "clientSecretRef": "secret:file/example", "origin": "http://127.0.0.1:3000", "redirectUris": ["http://127.0.0.1:3000/callback"], "audience": null, "tokenAttributes": []}]}),
         json!({"syntheticUsers": [{"username": "example", "email": "example@example.test", "passwordRef": "secret:env/EXAMPLE", "attributes": {}}]}),
         json!({"clientResources": {"example": "urn:example:resource"}}),
@@ -3473,11 +3473,6 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
         "https://evidence.example.org",
         "http://127.0.0.1:0",
         "http://127.0.0.1",
-        // The Evidence client refuses a base URL carrying credentials, so a
-        // session started from one fails at its first request rather than at
-        // this declaration.
-        "http://reader@127.0.0.1:18093",
-        "http://reader:secret@127.0.0.1:18093",
     ] {
         clients
             .evidence_providers
@@ -3494,6 +3489,26 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
             refusal.contains("exact loopback origins"),
             "{base_url}: {refusal}"
         );
+    }
+    // The reader's URL type refuses a base URL carrying credentials at the
+    // declaration, before any session starts.
+    for base_url in [
+        "http://reader@127.0.0.1:18093",
+        "http://reader:secret@127.0.0.1:18093",
+    ] {
+        clients
+            .evidence_providers
+            .get_mut("qualification")
+            .unwrap()
+            .base_url = base_url.into();
+        let refusal = config::clients(
+            "dev-clients.yaml",
+            &serde_norway::to_string(&clients).unwrap().into_bytes(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refusal.contains("no user information"), "{refusal}");
+        assert!(!refusal.contains("secret"), "{refusal}");
     }
 }
 
@@ -3931,7 +3946,7 @@ fn local_evidence_provider_ids_follow_the_governed_evidence_grammar() {
         )
         .unwrap_err()
         .to_string();
-        assert!(refusal.contains("bounded IDs"), "{id}: {refusal}");
+        assert!(refusal.contains("local identifier"), "{id}: {refusal}");
     }
 }
 
