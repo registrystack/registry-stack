@@ -3537,26 +3537,6 @@ exceptions:
   class: stable-move
   reason: a union mixing unit variants with mapping variants
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'
-- rule: CFG-EMPTY-2
-  format: messaging/runtime
-  location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty default ({})
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-ID-1
-  format: messaging/runtime
-  location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: a mapping whose keys are not typed
-  resolution: 'Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
-- rule: CFG-ID-1
-  format: platform/runtime-config-blocks
-  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/OidcClientsConfig/properties/assertionIssuers
-  class: stable-move
-  reason: a mapping whose keys are not typed
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
 - rule: CFG-ID-7
   format: platform/runtime-config-blocks
   location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/JwksSource
