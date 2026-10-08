@@ -28,3 +28,6 @@ CARGO_BUILD_RUSTC_WRAPPER= CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_P
 CARGO_BUILD_RUSTC_WRAPPER= CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo test --locked --manifest-path "$repository_root/Cargo.toml" \
     -p registry-discoveryctl --test schema_contract
+CARGO_BUILD_RUSTC_WRAPPER= CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo test --locked --manifest-path "$repository_root/Cargo.toml" \
+    -p registry-discoveryctl --features schema --lib schema::

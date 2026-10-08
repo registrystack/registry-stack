@@ -1,42 +1,81 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/discovery/schema/origins-v1alpha1.json",
-  "title": "Registry Discovery approved origins",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schemaVersion", "origins"],
-  "properties": {
-    "schemaVersion": {"const": "registry-discovery/origins/v1alpha1"},
-    "origins": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 128,
-      "items": {"$ref": "#/$defs/origin"}
+  "$defs": {
+    "ApprovedOrigin": {
+      "additionalProperties": false,
+      "description": "One approved origin: a provider whose public description the index\ncollects.",
+      "properties": {
+        "catalogUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact production HTTPS URL without credentials, query, or fragment.\nLoopback HTTP is a development exception `discoveryctl` accepts only\nwith `--allow-loopback`, not part of this production authoring schema.",
+          "pattern": "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"
+        },
+        "enabled": {
+          "description": "Whether `discoveryctl package` collects this origin.",
+          "type": "boolean"
+        },
+        "originId": {
+          "description": "The origin's name in this project: 1 to 128 characters from `A-Z`,\n`a-z`, `0-9`, `.`, `_`, and `-`.",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/OriginProfile"
+        }
+      },
+      "required": [
+        "originId",
+        "catalogUrl",
+        "profile",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "OriginProfile": {
+      "description": "The publication profile an approved origin implements.",
+      "enum": [
+        "registry-discovery-v1alpha1"
+      ],
+      "type": "string"
+    },
+    "OriginsSchemaVersion": {
+      "description": "The header an origins file carries.",
+      "enum": [
+        "registry-discovery/origins/v1alpha1"
+      ],
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
     }
   },
-  "$defs": {
-    "origin": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["originId", "catalogUrl", "profile", "enabled"],
-      "properties": {
-        "originId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9._-]+$"
-        },
-        "catalogUrl": {
-          "type": "string",
-          "format": "uri",
-          "minLength": 1,
-          "maxLength": 2048,
-          "pattern": "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$",
-          "description": "Exact production HTTPS URL without credentials, query, or fragment. Loopback HTTP is a CLI development-mode exception, not part of this production authoring schema."
-        },
-        "profile": {"const": "registry-discovery-v1alpha1"},
-        "enabled": {"type": "boolean"}
-      }
+  "$id": "https://id.registrystack.org/schemas/discovery/origins/origins.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The origins the operator approves for one index.",
+  "properties": {
+    "origins": {
+      "description": "One to 128 approved origins.",
+      "items": {
+        "$ref": "#/$defs/ApprovedOrigin"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schemaVersion": {
+      "$ref": "#/$defs/OriginsSchemaVersion"
     }
-  }
+  },
+  "required": [
+    "schemaVersion",
+    "origins"
+  ],
+  "title": "Registry Discovery approved origins",
+  "type": "object"
 }

@@ -148,8 +148,8 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="discovery",
         loader_sources=("crates/registry-discovery/src",),
-        runtime_schema=Exemption("Discovery publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/discovery/schemas/runtime.schema.json",
+        shared_blocks=("Digest", "ListenerBind", "ListenerConfig", "PackageConfig"),
         reference_refusal=Exemption("the Discovery runtime has no *Ref field"),
         authored_refusal=TestRef(
             "crates/registry-discoveryctl/src/project.rs",
@@ -171,13 +171,6 @@ ROWS: tuple[Row, ...] = (
                 "RuntimeConfig",
                 "package",
                 "PackageConfig",
-            ),
-        ),
-        hand_schemas=(
-            HandSchema(
-                "products/discovery/schemas/runtime.schema.json",
-                ("properties", "listener"),
-                "ListenerConfig",
             ),
         ),
     ),

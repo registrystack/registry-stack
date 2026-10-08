@@ -1,39 +1,106 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json",
-  "title": "Registry Discovery requirement-to-evidence-type mapping",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schemaVersion", "mappingId", "mappingAuthorityId", "requirementId", "alternatives"],
-  "properties": {
-    "schemaVersion": {"const": "registry-discovery/evidence-mapping/v1alpha1"},
-    "mappingId": {"$ref": "#/$defs/identifier"},
-    "mappingAuthorityId": {"$ref": "#/$defs/identifier"},
-    "requirementId": {"$ref": "#/$defs/identifier"},
-    "jurisdiction": {"$ref": "#/$defs/identifier"},
-    "alternatives": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 32,
-      "items": {"$ref": "#/$defs/alternative"}
+  "$defs": {
+    "AuthoredEvidenceTypeAlternative": {
+      "additionalProperties": false,
+      "description": "One evidence type list and the evidence types taken from it.",
+      "properties": {
+        "evidenceTypeIds": {
+          "description": "One to 32 distinct absolute URIs, each of at most 4096 characters.",
+          "items": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "evidenceTypeListId": {
+          "description": "An absolute URI of at most 4096 characters, unique in the mapping.",
+          "format": "uri",
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidenceTypeListId",
+        "evidenceTypeIds"
+      ],
+      "type": "object"
+    },
+    "MappingSchemaVersion": {
+      "description": "The header an evidence mapping file carries.",
+      "enum": [
+        "registry-discovery/evidence-mapping/v1alpha1"
+      ],
+      "type": "string"
     }
   },
-  "$defs": {
-    "identifier": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$"},
-    "alternative": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["evidenceTypeListId", "evidenceTypeIds"],
-      "properties": {
-        "evidenceTypeListId": {"$ref": "#/$defs/identifier"},
-        "evidenceTypeIds": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "uniqueItems": true,
-          "items": {"$ref": "#/$defs/identifier"}
-        }
-      }
+  "$id": "https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One requirement and the evidence type alternatives that satisfy it.",
+  "properties": {
+    "alternatives": {
+      "description": "One to 32 alternatives; any one of them satisfies the requirement.",
+      "items": {
+        "$ref": "#/$defs/AuthoredEvidenceTypeAlternative"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    },
+    "jurisdiction": {
+      "description": "An absolute URI of at most 4096 characters. Leave the key out for a\nmapping that applies in every jurisdiction.",
+      "format": "uri",
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mappingAuthorityId": {
+      "description": "An absolute URI of at most 4096 characters.",
+      "format": "uri",
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "mappingId": {
+      "description": "An absolute URI of at most 4096 characters, unique in the project.",
+      "format": "uri",
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "requirementId": {
+      "description": "An absolute URI of at most 4096 characters.",
+      "format": "uri",
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "$ref": "#/$defs/MappingSchemaVersion"
     }
-  }
+  },
+  "required": [
+    "schemaVersion",
+    "mappingId",
+    "mappingAuthorityId",
+    "requirementId",
+    "alternatives"
+  ],
+  "title": "Registry Discovery requirement-to-evidence-type mapping",
+  "type": "object"
 }

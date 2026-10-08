@@ -382,7 +382,7 @@ fn runtime_response_and_listener_boundaries_match_the_closed_rust_parser() {
         "the public schema must carry the stable Rust response-size minimum"
     );
     assert_eq!(
-        schema["properties"]["listener"]["properties"]["bind"]["maxLength"].as_u64(),
+        schema["$defs"]["ListenerBind"]["maxLength"].as_u64(),
         u64::try_from(registry_discovery::MAXIMUM_LISTENER_BIND_CHARACTERS).ok(),
         "the public schema must carry the Rust listener-bind bound"
     );

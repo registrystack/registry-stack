@@ -8010,20 +8010,6 @@ exceptions:
   class: stable-move
   reason: the format carries no kind
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: DiscoveryEvidenceMapping'
-- rule: CFG-SCHEMA-2
-  format: discovery/evidence-mapping
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the schema is written by hand
-  resolution: Generate the schema from the reader types
-- rule: CFG-SCHEMA-3
-  format: discovery/evidence-mapping
-  location: products/discovery/schemas/evidence-mapping.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json
 - rule: CFG-ENV-1
   format: discovery/origins
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -8036,27 +8022,6 @@ exceptions:
   class: stable-move
   reason: the format carries no kind
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: DiscoveryOrigins'
-- rule: CFG-SCHEMA-2
-  format: discovery/origins
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the schema is written by hand
-  resolution: Generate the schema from the reader types
-- rule: CFG-SCHEMA-3
-  format: discovery/origins
-  location: products/discovery/schemas/origins.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/discovery/schema/origins-v1alpha1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/discovery/origins/origins.v1alpha1.schema.json
-- rule: CFG-VAL-7
-  format: discovery/origins
-  location: products/discovery/schemas/origins.schema.json#/$defs/origin/properties/catalogUrl
-  class: pending
-  wp: WP3
-  reason: catalogUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-ENV-2
   format: discovery/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -8075,27 +8040,6 @@ exceptions:
   class: stable-move
   reason: shutdownTimeoutSeconds is a refused spelling of 'Time allowed to drain on shutdown'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to shutdownGraceMilliseconds'
-- rule: CFG-SCHEMA-2
-  format: discovery/runtime
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the schema is written by hand
-  resolution: Generate the schema from the reader types
-- rule: CFG-SCHEMA-3
-  format: discovery/runtime
-  location: products/discovery/schemas/runtime.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.org/discovery/schema/runtime-v1alpha1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/discovery/runtime/runtime.v1alpha1.schema.json
-- rule: CFG-VAL-6
-  format: discovery/runtime
-  location: products/discovery/schemas/runtime.schema.json#/properties/package/properties/expectedDigest
-  class: pending
-  wp: WP3
-  reason: expectedDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
 - rule: CFG-ENV-1
   format: evidence/access-client
   location: products/platform/config-formats.yaml#/current/apiVersion

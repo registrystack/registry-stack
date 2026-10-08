@@ -2936,6 +2936,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Registry Discovery requirement-to-evidence-type mapping",
+      "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema.",
+      "source": {
+        "path": "products/discovery/schemas/evidence-mapping.schema.json",
+        "sha256": "afe826505c29382f93fbc027509a7662025bca7552ae9b83ad7a363f3fdfac2e"
+      },
+      "artifact": {
+        "path": "products/discovery/schemas/evidence-mapping.schema.json",
+        "sha256": "afe826505c29382f93fbc027509a7662025bca7552ae9b83ad7a363f3fdfac2e",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/discovery/index/index.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -2950,6 +2968,42 @@
       "artifact": {
         "path": "products/discovery/schemas/index.schema.json",
         "sha256": "97014247dcc83bc148d355a5e56ffaf8ab0a522cd0f462c93a97fda19bcb6ffc",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/discovery/origins/origins.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Registry Discovery approved origins",
+      "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema.",
+      "source": {
+        "path": "products/discovery/schemas/origins.schema.json",
+        "sha256": "e418382c4baf35615beee73d177e60dfcc6bf90be67d1d76bbc8fcb85ff571f7"
+      },
+      "artifact": {
+        "path": "products/discovery/schemas/origins.schema.json",
+        "sha256": "e418382c4baf35615beee73d177e60dfcc6bf90be67d1d76bbc8fcb85ff571f7",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/discovery/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Registry Discovery runtime configuration",
+      "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema.",
+      "source": {
+        "path": "products/discovery/schemas/runtime.schema.json",
+        "sha256": "e1e67c122e063119eee53c3320f68487d5308cd000154b93b74ae1f77da58140"
+      },
+      "artifact": {
+        "path": "products/discovery/schemas/runtime.schema.json",
+        "sha256": "e1e67c122e063119eee53c3320f68487d5308cd000154b93b74ae1f77da58140",
         "mediaType": "application/schema+json"
       }
     },

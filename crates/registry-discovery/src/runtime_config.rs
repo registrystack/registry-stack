@@ -54,6 +54,7 @@ const MAXIMUM_TIMEOUT_SECONDS: u64 = 300;
 
 /// The bounds the service applies to every request and response.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(inline))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RuntimeLimits {

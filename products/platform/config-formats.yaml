@@ -2381,8 +2381,10 @@ formats:
       kind: DiscoveryOrigins
     schema:
       path: products/discovery/schemas/origins.schema.json
-      id: https://registrystack.org/discovery/schema/origins-v1alpha1.json
-      origin: hand-written
+      id: https://id.registrystack.org/schemas/discovery/origins/origins.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-discoveryctl --features schema --example discovery-schema -- --output products/discovery/schemas
+      driftCheck: crates/registry-discoveryctl/src/schema.rs
       differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
     reader:
       crate: registry-discoveryctl
@@ -2417,8 +2419,10 @@ formats:
       kind: DiscoveryEvidenceMapping
     schema:
       path: products/discovery/schemas/evidence-mapping.schema.json
-      id: https://registrystack.org/discovery/schema/evidence-mapping-v1alpha1.json
-      origin: hand-written
+      id: https://id.registrystack.org/schemas/discovery/evidence-mapping/evidence-mapping.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-discoveryctl --features schema --example discovery-schema -- --output products/discovery/schemas
+      driftCheck: crates/registry-discoveryctl/src/schema.rs
       differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
     reader:
       crate: registry-discoveryctl
@@ -2453,8 +2457,10 @@ formats:
       kind: DiscoveryRuntimeConfig
     schema:
       path: products/discovery/schemas/runtime.schema.json
-      id: https://registrystack.org/discovery/schema/runtime-v1alpha1.json
-      origin: hand-written
+      id: https://id.registrystack.org/schemas/discovery/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-discoveryctl --features schema --example discovery-schema -- --output products/discovery/schemas
+      driftCheck: crates/registry-discoveryctl/src/schema.rs
       differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
     reader:
       crate: registry-discovery

@@ -14,6 +14,8 @@ mod build;
 mod index;
 mod project;
 mod report;
+#[cfg(feature = "schema")]
+pub mod schema;
 
 pub use build::{package_project, package_project_at, BuildError, PackagedDiscovery};
 pub use index::{inspect_index_file, IndexReport};
