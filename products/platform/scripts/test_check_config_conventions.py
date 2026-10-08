@@ -1148,6 +1148,15 @@ class SecretTests(ConventionsTestCase):
         for key in ("clientSecret", "privateKeyFile", "tokenRef", "credential"):
             self.assertFinding(report, "CFG-SEC-1", P, at(PROJECT_SCHEMA, f"/properties/{key}"))
 
+    def test_cfg_sec_1_allows_a_key_file_path_in_a_report_nothing_reads(self) -> None:
+        self.repo.report["properties"]["assertionKeyFile"] = {"type": "string"}
+        self.repo.report["properties"]["clientSecret"] = {"type": "string"}
+        report = self.repo.run()
+        self.assertNotIn(
+            ("CFG-SEC-1", R, at(REPORT_SCHEMA, "/properties/assertionKeyFile")), keys(report.findings)
+        )
+        self.assertFinding(report, "CFG-SEC-1", R, at(REPORT_SCHEMA, "/properties/clientSecret"))
+
 
 class EmbedTests(ConventionsTestCase):
     def test_cfg_embed_2_reports_an_unmarked_embedded_schema(self) -> None:

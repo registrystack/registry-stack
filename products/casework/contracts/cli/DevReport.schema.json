@@ -125,7 +125,37 @@
         "clients": {
           "type": "array",
           "items": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "profile",
+              "role",
+              "clientIdFile",
+              "assertionKeyFile"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "staff",
+                  "supervisor",
+                  "administrator",
+                  "requester"
+                ]
+              },
+              "clientIdFile": {
+                "type": "string"
+              },
+              "assertionKeyFile": {
+                "type": "string"
+              }
+            }
           }
         },
         "directory": {

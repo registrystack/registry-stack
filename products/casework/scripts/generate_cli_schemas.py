@@ -1026,7 +1026,21 @@ REPORTS = {
                     "properties": {"project": STRING, "bregUrl": {"oneOf": [URL, {"type": "null"}]}},
                 },
             },
-            "clients": OBJECT_ARRAY,
+            "clients": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["id", "profile", "role", "clientIdFile", "assertionKeyFile"],
+                    "properties": {
+                        "id": LOCAL_ID,
+                        "profile": STRING,
+                        "role": {"enum": ["staff", "supervisor", "administrator", "requester"]},
+                        "clientIdFile": STRING,
+                        "assertionKeyFile": STRING,
+                    },
+                },
+            },
             "directory": {
                 "type": "object",
                 "additionalProperties": False,

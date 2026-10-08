@@ -1658,7 +1658,10 @@ class Lint:
                 elif (key.endswith("Ref") or key.endswith("Refs")) and frozen:
                     find("CFG-SEC-1", visit, f"{key} is typed through Evidence's frozen $defs/secret-ref", "Type the member as $defs/SecretReference")
                 elif SECRET_FILE.search(key):
-                    find("CFG-SEC-1", visit, f"{key} is a bare path to a key or secret file", "Replace it with a <name>Ref member holding a SecretReference")
+                    # A report a command only writes may name a file the command generated;
+                    # the refusal is for a format something reads as configuration.
+                    if entry is None or entry.get("reader") != "none":
+                        find("CFG-SEC-1", visit, f"{key} is a bare path to a key or secret file", "Replace it with a <name>Ref member holding a SecretReference")
                 elif (secret_typed or items_secret) and not (key.endswith("Ref") or key.endswith("Refs")):
                     find("CFG-SEC-1", visit, f"{key} holds a secret reference but does not end in Ref or Refs", f"Rename to {key}Ref")
                 elif INLINE_SECRET.search(key) and stringy:

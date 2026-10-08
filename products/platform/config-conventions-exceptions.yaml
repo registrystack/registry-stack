@@ -2512,13 +2512,6 @@ exceptions:
   class: stable-move
   reason: kind is DevReport
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkDevReport'
-- rule: CFG-SCHEMA-4
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/clients/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: casework/dev-token-report
   location: products/platform/config-formats.yaml#/current/apiVersion
