@@ -1981,7 +1981,9 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     assert!(!journeys.contains("token"));
     let selection =
         fs::read_to_string(destination.join("model/selection.yaml")).expect("selection echo reads");
-    assert!(selection.contains("kind: ModelSelection"));
+    assert!(selection.contains(
+        "\napiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\nkind: BRegModelSelection\n"
+    ));
     assert!(selection.contains("concept: GroupMembership"));
 }
 
@@ -2031,8 +2033,8 @@ fn init_from_publicschema_reads_a_selection_file_and_refuses_a_bad_one() {
     let selection = project.path().join("selection.yaml");
     fs::write(
         &selection,
-        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
-kind: ModelSelection
+        b"apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+kind: BRegModelSelection
 model: publicschema
 registry:
   id: places
@@ -2069,8 +2071,8 @@ entities:
 
     fs::write(
         &selection,
-        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
-kind: ModelSelection
+        b"apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+kind: BRegModelSelection
 model: publicschema
 registry:
   id: places
@@ -2109,6 +2111,64 @@ entities:
         .as_str()
         .expect("message")
         .contains("location_name"));
+}
+
+#[test]
+fn init_from_publicschema_prints_the_reader_diagnostics_for_a_selection_an_earlier_bregctl_wrote() {
+    let project = TestProject::asset_fixture();
+    let selection = project.path().join("selection.yaml");
+    fs::write(
+        &selection,
+        b"apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+model: publicschema
+registry:
+  id: places
+  title: Places
+entities:
+  - concept: Location
+",
+    )
+    .expect("selection writes");
+    let destination = project.path().join("places");
+    let init = |format: &[&str]| {
+        let mut arguments = format.to_vec();
+        arguments.extend([
+            "init",
+            path(&destination),
+            "--from",
+            "publicschema",
+            "--selection",
+            path(&selection),
+        ]);
+        bregctl(&arguments)
+    };
+
+    let output = init(&["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let report = json_stdout(&output);
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "init");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "config.wrong-kind");
+    assert_eq!(diagnostics[0]["path"], "/kind");
+    assert_eq!(diagnostics[0]["source"]["file"], path(&selection));
+    assert_eq!(diagnostics[0]["source"]["line"], 2);
+    assert!(!destination.exists(), "a refused selection writes nothing");
+
+    let output = init(&[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let rendered = String::from_utf8(output.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl init refused the model selection.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("config.wrong-kind"), "{rendered}");
+    assert!(rendered.contains("BRegModelSelection"), "{rendered}");
+    assert!(!destination.exists(), "a refused selection writes nothing");
 }
 
 #[test]

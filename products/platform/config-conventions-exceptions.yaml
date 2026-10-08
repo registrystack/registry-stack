@@ -1875,20 +1875,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-2
-  format: breg/model-selection
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/breg-model-selection/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/breg/model-selection/v1alpha1; refuse the old value with config.retired-api-version
-- rule: CFG-ENV-3
-  format: breg/model-selection
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: kind is ModelSelection
-  resolution: Rename the kind to BRegModelSelection
 - rule: CFG-SCHEMA-2
   format: breg/model-selection
   location: products/platform/config-formats.yaml#/schema
@@ -1903,13 +1889,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: breg/model-selection
-  location: crates/registry-bregctl/src/init_from_model/selection.rs#parse()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-EMPTY-1
   format: breg/module
   location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionRequirementSource/properties/equals

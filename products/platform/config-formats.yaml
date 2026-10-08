@@ -514,8 +514,8 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
-      kind: ModelSelection
+      apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1
+      kind: BRegModelSelection
       checkedBy:
         file: crates/registry-bregctl/src/init_from_model/selection.rs
         symbol: KIND

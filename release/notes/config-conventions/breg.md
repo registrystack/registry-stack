@@ -1182,3 +1182,32 @@ the output.
 The export checkpoint leaves `nextCursor` out when there is no cursor; it
 wrote `"nextCursor": null`, which the shared reader refuses
 (`config.null-value`).
+
+### BREAKING: model selection header
+
+`bregctl init --from publicschema` reads a selection (`--selection`, a
+shipped `--starter`, and the echo it writes to `model/selection.yaml`)
+through the shared reader. Migrate a selection by replacing its first two
+lines:
+
+| Old | New |
+|---|---|
+| `apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1` | `apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1` |
+| `kind: ModelSelection` | `kind: BRegModelSelection` |
+
+The members are unchanged. A selection with the old kind is refused with
+`config.wrong-kind`, and the old header beside the current kind with
+`config.retired-api-version`, naming the current header. A refused
+selection is printed as one sentence (`bregctl init refused the model
+selection.`) followed by the reader's diagnostics, each naming the file as
+given in `source.file` with its line, column, and member; nothing is
+written. Every unknown key is reported, not only the first.
+
+| Condition | Old | New |
+|---|---|---|
+| the document does not parse, or has an unknown, missing, or malformed member | `init.selection.invalid` | the reader's `config.*` and `yaml.*` codes |
+| another `apiVersion` or `kind` | `init.selection.kind` | `config.wrong-kind`, `config.retired-api-version`, or `config.unsupported-api-version` |
+| an empty document | `init.selection.size` | `config.missing-envelope` |
+
+`init.selection.size` remains for a `--selection` file over 256 KiB, and
+`init.selection.unreadable` for one that cannot be read.

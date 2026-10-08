@@ -317,10 +317,12 @@ reaches `ready` because Docker is not running.
 | `bregctl dev` refuses with `dev.failed` over a reported version | The installed `breg` comes from another release than this `bregctl`. The refusal names the file that answered, the version it reported, and the version this `bregctl` reports. Install both from the same release, or put the matching build first on `PATH`. |
 | `init --from publicschema` refuses with `init.selection.missing` | No terminal is attached, so the wizard cannot ask its questions. Pass `--starter household` or `--selection <FILE>` instead. |
 | `init --from publicschema --selection <FILE>` refuses over the file | `<FILE>` is a symbolic link, or larger than 256 KiB. Point `--selection` at an ordinary file under that size. |
-| `bregctl init` cannot parse the edited `model/selection.yaml` | Compare the indentation of the lines you changed with the rest of the file; a selection is a plain YAML list of entities, each with a `properties` list under it. |
+| `bregctl init refused the model selection.` after you edited `model/selection.yaml` | Each diagnostic under that sentence names the file, line, and column it refers to, and its fix. Compare the indentation of the lines you changed with the rest of the file; a selection is a plain YAML list of entities, each with a `properties` list under it. `config.unknown-key` names a key a selection does not have, beside the closest one it does. |
+| `bregctl init refused the model selection.` with `config.wrong-kind` or `config.retired-api-version` | Another `bregctl` release wrote the selection. Replace its first two lines with `apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1` and `kind: BRegModelSelection`; the rest of the file is unchanged. |
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs, binary() and matching_versions();
-    crates/registry-bregctl/src/init_from_model/mod.rs, MAX_SELECTION_FILE_BYTES and read_selection_file(). */}
+    crates/registry-bregctl/src/init_from_model/mod.rs, MAX_SELECTION_FILE_BYTES and read_selection_file();
+    crates/registry-bregctl/src/init_from_model/selection.rs, SELECTION_FORMAT. */}
 
 ## Next
 

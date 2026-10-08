@@ -2068,8 +2068,8 @@ mod tests {
 
     #[test]
     fn the_readme_names_what_no_field_links_and_the_concepts_that_would() {
-        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
-             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+        let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+             kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
              entities:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";
@@ -2107,8 +2107,8 @@ mod tests {
         let (linked, _) = starter_plan("household");
         assert!(!readme(&linked).contains("## What is not linked"));
 
-        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
-             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+        let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+             kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
              entities:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: Person\n    properties:\n      - name: given_name\n\
              \x20 - concept: GroupMembership\n    properties:\n      - name: person\n      - name: group\n\

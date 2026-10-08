@@ -2326,7 +2326,10 @@ where
                     (None, Some(name)) => init_from_model::Source::Starter(name),
                     (None, None) => init_from_model::Source::Interactive,
                 };
-                init_from_model::run(&args.destination, model, source)
+                return match init_from_model::run(&args.destination, model, source) {
+                    Ok(report) => write_success(&report, format, stdout, stderr),
+                    Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
+                };
             }
             (Some(_), Some(_)) => unreachable!("clap refuses --from together with --template"),
         },

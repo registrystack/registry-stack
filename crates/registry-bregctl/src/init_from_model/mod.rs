@@ -27,7 +27,8 @@ use registry_linkml::publicschema;
 
 use crate::{
     artifact_report, compile, compiler_findings, diagnostic, init_media_type, tool_diagnostic,
-    DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport, SuggestedAction,
+    DiagnosticArtifact, DocumentRefusal, FailureReport, ProfileArg, Refusal, SuccessReport,
+    SuggestedAction,
 };
 
 pub(crate) use selection::ModelName;
@@ -50,7 +51,7 @@ pub(crate) fn run(
     destination: &Path,
     model: ModelName,
     source: Source<'_>,
-) -> Result<SuccessReport, FailureReport> {
+) -> Result<SuccessReport, Refusal> {
     // The model is read before the selection, because the wizard asks its
     // questions about the concepts and properties this snapshot carries.
     let model_data = match model {
@@ -63,8 +64,8 @@ pub(crate) fn run(
         })?,
     };
     let selection = match source {
-        Source::File(path) => read_selection_file(path).map_err(selection_failure)?,
-        Source::Starter(name) => starter_selection(model, name).map_err(usage_failure)?,
+        Source::File(path) => read_selection_file(path)?,
+        Source::Starter(name) => starter_selection(model, name)?,
         Source::Interactive => {
             // The prompts read standard input and write standard error, so
             // those two are the streams that must be terminals; standard
@@ -78,7 +79,8 @@ pub(crate) fn run(
                          pass `--selection <FILE>` or `--starter <NAME>` (one of {})",
                         starter_names(model)
                     ),
-                )));
+                ))
+                .into());
             }
             wizard::gather(model, &model_data).map_err(usage_failure)?
         }
@@ -91,7 +93,8 @@ pub(crate) fn run(
                 "the selection was written for `{}`, and this run derives from `{model}`",
                 selection.model
             ),
-        )));
+        ))
+        .into());
     }
     let plan = resolve::resolve(&selection, &model_data).map_err(selection_failure)?;
     let files = render::render(&plan, &selection);
@@ -122,7 +125,7 @@ pub(crate) fn run(
     })
 }
 
-fn read_selection_file(path: &Path) -> Result<selection::Selection, Diagnostic> {
+fn read_selection_file(path: &Path) -> Result<selection::Selection, Refusal> {
     let source = path.display().to_string();
     let bytes = crate::read_bounded_source_file(
         path,
@@ -144,25 +147,28 @@ fn read_selection_file(path: &Path) -> Result<selection::Selection, Diagnostic> 
                 &format!("the selection file cannot be read: {}", refusal.message),
             )
         }
-    })?;
-    selection::Selection::parse(&source, &bytes)
+    })
+    .map_err(selection_failure)?;
+    selection::Selection::parse(&source, &bytes).map_err(selection_refusal)
 }
 
-fn starter_selection(model: ModelName, name: &str) -> Result<selection::Selection, Diagnostic> {
+fn starter_selection(model: ModelName, name: &str) -> Result<selection::Selection, Refusal> {
     let starters = match model {
         ModelName::Publicschema => publicschema::starters(),
     };
     let Some(starter) = starters.iter().find(|starter| starter.name == name) else {
-        return Err(diagnostic(
+        return Err(usage_failure(diagnostic(
             "init.starter.unknown",
             "arguments",
             &format!(
                 "`{name}` is not a starter of `{model}`; the starters are {}",
                 starter_names(model)
             ),
-        ));
+        ))
+        .into());
     };
     selection::Selection::parse(&format!("starter {name}"), starter.contents.as_bytes())
+        .map_err(selection_refusal)
 }
 
 /// The starter names of `model`, quoted and comma-joined.
@@ -184,6 +190,15 @@ fn selection_failure(diagnostic: Diagnostic) -> FailureReport {
         DiagnosticArtifact::ModelSelection,
         SuggestedAction::CorrectModelSelection,
     )
+}
+
+/// The reader's diagnostics for a selection document, printed unchanged.
+fn selection_refusal(report: registry_platform_yaml::Report) -> Refusal {
+    Refusal::Document(DocumentRefusal {
+        command: "init",
+        subject: "the model selection",
+        report,
+    })
 }
 
 fn usage_failure(diagnostic: Diagnostic) -> FailureReport {
@@ -283,11 +298,30 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// The command's own report of a refusal a test expects to be one.
+    fn tool_failure(refusal: Refusal) -> FailureReport {
+        match refusal {
+            Refusal::Tool(report) => report,
+            Refusal::Document(refusal) => panic!("{}", refusal.report.render_human()),
+        }
+    }
+
+    /// The single diagnostic of a refusal the command reports itself.
+    fn tool_diagnostic_of(refusal: Refusal) -> crate::ToolDiagnostic {
+        let mut report = tool_failure(refusal);
+        assert_eq!(report.diagnostics.len(), 1);
+        report.diagnostics.remove(0)
+    }
+
     #[test]
     fn a_starter_is_found_by_name_and_an_unknown_name_lists_the_starters() {
-        let selection = starter_selection(ModelName::Publicschema, "household").expect("ships");
+        let Ok(selection) = starter_selection(ModelName::Publicschema, "household") else {
+            panic!("the household starter ships");
+        };
         assert_eq!(selection.model, ModelName::Publicschema);
-        let error = starter_selection(ModelName::Publicschema, "missing").expect_err("refused");
+        let error = tool_diagnostic_of(
+            starter_selection(ModelName::Publicschema, "missing").expect_err("refused"),
+        );
         assert_eq!(error.code, "init.starter.unknown");
         assert!(error.message.contains("`household`"), "{}", error.message);
     }
@@ -323,7 +357,9 @@ mod tests {
             .expect("ships");
         std::fs::write(&path, starter.contents).expect("written");
         assert!(read_selection_file(&path).is_ok());
-        let missing = read_selection_file(&root.join("absent.yaml")).expect_err("refused");
+        let missing = tool_diagnostic_of(
+            read_selection_file(&root.join("absent.yaml")).expect_err("refused"),
+        );
         assert_eq!(missing.code, "init.selection.unreadable");
         let oversized = root.join("large.yaml");
         std::fs::write(
@@ -332,23 +368,55 @@ mod tests {
         )
         .expect("written");
         assert_eq!(
-            read_selection_file(&oversized).expect_err("refused").code,
+            tool_diagnostic_of(read_selection_file(&oversized).expect_err("refused")).code,
             "init.selection.size"
         );
         assert_eq!(
-            read_selection_file(root.as_path())
-                .expect_err("refused")
-                .code,
+            tool_diagnostic_of(read_selection_file(root.as_path()).expect_err("refused")).code,
             "init.selection.unreadable"
         );
         let linked = root.join("linked.yaml");
         std::os::unix::fs::symlink(&path, &linked).expect("linked");
-        let refused = read_selection_file(&linked).expect_err("a symbolic link is refused");
+        let refused = tool_diagnostic_of(
+            read_selection_file(&linked).expect_err("a symbolic link is refused"),
+        );
         assert_eq!(refused.code, "init.selection.unreadable");
         assert!(
             refused.message.contains("symbolic link"),
             "{}",
             refused.message
+        );
+    }
+
+    #[test]
+    fn a_selection_file_the_reader_refuses_keeps_the_reader_diagnostics() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let root = directory.path().canonicalize().expect("a canonical path");
+        let path = root.join("selection.yaml");
+        std::fs::write(
+            &path,
+            "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
+             kind: BRegModelSelection\n\
+             model: publicschema\n\
+             registry:\n  id: example\n  title: Example\n\
+             entities: []\n",
+        )
+        .expect("written");
+        let Err(Refusal::Document(refusal)) = read_selection_file(&path) else {
+            panic!("the reader refuses the header an earlier bregctl wrote");
+        };
+        assert_eq!(
+            (refusal.command, refusal.subject),
+            ("init", "the model selection")
+        );
+        let diagnostics = refusal.report.diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "config.retired-api-version");
+        let source = diagnostics[0].source.as_ref().expect("positioned");
+        let file = path.display().to_string();
+        assert_eq!(
+            (source.file.as_str(), source.line),
+            (file.as_str(), Some(1))
         );
     }
 
@@ -359,8 +427,8 @@ mod tests {
         let selection = root.join("selection.yaml");
         std::fs::write(
             &selection,
-            "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
-             kind: ModelSelection\n\
+            "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+             kind: BRegModelSelection\n\
              model: publicschema\n\
              modelVersion: \"0.3.0\"\n\
              registry:\n  id: place-registry\n  title: Place Registry\n\
@@ -378,6 +446,7 @@ mod tests {
             ModelName::Publicschema,
             Source::File(&selection),
         )
+        .map_err(tool_failure)
         .unwrap_or_else(|failure| panic!("{}", serde_json::to_string_pretty(&failure).unwrap()));
         let step = &report.next_steps[1];
         assert!(
@@ -403,6 +472,7 @@ mod tests {
             ModelName::Publicschema,
             Source::Starter("household"),
         )
+        .map_err(tool_failure)
         .unwrap_or_else(|failure| panic!("{}", serde_json::to_string_pretty(&failure).unwrap()));
         assert_eq!(report.command, "init");
         assert!(destination.join(render::SELECTION_PATH).is_file());
@@ -419,7 +489,7 @@ mod tests {
             Source::Starter("household"),
         ) {
             Ok(_) => panic!("an existing destination is refused"),
-            Err(again) => assert_eq!(again.command, "init"),
+            Err(again) => assert_eq!(tool_failure(again).command, "init"),
         }
     }
 
@@ -451,7 +521,7 @@ mod tests {
             let destination = root.join(format!("project-{index}"));
             match run(&destination, ModelName::Publicschema, Source::File(&path)) {
                 Ok(_) => panic!("selection {index} is refused"),
-                Err(failure) => assert_eq!(failure.command, "init"),
+                Err(failure) => assert_eq!(tool_failure(failure).command, "init"),
             }
             assert!(!destination.exists(), "{}", destination.display());
         }
@@ -459,8 +529,8 @@ mod tests {
 
     #[test]
     fn the_next_steps_say_what_no_field_links() {
-        let document = "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
-             kind: ModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
+        let document = "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+             kind: BRegModelSelection\nmodel: publicschema\nregistry:\n  id: example\n  title: Example\n\
              entities:\n  - concept: Household\n    properties:\n      - name: name\n\
              \x20 - concept: School\n    properties:\n      - name: name\n";
         let selection = selection::Selection::parse("test", document.as_bytes()).expect("parses");
@@ -478,7 +548,9 @@ mod tests {
     fn a_selection_for_another_model_is_refused() {
         // There is one model today, so the check is exercised through the
         // starter path: every starter matches its own model.
-        let selection = starter_selection(ModelName::Publicschema, "household").expect("ships");
+        let Ok(selection) = starter_selection(ModelName::Publicschema, "household") else {
+            panic!("the household starter ships");
+        };
         assert_eq!(selection.model, ModelName::Publicschema);
     }
 }

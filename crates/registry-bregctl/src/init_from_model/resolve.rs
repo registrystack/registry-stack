@@ -1340,8 +1340,8 @@ mod tests {
 
     fn selection(body: &str) -> Selection {
         let document = format!(
-            "apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1\n\
-             kind: ModelSelection\n\
+            "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+             kind: BRegModelSelection\n\
              model: publicschema\n\
              registry:\n  id: example\n  title: Example\n\
              {body}"

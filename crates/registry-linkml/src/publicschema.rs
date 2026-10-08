@@ -433,7 +433,7 @@ mod tests {
                 serde_norway::from_str(starter.contents).expect("a starter is YAML");
             assert_eq!(
                 document["kind"].as_str(),
-                Some("ModelSelection"),
+                Some("BRegModelSelection"),
                 "{} declares the selection kind",
                 starter.name
             );
