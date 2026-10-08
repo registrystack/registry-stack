@@ -1316,23 +1316,23 @@ class EndToEndTest(unittest.TestCase):
         )
         self.write_case("path-outside-project", self.PATH_CASE.format(id="path-outside-project", via="parent"))
         self.write_case("path-link-outside-project", self.PATH_CASE.format(id="path-link-outside-project", via="link"))
-        code, stdout, _ = self.run_runner("--matrix")
+        _, stdout, _ = self.run_runner("--matrix")
         self.assertIn("demo/project\tbaseline\tpass", stdout)
         self.assertIn("demo/project\tpath-outside-project\tpass", stdout)
         self.assertIn("demo/project\tpath-link-outside-project\tpass", stdout)
-        code, stdout, _ = self.run_runner("--matrix", env={"FAKECTL_FOLLOW_PATHS": "1"})
+        _, stdout, _ = self.run_runner("--matrix", env={"FAKECTL_FOLLOW_PATHS": "1"})
         self.assertIn("demo/project\tpath-outside-project\tfail", stdout)
         self.assertIn("demo/project\tpath-link-outside-project\tfail", stdout)
         self.assertIn("missing a diagnostic of any code at /script 15:9", stdout)
 
     def test_prepare_commands_run_in_the_staged_project_before_the_check(self) -> None:
         (self.root / "products/demo/example/needs-prepare").write_text("", encoding="utf-8")
-        code, stdout, _ = self.run_runner("--matrix")
+        _, stdout, _ = self.run_runner("--matrix")
         self.assertIn("demo/project\tbaseline\tfail", stdout)
         (self.root / "products/platform/conformance/yaml/formats.yaml").write_text(
             "formats:\n  demo/project:\n    prepare: ['fakectl prepare {project}']\n", encoding="utf-8"
         )
-        code, stdout, _ = self.run_runner("--matrix")
+        _, stdout, _ = self.run_runner("--matrix")
         self.assertIn("demo/project\tbaseline\tpass", stdout)
         self.assertIn("demo/project\tduplicate-key\tpass", stdout)
 
