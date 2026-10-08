@@ -666,6 +666,8 @@ error[breg.entity.unknown-field-type] modules/household/module.yaml:14:11 /entit
 Each `related` entry follows the `next:` line as a `note:` line with its own
 position, path, and message. The output ends with one summary line counting
 errors, warnings, and the files checked (`2 errors, 1 warning in 3 files`).
+A path longer than 120 characters is shown as its first and last 60 joined by
+`...`; the JSON `path` is always whole.
 
 **CFG-DIAG-3 (MUST). Codes are dotted, lowercase, each segment kebab-case.**
 A product code is `<product>.<area>.<condition>` with the product token

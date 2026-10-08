@@ -21,6 +21,11 @@ const RENDERING_OVERHEAD_BYTES: usize = 256;
 /// in human output, `\u001f` in JSON).
 const ESCAPE_GROWTH: usize = 6;
 
+/// The most bytes a path takes in human output before escaping: 120
+/// characters of at most four bytes each, around `...`. JSON output
+/// carries the whole path.
+const MAXIMUM_SHOWN_PATH_BYTES: usize = 120 * 4 + 3;
+
 /// What the hook substitutes. The input never contains it (a run whose
 /// input does is not checked for it), so a diagnostic that repeats it
 /// repeated a value (CFG-SEC-3).
@@ -116,29 +121,38 @@ pub fn check_report(report: &Report, forbid_marker: bool) {
         diagnostics.len()
     );
     let mut written = 0;
+    let mut shown = 0;
     for (index, diagnostic) in diagnostics.iter().enumerate() {
         check_diagnostic(diagnostic, forbid_marker);
         if diagnostic.code == "config.too-many-problems" {
             assert_eq!(index, MAXIMUM_DIAGNOSTICS_PER_FILE, "the count comes last");
         }
-        written += RENDERING_OVERHEAD_BYTES
+        let sentences = RENDERING_OVERHEAD_BYTES
             + diagnostic.artifact.as_ref().map_or(0, String::len)
-            + diagnostic.path.len()
             + diagnostic.message.len()
             + diagnostic.suggested_action.len();
+        written += sentences + diagnostic.path.len();
+        shown += sentences + diagnostic.path.len().min(MAXIMUM_SHOWN_PATH_BYTES);
         for related in &diagnostic.related {
-            written += RENDERING_OVERHEAD_BYTES + related.path.len() + related.message.len();
+            let note = RENDERING_OVERHEAD_BYTES + related.message.len();
+            written += note + related.path.len();
+            shown += note + related.path.len().min(MAXIMUM_SHOWN_PATH_BYTES);
         }
     }
     let human = report.render_human();
     let json = report.to_json_value().to_string();
-    let bound = ESCAPE_GROWTH * written + RENDERING_OVERHEAD_BYTES;
+    let human_bound = ESCAPE_GROWTH * shown + RENDERING_OVERHEAD_BYTES;
+    let json_bound = ESCAPE_GROWTH * written + RENDERING_OVERHEAD_BYTES;
     assert!(
-        human.len() <= bound,
+        human.len() <= human_bound,
         "{} bytes of human output",
         human.len()
     );
-    assert!(json.len() <= bound, "{} bytes of JSON output", json.len());
+    assert!(
+        json.len() <= json_bound,
+        "{} bytes of JSON output",
+        json.len()
+    );
     if forbid_marker {
         assert!(!human.contains(MARKER), "human output repeats a value");
         assert!(!json.contains(MARKER), "JSON output repeats a value");

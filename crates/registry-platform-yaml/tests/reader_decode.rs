@@ -1524,6 +1524,21 @@ fn cfg_diag_2_control_characters_in_keys_are_escaped_in_human_output() {
     assert!(!human.contains('\u{1b}'), "{human:?}");
 }
 
+#[test]
+fn cfg_diag_2_a_long_path_is_shortened_in_human_output_and_kept_whole_in_json() {
+    let key = format!("{}{}", "a".repeat(150), "z".repeat(150));
+    let report = refusal::<Settings>(&format!("listener:\n  bind: x\n  {key}: 1\n"));
+    assert_eq!(report.diagnostics()[0].path, format!("/listener/{key}"));
+    let human = report.render_human();
+    let header = human.lines().next().expect("a header line");
+    let shown = format!("/listener/{}...{}", "a".repeat(50), "z".repeat(60));
+    assert!(header.ends_with(&format!(" {shown}")), "{header}");
+    assert!(
+        report.to_json_value().to_string().contains(&key),
+        "the JSON path is whole"
+    );
+}
+
 // ----- CFG-DIAG-5 -----
 
 #[test]

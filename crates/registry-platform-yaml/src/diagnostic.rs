@@ -122,7 +122,7 @@ impl Diagnostic {
         }
         if !self.path.is_empty() {
             out.push(' ');
-            out.push_str(&clean(&self.path));
+            out.push_str(&shown_path(&self.path));
         }
         out.push('\n');
         out.push_str("  ");
@@ -136,7 +136,7 @@ impl Diagnostic {
             out.push_str(&location(&related.file, related.line, related.column));
             if !related.path.is_empty() {
                 out.push(' ');
-                out.push_str(&clean(&related.path));
+                out.push_str(&shown_path(&related.path));
             }
             out.push(' ');
             out.push_str(&clean(&related.message));
@@ -323,6 +323,24 @@ fn location(file: &str, line: Option<usize>, column: Option<usize>) -> String {
         }
     }
     out
+}
+
+/// Paths longer than this are shortened in human output; JSON output
+/// carries the whole path.
+const PATH_DISPLAY_CHARS: usize = 120;
+
+/// A path as human output shows it: when longer than
+/// [`PATH_DISPLAY_CHARS`], its first and last halves of that length joined
+/// by `...`, so both the root's members and the last key stay readable.
+fn shown_path(path: &str) -> String {
+    let count = path.chars().count();
+    if count <= PATH_DISPLAY_CHARS {
+        return clean(path);
+    }
+    let half = PATH_DISPLAY_CHARS / 2;
+    let head: String = path.chars().take(half).collect();
+    let tail: String = path.chars().skip(count - half).collect();
+    format!("{}...{}", clean(&head), clean(&tail))
 }
 
 /// Escape control characters so a key or file name cannot rewrite a
