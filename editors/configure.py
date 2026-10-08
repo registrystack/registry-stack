@@ -116,6 +116,8 @@ SCHEMAS = {
     "evidence-deployment": (
         ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
         ("products/evidence/contracts/bundle.schema.yaml", "bundle/evidence.yaml"),
+        ("products/evidence/contracts/holder-bound-verification-policy.schema.yaml", "holder-bound*.policy.yaml"),
+        ("products/evidence/contracts/verification-policy.schema.yaml", "verification*.policy.yaml"),
         ("products/evidence/generated/codelist/codelist.schema.json", "bundle/codelists/*.yaml"),
     ),
 }

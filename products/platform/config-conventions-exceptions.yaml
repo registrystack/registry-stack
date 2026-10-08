@@ -3403,13 +3403,6 @@ exceptions:
   wp: WP6
   reason: $id is https://registrystack.org/schemas/evidence/holder-bound-verification-policy-v1.json
   resolution: Set $id to https://id.registrystack.org/schemas/evidence/holder-bound-verification-policy/holder-bound-verification-policy.v1.schema.json
-- rule: CFG-SCHEMA-6
-  format: evidence/holder-bound-verification-policy
-  location: editors/configure.py#/SCHEMAS/evidence
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map products/evidence/contracts/holder-bound-verification-policy.schema.yaml in editors/configure.py
 - rule: CFG-NAME-2
   format: evidence/oid4vci-runtime
   location: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
@@ -3593,13 +3586,26 @@ exceptions:
   wp: WP6
   reason: $id is https://registrystack.org/schemas/evidence/verification-policy-v1.json
   resolution: Set $id to https://id.registrystack.org/schemas/evidence/verification-policy/verification-policy.v1.schema.json
-- rule: CFG-SCHEMA-6
-  format: evidence/verification-policy
-  location: editors/configure.py#/SCHEMAS/evidence
+- rule: CFG-EMPTY-2
+  format: messaging/runtime
+  location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
   class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map products/evidence/contracts/verification-policy.schema.yaml in editors/configure.py
+  wp: WP8
+  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty default ({})
+  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
+- rule: CFG-ID-1
+  format: messaging/runtime
+  location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
+  class: pending
+  wp: WP8
+  reason: a mapping whose keys are not typed
+  resolution: 'Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
+- rule: CFG-ID-1
+  format: platform/runtime-config-blocks
+  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/OidcClientsConfig/properties/assertionIssuers
+  class: stable-move
+  reason: a mapping whose keys are not typed
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
 - rule: CFG-ID-7
   format: platform/runtime-config-blocks
   location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/JwksSource

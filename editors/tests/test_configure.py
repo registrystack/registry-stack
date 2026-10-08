@@ -397,6 +397,12 @@ class ConfigureTests(unittest.TestCase):
                 (schemas / "runtime.schema.yaml").as_uri(): [str(project / "runtime.yaml")],
                 (schemas / "bundle.schema.yaml").as_uri(): [str(project / "bundle/evidence.yaml")],
                 (schemas / "codelist.schema.json").as_uri(): [str(project / "bundle/codelists/*.yaml")],
+                (schemas / "holder-bound-verification-policy.schema.yaml").as_uri(): [
+                    str(project / "holder-bound*.policy.yaml")
+                ],
+                (schemas / "verification-policy.schema.yaml").as_uri(): [
+                    str(project / "verification*.policy.yaml")
+                ],
             },
         )
         self.assertEqual(
