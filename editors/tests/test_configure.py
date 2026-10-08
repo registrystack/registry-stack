@@ -81,6 +81,30 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("breg", project, self.workspace, None)
         self.assertEqual({path: path.read_bytes() for path in snapshots}, snapshots)
 
+    def test_breg_maps_its_json_documents_to_json_schemas(self):
+        project = self.project(
+            "breg",
+            "registry.yaml",
+            "products/breg/fixtures/organization-membership-access/registry.yaml",
+        )
+        configure.configure("breg", project, self.workspace, None)
+        vscode = json.loads((self.workspace / ".vscode/settings.json").read_text())
+        zed = json.loads((self.workspace / ".zed/settings.json").read_text())
+        self.assertEqual(
+            zed["lsp"]["json-language-server"]["settings"]["json"]["schemas"], vscode["json.schemas"]
+        )
+        schemas = {entry["url"]: entry["fileMatch"] for entry in vscode["json.schemas"]}
+        for name, pattern in (
+            ("backup-binding.v1alpha1.schema.json", "*-binding.json"),
+            ("example-scenarios.v1alpha1.schema.json", "examples/scenarios.json"),
+        ):
+            with self.subTest(schema=name):
+                url = (project / ".registry-stack-editor/schemas" / name).as_uri()
+                self.assertEqual(schemas[url], [str(project / pattern)])
+        snapshot = (self.workspace / ".vscode/settings.json").read_bytes()
+        configure.configure("breg", project, self.workspace, None)
+        self.assertEqual((self.workspace / ".vscode/settings.json").read_bytes(), snapshot)
+
     def test_refuses_jsonc_before_writing_anything(self):
         project = self.project("casework", "casework.yaml")
         settings_path = self.workspace / ".vscode/settings.json"

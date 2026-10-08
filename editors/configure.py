@@ -44,6 +44,8 @@ SCHEMAS = {
         ("products/breg/generated/tools/journeys.v1.schema.json", "tests/journeys.yaml"),
         ("products/breg/generated/tools/schema-test-credentials.v1.schema.json", "credentials.yaml"),
         ("products/breg/generated/tools/model-selection.v1alpha1.schema.json", "model/selection.yaml"),
+        ("products/breg/generated/tools/backup-binding.v1alpha1.schema.json", "*-binding.json"),
+        ("products/breg/generated/tools/example-scenarios.v1alpha1.schema.json", "examples/scenarios.json"),
     ),
     "breg-mcp": (("products/breg/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),),
     "breg-review": (("products/breg/generated/review-runtime/review-runtime.schema.json", "runtime.yaml"),),

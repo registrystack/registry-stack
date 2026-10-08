@@ -269,13 +269,6 @@ exceptions:
   class: stable-move
   reason: stem retention uses Seconds here and Days in 2 other places
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to retentionDays, or move every use of the stem to one unit'
-- rule: CFG-SCHEMA-6
-  format: breg/backup-binding
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-ENV-2
   format: breg/change-requests-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -410,13 +403,6 @@ exceptions:
   class: stable-move
   reason: kind is EventsExplanation
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to BRegEventsExplanation'
-- rule: CFG-SCHEMA-6
-  format: breg/example-scenarios
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-ENV-2
   format: breg/lifecycle-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
