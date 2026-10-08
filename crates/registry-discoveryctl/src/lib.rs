@@ -612,6 +612,35 @@ mod tests {
     }
 
     #[test]
+    fn cfg_diag_2_a_refused_runtime_file_prints_its_diagnostic_and_exits_one() {
+        let runtime = Path::new(FIXTURE).join("runtime.yaml");
+        let runtime = runtime.to_str().unwrap();
+        let (exit, stdout, stderr) = run_cli(&["check", "--runtime-config", runtime]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
+        assert!(
+            stdout.ends_with("0 errors, 0 warnings in 1 file\n"),
+            "{stdout}"
+        );
+
+        let directory = temporary();
+        let path = directory.path().join("runtime.yaml");
+        fs::write(&path, b"unknownMember: true\n").unwrap();
+        let path = path.to_str().unwrap();
+        let (exit, stdout, stderr) = run_cli(&["check", "--runtime-config", path]);
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(stderr.contains(path), "{stderr}");
+        assert!(stderr.contains("next:"), "{stderr}");
+
+        let (exit, stdout, _) = run_cli(&["check", "--runtime-config", path, "--format", "json"]);
+        assert_eq!(exit, ExitCode::from(1));
+        let report = json(&stdout);
+        assert_eq!(report["status"], "domain-refusal");
+        assert_eq!(report["ok"], false);
+        assert!(!report["diagnostics"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn cfg_check_1_the_index_checks_on_its_own_in_both_formats() {
         let index = Path::new(FIXTURE).join("discovery-index.json");
         let index = index.to_str().unwrap();
