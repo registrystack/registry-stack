@@ -11,12 +11,12 @@ use std::fmt;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use registry_platform_yaml::{
-    ApiVersion, BoundedU64, DataLiteral, Decoded, Document, EnvelopeRule, Expect, ExternalId,
-    FormatSpec, Invalid, LocalId, Reader, Refusal, RemovedKey, Report, RetiredApiVersion,
-    ScalarHook, ScalarSite, Severity, UniqueList,
+    ApiVersion, BoundedU64, Decoded, Document, EnvelopeRule, Expect, ExternalId, FormatSpec,
+    Invalid, LocalId, Reader, Refusal, RemovedKey, Report, RetiredApiVersion, ScalarHook,
+    ScalarSite, Severity, UniqueList,
 };
-use serde::de::Deserializer;
-use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::config::contains_environment_expression;
@@ -324,7 +324,7 @@ mod schema_impls {
 
     use schemars::{json_schema, JsonSchema, Schema, SchemaGenerator};
 
-    use super::{CalendarDate, Timestamp};
+    use super::{CalendarDate, SimulatedFieldValue, Timestamp};
 
     impl JsonSchema for Timestamp {
         fn schema_name() -> Cow<'static, str> {
@@ -336,6 +336,19 @@ mod schema_impls {
                 "type": "string",
                 "format": "date-time",
                 "description": "An RFC 3339 timestamp with an offset, such as 2026-09-11T17:00:00+07:00.",
+            })
+        }
+    }
+
+    impl JsonSchema for SimulatedFieldValue {
+        fn schema_name() -> Cow<'static, str> {
+            Cow::Borrowed("SimulatedFieldValue")
+        }
+
+        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            json_schema!({
+                "type": ["boolean", "number", "string"],
+                "description": "A routing field value: a boolean, a number, or text. A field the record does not carry is omitted.",
             })
         }
     }
@@ -443,8 +456,9 @@ pub struct SimulationSubject {
     #[serde(default)]
     pub stage: Option<ExternalId>,
     /// Routing field values, by the field id the request's projection names.
+    /// A field the record does not carry is omitted.
     #[serde(default)]
-    pub fields: BTreeMap<ExternalId, DataLiteral>,
+    pub fields: BTreeMap<ExternalId, SimulatedFieldValue>,
     /// When the record entered its stage; an activity clock starts here.
     #[serde(default)]
     pub stage_entered_at: Option<Timestamp>,
@@ -462,18 +476,87 @@ impl SimulationSubject {
             fields: self
                 .fields
                 .iter()
-                .map(|(field, value)| (field.to_string(), literal_value(value)))
+                .map(|(field, value)| (field.to_string(), value.to_value()))
                 .collect(),
         }
     }
 }
 
-fn literal_value(value: &DataLiteral) -> Value {
-    match value {
-        DataLiteral::Null => Value::Null,
-        DataLiteral::Boolean(value) => Value::Bool(*value),
-        DataLiteral::Number(value) => Value::Number(value.clone()),
-        DataLiteral::String(value) => Value::String(value.clone()),
+/// A routing field value a simulated subject carries: a boolean, a number,
+/// or text. Routing reads a null field exactly as an absent one, so null
+/// says nothing omission does not, and the reader refuses it (CFG-EMPTY-1):
+/// a field the record does not carry is omitted.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SimulatedFieldValue {
+    Boolean(bool),
+    Number(serde_json::Number),
+    String(String),
+}
+
+const EXPECT_SIMULATED_FIELD_VALUE: &str = "a boolean, a number, or text";
+
+impl SimulatedFieldValue {
+    /// The value as routing compares it.
+    pub fn to_value(&self) -> Value {
+        match self {
+            SimulatedFieldValue::Boolean(value) => Value::Bool(*value),
+            SimulatedFieldValue::Number(value) => Value::Number(value.clone()),
+            SimulatedFieldValue::String(value) => Value::String(value.clone()),
+        }
+    }
+}
+
+impl Serialize for SimulatedFieldValue {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_value().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SimulatedFieldValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Scalar;
+
+        impl Visitor<'_> for Scalar {
+            type Value = SimulatedFieldValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(EXPECT_SIMULATED_FIELD_VALUE)
+            }
+
+            fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(SimulatedFieldValue::Boolean(value))
+            }
+
+            fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(SimulatedFieldValue::Number(value.into()))
+            }
+
+            fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(SimulatedFieldValue::Number(value.into()))
+            }
+
+            fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                serde_json::Number::from_f64(value)
+                    .map(SimulatedFieldValue::Number)
+                    .ok_or_else(|| {
+                        Invalid::expected(
+                            EXPECT_SIMULATED_FIELD_VALUE,
+                            "Write true, false, a finite number, or text.",
+                        )
+                        .into_error()
+                    })
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(SimulatedFieldValue::String(value.to_string()))
+            }
+
+            fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(SimulatedFieldValue::String(value))
+            }
+        }
+
+        deserializer.deserialize_any(Scalar)
     }
 }
 
@@ -831,6 +914,53 @@ dates: [2026-09-07]
             panic!("null refused");
         };
         assert_eq!(codes(&report), [("config.null-value", "/expect/target")]);
+    }
+
+    #[test]
+    fn cfg_empty_1_a_null_simulated_field_is_refused_and_omission_states_it() {
+        let null = SIMULATION.replace("    region: north\n", "    region: null\n");
+        let Err(report) = CaseworkSimulation::read("s.yaml", null.as_bytes()) else {
+            panic!("a null field value is refused");
+        };
+        assert_eq!(
+            codes(&report),
+            [("config.null-value", "/subject/fields/region")]
+        );
+        let empty = SIMULATION.replace("    region: north\n", "    region:\n");
+        let Err(report) = CaseworkSimulation::read("s.yaml", empty.as_bytes()) else {
+            panic!("an empty field value is refused");
+        };
+        assert_eq!(
+            codes(&report),
+            [("config.null-value", "/subject/fields/region")]
+        );
+        let list = SIMULATION.replace("    region: north\n", "    region: [north]\n");
+        let Err(report) = CaseworkSimulation::read("s.yaml", list.as_bytes()) else {
+            panic!("a list field value is refused");
+        };
+        assert_eq!(
+            codes(&report),
+            [("config.invalid-type", "/subject/fields/region")]
+        );
+        let omitted = SIMULATION.replace("  fields:\n    region: north\n", "");
+        let simulation =
+            CaseworkSimulation::read("s.yaml", omitted.as_bytes()).expect("omitted field");
+        assert!(simulation.value.subject.routing_context().fields.is_empty());
+        for (text, expected) in [
+            ("true", Value::Bool(true)),
+            ("3", Value::from(3)),
+            ("2.5", Value::from(2.5)),
+            ("\"north\"", Value::from("north")),
+        ] {
+            let scalar =
+                SIMULATION.replace("    region: north\n", &format!("    region: {text}\n"));
+            let simulation =
+                CaseworkSimulation::read("s.yaml", scalar.as_bytes()).expect("scalar field");
+            assert_eq!(
+                simulation.value.subject.routing_context().fields["region"],
+                expected
+            );
+        }
     }
 
     #[test]

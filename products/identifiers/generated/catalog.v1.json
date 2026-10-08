@@ -3431,7 +3431,7 @@
       "description": "Registry Casework fixture JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
+        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
@@ -3449,7 +3449,7 @@
       "description": "Registry Casework holiday set JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
+        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
@@ -3539,7 +3539,7 @@
       "description": "Registry Casework project JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
+        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
@@ -3611,11 +3611,11 @@
       "description": "Registry Casework simulation JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "edf4378a5a307924582999707bc6dec96cc04cda3f92e835a9662b8f7fac4392"
+        "sha256": "90463ee0113e3d86b5e974c1d29ecdaa53bf445a2f86155f791e846e62e7eee6"
       },
       "artifact": {
         "path": "products/casework/generated/simulation/simulation.schema.json",
-        "sha256": "0e62a5f699e85ed39ef1910e5f651618f66b955000a5a6453990b2222ef9bf7d",
+        "sha256": "77b426a808ae3a80e07d4ad50c79d2c61c0dcbe229eb6c111d994dfaad82838f",
         "mediaType": "application/schema+json"
       }
     },

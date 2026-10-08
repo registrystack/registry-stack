@@ -1,14 +1,5 @@
 {
   "$defs": {
-    "DataLiteral": {
-      "description": "A record value: null, a boolean, a number, or text.",
-      "type": [
-        "null",
-        "boolean",
-        "number",
-        "string"
-      ]
-    },
     "DueState": {
       "description": "An activity clock's state at an instant.",
       "enum": [
@@ -29,6 +20,14 @@
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "SimulatedFieldValue": {
+      "description": "A routing field value: a boolean, a number, or text. A field the record does not carry is omitted.",
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ]
     },
     "SimulationExpectation": {
       "additionalProperties": false,
@@ -119,10 +118,10 @@
         },
         "fields": {
           "additionalProperties": {
-            "$ref": "#/$defs/DataLiteral"
+            "$ref": "#/$defs/SimulatedFieldValue"
           },
           "default": {},
-          "description": "Routing field values, by the field id the request's projection names.",
+          "description": "Routing field values, by the field id the request's projection names.\nA field the record does not carry is omitted.",
           "propertyNames": {
             "$ref": "#/$defs/ExternalId"
           },

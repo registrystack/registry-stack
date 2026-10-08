@@ -484,6 +484,7 @@ expect:
 ```
 
 Each `holidayRevisions` entry pins one revision, read from `simulations/holiday-sets/<holiday-set>-<revision>.yaml` beside the simulation.
+Each `fields` value is a boolean, a number, or text. Leave out a field the record does not carry: routing reads a missing field and a `null` one alike, so `null` is refused.
 Every member of `expect` other than `queue` is optional, and a member you leave out is not checked.
 Write `rule: none` to expect that no routing rule matched.
 

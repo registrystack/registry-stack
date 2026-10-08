@@ -216,7 +216,7 @@ fn route(
             .fields
             .iter()
             .find(|(key, _)| key.as_str() == name)
-            .and_then(|(_, value)| serde_json::to_value(value).ok());
+            .map(|(_, value)| value.to_value());
         let message = match (declared, written) {
             (Some(types), Some(written)) if !admits(&types, json_type(&written)) => format!(
                 "the source description declares this field as {}, and it is written as {}",

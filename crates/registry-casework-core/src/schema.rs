@@ -87,13 +87,7 @@ pub fn render(
     title: &str,
 ) -> Result<String, serde_json::Error> {
     let mut derived = serde_json::to_value(schema)?;
-    // A record value is the one position where `null` is a value
-    // (CFG-EMPTY-1), so its definition keeps the `null` type.
-    let literal = derived.pointer("/$defs/DataLiteral").cloned();
     refuse_null(&mut derived);
-    if let (Some(literal), Some(slot)) = (literal, derived.pointer_mut("/$defs/DataLiteral")) {
-        *slot = literal;
-    }
     state_zero_minimum(&mut derived);
     // A type used only as a map key is inlined as a pattern, so the
     // definitions come from the types rather than from `$defs`.
@@ -420,9 +414,12 @@ mod tests {
 
         let simulation = offline_schema(SIMULATION_SCHEMA_FILE);
         let valid = example_file("multi-stage-routing-clocks/simulations/friday-review.yaml");
-        let mut literal = valid.clone();
-        literal["subject"]["fields"]["region"] = Value::Null;
-        assert!(simulation.is_valid(&literal), "a field value may be null");
+        let mut null = valid.clone();
+        null["subject"]["fields"]["region"] = Value::Null;
+        assert!(
+            !simulation.is_valid(&null),
+            "a field the record does not carry is omitted"
+        );
         let mut nested = valid.clone();
         nested["subject"]["fields"]["region"] = serde_json::json!(["north"]);
         assert!(!simulation.is_valid(&nested));

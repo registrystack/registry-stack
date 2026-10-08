@@ -58,12 +58,14 @@
   names itself with `id`, writes its request as `request: {source, entity}`,
   and states its target as `target: {elapsedMinutes: N}` or `target: none`.
   A simulation declares `kind: CaseworkSimulation`, names its record
-  `subject.recordId` and its rule `expect.rule` (or `rule: none`), and
-  writes `dueState: at-risk`; a holiday set declares
-  `kind: CaseworkHolidaySet`. `caseworkctl check` reads every file under
-  `fixtures/` and `simulations/` and refuses an undeclared reference or a
-  review display its kind's display schema rejects, `caseworkctl test` also
-  runs simulations, and each failure is its own positioned diagnostic.
+  `subject.recordId` and its rule `expect.rule` (or `rule: none`), writes
+  `dueState: at-risk`, and omits a routing field the record does not carry,
+  since `subject.fields` holds only a boolean, a number, or text; a holiday
+  set declares `kind: CaseworkHolidaySet`. `caseworkctl check` reads every
+  file under `fixtures/` and `simulations/` and refuses an undeclared
+  reference or a review display its kind's display schema rejects,
+  `caseworkctl test` also runs simulations, and each failure is its own
+  positioned diagnostic.
   Migration steps and the code table are in
   `release/notes/config-conventions/casework.md`.
 - BREAKING: a project declares at most 64 sources (`casework.source.too-many`

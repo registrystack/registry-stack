@@ -320,6 +320,8 @@ spelling:
 | `expect.ruleId` absent, meaning no rule matches | `expect.rule: none`; an absent `rule` is no longer checked |
 | `expect.dueState: atRisk` | `expect.dueState: at-risk` (`pending` and `due` are unchanged) |
 | `pauseStartedAt: null`, `completedAt: null` | omit the member |
+| `subject.fields.F: null` | omit `F`: routing reads a null field exactly as an absent one |
+| a list or a mapping as a `subject.fields` value | a boolean, a number, or text |
 
 The reader names the replacement for each old spelling at its position
 (`config.removed-key`, `config.retired-api-version`). Other changes:
