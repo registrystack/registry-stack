@@ -137,6 +137,8 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
 # job builds; a change to one, or to anything it links, runs the corpus.
 CONFIG_CHECK_PACKAGES = frozenset(
     {
+        "registry-breg-mcp",
+        "registry-breg-review",
         "registry-bregctl",
         "registry-caseworkctl",
         "registry-discoveryctl",
