@@ -477,6 +477,61 @@ fn cfg_yaml_8_unexpected_end() {
 }
 
 #[test]
+fn cfg_yaml_8_an_error_inside_an_open_bracket_names_the_bracket() {
+    for (text, path, position, message, action) in [
+        (
+            "tags: [a, b\nother: 1\n",
+            "/tags/1",
+            (2, 6),
+            "the YAML is not well formed here, inside the list opened with `[` on line 1 (the parser reports: illegal placement of ':' indicator)",
+            "Close the list with `]` where it ends, or check the punctuation at this position.",
+        ),
+        (
+            "name: {a: 1\nother: 2\n",
+            "/name",
+            (2, 6),
+            "the YAML is not well formed here, inside the mapping opened with `{` on line 1 (the parser reports: while parsing a flow mapping, did not find expected ',' or '}')",
+            "Close the mapping with `}` where it ends, or check the punctuation at this position.",
+        ),
+    ] {
+        let report = scan_refusal(text);
+        assert_diagnostic(
+            only(&report),
+            "yaml.syntax",
+            path,
+            position,
+            message,
+            action,
+        );
+    }
+}
+
+#[test]
+fn cfg_yaml_8_a_tab_after_a_colon_is_named_at_the_tab() {
+    for (text, path, position) in [
+        ("name:\tx\n", "", (1, 6)),
+        ("outer:\n  a:\tx\n", "/outer", (2, 5)),
+        ("- name:\t-x\n", "/0", (1, 8)),
+    ] {
+        let report = scan_refusal(text);
+        assert_diagnostic(
+            only(&report),
+            "yaml.syntax",
+            path,
+            position,
+            "a tab after `:` is not read as the space before an unquoted value",
+            "Write a space after `:` in place of the tab.",
+        );
+    }
+    // A tab is read as that space before a quoted or bracketed value.
+    for text in ["a:\t\"x\"\n", "a:\t[1]\n", "a: \tx\n"] {
+        Reader::new(FILE)
+            .scan(text.as_bytes())
+            .unwrap_or_else(|report| panic!("{report}"));
+    }
+}
+
+#[test]
 fn cfg_yaml_8_other_syntax_errors() {
     let report = scan_refusal("a: 1\n- b\n");
     let diagnostic = only(&report);

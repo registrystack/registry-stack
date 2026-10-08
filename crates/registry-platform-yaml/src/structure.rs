@@ -751,6 +751,16 @@ impl Builder<'_, '_> {
                 messages::misplaced_colon(),
             );
         }
+        if info == "':' must be followed by a valid YAML whitespace" {
+            // The parser accepts a tab after `:` before a quoted or bracketed
+            // value, and refuses it before any other.
+            return Problem::error(
+                "yaml.syntax",
+                pointer,
+                Some(tab_after_colon(&lines, at).unwrap_or(at)),
+                messages::tab_after_colon(),
+            );
+        }
         if info == "recursion limit exceeded" {
             // The scanner's own flow nesting bound, reached while it looks
             // ahead past the reader's bound.
@@ -786,7 +796,12 @@ impl Builder<'_, '_> {
         // Every parser message is static text except the one that names an
         // unexpected character, which could carry an input byte.
         let note = (!info.starts_with("unexpected character")).then_some(info);
-        Problem::error("yaml.syntax", pointer, Some(at), messages::syntax(note))
+        Problem::error(
+            "yaml.syntax",
+            pointer,
+            Some(at),
+            messages::syntax(note, self.open_flow_bracket()),
+        )
     }
 
     fn anchor_or_alias_at(&self, marker: &Marker, at: Position) -> (&'static str, Position) {
@@ -861,6 +876,17 @@ fn closing_quote_before(lines: &[&str], at: Position) -> Option<char> {
         .filter(|c| !matches!(c, ' ' | '\t'))
         .last()
         .filter(|c| matches!(c, '\'' | '"'))
+}
+
+/// The tab right after the last `:` before `at` on its line.
+fn tab_after_colon(lines: &[&str], at: Position) -> Option<Position> {
+    let text = lines.get(at.line.checked_sub(1)?)?;
+    let before: Vec<char> = text.chars().take(at.column.saturating_sub(1)).collect();
+    let colon = before.iter().rposition(|c| *c == ':')?;
+    (before.get(colon + 1) == Some(&'\t')).then_some(Position {
+        line: at.line,
+        column: colon + 2,
+    })
 }
 
 fn tab_at_or_after(lines: &[&str], at: Position) -> Option<Position> {

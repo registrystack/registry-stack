@@ -112,6 +112,12 @@ the value's first character; a missing member at the key of the mapping that
 lacks it (1:1 for the top level); an empty value at its key, or at the `-`
 of its list item.
 
+A `yaml.syntax` error inside a `[` or `{` that is still open names the
+bracket and the line it was opened on, since a missing `]` or `}` is the
+usual cause. A tab after `:` before an unquoted value is named at the tab:
+the parser reads a tab there as separation only before a quoted or
+bracketed value.
+
 What a read reports together (CFG-DIAG-5): every structural problem (YAML
 subset, duplicate keys, ambiguous numbers, hook refusals) and every envelope
 problem, without decoding. When the structure is sound, decoding reports

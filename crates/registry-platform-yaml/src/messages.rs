@@ -257,12 +257,35 @@ pub(crate) fn unexpected_end(open: Option<(char, usize)>) -> Text {
 
 const SYNTAX_ACTION: &str = "Check the indentation and punctuation at this position.";
 
-pub(crate) fn syntax(parser_note: Option<&str>) -> Text {
-    let message = match parser_note {
-        Some(note) => format!("the YAML is not well formed here (the parser reports: {note})"),
-        None => "the YAML is not well formed here".to_string(),
-    };
-    text(message, SYNTAX_ACTION)
+/// `open` is the innermost bracket still open where the error is, and the
+/// line it was opened on.
+pub(crate) fn syntax(parser_note: Option<&str>, open: Option<(char, usize)>) -> Text {
+    let mut message = "the YAML is not well formed here".to_string();
+    let mut action = SYNTAX_ACTION.to_string();
+    if let Some((bracket, line)) = open {
+        let (collection, close) = if bracket == '[' {
+            ("list", ']')
+        } else {
+            ("mapping", '}')
+        };
+        message.push_str(&format!(
+            ", inside the {collection} opened with `{bracket}` on line {line}"
+        ));
+        action = format!(
+            "Close the {collection} with `{close}` where it ends, or check the punctuation at this position."
+        );
+    }
+    if let Some(note) = parser_note {
+        message.push_str(&format!(" (the parser reports: {note})"));
+    }
+    text(message, action)
+}
+
+pub(crate) fn tab_after_colon() -> Text {
+    text(
+        "a tab after `:` is not read as the space before an unquoted value",
+        "Write a space after `:` in place of the tab.",
+    )
 }
 
 pub(crate) fn duplicate_key() -> Text {
