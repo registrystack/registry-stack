@@ -1341,6 +1341,27 @@ class CommittedCorpusTest(unittest.TestCase):
         self.assertLessEqual(set(expected.unreached), formats)
         self.assertLessEqual(set(expected.inapplicable), ids)
 
+    def syntax_error_case(self) -> Any:
+        return next(case for case in self.cases if case.id == "syntax-error")
+
+    def test_cfg_yaml_8_syntax_error_breaks_a_list_at_column_zero(self) -> None:
+        case = self.syntax_error_case()
+        text = "apiVersion: v\nkind: K\ndocuments:\n- id: first\n"
+        variant = one(runner.mutate(text, case.mutation, demo_format()))
+        with self.assertRaises(yaml.YAMLError):
+            yaml.compose(variant.text, Loader=yaml.SafeLoader)
+
+    def test_cfg_yaml_8_syntax_error_breaks_every_reached_example(self) -> None:
+        case = self.syntax_error_case()
+        reached, _ = runner.partition_formats(self.registry)
+        harness = runner.load_harness(self.corpus / "formats.yaml")
+        for fmt in reached:
+            fmt = fmt.with_harness(harness.get(fmt.id, {}))
+            text = runner.prepare_example((ROOT / fmt.example).read_text(encoding="utf-8"), fmt, {})
+            for variant in runner.mutate(text, case.mutation, fmt):
+                with self.subTest(format=fmt.id), self.assertRaises(yaml.YAMLError):
+                    yaml.compose(variant.text, Loader=yaml.SafeLoader)
+
     def test_every_case_mutates_every_reached_example(self) -> None:
         reached, _ = runner.partition_formats(self.registry)
         harness = runner.load_harness(self.corpus / "formats.yaml")
