@@ -1362,7 +1362,16 @@ impl<'de> de::MapAccess<'de> for MapAccess<'_, '_> {
                 continue;
             }
             self.pending = Some(entry);
-            return seed.deserialize(KeyDe { entry, path }).map(Some);
+            // A key type that converts after reading the text, such as
+            // `LocalId`, fails outside `KeyDe`; its error belongs at the key.
+            let key = KeyDe {
+                entry,
+                path: path.clone(),
+            };
+            return seed
+                .deserialize(key)
+                .map(Some)
+                .map_err(|error| KeyDe { entry, path }.locate(error));
         }
         Ok(None)
     }

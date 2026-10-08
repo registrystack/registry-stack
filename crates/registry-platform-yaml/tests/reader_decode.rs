@@ -920,6 +920,21 @@ struct Everything {
     retention_days: Option<BoundedU32<1, 36500>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct Keyed {
+    labels: std::collections::BTreeMap<LocalId, String>,
+}
+
+#[test]
+fn cfg_diag_1_a_refused_map_key_is_reported_at_the_key() {
+    let report = refusal::<Keyed>("labels:\n  title: a\n  Title: b\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "config.invalid-value");
+    assert_eq!(diagnostic.path, "/labels/Title");
+    assert_eq!(at(diagnostic), (5, 3));
+}
+
 #[test]
 fn cfg_sec_3_no_diagnostic_repeats_a_value() {
     let cases = [
