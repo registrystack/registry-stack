@@ -302,9 +302,9 @@ fn integrations_read_identifiers_and_urls_through_shared_types() {
             "/integrations/serviceClients/0/id",
         ),
         (
-            // The reader places a refused key at its mapping.
+            // The reader places a refused key at the key.
             "  secretFiles:\n    Source-Key: /absolute/key\n",
-            "/integrations/secretFiles",
+            "/integrations/secretFiles/Source-Key",
         ),
         (
             "  taskAuthority:\n    issuer: casework.local.example\n    jwksPort: 8094\n    statusClients: {}\n",
