@@ -714,8 +714,8 @@ def mutate_path_outside(text: str, spec: dict[str, Any], fmt: Format) -> list[Va
         outside = staged.work / OUTSIDE / name
         outside.parent.mkdir(exist_ok=True)
         shutil.copyfile(original, outside)
+        original.unlink()
         if via == "link":
-            original.unlink()
             original.symlink_to(os.path.relpath(outside, original.parent))
 
     start = node.start_mark.index

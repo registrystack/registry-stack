@@ -331,7 +331,7 @@ class MutationTest(unittest.TestCase):
             self.assertEqual(text, 'script: "../../conformance-outside/run.rhai"\n')
             outside = staged.work / "conformance-outside/run.rhai"
             self.assertEqual(outside.read_text(encoding="utf-8"), "script\n")
-            self.assertTrue((staged.target.parent / "scripts/run.rhai").is_file())
+            self.assertFalse((staged.target.parent / "scripts/run.rhai").exists())
 
     def test_cfg_val_8_path_outside_through_a_link(self) -> None:
         fmt = demo_format(roles={"relativePath": "/script"})
