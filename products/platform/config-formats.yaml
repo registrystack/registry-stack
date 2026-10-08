@@ -2481,9 +2481,11 @@ formats:
     audience: generated
     stability: experimental
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1
+      kind: MessagingCtlReport
+      checkedBy:
+        file: crates/registry-messaging-core/src/naming.rs
+        symbol: MESSAGING_CTL_REPORT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1
       kind: MessagingCtlReport
@@ -2493,7 +2495,7 @@ formats:
       file: crates/registry-messagingctl/src/report.rs
       symbol: write
     check: none
-    example: none
+    example: products/messaging/examples/formats/ctl-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []

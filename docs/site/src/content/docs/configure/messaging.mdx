@@ -69,11 +69,14 @@ reached. Run `messagingctl <command> --help` for each command's arguments.
 
 A human failure is one `error[CODE] PATH: MESSAGE` line on standard error, followed by a `next:`
 line naming what to do. With `--format json`, every report opens with `ok`, `command`, and
-`status`, and a failure lists its `diagnostics`, each with a `code`, `path`, `message`, and
-`suggestedAction`. The one exception is a successful `preview`, which prints the route body the
-HTTP preview answers, unwrapped.
+`status`, then names its format: `apiVersion` is
+`id.registrystack.org/formats/messaging/ctl-report/v1alpha1` and `kind` is `MessagingCtlReport`. A
+failure lists its `diagnostics`, each with a `code`, `path`, `message`, and `suggestedAction`. The
+one exception is a successful `preview`, which prints the route body the HTTP preview answers,
+unwrapped.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, Command;
+    crates/registry-messagingctl/src/report.rs, write;
     products/messaging/README.md, Running locally;
     scripts/cargo-runtime-library-path.sh, registry_cargo_build; CONTRIBUTING.md. */}
 

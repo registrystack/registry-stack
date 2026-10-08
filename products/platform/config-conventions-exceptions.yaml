@@ -4993,27 +4993,6 @@ exceptions:
   wp: WP3
   reason: the reader does not read through registry-platform-yaml
   resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-1
-  format: messaging/ctl-report
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1'
-- rule: CFG-ENV-1
-  format: messaging/ctl-report
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: MessagingCtlReport'
-- rule: CFG-SCHEMA-1
-  format: messaging/ctl-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-EMPTY-2
   format: messaging/runtime
   location: products/messaging/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers

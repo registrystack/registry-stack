@@ -26,6 +26,12 @@
   replaced by `RuntimeConfigError::pointer`. Migration steps and the
   old-to-new code table are in
   `release/notes/config-conventions/messaging.md`.
+- BREAKING: every `messagingctl --format json` report names its format with
+  `apiVersion: id.registrystack.org/formats/messaging/ctl-report/v1alpha1`
+  and `kind: MessagingCtlReport`, written after `ok`, `command`, and
+  `status`. `examples/formats/ctl-report.json` is the report `check` writes
+  for the starter project. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
 - BREAKING: a spent idempotency key is scoped to the caller's issuer and
   subject, as in Scheduling and Casework, instead of the caller's keyed audit
   pseudonym, so rotating `audit.hashKeyRef` no longer frees spent keys: an

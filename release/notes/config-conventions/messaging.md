@@ -251,6 +251,23 @@ meant.
 - `messaging serve` prints the same report on standard error when it refuses
   its package.
 
+## BREAKING: every `messagingctl --format json` report names its format
+
+- Every JSON report names its format with `apiVersion` and `kind`, written
+  after `ok`, `command`, and `status`:
+
+  ```json
+  "apiVersion": "id.registrystack.org/formats/messaging/ctl-report/v1alpha1",
+  "kind": "MessagingCtlReport",
+  ```
+
+  A command cannot replace either member. A successful `preview` still prints
+  the HTTP preview's body unwrapped, without them.
+  `products/messaging/examples/formats/ctl-report.json` is the report
+  `check --project products/messaging/examples/starter` writes. Migration: a
+  script that compared the whole report, or its leading members, accepts the
+  two new members; a script that reads members by name needs no change.
+
 ## BREAKING: Rust API
 
 - `registry-messaging-core`: `MessagingPackage` is `MessagingProject`, read

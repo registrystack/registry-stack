@@ -43,6 +43,13 @@ pub const MESSAGING_PROVIDER_API_VERSION: &str =
 /// Kind of one HTTP provider's `provider.yaml`.
 pub const MESSAGING_PROVIDER_KIND: &str = "MessagingProvider";
 
+/// apiVersion of the report every `messagingctl` command writes as JSON.
+pub const MESSAGING_CTL_REPORT_API_VERSION: &str =
+    "id.registrystack.org/formats/messaging/ctl-report/v1alpha1";
+
+/// Kind of the report every `messagingctl` command writes as JSON.
+pub const MESSAGING_CTL_REPORT_KIND: &str = "MessagingCtlReport";
+
 /// File name of the authored project document inside `package.root`.
 pub const PACKAGE_FILE: &str = "messaging.yaml";
 
@@ -156,6 +163,11 @@ mod tests {
             "id.registrystack.org/formats/messaging/provider/v1alpha1"
         );
         assert_eq!(MESSAGING_PROVIDER_KIND, "MessagingProvider");
+        assert_eq!(
+            MESSAGING_CTL_REPORT_API_VERSION,
+            "id.registrystack.org/formats/messaging/ctl-report/v1alpha1"
+        );
+        assert_eq!(MESSAGING_CTL_REPORT_KIND, "MessagingCtlReport");
         assert_eq!(PACKAGE_FILE, "messaging.yaml");
         assert_eq!(RUNTIME_SCHEMA_FILE, "runtime.schema.json");
         assert_eq!(

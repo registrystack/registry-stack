@@ -2535,6 +2535,34 @@ audit:
         assert_eq!(leftovers, vec![OsString::from("starter")]);
     }
 
+    /// The committed report example is what `messagingctl --format json check
+    /// --project products/messaging/examples/starter` writes from the
+    /// repository root, byte for byte.
+    #[test]
+    fn the_committed_report_example_is_check_output() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let relative = "products/messaging/examples/starter";
+        let project = root.join(relative);
+        let (exit, mut report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            project.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        report["package"] = json!(relative);
+        let mut written = Vec::new();
+        report::write(&report, &mut written).unwrap();
+        let committed =
+            std::fs::read(root.join("products/messaging/examples/formats/ctl-report.json"))
+                .unwrap();
+        assert!(
+            written == committed,
+            "products/messaging/examples/formats/ctl-report.json drifted; rerun \
+             `messagingctl --format json check --project {relative}` from the repository \
+             root and commit its output"
+        );
+    }
+
     #[test]
     fn check_reports_the_package_digest_templates_and_sample_segments() {
         let root = tempfile::tempdir().unwrap();
