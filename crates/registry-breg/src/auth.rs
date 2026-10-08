@@ -99,6 +99,12 @@ pub enum AuthenticationConfigError {
     InvalidVerifierProfile,
     #[error("an authority claim mapping is invalid")]
     InvalidClaimMapping,
+    #[error(
+        "the project names clients in requesterClients, trusted actors, or consent recipients \
+         that authentication.oidc.allowedClients does not list; list each of them in \
+         authentication.oidc.allowedClients, because the keyword unrestricted lists none"
+    )]
+    NamedClientNotListed,
     #[error("a contextual authority claim overlaps another configured claim role")]
     ConflictingClaimMapping,
     #[error("the configured principal claim is not the principal claim a compiled access profile requires")]
@@ -497,10 +503,16 @@ fn validate_claim_mapping(
                 || !valid_config_value(actor)
                 || actor.chars().any(char::is_whitespace)
                 || uuid::Uuid::parse_str(actor).is_err()
-                || !verifier.allowed_clients.contains(client)
         })
     {
         return Err(AuthenticationConfigError::InvalidClaimMapping);
+    }
+    if claims
+        .trusted_actors
+        .keys()
+        .any(|client| !verifier.allowed_clients.contains(client))
+    {
+        return Err(AuthenticationConfigError::NamedClientNotListed);
     }
     if !(valid_authority_claim_name(&claims.principal_claim) || claims.principal_claim == "sub")
         || claims.principal_claim == verifier.scope_claim
@@ -548,7 +560,7 @@ fn validate_claim_mapping(
             .iter()
             .any(|client| !verifier.allowed_clients.contains(client))
         {
-            return Err(AuthenticationConfigError::InvalidClaimMapping);
+            return Err(AuthenticationConfigError::NamedClientNotListed);
         }
         if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
             && profile.task_grant.is_none()
@@ -568,7 +580,7 @@ fn validate_claim_mapping(
             .iter()
             .any(|allowed| allowed == client)
     }) {
-        return Err(AuthenticationConfigError::InvalidClaimMapping);
+        return Err(AuthenticationConfigError::NamedClientNotListed);
     }
     if inventory
         .principal_claims

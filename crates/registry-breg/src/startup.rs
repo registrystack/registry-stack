@@ -25,7 +25,7 @@ use crate::api::{
 };
 use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
-use crate::auth::RegistryAuthenticator;
+use crate::auth::{AuthenticationConfigError, RegistryAuthenticator};
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -126,6 +126,13 @@ pub enum StartupError {
     Oidc,
     #[error("the Registry authentication profile was refused")]
     Authentication,
+    /// The project names clients that `authentication.oidc.allowedClients`
+    /// does not list; `unrestricted` lists none.
+    #[error(
+        "the project names clients that authentication.oidc.allowedClients does not list; list \
+         each client named in requesterClients, trusted actors, or consent recipients there"
+    )]
+    AuthenticationClientsUnlisted,
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
     #[error(
@@ -603,6 +610,9 @@ impl StartupError {
             Self::Cursor => "the Registry cursor profile was refused",
             Self::Oidc => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
+            Self::AuthenticationClientsUnlisted => {
+                "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
+            }
             Self::AttachmentStorage => {
                 "the Registry attachment storage or verification binding was refused"
             }
@@ -1314,7 +1324,12 @@ async fn finish_prepared_server(
             Arc::clone(&key_source),
             config.authentication().authority_claim_config(),
         )
-        .map_err(|_| StartupError::Authentication)?,
+        .map_err(|error| match error {
+            AuthenticationConfigError::NamedClientNotListed => {
+                StartupError::AuthenticationClientsUnlisted
+            }
+            _ => StartupError::Authentication,
+        })?,
     );
     let expected = startup.expected_identity().clone();
     let expected_catalog = startup.expected_catalog().clone();

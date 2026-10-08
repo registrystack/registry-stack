@@ -904,7 +904,51 @@ mod startup {
         let registry = compile(&value).expect("consent fixture compiles");
         assert_eq!(
             authenticator(&registry, &idp, &["wfp-scope", "ngo-alpha-portal"]).err(),
-            Some(AuthenticationConfigError::InvalidClaimMapping)
+            Some(AuthenticationConfigError::NamedClientNotListed)
+        );
+    }
+
+    /// `allowedClients: unrestricted` reaches the verifier as an empty list,
+    /// which lists no client, so a project that names clients is refused with
+    /// the cause that says so rather than a generic mapping error.
+    #[tokio::test]
+    async fn an_unrestricted_client_list_refuses_a_project_that_names_clients() {
+        let registry = compile(&source()).expect("consent fixture compiles");
+        let idp = MockIdp::start().await;
+        assert_eq!(
+            authenticator(&registry, &idp, &[]).err(),
+            Some(AuthenticationConfigError::NamedClientNotListed)
+        );
+        let message = AuthenticationConfigError::NamedClientNotListed.to_string();
+        for fix in ["allowedClients", "requesterClients", "unrestricted"] {
+            assert!(message.contains(fix), "{fix}: {message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_trusted_actor_client_must_be_an_allowed_client() {
+        use std::collections::BTreeMap;
+
+        let registry = compile(&source()).expect("consent fixture compiles");
+        let idp = MockIdp::start().await;
+        let mut verifier = oidc_verifier_config(idp.issuer(), vec!["consent-api".to_owned()]);
+        verifier.allowed_clients = vec!["wfp-scope".to_owned(), "ngo-alpha-portal".to_owned()];
+        let key_source = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        ));
+        let claims = AuthorityClaimConfig::new("principal", Some("purpose".to_owned()))
+            .with_contextual_claims(
+                Default::default(),
+                BTreeMap::from([(
+                    "unlisted-agent".to_owned(),
+                    "00000000-0000-4000-8000-000000000001".to_owned(),
+                )]),
+            );
+        assert_eq!(
+            RegistryAuthenticator::new(&registry, verifier, key_source, claims).err(),
+            Some(AuthenticationConfigError::NamedClientNotListed)
         );
     }
 }

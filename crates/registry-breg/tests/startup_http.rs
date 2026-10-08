@@ -492,7 +492,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 27] {
+fn startup_errors() -> [StartupError; 28] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -516,6 +516,7 @@ fn startup_errors() -> [StartupError; 27] {
         StartupError::Cursor,
         StartupError::Oidc,
         StartupError::Authentication,
+        StartupError::AuthenticationClientsUnlisted,
         StartupError::EventDestinations,
         StartupError::RetainedWebhookBindings {
             retained_deliveries: 2,
@@ -736,6 +737,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::Cursor => "the Registry cursor profile was refused",
         StartupError::Oidc => "the Registry OIDC key source was refused",
         StartupError::Authentication => "the Registry authentication profile was refused",
+        StartupError::AuthenticationClientsUnlisted => {
+            "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
+        }
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
         StartupError::RetainedWebhookBindings { .. } => {
             "retained webhook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"

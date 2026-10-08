@@ -260,6 +260,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "authentication",
             "the authentication profile was refused: check the claim mapping, the accepted algorithms, and the audience against the package this runtime serves",
         ),
+        StartupError::AuthenticationClientsUnlisted => (
+            "startup.authentication.clients_unlisted",
+            "authentication",
+            "the project names clients in requesterClients, trusted actors, or consent recipients that authentication.oidc.allowedClients does not list; list each of them in allowedClients, because the keyword unrestricted lists none",
+        ),
         StartupError::EventDestinations => (
             "startup.event_destinations.refused",
             "eventDestinations",
@@ -824,7 +829,23 @@ mod tests {
             );
         }
 
-        for diagnostic in [key_source, profile] {
+        let unlisted = startup_diagnostic(StartupError::AuthenticationClientsUnlisted);
+        assert_eq!(unlisted.code, "startup.authentication.clients_unlisted");
+        assert_eq!(unlisted.path, "authentication");
+        for fix in [
+            "requesterClients",
+            "trusted actors",
+            "allowedClients",
+            "unrestricted",
+        ] {
+            assert!(
+                unlisted.message.contains(fix),
+                "{fix}: {}",
+                unlisted.message
+            );
+        }
+
+        for diagnostic in [key_source, profile, unlisted] {
             assert!(!diagnostic.message.contains("http"));
             assert!(!diagnostic.message.contains("://"));
         }
