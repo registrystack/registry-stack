@@ -1040,12 +1040,12 @@ pub struct ChangeRequestEvidenceSource {
     #[serde(default)]
     pub requires: Vec<ChangeRequestEvidenceRequirementSource>,
     #[serde(
-        deserialize_with = "bounded_u64::<_, 1, { crate::action_evidence_contracts::MAX_EVIDENCE_OBSERVATION_AGE_SECONDS }>"
+        deserialize_with = "bounded_u64::<_, 1, { crate::action_evidence_contracts::MAX_EVIDENCE_AGE_SECONDS }>"
     )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "BoundedU64<1, { crate::action_evidence_contracts::MAX_EVIDENCE_OBSERVATION_AGE_SECONDS }>"
+            with = "BoundedU64<1, { crate::action_evidence_contracts::MAX_EVIDENCE_AGE_SECONDS }>"
         )
     )]
     pub maximum_observation_age_seconds: u64,

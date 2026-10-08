@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_EVIDENCE_CAPABILITIES: usize = 2;
 pub const MAX_EVIDENCE_CONTRACT_BYTES: usize = 1_048_576;
 /// The longest `maximumObservationAgeSeconds` an Evidence acquisition declares.
-pub const MAX_EVIDENCE_OBSERVATION_AGE_SECONDS: u64 = 300;
+pub const MAX_EVIDENCE_AGE_SECONDS: u64 = 300;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -44,14 +44,10 @@ pub struct ActionEvidenceSource {
     pub requirement: String,
     pub subjects: BTreeMap<String, EvidenceSubjectSource>,
     pub outputs: Vec<String>,
-    #[serde(
-        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_EVIDENCE_OBSERVATION_AGE_SECONDS>"
-    )]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_EVIDENCE_AGE_SECONDS>")]
     #[cfg_attr(
         feature = "schema",
-        schemars(
-            with = "registry_platform_yaml::BoundedU64<1, MAX_EVIDENCE_OBSERVATION_AGE_SECONDS>"
-        )
+        schemars(with = "registry_platform_yaml::BoundedU64<1, MAX_EVIDENCE_AGE_SECONDS>")
     )]
     pub maximum_observation_age_seconds: u64,
 }
@@ -140,8 +136,7 @@ pub(crate) fn compile_request_evidence(
     let valid = valid_evidence_id(&source.id)
         && valid_evidence_id(&provider.id)
         && definitions.len() == 1
-        && (1..=MAX_EVIDENCE_OBSERVATION_AGE_SECONDS)
-            .contains(&source.maximum_observation_age_seconds)
+        && (1..=MAX_EVIDENCE_AGE_SECONDS).contains(&source.maximum_observation_age_seconds)
         && !outputs.is_empty()
         && output_ids.len() == outputs.len()
         && definition
@@ -440,7 +435,7 @@ pub(crate) fn compile_evidence(
             let definition = definitions.first().copied();
             let valid = valid_evidence_id(&capability.id)
                 && ids.insert(&capability.id)
-                && (1..=MAX_EVIDENCE_OBSERVATION_AGE_SECONDS)
+                && (1..=MAX_EVIDENCE_AGE_SECONDS)
                     .contains(&capability.maximum_observation_age_seconds)
                 && definitions.len() == 1
                 && definition.is_some_and(|definition| {
