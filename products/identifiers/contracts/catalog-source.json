@@ -274,6 +274,14 @@
       "description": "Registry Scheduling fixture JSON Schema."
     },
     {
+      "glob": "products/messaging/generated/authoring/*.schema.json",
+      "sourcePath": "crates/registry-messaging/src/schema.rs",
+      "owner": "messaging",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema."
+    },
+    {
       "glob": "products/messaging/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-messaging/src/schema.rs",
       "owner": "messaging",

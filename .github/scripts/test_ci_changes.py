@@ -1899,6 +1899,7 @@ class CiChangesTest(unittest.TestCase):
             "products/scheduling/generated/project/project.schema.json",
             "products/scheduling/generated/records/records.schema.json",
             "products/scheduling/generated/fixture/fixture.schema.json",
+            "products/messaging/generated/authoring/project.schema.json",
             "products/messaging/generated/runtime/runtime.schema.json",
             "products/discovery/schemas/origins.schema.json",
         ):

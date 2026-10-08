@@ -254,7 +254,7 @@ fn runtime_members(
                         ),
                         "attemptTimeoutMilliseconds": 10000,
                         "maximumResponseBytes": 16384,
-                        "maximumConcurrentRequests": capabilities.map_or(1, |capabilities| capabilities.concurrency_limit),
+                        "maximumConcurrentRequests": capabilities.map_or(1, |capabilities| capabilities.maximum_concurrent_requests),
                         "redirects": "deny",
                         "authentication": {
                             "type": "static-authorization",

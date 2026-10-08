@@ -1255,6 +1255,7 @@ def classify(
                 "products/scheduling/generated/project/",
                 "products/scheduling/generated/records/",
                 "products/scheduling/generated/fixture/",
+                "products/messaging/generated/authoring/",
                 "products/messaging/generated/runtime/",
                 "products/discovery/schemas/",
             )

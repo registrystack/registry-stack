@@ -51,7 +51,10 @@ profile the verified client resolves to, never against raw claims. A client
 listed in two profiles is refused when the package loads
 (MESSAGING-DEC-03). The profile's scopes, actor kind, and principal claim
 must all be present on the token, or the caller is refused
-`403 profile.not-authorized`. An operation the caller's role does not carry,
+`403 profile.not-authorized`. A profile states its scopes or writes
+`unrestricted`: an omitted or empty `requiredScopes` is refused when the
+project is read, so no profile is left open by a missing line
+(MESSAGING-DEC-29). An operation the caller's role does not carry,
 such as an operator submitting, is refused `403 operation.not-authorized`.
 
 - Submission (MESSAGING-SEC-01, enforced): `authorize_submission` admits
@@ -368,7 +371,7 @@ caller cannot spend the runtime's rendering on requests it has no budget
 for; past the burst it is `429 rate-limit.exceeded` with `Retry-After`, and
 a limiter that cannot decide answers `503 service.unavailable`
 (MESSAGING-DEC-20). The bucket is in-process: each replica enforces its own,
-and a restart refills it. `dailyLimit` is counted over the profile's
+and a restart refills it. `maximumMessagesPerDay` is counted over the profile's
 accepted messages of the last 24 hours inside the acceptance transaction,
 under a transaction advisory lock of the profile, so concurrent submissions
 cannot both take the last place and the count survives a restart and holds

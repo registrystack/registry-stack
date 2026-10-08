@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Generated documents: the JSON Schema for the Messaging runtime
-//! configuration and the OpenAPI description of the HTTP surface.
+//! Generated documents: the JSON Schemas for the Messaging runtime
+//! configuration and the authored project, template, and provider files,
+//! and the OpenAPI description of the HTTP surface.
 //!
-//! Both are derived, never written by hand. The runtime schema comes from the
-//! strict `RuntimeConfig` types; the OpenAPI document comes from the same
-//! operation table the router serves. Regenerate the committed documents
-//! with:
+//! Every one is derived, never written by hand. The schemas come from the
+//! strict reader types; the OpenAPI document comes from the same operation
+//! table the router serves. Regenerate the committed documents with:
 //!
 //! ```bash
 //! cargo run -p registry-messaging --features schema --example runtime-schema -- \
 //!   --output products/messaging/generated/runtime
+//! cargo run -p registry-messaging --features schema --example authoring-schema -- \
+//!   --output products/messaging/generated/authoring
 //! cargo run -p registry-messaging --features schema --example openapi -- \
 //!   --output products/messaging/generated
 //! ```
@@ -24,14 +26,19 @@ use serde_json::{json, Map, Value};
 
 use registry_messaging_core::typed::refuse_null;
 use registry_messaging_core::{
-    type_uri, MessageDispatch, MessageStatus, ProblemCode, IDEMPOTENCY_KEY_HEADER,
-    MAXIMUM_CORRELATION_ID_BYTES, MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_SENDER_BYTES,
-    MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, MESSAGING_RUNTIME_SCHEMA_ID,
-    RUNTIME_SCHEMA_FILE,
+    type_uri, MessageDispatch, MessageStatus, MessagingProject, ProblemCode, TemplateDocument,
+    IDEMPOTENCY_KEY_HEADER, MAXIMUM_CORRELATION_ID_BYTES, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_SENDER_BYTES, MESSAGING_PROJECT_API_VERSION, MESSAGING_PROJECT_KIND,
+    MESSAGING_PROJECT_SCHEMA_ID, MESSAGING_PROVIDER_API_VERSION, MESSAGING_PROVIDER_KIND,
+    MESSAGING_PROVIDER_SCHEMA_ID, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
+    MESSAGING_RUNTIME_SCHEMA_ID, MESSAGING_TEMPLATE_API_VERSION, MESSAGING_TEMPLATE_KIND,
+    MESSAGING_TEMPLATE_SCHEMA_ID, PROJECT_SCHEMA_FILE, PROVIDER_SCHEMA_FILE, RUNTIME_SCHEMA_FILE,
+    TEMPLATE_SCHEMA_FILE,
 };
 
 use crate::config::{RuntimeConfig, MAXIMUM_TLS_TRUST_PROFILES};
 use crate::http::{RequestBody, OPERATIONS};
+use crate::http_provider::HttpProviderPackage;
 use crate::messages::MASKED_CONTACT;
 
 /// File name of the generated OpenAPI document.
@@ -60,6 +67,60 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         Value::String("Registry Messaging runtime configuration".to_owned()),
     );
     Ok([(RUNTIME_SCHEMA_FILE, render(&Value::Object(object))?)].into())
+}
+
+/// The schemas of the three authored files a package holds: the project
+/// `messaging.yaml`, each version's `template.yaml`, and each HTTP
+/// provider's `provider.yaml`.
+pub fn authoring_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
+    let entries = [
+        (
+            PROJECT_SCHEMA_FILE,
+            serde_json::to_value(schemars::schema_for!(MessagingProject))?,
+            "Registry Messaging project",
+            MESSAGING_PROJECT_SCHEMA_ID,
+            MESSAGING_PROJECT_API_VERSION,
+            MESSAGING_PROJECT_KIND,
+        ),
+        (
+            TEMPLATE_SCHEMA_FILE,
+            serde_json::to_value(schemars::schema_for!(TemplateDocument))?,
+            "Registry Messaging template version",
+            MESSAGING_TEMPLATE_SCHEMA_ID,
+            MESSAGING_TEMPLATE_API_VERSION,
+            MESSAGING_TEMPLATE_KIND,
+        ),
+        (
+            PROVIDER_SCHEMA_FILE,
+            serde_json::to_value(schemars::schema_for!(HttpProviderPackage))?,
+            "Registry Messaging HTTP provider package",
+            MESSAGING_PROVIDER_SCHEMA_ID,
+            MESSAGING_PROVIDER_API_VERSION,
+            MESSAGING_PROVIDER_KIND,
+        ),
+    ];
+    entries
+        .into_iter()
+        .map(
+            |(file, mut derived, title, identifier, api_version, kind)| {
+                // The reader refuses `null` in every authored member (CFG-EMPTY-1).
+                refuse_null(&mut derived);
+                set_const(&mut derived, "apiVersion", api_version);
+                set_const(&mut derived, "kind", kind);
+                let mut object = match derived {
+                    Value::Object(object) => object,
+                    _ => unreachable!("schemars derives a schema object for a struct"),
+                };
+                object.insert(
+                    "$schema".to_owned(),
+                    Value::String("https://json-schema.org/draft/2020-12/schema".to_owned()),
+                );
+                object.insert("$id".to_owned(), Value::String(identifier.to_owned()));
+                object.insert("title".to_owned(), Value::String(title.to_owned()));
+                Ok((file, render(&Value::Object(object))?))
+            },
+        )
+        .collect()
 }
 
 /// The OpenAPI 3.1 description of every operation the public listener
@@ -1076,6 +1137,75 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_examples_satisfy_the_authoring_schemas() {
+        use registry_messaging_core::{MESSAGING_PROJECT_FORMAT, MESSAGING_TEMPLATE_FORMAT};
+        use registry_platform_yaml::{Expect, Reader};
+
+        use crate::http_provider::MESSAGING_PROVIDER_FORMAT;
+
+        let documents = authoring_documents().unwrap();
+        let examples = product_generated().join("../examples");
+        for (schema_file, format, example) in [
+            (
+                PROJECT_SCHEMA_FILE,
+                &MESSAGING_PROJECT_FORMAT,
+                "starter/messaging.yaml",
+            ),
+            (
+                TEMPLATE_SCHEMA_FILE,
+                &MESSAGING_TEMPLATE_FORMAT,
+                "starter/templates/appointment-reminder/1/template.yaml",
+            ),
+            (
+                TEMPLATE_SCHEMA_FILE,
+                &MESSAGING_TEMPLATE_FORMAT,
+                "starter/templates/appointment-reminder-sms/1/template.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "starter/providers/sms-gateway/provider.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "providers/aws-sms/provider.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "providers/form-sms-gateway/provider.yaml",
+            ),
+            (
+                PROVIDER_SCHEMA_FILE,
+                &MESSAGING_PROVIDER_FORMAT,
+                "providers/mock/provider.yaml",
+            ),
+        ] {
+            let schema: Value = serde_json::from_str(&documents[schema_file]).unwrap();
+            let validator = jsonschema::JSONSchema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .compile(&schema)
+                .unwrap_or_else(|error| panic!("{schema_file} compiles: {error}"));
+            let bytes = std::fs::read(examples.join(example)).unwrap();
+            let instance = Reader::new(example)
+                .read(&bytes, &Expect::one(format))
+                .unwrap_or_else(|report| panic!("{example} reads: {report:?}"))
+                .to_json_value();
+            let errors: Vec<String> = match validator.validate(&instance) {
+                Ok(()) => Vec::new(),
+                Err(errors) => errors
+                    .map(|error| format!("{}: {error}", error.instance_path))
+                    .collect(),
+            };
+            assert!(
+                errors.is_empty(),
+                "{example} does not satisfy {schema_file}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
     fn committed_documents_match_generated_bytes() {
         let generated = runtime_documents().unwrap();
         assert_eq!(
@@ -1088,6 +1218,14 @@ mod tests {
             generated[RUNTIME_SCHEMA_FILE],
             "regenerate with the runtime-schema example"
         );
+        for (file, contents) in authoring_documents().unwrap() {
+            assert_eq!(
+                std::fs::read_to_string(product_generated().join("authoring").join(file))
+                    .expect("the committed authoring schema"),
+                contents,
+                "regenerate with the authoring-schema example"
+            );
+        }
         let generated = openapi_documents().unwrap();
         assert_eq!(
             std::fs::read_to_string(product_generated().join(OPENAPI_FILE))

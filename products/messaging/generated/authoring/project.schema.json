@@ -1,0 +1,369 @@
+{
+  "$defs": {
+    "AccessProfile": {
+      "additionalProperties": false,
+      "description": "One declared caller profile.",
+      "properties": {
+        "actorKind": {
+          "$ref": "#/$defs/ActorKind",
+          "description": "The actor kind the token must claim. Absent means any kind."
+        },
+        "allowDirectContent": {
+          "default": false,
+          "type": "boolean"
+        },
+        "burst": {
+          "format": "uint32",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "maximumMessagesPerDay": {
+          "description": "The most messages the profile may submit in any 24 hours. Absent\nmeans no daily bound beyond the rate.",
+          "format": "uint32",
+          "maximum": 10000000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "principalClaim": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "`sub`, or the name of another string claim identifying the principal."
+        },
+        "requesterClients": {
+          "description": "The OAuth clients whose tokens resolve to this profile, at least one.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requestsPerMinute": {
+          "format": "uint32",
+          "maximum": 60000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requiredScopes": {
+          "$ref": "#/$defs/RequiredScopes",
+          "description": "The scopes a token must carry: `unrestricted`, or a list of at least\none scope. Held as the listed scopes, so `unrestricted` is the empty\nlist."
+        },
+        "role": {
+          "$ref": "#/$defs/AccessRole"
+        },
+        "senderProfiles": {
+          "default": [],
+          "description": "The sender profiles a sender may select; an operator lists none.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "templates": {
+          "default": [],
+          "description": "The templates a sender may use, by id, every declared version; an\noperator lists none.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "principalClaim",
+        "requiredScopes",
+        "requesterClients",
+        "role",
+        "requestsPerMinute",
+        "burst"
+      ],
+      "type": "object"
+    },
+    "AccessRole": {
+      "description": "What a profile is for. A sender submits and reads its own messages; an\noperator reads and acts on every message but submits none.",
+      "enum": [
+        "sender",
+        "operator"
+      ],
+      "type": "string"
+    },
+    "ActorKind": {
+      "description": "The closed actor-kind vocabulary, spelled exactly as the Registry Stack\ncontextual-claim profile spells it.",
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "Channel": {
+      "description": "A delivery channel.",
+      "enum": [
+        "email",
+        "sms"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ProviderDeclaration": {
+      "additionalProperties": false,
+      "description": "One declared provider, referenced by sender profiles through `id`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "idempotentSubmit": {
+          "default": false,
+          "description": "The provider deduplicates submissions on the idempotency key the\nruntime sends, so sending one message twice delivers it once. This is\nthe one declaration of that capability: an HTTP provider's scripts\nsee the key only when it is set, and an `smtp` provider may not set\nit.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/ProviderKind"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ProviderKind": {
+      "description": "The transport a provider speaks. Its endpoint and credentials are runtime\nconfiguration; only the type is project.",
+      "enum": [
+        "smtp",
+        "http"
+      ],
+      "type": "string"
+    },
+    "RequiredScopes": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Require no scope.",
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "The scopes a token must carry: the keyword `unrestricted`, or a list of\nat least one scope. An empty list is refused, because it reads as both\n\"none\" and \"any\" (CFG-EMPTY-2)."
+    },
+    "RetryPolicy": {
+      "additionalProperties": false,
+      "description": "How a send that definitely failed is retried: exponential backoff that\ndoubles from `initialDelaySeconds` up to `maximumDelaySeconds`, with\njitter, until `maximumAttempts` attempts were made.",
+      "properties": {
+        "initialDelaySeconds": {
+          "format": "uint32",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumAttempts": {
+          "format": "uint8",
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumDelaySeconds": {
+          "description": "At least `initialDelaySeconds`.",
+          "format": "uint32",
+          "maximum": 86400,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumAttempts",
+        "initialDelaySeconds",
+        "maximumDelaySeconds"
+      ],
+      "type": "object"
+    },
+    "SenderProfile": {
+      "additionalProperties": false,
+      "description": "What a caller selects: a channel, the provider carrying it, the sender\nidentity, for SMS the most segments one message may use, and how the\nworker retries, holds, and expires its messages.",
+      "properties": {
+        "acceptDuplicates": {
+          "default": false,
+          "description": "The operator's explicit choice that a duplicate message is better\nthan a missed one, which permits `onUncertain: retry` through a\nprovider that does not deduplicate.",
+          "type": "boolean"
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel"
+        },
+        "defaultExpirySeconds": {
+          "description": "How long an accepted message may wait to be sent when its request\nnames no `expiresAt`. Absent means [`DEFAULT_EXPIRY_SECONDS`].",
+          "format": "uint32",
+          "maximum": 2592000,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "maximumSegments": {
+          "description": "For SMS, and only for SMS, the most segments one message may use.",
+          "format": "uint8",
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "onUncertain": {
+          "$ref": "#/$defs/UncertainPolicy",
+          "default": "hold",
+          "description": "What happens when a send may have reached the provider."
+        },
+        "provider": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryPolicy",
+          "description": "How a send that definitely failed is retried. Absent means the\ndefaults [`SenderProfile::retry_policy`] reports."
+        },
+        "sender": {
+          "description": "The from address for email, the sender identifier for SMS.",
+          "maxLength": 254,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "channel",
+        "provider",
+        "sender"
+      ],
+      "type": "object"
+    },
+    "TemplateDeclaration": {
+      "additionalProperties": false,
+      "description": "One template version the project declares.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "description": "A version label: 1 to 32 lowercase letters, digits, dots, or hyphens,\nstarting with a letter or digit. Quote a numeric one.",
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9-]*(\\.[a-z0-9-]+)*$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "UncertainPolicy": {
+      "description": "What the worker does with a send that may have reached the provider.",
+      "oneOf": [
+        {
+          "const": "hold",
+          "description": "Stop the message as `unknown` until an operator settles it.",
+          "type": "string"
+        },
+        {
+          "const": "retry",
+          "description": "Send it again with the same provider idempotency key.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/messaging/project/project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The project file as authored.",
+  "properties": {
+    "accessProfiles": {
+      "description": "Who may call the deployment, at least one profile: a project that\nnames no caller serves none.",
+      "items": {
+        "$ref": "#/$defs/AccessProfile"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/messaging/project/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "MessagingProject",
+      "type": "string"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity"
+    },
+    "providers": {
+      "items": {
+        "$ref": "#/$defs/ProviderDeclaration"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "senderProfiles": {
+      "items": {
+        "$ref": "#/$defs/SenderProfile"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "templates": {
+      "items": {
+        "$ref": "#/$defs/TemplateDeclaration"
+      },
+      "maxItems": 256,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "project",
+    "accessProfiles"
+  ],
+  "title": "Registry Messaging project",
+  "type": "object"
+}

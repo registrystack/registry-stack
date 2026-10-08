@@ -696,7 +696,7 @@
               "description": "How the provider's delivery callbacks are authenticated. Required\nexactly when the package declares `receipts: callback`."
             },
             "maximumConcurrentRequests": {
-              "description": "The most sends this deployment has in flight to the provider, at most\nthe package's declared `capabilities.concurrencyLimit`.",
+              "description": "The most sends this deployment has in flight to the provider, at most\nthe package's declared `capabilities.maximumConcurrentRequests`.",
               "format": "uint16",
               "maximum": 64,
               "minimum": 1,

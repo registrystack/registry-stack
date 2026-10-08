@@ -53,7 +53,7 @@ suite('Registry Stack extension', () => {
       ['breg', 'registry.yaml', 'kind: RegistryProject\nentities:\n  - id: host-person\n', 'host-person'],
       ['casework', 'casework.yaml', 'kind: CaseworkProject\nqueues:\n  - id: host-queue\n', 'host-queue'],
       ['scheduling', 'scheduling.yaml', 'kind: SchedulingProject\nservices:\n  - id: host-service\n', 'host-service'],
-      ['messaging', 'messaging.yaml', 'kind: MessagingPackage\nproviders:\n  - id: host-provider\n', 'host-provider'],
+      ['messaging', 'messaging.yaml', 'kind: MessagingProject\nproviders:\n  - id: host-provider\n', 'host-provider'],
       ['discovery', 'origins.yaml', 'schemaVersion: registry-discovery/origins/v1alpha1\norigins:\n  - originId: host-origin\n', 'host-origin'],
       ['render', 'manifest.yaml', 'kind: RenderBundle\ndocuments:\n  - id: host-document\n', 'host-document'],
       ['manifest', 'custom.yaml', 'schema_version: registry-manifest/v1\ncatalog:\n  id: host-catalog\n', 'host-catalog'],

@@ -68,9 +68,9 @@ use registry_messaging::runtime::{
 };
 use registry_messaging_core::{
     ContentRefusal, MessageDispatch, MessageStatus, ProblemCode, TemplatePreviewRequest,
-    MESSAGING_RUNTIME_KIND,
+    MESSAGING_PROJECT_KIND, MESSAGING_RUNTIME_KIND,
 };
-use registry_platform_yaml::{Diagnostic, Report};
+use registry_platform_yaml::{Diagnostic, Report, Source};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -457,18 +457,6 @@ impl Outcome {
             raw_json: None,
         }
     }
-
-    /// Name the artifact a refusal is about when its code alone does not.
-    fn about(mut self, artifact: &str) -> Self {
-        for diagnostic in self.report["diagnostics"]
-            .as_array_mut()
-            .into_iter()
-            .flatten()
-        {
-            diagnostic["artifact"] = json!(artifact);
-        }
-        self
-    }
 }
 
 /// The next step for a command line clap refused.
@@ -487,10 +475,6 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         "init.write-failed" => (
             "filesystem",
             "Make the parent directory writable, then rerun messagingctl init.",
-        ),
-        "package.project-refused" => (
-            "messaging_project",
-            "Correct the project file the path names, then rerun messagingctl package.",
         ),
         "package.refused" => (
             "package_output",
@@ -704,14 +688,7 @@ fn command_path(command: &Command) -> &'static str {
 fn package(args: &PackageArgs) -> Outcome {
     let inputs = match package_inputs(&args.project) {
         Ok(inputs) => inputs,
-        Err(error) => {
-            return Outcome::refused(
-                DOMAIN_REFUSAL_EXIT,
-                "package.project-refused",
-                error.path(),
-                error.to_string(),
-            )
-        }
+        Err(error) => return package_refusal(&args.project, &error),
     };
     let digest = if args.dry_run {
         match plan_package_inputs(&args.project, &inputs, args.revision.as_deref()) {
@@ -795,10 +772,10 @@ fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage)
         }
         (None, Some(root), _) => load_package(root)
             .map(|package| (None, package))
-            .map_err(|error| package_refusal(&error)),
+            .map_err(|error| package_refusal(root, &error)),
         (None, None, Some(root)) => load_project(root)
             .map(|package| (None, package))
-            .map_err(|error| package_refusal(&error)),
+            .map_err(|error| package_refusal(root, &error)),
         (None, None, None) => Err(Outcome::refused(
             USAGE_EXIT,
             "usage.invalid",
@@ -808,16 +785,38 @@ fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage)
     }
 }
 
-/// The refusal of a package or authoring project that could not be read,
-/// or was read and refused.
-fn package_refusal(error: &PackageLoadError) -> Outcome {
+/// The refusal of a package or authoring project under `root` that could
+/// not be read, or was read and refused: every diagnostic its files hold,
+/// or the one file it could not read as a package.
+fn package_refusal(root: &Path, error: &PackageLoadError) -> Outcome {
     let exit = if error.is_read_failure() {
         OPERATIONAL_FAILURE_EXIT
     } else {
         DOMAIN_REFUSAL_EXIT
     };
-    Outcome::refused(exit, "config.refused", error.path(), error.to_string())
-        .about("messaging_package")
+    Outcome::diagnosed(exit, &package_load_report(root, error))
+}
+
+/// The diagnostics of a package load refusal. A file the loader refused as
+/// a package, rather than for what it holds, is named with no position.
+fn package_load_report(root: &Path, error: &PackageLoadError) -> Report {
+    if let Some(report) = error.report() {
+        return report.clone();
+    }
+    let exit = if error.is_read_failure() {
+        OPERATIONAL_FAILURE_EXIT
+    } else {
+        DOMAIN_REFUSAL_EXIT
+    };
+    let (_, action) = guidance("config.refused", exit);
+    let mut diagnostic = Diagnostic::error("config.refused", "", error.to_string(), action);
+    diagnostic.artifact = Some(MESSAGING_PROJECT_KIND.to_owned());
+    diagnostic.source = Some(Source {
+        file: root.join(error.path()).display().to_string(),
+        line: None,
+        column: None,
+    });
+    Report::new(vec![diagnostic])
 }
 
 /// Read the runtime file at `path` as `messaging serve` does. A refusal of
@@ -849,6 +848,9 @@ fn refusal_exit(error: &RuntimeConfigError) -> u8 {
 fn config_refusal(error: &RuntimeConfigError) -> Outcome {
     let report = match error {
         RuntimeConfigError::Load(error) => Report::new(error.diagnostics().to_vec()),
+        RuntimeConfigError::Package(package) if package.report().is_some() => {
+            package.report().cloned().unwrap_or_default()
+        }
         _ => Report::new(vec![Diagnostic::error(
             error.code(),
             error.pointer(),
@@ -870,14 +872,22 @@ fn check(args: &CheckArgs) -> Outcome {
     };
     let Some(path) = &args.runtime_config else {
         return match given {
-            Some((root, Ok(loaded))) => match package_report(&loaded) {
-                Ok(mut report) => {
-                    report["package"] = json!(root);
-                    Outcome::new(report, View::Check)
+            Some((root, Ok(loaded))) => {
+                let warnings = loaded.warnings();
+                if args.deny_warnings && warnings.warning_count() > 0 {
+                    return Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, warnings);
                 }
-                Err(refused) => refused,
-            },
-            Some((_, Err(error))) => package_refusal(&error),
+                match package_report(&loaded) {
+                    Ok(mut report) => {
+                        report["package"] = json!(root);
+                        report["filesChecked"] = json!(warnings.files_checked());
+                        report["diagnostics"] = warnings.to_json_value();
+                        Outcome::new(report, View::Check)
+                    }
+                    Err(refused) => refused,
+                }
+            }
+            Some((root, Err(error))) => package_refusal(root, &error),
             None => Outcome::refused(
                 USAGE_EXIT,
                 "usage.invalid",
@@ -888,7 +898,7 @@ fn check(args: &CheckArgs) -> Outcome {
     };
     let (given, mut refused) = match given {
         Some((root, Ok(loaded))) => (Some((root, loaded)), None),
-        Some((_, Err(error))) => (None, Some(package_refusal(&error))),
+        Some((root, Err(error))) => (None, Some(package_refusal(root, &error))),
         None => (None, None),
     };
     let absolute = match std::path::absolute(path) {
@@ -923,6 +933,9 @@ fn check(args: &CheckArgs) -> Outcome {
         ) {
             diagnostics.extend(more);
         }
+        let package_files = refused.report["filesChecked"].as_u64().unwrap_or(0);
+        refused.report["filesChecked"] =
+            json!(package_files + report.files_checked().map_or(0, |files| files as u64));
         refused.exit = exit;
         refused.view = View::Diagnostics;
         return refused;
@@ -986,7 +999,7 @@ fn runtime_report(given: &Path, absolute: &Path, runtime: &RuntimeCheck) -> Repo
         diagnostic
     };
     let mut report = Report::new(runtime.diagnostics.iter().map(named).collect());
-    report.set_files_checked(1);
+    report.set_files_checked(runtime.files_checked);
     report
 }
 
@@ -2114,8 +2127,11 @@ mod tests {
     use registry_messaging::store::StoreError;
     use std::path::Path;
 
-    const PACKAGE: &str = r"apiVersion: registry.registrystack.org/messaging-package/v1alpha1
-kind: MessagingPackage
+    const PACKAGE: &str = r"apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+kind: MessagingProject
+project:
+  id: operations
+  version: '1'
 accessProfiles:
   - id: operations
     principalClaim: sub
@@ -2196,8 +2212,8 @@ audit:
 
     #[test]
     fn the_package_formats_are_the_ones_the_runtime_reads() {
-        assert!(PACKAGE.contains(registry_messaging_core::MESSAGING_PACKAGE_API_VERSION));
-        assert!(PACKAGE.contains(registry_messaging_core::MESSAGING_PACKAGE_KIND));
+        assert!(PACKAGE.contains(registry_messaging_core::MESSAGING_PROJECT_API_VERSION));
+        assert!(PACKAGE.contains(registry_messaging_core::MESSAGING_PROJECT_KIND));
         let (root, _) = project("");
         let runtime = runtime(root.path(), "");
         assert!(runtime.contains(registry_messaging_core::MESSAGING_RUNTIME_API_VERSION));
@@ -2360,7 +2376,7 @@ audit:
         std::fs::create_dir_all(&authoring).unwrap();
         std::fs::write(
             authoring.join("messaging.yaml"),
-            format!("{PACKAGE}providers:\n  - id: mail-relay\n    kind: smtp\n"),
+            format!("{PACKAGE}providers:\n  - id: mail-relay\n    type: smtp\n"),
         )
         .unwrap();
         let inputs = package_inputs(&authoring).unwrap();
@@ -2532,6 +2548,8 @@ audit:
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
         assert_eq!(report["packageDigest"], expected.package.digest());
         assert_eq!(report["packageFiles"], expected.files.len());
+        assert_eq!(report["filesChecked"], expected.files.len());
+        assert_eq!(report["diagnostics"], json!([]));
         let templates = report["templates"].as_array().unwrap();
         assert_eq!(templates.len(), 2);
         assert_eq!(templates[0]["id"], "appointment-reminder");
@@ -2556,6 +2574,93 @@ audit:
             "{stdout}"
         );
         assert!(stdout.contains("sample en: 1 segment(s), gsm7"), "{stdout}");
+    }
+
+    #[test]
+    fn check_refuses_a_project_file_at_its_member_and_file() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = starter(root.path());
+        let provider = directory.join("providers/sms-gateway/provider.yaml");
+        let text = std::fs::read_to_string(&provider).unwrap();
+        assert!(text.contains("maximumConcurrentRequests: "), "{text}");
+        let broken = text
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("maximumConcurrentRequests: ") {
+                    "  maximumConcurrentRequests: 0".to_owned()
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&provider, broken).unwrap();
+
+        let (exit, report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            directory.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report}");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_eq!(diagnostics[0]["code"], "config.out-of-range");
+        assert_eq!(
+            diagnostics[0]["path"],
+            "/capabilities/maximumConcurrentRequests"
+        );
+        assert_eq!(
+            diagnostics[0]["source"]["file"],
+            provider.display().to_string()
+        );
+        assert!(diagnostics[0]["source"]["line"].as_u64().is_some());
+        assert!(report["filesChecked"].as_u64().unwrap() >= 2, "{report}");
+    }
+
+    #[test]
+    fn check_lists_project_warnings_and_deny_warnings_refuses_them() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = starter(root.path());
+        let project = directory.join("messaging.yaml");
+        let text = std::fs::read_to_string(&project).unwrap();
+        std::fs::write(
+            &project,
+            text.replace(
+                "requesterClients: [operations-console]",
+                "requesterClients: [unrestricted]",
+            ),
+        )
+        .unwrap();
+
+        let (exit, report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            directory.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_eq!(diagnostics[0]["severity"], "warning");
+        assert_eq!(
+            diagnostics[0]["code"],
+            "messaging.project.wildcard-spelled-item"
+        );
+        assert_eq!(
+            diagnostics[0]["path"],
+            "/accessProfiles/1/requesterClients/0"
+        );
+
+        let (exit, report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            directory.as_os_str(),
+            OsStr::new("--deny-warnings"),
+        ]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report}");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "messaging.project.wildcard-spelled-item"
+        );
     }
 
     #[test]
@@ -2642,6 +2747,11 @@ audit:
         assert_eq!(report["runtimeConfig"], json!(runtime_config));
         assert_eq!(report["diagnostics"], json!([]));
         assert!(report["packageDigest"].is_string());
+        // The runtime file and every project file the check read.
+        assert_eq!(
+            report["filesChecked"],
+            1 + load_project(&directory).unwrap().files.len()
+        );
 
         // Alone, the file is checked against the package its package.root
         // names, which this machine does not hold.

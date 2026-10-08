@@ -2291,25 +2291,30 @@ formats:
     stability: experimental
     topLevel: project
     current:
-      apiVersion: registry.registrystack.org/messaging-package/v1alpha1
-      kind: MessagingPackage
+      apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+      kind: MessagingProject
       checkedBy:
         file: crates/registry-messaging-core/src/naming.rs
-        symbol: MESSAGING_PACKAGE_API_VERSION
+        symbol: MESSAGING_PROJECT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
       kind: MessagingProject
-    schema: none
+    schema:
+      path: products/messaging/generated/authoring/project.schema.json
+      id: https://id.registrystack.org/schemas/messaging/project/project.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-messaging --features schema --example authoring-schema -- --output products/messaging/generated/authoring
+      driftCheck: crates/registry-messaging/src/schema.rs
     reader:
       crate: registry-messaging
       file: crates/registry-messaging/src/package.rs
       function: load_contents
-      type: MessagingPackage
+      type: MessagingProject
     check: messagingctl check --project {project}
     example: products/messaging/examples/starter/messaging.yaml
     conformance:
-      requiredText: /providers/0/id
-      optionalText: /senderProfiles/0/sender
+      requiredText: /project/id
+      optionalText: /accessProfiles/0/actorKind
       integer: /senderProfiles/1/maximumSegments
       boolean: /providers/1/idempotentSubmit
       idList: /providers
@@ -2317,7 +2322,7 @@ formats:
       reference: /senderProfiles/0/provider
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
-        whenOmitted: unclassified
+        whenOmitted: refused
     restrictingMembers: [/accessProfiles/*/requiredScopes]
   - id: messaging/template
     product: messaging
@@ -2327,13 +2332,20 @@ formats:
     audience: authored
     stability: experimental
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/messaging/template/v1alpha1
+      kind: MessagingTemplate
+      checkedBy:
+        file: crates/registry-messaging-core/src/naming.rs
+        symbol: MESSAGING_TEMPLATE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/messaging/template/v1alpha1
       kind: MessagingTemplate
-    schema: none
+    schema:
+      path: products/messaging/generated/authoring/template.schema.json
+      id: https://id.registrystack.org/schemas/messaging/template/template.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-messaging --features schema --example authoring-schema -- --output products/messaging/generated/authoring
+      driftCheck: crates/registry-messaging/src/schema.rs
     reader:
       crate: registry-messaging
       file: crates/registry-messaging/src/package.rs
@@ -2357,13 +2369,20 @@ formats:
     audience: authored
     stability: experimental
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
+      kind: MessagingProvider
+      checkedBy:
+        file: crates/registry-messaging-core/src/naming.rs
+        symbol: MESSAGING_PROVIDER_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
       kind: MessagingProvider
-    schema: none
+    schema:
+      path: products/messaging/generated/authoring/provider.schema.json
+      id: https://id.registrystack.org/schemas/messaging/provider/provider.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-messaging --features schema --example authoring-schema -- --output products/messaging/generated/authoring
+      driftCheck: crates/registry-messaging/src/schema.rs
     reader:
       crate: registry-messaging
       file: crates/registry-messaging/src/package.rs
@@ -2373,8 +2392,8 @@ formats:
     example: products/messaging/examples/starter/providers/sms-gateway/provider.yaml
     conformance:
       requiredText: /prepareScript
-      optionalText: none
-      integer: /capabilities/concurrencyLimit
+      optionalText: /interpretScript
+      integer: /capabilities/maximumConcurrentRequests
       boolean: none
       relativePath: /prepareScript
     securityMembers: []

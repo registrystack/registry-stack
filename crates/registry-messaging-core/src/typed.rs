@@ -8,7 +8,9 @@
 use std::collections::BTreeMap;
 use std::hash::Hash;
 
-use registry_platform_yaml::{BoundedU32, BoundedU64, Digest, LocalId, UniqueList, Url};
+use registry_platform_yaml::{
+    BoundedU32, BoundedU64, Digest, ExternalId, Identified, LocalId, UniqueIdList, UniqueList, Url,
+};
 use serde::{Deserialize, Deserializer};
 
 /// A whole number from `MIN` to `MAX` (CFG-QTY-4).
@@ -38,6 +40,28 @@ where
     const { assert!(MAX <= u16::MAX as u32) };
     let value = BoundedU32::<MIN, MAX>::deserialize(deserializer)?.get();
     Ok(value as u16)
+}
+
+/// A whole number from `MIN` to `MAX` (CFG-QTY-4), kept as `u8`.
+pub fn bounded_u8<'de, D, const MIN: u32, const MAX: u32>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    const { assert!(MAX <= u8::MAX as u32) };
+    let value = BoundedU32::<MIN, MAX>::deserialize(deserializer)?.get();
+    Ok(value as u8)
+}
+
+/// An optional member holding a whole number from `MIN` to `MAX`
+/// (CFG-QTY-4), kept as `u8`; absent reads as `None` through
+/// `serde(default)`.
+pub fn optional_bounded_u8<'de, D, const MIN: u32, const MAX: u32>(
+    deserializer: D,
+) -> Result<Option<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    bounded_u8::<D, MIN, MAX>(deserializer).map(Some)
 }
 
 /// A whole number from `MIN` to `MAX` (CFG-QTY-4), kept as `usize`.
@@ -76,6 +100,45 @@ where
     T: Deserialize<'de> + Eq + Hash,
 {
     UniqueList::<T>::deserialize(deserializer).map(UniqueList::into_vec)
+}
+
+/// Named items in a list, each with an `id` unique in the list (CFG-ID-5):
+/// a repeated id is refused at the second item's `id`.
+pub fn unique_id_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Identified,
+{
+    UniqueIdList::<T>::deserialize(deserializer).map(UniqueIdList::into_vec)
+}
+
+/// A local identifier (CFG-ID-1), kept as text.
+pub fn local_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    LocalId::deserialize(deserializer).map(LocalId::into_string)
+}
+
+/// A set of local identifiers (CFG-ID-1, CFG-ID-6), kept as text.
+pub fn local_ids<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let ids = UniqueList::<LocalId>::deserialize(deserializer)?;
+    Ok(ids
+        .into_vec()
+        .into_iter()
+        .map(LocalId::into_string)
+        .collect())
+}
+
+/// An identifier another system assigns (CFG-ID-2), kept as text.
+pub fn external_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    ExternalId::deserialize(deserializer).map(ExternalId::into_string)
 }
 
 /// An absolute `http` or `https` URL (CFG-VAL-7), kept as written.

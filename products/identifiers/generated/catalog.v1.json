@@ -3872,6 +3872,42 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/messaging/project/project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Registry Messaging project",
+      "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-messaging/src/schema.rs",
+        "sha256": "c2a215ba90319e4ab7a5c3e1bc98ce3929c55fbd97406753da548833b74a2e21"
+      },
+      "artifact": {
+        "path": "products/messaging/generated/authoring/project.schema.json",
+        "sha256": "af3c4d9d5e6da2a07c2d26fc9a06f7bdb3358f6145c54b25d7a045d3066c09e6",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/messaging/provider/provider.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Registry Messaging HTTP provider package",
+      "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-messaging/src/schema.rs",
+        "sha256": "c2a215ba90319e4ab7a5c3e1bc98ce3929c55fbd97406753da548833b74a2e21"
+      },
+      "artifact": {
+        "path": "products/messaging/generated/authoring/provider.schema.json",
+        "sha256": "06439b2e8b23831f90676f4103605a1fc7e79e34f9e8935023cf173e122934de",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/messaging/runtime/runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3881,11 +3917,29 @@
       "description": "Registry Messaging runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-messaging/src/schema.rs",
-        "sha256": "62e1d7f34e58dc153cd69cdaa8de9e10bd671277be8db8733b00009ff1e73993"
+        "sha256": "c2a215ba90319e4ab7a5c3e1bc98ce3929c55fbd97406753da548833b74a2e21"
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "b61f0f39d63bd1b74c86a76e71995b7e26ecd8aaf78e43d8d8f66ba76126afd8",
+        "sha256": "8c07ae3b1301c5559cf2b1451e0a0804df0f18da3a535a43dba48634a51e298c",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/messaging/template/template.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "messaging",
+      "title": "Registry Messaging template version",
+      "description": "Registry Messaging project, template, and HTTP provider authoring JSON Schema.",
+      "source": {
+        "path": "crates/registry-messaging/src/schema.rs",
+        "sha256": "c2a215ba90319e4ab7a5c3e1bc98ce3929c55fbd97406753da548833b74a2e21"
+      },
+      "artifact": {
+        "path": "products/messaging/generated/authoring/template.schema.json",
+        "sha256": "5d99a71fc7fb00d3d4f6f4ffc4f6399570e60497e53a080cd571fc0ef3bd0d42",
         "mediaType": "application/schema+json"
       }
     },

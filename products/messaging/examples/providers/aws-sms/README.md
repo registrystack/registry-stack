@@ -21,7 +21,7 @@ above from this example, and change the package manifest to:
 ```yaml
 providers:
   - id: aws-sms
-    kind: http
+    type: http
 senderProfiles:
   - id: reminders-sms
     channel: sms

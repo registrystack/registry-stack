@@ -94,8 +94,6 @@ rhai.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_norway.workspace = true
-serde_path_to_error.workspace = true
 sha2.workspace = true
 schemars = { workspace = true, optional = true }
 thiserror.workspace = true
@@ -111,10 +109,12 @@ zeroize.workspace = true
 [dev-dependencies]
 aws-lc-rs.workspace = true
 hex.workspace = true
+jsonschema.workspace = true
 rcgen.workspace = true
 registry-messaging-client.workspace = true
 registry-platform-testing.workspace = true
 reqwest.workspace = true
+serde_norway.workspace = true
 tempfile.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true

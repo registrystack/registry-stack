@@ -1104,7 +1104,7 @@ impl MessageService {
             return replay(stored, submission).map(Some);
         }
         let window = Window::new(now, submission, &self.retention)?;
-        if let Some(limit) = caller.profile.daily_limit {
+        if let Some(limit) = caller.profile.maximum_messages_per_day {
             lock_daily_limit(&transaction, &caller.profile.id).await?;
             // A submission under the same key may have committed while this
             // one waited on the lock; it is replayed, never counted against.
@@ -1264,7 +1264,7 @@ const fn days(count: u16) -> Duration {
     Duration::from_secs(count as u64 * SECONDS_PER_DAY)
 }
 
-/// The window a `dailyLimit` counts over.
+/// The window a `maximumMessagesPerDay` counts over.
 const DAILY_WINDOW: Duration = Duration::from_secs(SECONDS_PER_DAY);
 
 /// Take the transaction-scoped advisory lock `profile`'s daily count runs

@@ -978,13 +978,16 @@ pub enum CheckedAgainst<'a> {
 #[derive(Debug)]
 pub struct RuntimeCheck {
     /// Every finding, each naming the file as the path was given and each
-    /// positioned at the member it concerns.
+    /// positioned at the member it concerns: the runtime document's, in file
+    /// order, then those the package's authored files hold.
     pub diagnostics: Vec<Diagnostic>,
     /// The file, or the package it names, could not be read at all, as
     /// opposed to read and refused.
     pub unavailable: bool,
     /// The package `package.root` names, when the check read it.
     pub package: Option<LoadedPackage>,
+    /// The runtime document and every package file the check read.
+    pub files_checked: usize,
     check: RuntimeFileCheck<RuntimeConfig>,
 }
 
@@ -1024,6 +1027,7 @@ pub fn check_runtime_file(
     let mut diagnostics = check.diagnostics.clone();
     let mut unavailable = check.unavailable;
     let mut named = None;
+    let mut refused_package = Report::default();
     if let Some(loaded) = &check.loaded {
         let config = &loaded.config;
         let mut findings = Vec::new();
@@ -1035,7 +1039,11 @@ pub fn check_runtime_file(
                 Ok(package) => Some(&*named.insert(package)),
                 Err(error) => {
                     unavailable |= error.is_read_failure();
-                    findings.push(RuntimeConfigError::Package(error));
+                    if let Some(report) = error.report() {
+                        refused_package = report.clone();
+                    } else {
+                        findings.push(RuntimeConfigError::Package(error));
+                    }
                     None
                 }
             },
@@ -1049,22 +1057,38 @@ pub fn check_runtime_file(
         );
     }
     in_file_order(&mut diagnostics);
+    let mut files_checked = 1 + refused_package.files_checked().unwrap_or(0);
+    diagnostics.extend(refused_package.into_diagnostics());
+    let given = match against {
+        CheckedAgainst::Package(package) => Some(package),
+        CheckedAgainst::NamedPackage | CheckedAgainst::Nothing => None,
+    };
+    if let Some(package) = named.as_ref().or(given) {
+        diagnostics.extend_from_slice(package.warnings().diagnostics());
+        files_checked += package.warnings().files_checked().unwrap_or(0);
+    }
     RuntimeCheck {
         diagnostics,
         unavailable,
         package: named,
+        files_checked,
         check,
     }
 }
 
 /// The report `messaging serve` prints when it refuses the runtime document
-/// at `path` with `error`: the shared loader's diagnostics, or every rule
-/// the document breaks, each at its position. `None` for a refusal of the
-/// package or of a dependency, which its message alone describes.
+/// at `path` with `error`: the shared loader's diagnostics, every
+/// diagnostic the package's authored files hold, or every rule the document
+/// breaks, each at its position. `None` for a refusal of a dependency, or of
+/// a package that could not be read, which its message alone describes.
 #[must_use]
 pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
-    if let RuntimeConfigError::Load(error) = error {
-        return Some(Report::new(error.diagnostics().to_vec()));
+    match error {
+        RuntimeConfigError::Load(error) => {
+            return Some(Report::new(error.diagnostics().to_vec()));
+        }
+        RuntimeConfigError::Package(error) => return error.report().cloned(),
+        _ => {}
     }
     if !error.in_file() {
         return None;
@@ -1180,77 +1204,6 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["providers", _, "tls"] => "starttls",
         _ => DEFAULT_STAND_IN,
     }
-}
-
-/// Name where a YAML document was refused and why. A refusal serde never
-/// attributed to a member is reported at the document root.
-pub(crate) fn refused_yaml(
-    error: serde_path_to_error::Error<serde_norway::Error>,
-) -> (String, String) {
-    let path = error.path().to_string();
-    let path = if path == "." { "/".to_owned() } else { path };
-    (path, redact_refused_values(&error.into_inner().to_string()))
-}
-
-/// Keep the member, the reason, and the location of a refusal while the
-/// refused value stays out of the message. Only the shape word that opens an
-/// `invalid type:` or `invalid value:` clause survives, because the value
-/// might be a secret reference, a database URL, or a credential typed in the
-/// wrong place, and a startup refusal is written to the operator's log.
-pub(crate) fn redact_refused_values(message: &str) -> String {
-    const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
-    let mut redacted = String::with_capacity(message.len());
-    let mut rest = message;
-    loop {
-        let Some((start, len)) = CLAUSES
-            .iter()
-            .filter_map(|clause| rest.find(clause).map(|start| (start, clause.len())))
-            .min_by_key(|(start, _)| *start)
-        else {
-            redacted.push_str(rest);
-            return redacted;
-        };
-        let opened = start + len;
-        redacted.push_str(&rest[..opened]);
-        let (shape, tail) = split_refused_value(&rest[opened..]);
-        redacted.push_str(shape);
-        rest = tail;
-    }
-}
-
-/// Split the text after a clause marker into the shape word serde names and
-/// the remainder that follows the refused value, which serde renders with
-/// `Debug` inside quotes or backticks.
-fn split_refused_value(clause: &str) -> (&str, &str) {
-    let bytes = clause.as_bytes();
-    let mut index = 0;
-    let mut shape_end = None;
-    while index < bytes.len() {
-        match bytes[index] {
-            delimiter @ (b'"' | b'`') => {
-                shape_end.get_or_insert(index);
-                index = skip_delimited(bytes, index, delimiter);
-            }
-            b',' => break,
-            _ => index += 1,
-        }
-    }
-    let shape_end = shape_end.unwrap_or(index);
-    (clause[..shape_end].trim_end(), &clause[index..])
-}
-
-/// Return the offset just past the delimited run that opens at `open`. An
-/// escaped delimiter inside the run does not end it.
-fn skip_delimited(bytes: &[u8], open: usize, delimiter: u8) -> usize {
-    let mut index = open + 1;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' => index += 2,
-            byte if byte == delimiter => return index + 1,
-            _ => index += 1,
-        }
-    }
-    bytes.len()
 }
 
 /// Why the runtime document, or the package it names, was refused. Every
@@ -2417,8 +2370,24 @@ pub(crate) mod tests {
         package["providers"][0]["endpointRef"] = json!("${RELAY_URL}");
         let path = write_project(root.path(), &runtime, &package);
         let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
-        assert!(error.to_string().contains("endpointRef"), "{error}");
         assert!(!error.to_string().contains("RELAY_URL"), "{error}");
+        let RuntimeConfigError::Package(error) = error else {
+            panic!("{error}");
+        };
+        let refusals: Vec<_> = error
+            .report()
+            .expect("an authored expression is refused with a report")
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(
+            refusals,
+            [(
+                "config.substitution-not-allowed",
+                "/providers/0/endpointRef"
+            )]
+        );
     }
 
     /// Runtime connections for both starter providers.

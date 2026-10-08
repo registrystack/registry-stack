@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/provider/provider.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
+kind: MessagingProvider
 # Example HTTP provider package for a generic JSON gateway that carries email
 # and SMS, deduplicates on an idempotency key, and reports delivery through a
 # signed JSON callback. Local development points it at a loopback mock.
@@ -13,4 +16,4 @@ request:
 responseHeaders: [x-request-id]
 capabilities:
   receipts: callback
-  concurrencyLimit: 8
+  maximumConcurrentRequests: 8

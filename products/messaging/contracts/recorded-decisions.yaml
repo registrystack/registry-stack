@@ -417,7 +417,7 @@ decisions:
   - id: MESSAGING-DEC-21
     subject: A profile's daily limit is counted from its accepted messages
     decision: >-
-      dailyLimit bounds the messages one access profile, all its callers
+      maximumMessagesPerDay bounds the messages one access profile, all its callers
       together, accepted in the last 24 hours. The acceptance transaction
       counts them under a transaction advisory lock of the profile; past the
       limit the submission is refused with 429 quota.exceeded and
@@ -594,3 +594,18 @@ decisions:
     evidence:
       - {path: crates/registry-messaging/src/http.rs, name: callbacks_past_the_rate_are_refused_before_they_are_verified}
       - {path: crates/registry-messaging/src/limits.rs, name: each_callback_provider_and_the_unrouted_paths_have_separate_budgets}
+  - id: MESSAGING-DEC-29
+    subject: An access profile states the scopes it requires, or says unrestricted
+    decision: >-
+      `requiredScopes` is a required member of every access profile: a list
+      of at least one scope, each listed once, or the word `unrestricted` to
+      require none. An omitted member, an empty list, `null`, and any other
+      word are refused when the project or package is read, at the member.
+      `requesterClients` likewise lists at least one client, each once.
+    reasoning: >-
+      An omitted or empty scope list used to admit a token carrying any scope
+      or none, so a profile could be left open by forgetting a line. Writing
+      `unrestricted` keeps that choice available but makes it a visible
+      statement a reviewer reads in the project, not a default.
+    evidence:
+      - {path: crates/registry-messaging-core/src/access.rs, name: required_scopes_are_unrestricted_or_listed_never_empty}

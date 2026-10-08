@@ -8,7 +8,7 @@
 //! `sample.json`, and one directory per locale holding the part sources
 //! `subject.j2`, `text.j2`, and `html.j2`.
 //!
-//! Every provider the manifest declares with kind `http` has a
+//! Every provider the manifest declares with type `http` has a
 //! `providers/<id>/` directory holding `provider.yaml`, the provider's
 //! package half, and exactly the scripts it names, at the paths it names
 //! relative to that directory. No other directory may appear under
@@ -31,25 +31,28 @@ use std::io::Read as _;
 use std::path::Path;
 
 use registry_messaging_core::{
-    LocaleSources, MessagingPackage, Package, PackageError, PartKind, ProviderKind,
-    TemplateDocument, TemplateSource, MAXIMUM_TEMPLATE_SOURCE_BYTES, PACKAGE_FILE,
+    CompiledTemplate, FindingReason, LocaleSources, MessagingFinding, MessagingProject, Package,
+    PackageError, PartKind, ProviderKind, TemplateDocument, TemplateReference, TemplateSource,
+    MAXIMUM_TEMPLATE_SOURCE_BYTES, MESSAGING_PROJECT_KIND, MESSAGING_PROVIDER_KIND,
+    MESSAGING_TEMPLATE_KIND, PACKAGE_FILE,
 };
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    plan_package, reject_environment_expressions_in_authored_yaml, verify_package, write_package,
-    PackageConfig, PackageError as SharedPackageError, PackageErrorKind as SharedPackageErrorKind,
-    PackageLimits, RuntimeConfigError as AuthoredConfigError, VerifiedPackage, REVISION_FILE,
-    SUM_FILE,
+    plan_package, verify_package, write_package, AuthoredExpressions, PackageConfig,
+    PackageError as SharedPackageError, PackageErrorKind as SharedPackageErrorKind, PackageLimits,
+    VerifiedPackage, REVISION_FILE, SUM_FILE,
+};
+use registry_platform_yaml::{
+    Decoded, Diagnostic, Document, Reader, Report, Severity, Source, MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::config::{redact_refused_values, refused_yaml};
 use crate::http_provider::{
-    compile_scripts, HttpProviderError, HttpProviderPackage, HttpProviderScripts,
-    ReceiptCapability, MAXIMUM_SCRIPT_SOURCE_BYTES,
+    script_findings, HttpProviderPackage, HttpProviderScripts, ReceiptCapability,
+    MAXIMUM_SCRIPT_SOURCE_BYTES,
 };
 
 /// The directory under the package root holding every template version.
@@ -72,6 +75,9 @@ pub const PROVIDER_FILE: &str = "provider.yaml";
 pub const MAXIMUM_MANIFEST_BYTES: u64 = 1024 * 1024;
 /// The largest file under `templates/`, and the largest `provider.yaml`.
 pub const MAXIMUM_TEMPLATE_FILE_BYTES: u64 = MAXIMUM_TEMPLATE_SOURCE_BYTES as u64;
+// An authored YAML file's bound may lower the shared reader's, never raise it.
+const _: () = assert!(MAXIMUM_MANIFEST_BYTES <= MAXIMUM_DOCUMENT_BYTES as u64);
+const _: () = assert!(MAXIMUM_TEMPLATE_FILE_BYTES <= MAXIMUM_DOCUMENT_BYTES as u64);
 /// The most directory entries a package may hold under `templates/` and
 /// `providers/` together.
 pub const MAXIMUM_PACKAGE_ENTRIES: usize = 4096;
@@ -105,17 +111,25 @@ pub struct PackageFile {
 }
 
 /// A package read from disk: the checked package, the package half of every
-/// HTTP provider by provider id, and the files its digest covers, sorted by
-/// path.
+/// HTTP provider by provider id, the files its digest covers, sorted by
+/// path, and the warnings its files hold.
 #[derive(Clone, Debug)]
 pub struct LoadedPackage {
     pub package: Package,
     pub providers: BTreeMap<String, HttpProviderSource>,
     pub files: Vec<PackageFile>,
+    warnings: Report,
     inputs: BTreeMap<String, Vec<u8>>,
 }
 
 impl LoadedPackage {
+    /// What reading the package's authored files found that does not refuse
+    /// it: every warning, placed in its file.
+    #[must_use]
+    pub const fn warnings(&self) -> &Report {
+        &self.warnings
+    }
+
     /// The providers whose package half declares `receipts: callback`: the
     /// ones whose delivery receipts the runtime records. Every other
     /// provider's messages report `unavailable`.
@@ -209,6 +223,16 @@ impl PackageLoadError {
         &self.reason
     }
 
+    /// Every diagnostic the package's authored files hold, placed in its
+    /// file, when reading them refused the package.
+    #[must_use]
+    pub const fn report(&self) -> Option<&Report> {
+        match &self.reason {
+            PackageLoadReason::Refused(report) => Some(report),
+            _ => None,
+        }
+    }
+
     /// Whether the package could not be read at all, rather than read and
     /// refused.
     #[must_use]
@@ -230,8 +254,10 @@ impl PackageLoadError {
 pub enum PackageLoadReason {
     #[error("does not satisfy the shared package envelope: {0}")]
     Envelope(#[source] Box<SharedPackageError>),
-    #[error("contains an authored configuration refusal: {0}")]
-    Authored(#[source] AuthoredConfigError),
+    /// The authored files the package holds were read and refused: the
+    /// report places every diagnostic in its file.
+    #[error("is refused: {}", first_error(.0))]
+    Refused(Report),
     #[error(
         "does not pin the package at package.root, whose digest is {found}; \
          deploy the pinned package or update package.expectedDigest"
@@ -253,12 +279,18 @@ pub enum PackageLoadReason {
     TooLarge,
     #[error("is not UTF-8 text")]
     NotUtf8,
-    #[error("is not valid at {at}: {cause}")]
-    Parse { at: String, cause: String },
     #[error("is refused: {0}")]
     Invalid(PackageError),
-    #[error("is refused: {0}")]
-    Provider(HttpProviderError),
+}
+
+fn first_error(report: &Report) -> &str {
+    report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.severity == Severity::Error)
+        .map_or("the package does not pass its checks", |diagnostic| {
+            diagnostic.message.as_str()
+        })
 }
 
 /// Verify and load the installed package under `root`.
@@ -321,33 +353,69 @@ fn load_contents(
     if let Some(verified) = verified {
         rebind_envelope(root, verified)?;
     }
-    let mut reader = Reader {
+    let mut reader = PackageReader {
         root,
         verified,
         files: Vec::new(),
         inputs: BTreeMap::new(),
         bytes: 0,
         entries: 0,
+        found: Found::default(),
     };
-    let manifest_text = reader.read_file(PACKAGE_FILE, MAXIMUM_MANIFEST_BYTES)?;
-    reject_authored_expressions(PACKAGE_FILE, &manifest_text)?;
-    let deserializer = serde_norway::Deserializer::from_str(&manifest_text);
-    let manifest: MessagingPackage =
-        serde_path_to_error::deserialize(deserializer).map_err(|error| {
-            let (at, cause) = refused_yaml(error);
-            PackageLoadError::new(PACKAGE_FILE, PackageLoadReason::Parse { at, cause })
-        })?;
-    manifest
-        .check()
-        .map_err(|error| PackageLoadError::new(PACKAGE_FILE, PackageLoadReason::Invalid(error)))?;
-    let sources = reader.read_templates()?;
-    let http_providers: BTreeSet<String> = manifest
-        .providers
-        .iter()
-        .filter(|provider| provider.kind == ProviderKind::Http)
-        .map(|provider| provider.id.clone())
-        .collect();
-    let providers = reader.read_providers(&http_providers)?;
+    let project = reader
+        .read_document(PACKAGE_FILE, MESSAGING_PROJECT_KIND, MAXIMUM_MANIFEST_BYTES)?
+        .and_then(|bytes| reader.decode(PACKAGE_FILE, &bytes, MessagingProject::decode));
+    if let Some(project) = &project {
+        reader
+            .found
+            .note_findings(PACKAGE_FILE, &project.document, &project.value.findings());
+    }
+    let (templates, shipped) = reader.read_templates()?;
+    let mut compiled = Vec::new();
+    for (source, document, path) in templates {
+        let reference = TemplateReference {
+            id: source.id.clone(),
+            version: source.version.clone(),
+        };
+        let findings = match &project {
+            Some(project) if !project.value.declares_template(&reference) => {
+                vec![MessagingFinding::new(FindingReason::UndeclaredTemplate, "")]
+            }
+            _ => match CompiledTemplate::compile(source) {
+                Ok(template) => {
+                    compiled.push(template);
+                    Vec::new()
+                }
+                Err(finding) => vec![finding],
+            },
+        };
+        reader.found.note_findings(&path, &document, &findings);
+    }
+    let providers = match &project {
+        Some(project) => {
+            let http_providers: BTreeSet<String> = project
+                .value
+                .providers
+                .iter()
+                .filter(|provider| provider.kind == ProviderKind::Http)
+                .map(|provider| provider.id.clone())
+                .collect();
+            reader.read_providers(&http_providers)?
+        }
+        None => BTreeMap::new(),
+    };
+    if let Some(project) = &project {
+        let missing = project.value.missing_templates(&shipped);
+        for finding in &missing {
+            let placed = finding.to_diagnostic(&project.document);
+            reader.found.note(PACKAGE_FILE, Report::new(vec![placed]));
+        }
+    }
+    let mut found = std::mem::take(&mut reader.found);
+    found.report.set_files_checked(reader.files.len());
+    let Some(project) = project.filter(|_| !found.report.has_errors()) else {
+        return Err(found.refusal());
+    };
     if let Some(verified) = verified {
         if let Some(unread) = verified
             .files()
@@ -369,23 +437,54 @@ fn load_contents(
         )
         .map_err(|error| PackageLoadError::new("", PackageLoadReason::Envelope(Box::new(error))))?,
     };
-    let package = Package::assemble(&manifest, sources, digest).map_err(|error| {
-        let file = match &error {
-            PackageError::Template { id, version, .. }
-            | PackageError::UndeclaredTemplate { id, version }
-            | PackageError::MissingTemplate { id, version } => {
-                format!("{TEMPLATES_DIRECTORY}/{id}/{version}")
-            }
-            _ => PACKAGE_FILE.to_owned(),
-        };
-        PackageLoadError::new(&file, PackageLoadReason::Invalid(error))
-    })?;
+    let package = Package::assemble(&project.value, compiled, digest)
+        .map_err(|error| PackageLoadError::new(PACKAGE_FILE, PackageLoadReason::Invalid(error)))?;
     Ok(LoadedPackage {
         package,
         providers,
         files,
+        warnings: found.report,
         inputs: reader.inputs,
     })
+}
+
+/// What reading the package's authored files found: every diagnostic, file
+/// by file, and the first file holding an error.
+#[derive(Default)]
+struct Found {
+    report: Report,
+    refused: Option<String>,
+}
+
+impl Found {
+    fn note(&mut self, file: &str, report: Report) {
+        if self.refused.is_none() && report.has_errors() {
+            self.refused = Some(file.to_owned());
+        }
+        self.report.extend(report);
+    }
+
+    /// Note the document's warnings and every finding placed in it, each
+    /// under the file it names: `path` itself, or a file beside it.
+    fn note_findings(&mut self, path: &str, document: &Document, findings: &[MessagingFinding]) {
+        self.note(path, document.warnings());
+        let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
+        for finding in findings {
+            let file = match &finding.file {
+                Some(file) if directory.is_empty() => file.clone(),
+                Some(file) => format!("{directory}/{file}"),
+                None => path.to_owned(),
+            };
+            self.note(&file, Report::new(vec![finding.to_diagnostic(document)]));
+        }
+    }
+
+    fn refusal(self) -> PackageLoadError {
+        PackageLoadError::new(
+            self.refused.as_deref().unwrap_or_default(),
+            PackageLoadReason::Refused(self.report),
+        )
+    }
 }
 
 fn rebind_envelope(root: &Path, verified: &VerifiedPackage) -> Result<(), PackageLoadError> {
@@ -448,11 +547,6 @@ fn read_rebound_bytes(root: &Path, path: &str, limit: u64) -> Result<Vec<u8>, Pa
     Ok(bytes)
 }
 
-fn reject_authored_expressions(path: &str, text: &str) -> Result<(), PackageLoadError> {
-    reject_environment_expressions_in_authored_yaml(text)
-        .map_err(|error| PackageLoadError::new(path, PackageLoadReason::Authored(error)))
-}
-
 fn sha256(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(bytes);
@@ -471,21 +565,57 @@ enum EntryKind {
     Directory,
 }
 
-struct Reader<'a> {
+/// One template version read from disk: its sources, its decoded
+/// `template.yaml`, and that file's path under the root.
+type ReadTemplate = (TemplateSource, Document, String);
+
+struct PackageReader<'a> {
     root: &'a Path,
     verified: Option<&'a VerifiedPackage>,
     files: Vec<PackageFile>,
     inputs: BTreeMap<String, Vec<u8>>,
     bytes: u64,
     entries: usize,
+    found: Found,
 }
 
-impl Reader<'_> {
-    fn read_templates(&mut self) -> Result<Vec<TemplateSource>, PackageLoadError> {
+impl PackageReader<'_> {
+    /// The path a diagnostic names for `path` under the root.
+    fn label(&self, path: &str) -> String {
+        self.root.join(path).display().to_string()
+    }
+
+    /// Decode one authored YAML file, refusing every `${...}` expression in
+    /// it. A refusal is noted, and the file yields nothing.
+    fn decode<T>(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+        decode: impl FnOnce(Reader<'_>, &[u8]) -> Result<Decoded<T>, Report>,
+    ) -> Option<Decoded<T>> {
+        let mut hook = AuthoredExpressions;
+        let reader = Reader::new(self.label(path)).with_hook(&mut hook);
+        match decode(reader, bytes) {
+            Ok(decoded) => Some(decoded),
+            Err(report) => {
+                self.found.note(path, report);
+                None
+            }
+        }
+    }
+
+    /// Every template version under `templates/` whose files read, and the
+    /// reference of every version directory, read or not.
+    fn read_templates(
+        &mut self,
+    ) -> Result<(Vec<ReadTemplate>, BTreeSet<TemplateReference>), PackageLoadError> {
+        let mut shipped = BTreeSet::new();
         let directory = self.root.join(TEMPLATES_DIRECTORY);
         let metadata = match std::fs::symlink_metadata(&directory) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), shipped))
+            }
             Err(error) => {
                 return Err(PackageLoadError::new(
                     TEMPLATES_DIRECTORY,
@@ -512,41 +642,51 @@ impl Reader<'_> {
             for (version, kind) in self.list(&template)? {
                 let directory = format!("{template}/{version}");
                 expect_directory(&directory, kind)?;
-                sources.push(self.read_version(&id, &version, &directory)?);
+                if let Some(source) = self.read_version(&id, &version, &directory)? {
+                    sources.push(source);
+                }
+                shipped.insert(TemplateReference {
+                    id: id.clone(),
+                    version,
+                });
             }
         }
-        Ok(sources)
+        Ok((sources, shipped))
     }
 
+    /// Read one template version directory. A file that reads but is
+    /// refused is noted, and the version yields nothing.
     fn read_version(
         &mut self,
         id: &str,
         version: &str,
         directory: &str,
-    ) -> Result<TemplateSource, PackageLoadError> {
+    ) -> Result<Option<ReadTemplate>, PackageLoadError> {
         let mut document = None;
         let mut schema = None;
         let mut sample = None;
+        let mut refused = false;
         let mut locales = std::collections::BTreeMap::new();
         for (name, kind) in self.list(directory)? {
             let path = format!("{directory}/{name}");
             match (name.as_str(), kind) {
                 (TEMPLATE_FILE, EntryKind::File) => {
-                    let text = self.read_file(&path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
-                    reject_authored_expressions(&path, &text)?;
-                    let deserializer = serde_norway::Deserializer::from_str(&text);
-                    let parsed: TemplateDocument = serde_path_to_error::deserialize(deserializer)
-                        .map_err(|error| {
-                        let (at, cause) = refused_yaml(error);
-                        PackageLoadError::new(&path, PackageLoadReason::Parse { at, cause })
-                    })?;
-                    document = Some(parsed);
+                    document = Some(
+                        self.read_document(
+                            &path,
+                            MESSAGING_TEMPLATE_KIND,
+                            MAXIMUM_TEMPLATE_FILE_BYTES,
+                        )?
+                        .and_then(|bytes| self.decode(&path, &bytes, TemplateDocument::decode)),
+                    );
                 }
                 (SCHEMA_FILE, EntryKind::File) => {
-                    schema = Some(self.read_json(&path)?);
+                    schema = Some(self.read_json(&path, FindingReason::SchemaSyntax)?);
                 }
                 (SAMPLE_FILE, EntryKind::File) => {
-                    sample = Some(self.read_json(&path)?);
+                    let read = self.read_json(&path, FindingReason::SampleSyntax)?;
+                    refused |= read.is_none();
+                    sample = read;
                 }
                 (_, EntryKind::Directory) => {
                     let sources = self.read_locale(&path)?;
@@ -563,14 +703,25 @@ impl Reader<'_> {
                 PackageLoadReason::Read(std::io::ErrorKind::NotFound.into()),
             )
         };
-        Ok(TemplateSource {
+        let document = document.ok_or_else(|| missing(TEMPLATE_FILE))?;
+        let schema = schema.ok_or_else(|| missing(SCHEMA_FILE))?;
+        let (Some(Decoded { value, document }), Some(schema), false) = (document, schema, refused)
+        else {
+            return Ok(None);
+        };
+        let source = TemplateSource {
             id: id.to_owned(),
             version: version.to_owned(),
-            document: document.ok_or_else(|| missing(TEMPLATE_FILE))?,
-            schema: schema.ok_or_else(|| missing(SCHEMA_FILE))?,
+            document: value,
+            schema,
             locales,
             sample,
-        })
+        };
+        Ok(Some((
+            source,
+            document,
+            format!("{directory}/{TEMPLATE_FILE}"),
+        )))
     }
 
     fn read_locale(&mut self, directory: &str) -> Result<LocaleSources, PackageLoadError> {
@@ -644,29 +795,36 @@ impl Reader<'_> {
             if !listed.contains(id) {
                 return Err(missing(id));
             }
-            providers.insert(id.clone(), self.read_provider(id)?);
+            if let Some(source) = self.read_provider(id)? {
+                providers.insert(id.clone(), source);
+            }
         }
         Ok(providers)
     }
 
-    fn read_provider(&mut self, id: &str) -> Result<HttpProviderSource, PackageLoadError> {
+    /// Read one provider directory. A `provider.yaml` that reads but is
+    /// refused, or a script that does not compile, is noted, and the
+    /// provider yields nothing.
+    fn read_provider(&mut self, id: &str) -> Result<Option<HttpProviderSource>, PackageLoadError> {
         let directory = format!("{PROVIDERS_DIRECTORY}/{id}");
         let manifest_path = format!("{directory}/{PROVIDER_FILE}");
-        let text = self.read_file(&manifest_path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
-        reject_authored_expressions(&manifest_path, &text)?;
-        let deserializer = serde_norway::Deserializer::from_str(&text);
-        let package: HttpProviderPackage =
-            serde_path_to_error::deserialize(deserializer).map_err(|error| {
-                let (at, cause) = refused_yaml(error);
-                PackageLoadError::new(&manifest_path, PackageLoadReason::Parse { at, cause })
-            })?;
-        package.validate().map_err(|error| {
-            PackageLoadError::new(&manifest_path, PackageLoadReason::Provider(error))
-        })?;
+        let Some(bytes) = self.read_document(
+            &manifest_path,
+            MESSAGING_PROVIDER_KIND,
+            MAXIMUM_TEMPLATE_FILE_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(Decoded { value, document }) =
+            self.decode(&manifest_path, &bytes, HttpProviderPackage::decode)
+        else {
+            return Ok(None);
+        };
         let scripts: Vec<(&'static str, String)> = [
-            ("prepareScript", Some(&package.prepare_script)),
-            ("interpretScript", package.interpret_script.as_ref()),
-            ("receiptScript", package.receipt_script.as_ref()),
+            ("prepareScript", Some(&value.prepare_script)),
+            ("interpretScript", value.interpret_script.as_ref()),
+            ("receiptScript", value.receipt_script.as_ref()),
         ]
         .into_iter()
         .filter_map(|(field, path)| path.map(|path| (field, path.clone())))
@@ -686,22 +844,14 @@ impl Reader<'_> {
             prepare: sources.remove("prepareScript").unwrap_or_default(),
             interpret: sources.remove("interpretScript"),
             receipt: sources.remove("receiptScript"),
-            package,
+            package: value,
         };
-        compile_scripts(&source.package, source.scripts()).map_err(|error| {
-            let path = match &error {
-                HttpProviderError::Script { script, .. } => scripts
-                    .iter()
-                    .find(|(field, _)| field == script)
-                    .map_or_else(
-                        || manifest_path.clone(),
-                        |(_, path)| format!("{directory}/{path}"),
-                    ),
-                _ => manifest_path.clone(),
-            };
-            PackageLoadError::new(&path, PackageLoadReason::Provider(error))
-        })?;
-        Ok(source)
+        let mut findings = source.package.findings();
+        findings.extend(script_findings(&source.package, source.scripts()));
+        self.found
+            .note_findings(&manifest_path, &document, &findings);
+        let refused = findings.iter().any(MessagingFinding::is_error);
+        Ok((!refused).then_some(source))
     }
 
     /// Walk `directory` and refuse every entry that is not one of the
@@ -744,17 +894,28 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn read_json(&mut self, path: &str) -> Result<Value, PackageLoadError> {
+    /// Read one JSON file beside a template. JSON is not an authored YAML
+    /// format: a file that is not JSON is noted as `syntax`, at the line
+    /// where it stops parsing, and yields nothing.
+    fn read_json(
+        &mut self,
+        path: &str,
+        syntax: FindingReason,
+    ) -> Result<Option<Value>, PackageLoadError> {
         let text = self.read_file(path, MAXIMUM_TEMPLATE_FILE_BYTES)?;
-        serde_json::from_str(&text).map_err(|error| {
-            PackageLoadError::new(
-                path,
-                PackageLoadReason::Parse {
-                    at: "/".to_owned(),
-                    cause: redact_refused_values(&error.to_string()),
-                },
-            )
-        })
+        match serde_json::from_str(&text) {
+            Ok(value) => Ok(Some(value)),
+            Err(error) => {
+                let mut diagnostic = MessagingFinding::new(syntax, "").to_unplaced_diagnostic();
+                diagnostic.source = Some(Source {
+                    file: self.label(path),
+                    line: Some(error.line()),
+                    column: None,
+                });
+                self.found.note(path, Report::new(vec![diagnostic]));
+                Ok(None)
+            }
+        }
     }
 
     /// List one directory under the root, sorted by name. Every entry counts
@@ -797,9 +958,50 @@ impl Reader<'_> {
         Ok(listed)
     }
 
+    /// Read one authored YAML file of at most `limit` bytes for the shared
+    /// reader, which refuses one that is not UTF-8 at its first invalid byte.
+    /// A file over `limit`, a bound no larger than the shared one, is refused
+    /// here, for the format `kind` names, as the shared reader refuses a
+    /// document over its own bound, and yields nothing.
+    fn read_document(
+        &mut self,
+        path: &str,
+        kind: &str,
+        limit: u64,
+    ) -> Result<Option<Vec<u8>>, PackageLoadError> {
+        match self.read_bytes(path, limit) {
+            Err(error) if matches!(error.reason, PackageLoadReason::FileTooLarge(_)) => {
+                let mut diagnostic = Diagnostic::error(
+                    "yaml.too-large",
+                    "",
+                    format!("the document is larger than the {limit}-byte bound of this file"),
+                    "Split the content into smaller files, or move large embedded content into \
+                     its own file.",
+                );
+                diagnostic.artifact = Some(kind.to_owned());
+                diagnostic.source = Some(Source {
+                    file: self.label(path),
+                    line: None,
+                    column: None,
+                });
+                self.found.note(path, Report::new(vec![diagnostic]));
+                Ok(None)
+            }
+            read => read.map(Some),
+        }
+    }
+
     /// Read one regular file of at most `limit` bytes as UTF-8 and record it
     /// for the digest.
     fn read_file(&mut self, path: &str, limit: u64) -> Result<String, PackageLoadError> {
+        let bytes = self.read_bytes(path, limit)?;
+        String::from_utf8(bytes)
+            .map_err(|_| PackageLoadError::new(path, PackageLoadReason::NotUtf8))
+    }
+
+    /// Read one regular file of at most `limit` bytes and record it for the
+    /// digest.
+    fn read_bytes(&mut self, path: &str, limit: u64) -> Result<Vec<u8>, PackageLoadError> {
         let full = self.root.join(path);
         let read = |error| PackageLoadError::new(path, PackageLoadReason::Read(error));
         let metadata = std::fs::symlink_metadata(&full).map_err(read)?;
@@ -837,8 +1039,7 @@ impl Reader<'_> {
             bytes: length,
         });
         self.inputs.insert(path.to_owned(), bytes.clone());
-        String::from_utf8(bytes)
-            .map_err(|_| PackageLoadError::new(path, PackageLoadReason::NotUtf8))
+        Ok(bytes)
     }
 }
 
@@ -894,6 +1095,24 @@ pub(crate) mod tests {
 
     fn refusal(root: &Path) -> PackageLoadError {
         load_project(root).unwrap_err()
+    }
+
+    /// The codes a refused package's report holds, with each one's file
+    /// relative to `root` and its JSON Pointer.
+    fn refused_codes(root: &Path) -> Vec<(String, String, String)> {
+        let error = refusal(root);
+        let report = error.report().unwrap_or_else(|| panic!("{error}"));
+        let prefix = format!("{}/", root.display());
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let file = diagnostic.source.as_ref().map_or(String::new(), |source| {
+                    source.file.trim_start_matches(&prefix).to_owned()
+                });
+                (diagnostic.code.clone(), file, diagnostic.path.clone())
+            })
+            .collect()
     }
 
     const REMINDER: &str = "templates/appointment-reminder/1";
@@ -1009,7 +1228,10 @@ pub(crate) mod tests {
             std::fs::write(file, text).unwrap();
             let error = load_project(project.path()).unwrap_err();
             assert_eq!(error.path(), format!("package.root/{path}"));
-            assert!(matches!(error.reason(), PackageLoadReason::Authored(_)));
+            let codes = refused_codes(project.path());
+            assert_eq!(codes.len(), 1, "{codes:?}");
+            assert_eq!(codes[0].0, "config.substitution-not-allowed");
+            assert_eq!(codes[0].1, path);
         }
     }
 
@@ -1019,11 +1241,13 @@ pub(crate) mod tests {
         std::fs::write(
             root.path().join(PACKAGE_FILE),
             concat!(
-                "apiVersion: registry.registrystack.org/messaging-package/v1alpha1\n",
-                "kind: MessagingPackage\n",
+                "apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1\n",
+                "kind: MessagingProject\n",
+                "project: {id: operations, version: \"1\"}\n",
                 "accessProfiles:\n",
                 "  - {id: operations, principalClaim: sub, requesterClients: [console],\n",
-                "     role: operator, requestsPerMinute: 60, burst: 10}\n",
+                "     requiredScopes: unrestricted, role: operator,\n",
+                "     requestsPerMinute: 60, burst: 10}\n",
             ),
         )
         .unwrap();
@@ -1116,6 +1340,65 @@ pub(crate) mod tests {
         assert_eq!(error.path(), format!("package.root/{REMINDER}/en/text.j2"));
     }
 
+    /// The code, the file relative to `root`, and whether a line is named,
+    /// of every diagnostic a refused load reports.
+    fn located(root: &Path) -> Vec<(String, String, bool)> {
+        let error = refusal(root);
+        let report = error.report().unwrap_or_else(|| panic!("{error}"));
+        let prefix = format!("{}/", root.display());
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let source = diagnostic.source.as_ref().unwrap();
+                (
+                    diagnostic.code.clone(),
+                    source.file.trim_start_matches(&prefix).to_owned(),
+                    source.line.is_some(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_oversized_or_non_utf8_yaml_file_is_refused_by_the_shared_reader_at_its_file() {
+        let root = starter_copy();
+        let template = format!("{REMINDER}/{TEMPLATE_FILE}");
+        let provider = format!("{GATEWAY}/{PROVIDER_FILE}");
+        std::fs::write(
+            root.path().join(&template),
+            "#".repeat(usize::try_from(MAXIMUM_TEMPLATE_FILE_BYTES).unwrap() + 1),
+        )
+        .unwrap();
+        let mut bytes = std::fs::read(root.path().join(&provider)).unwrap();
+        bytes.extend_from_slice(b"# a comment \xff\n");
+        std::fs::write(root.path().join(&provider), bytes).unwrap();
+        assert_eq!(
+            located(root.path()),
+            [
+                ("yaml.too-large".to_owned(), template, false),
+                ("yaml.not-utf8".to_owned(), provider, true),
+            ]
+        );
+        let error = refusal(root.path());
+        let too_large = &error.report().unwrap().diagnostics()[0];
+        assert!(too_large
+            .message
+            .contains(&MAXIMUM_TEMPLATE_FILE_BYTES.to_string()));
+        assert_eq!(too_large.artifact.as_deref(), Some(MESSAGING_TEMPLATE_KIND));
+
+        let root = starter_copy();
+        std::fs::write(
+            root.path().join(PACKAGE_FILE),
+            "#".repeat(usize::try_from(MAXIMUM_MANIFEST_BYTES).unwrap() + 1),
+        )
+        .unwrap();
+        assert_eq!(
+            located(root.path()),
+            [("yaml.too-large".to_owned(), PACKAGE_FILE.to_owned(), false)]
+        );
+    }
+
     #[test]
     fn the_entry_bound_is_enforced_before_the_layout_is_judged() {
         let root = starter_copy();
@@ -1132,17 +1415,22 @@ pub(crate) mod tests {
     #[test]
     fn an_unknown_key_in_a_template_descriptor_is_refused_with_its_path() {
         let root = starter_copy();
-        std::fs::write(
-            root.path().join(REMINDER).join(TEMPLATE_FILE),
-            "channel: email\nlocales: [en, fr]\nparts: [subject, text, html]\nfallback: en\n",
-        )
-        .unwrap();
+        let file = root.path().join(REMINDER).join(TEMPLATE_FILE);
+        let original = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, format!("{original}fallback: en\n")).unwrap();
         let error = refusal(root.path());
         assert_eq!(
             error.path(),
             format!("package.root/{REMINDER}/{TEMPLATE_FILE}")
         );
-        assert!(error.to_string().contains("fallback"), "{error}");
+        assert_eq!(
+            refused_codes(root.path()),
+            [(
+                "config.unknown-key".to_owned(),
+                format!("{REMINDER}/{TEMPLATE_FILE}"),
+                "/fallback".to_owned()
+            )]
+        );
     }
 
     #[test]
@@ -1154,14 +1442,15 @@ pub(crate) mod tests {
         )
         .unwrap();
         let error = refusal(root.path());
-        assert!(
-            matches!(
-                error.reason(),
-                PackageLoadReason::Invalid(PackageError::Template { .. })
-            ),
-            "{error}"
+        assert_eq!(error.path(), format!("package.root/{REMINDER}/en/text.j2"));
+        assert_eq!(
+            refused_codes(root.path()),
+            [(
+                "messaging.template.part-syntax".to_owned(),
+                format!("{REMINDER}/en/text.j2"),
+                String::new()
+            )]
         );
-        assert_eq!(error.path(), format!("package.root/{REMINDER}"));
 
         let root = starter_copy();
         std::fs::remove_file(root.path().join(REMINDER).join(SCHEMA_FILE)).unwrap();
@@ -1172,12 +1461,25 @@ pub(crate) mod tests {
         );
 
         let root = starter_copy();
-        std::fs::write(root.path().join(REMINDER).join(SCHEMA_FILE), "{\"type\": ").unwrap();
-        let error = refusal(root.path());
-        assert!(
-            matches!(error.reason(), PackageLoadReason::Parse { .. }),
-            "{error}"
+        std::fs::write(
+            root.path().join(REMINDER).join(SCHEMA_FILE),
+            "{\n  \"type\": ",
+        )
+        .unwrap();
+        assert_eq!(
+            refused_codes(root.path()),
+            [(
+                "messaging.template.schema-syntax".to_owned(),
+                format!("{REMINDER}/{SCHEMA_FILE}"),
+                String::new()
+            )]
         );
+        let error = refusal(root.path());
+        let line = error.report().unwrap().diagnostics()[0]
+            .source
+            .as_ref()
+            .and_then(|source| source.line);
+        assert_eq!(line, Some(2));
     }
 
     #[test]
@@ -1185,16 +1487,33 @@ pub(crate) mod tests {
         let root = starter_copy();
         std::fs::remove_dir_all(root.path().join("templates/appointment-reminder-sms")).unwrap();
         let error = refusal(root.path());
-        assert!(
-            matches!(
-                error.reason(),
-                PackageLoadReason::Invalid(PackageError::MissingTemplate { .. })
-            ),
-            "{error}"
-        );
+        assert_eq!(error.path(), "package.root/messaging.yaml");
+        let codes = refused_codes(root.path());
+        assert_eq!(codes.len(), 1, "{codes:?}");
+        assert_eq!(codes[0].0, "messaging.project.missing-template");
+        assert_eq!(codes[0].1, PACKAGE_FILE);
+        assert!(codes[0].2.starts_with("/templates/"), "{codes:?}");
+
+        let root = starter_copy();
+        let shipped = root.path().join(REMINDER);
+        std::fs::rename(
+            &shipped,
+            root.path().join("templates/appointment-reminder/2"),
+        )
+        .unwrap();
+        let codes = refused_codes(root.path());
         assert_eq!(
-            error.path(),
-            "package.root/templates/appointment-reminder-sms/1"
+            codes
+                .iter()
+                .map(|(code, file, _)| (code.as_str(), file.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "messaging.template.undeclared",
+                    "templates/appointment-reminder/2/template.yaml"
+                ),
+                ("messaging.project.missing-template", PACKAGE_FILE),
+            ]
         );
     }
 
@@ -1351,30 +1670,58 @@ pub(crate) mod tests {
         )
         .unwrap();
         let error = refusal(root.path());
-        assert!(
-            matches!(error.reason(), PackageLoadReason::Parse { .. }),
-            "{error}"
-        );
         assert_eq!(
             error.path(),
             format!("package.root/{GATEWAY}/provider.yaml")
+        );
+        assert_eq!(
+            refused_codes(root.path()),
+            [(
+                "config.unknown-key".to_owned(),
+                format!("{GATEWAY}/provider.yaml"),
+                "/endpoint".to_owned()
+            )]
+        );
+
+        let root = starter_copy();
+        assert!(original.contains("maximumConcurrentRequests: 8"));
+        std::fs::write(
+            root.path().join(GATEWAY).join("provider.yaml"),
+            original.replace(
+                "maximumConcurrentRequests: 8",
+                "maximumConcurrentRequests: 0",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            refused_codes(root.path()),
+            [(
+                "config.out-of-range".to_owned(),
+                format!("{GATEWAY}/provider.yaml"),
+                "/capabilities/maximumConcurrentRequests".to_owned()
+            )]
         );
 
         let root = starter_copy();
         std::fs::write(
             root.path().join(GATEWAY).join("provider.yaml"),
-            original.replace("concurrencyLimit: 8", "concurrencyLimit: 0"),
+            original.replace("maximumConcurrentRequests", "concurrencyLimit"),
         )
         .unwrap();
-        let error = refusal(root.path());
-        assert!(
-            matches!(error.reason(), PackageLoadReason::Provider(_)),
-            "{error}"
-        );
-        assert!(error.to_string().contains("concurrencyLimit"), "{error}");
         assert_eq!(
-            error.path(),
-            format!("package.root/{GATEWAY}/provider.yaml")
+            refused_codes(root.path()),
+            [
+                (
+                    "config.missing-key".to_owned(),
+                    format!("{GATEWAY}/provider.yaml"),
+                    "/capabilities".to_owned()
+                ),
+                (
+                    "config.removed-key".to_owned(),
+                    format!("{GATEWAY}/provider.yaml"),
+                    "/capabilities/concurrencyLimit".to_owned()
+                )
+            ]
         );
 
         let root = starter_copy();
@@ -1384,13 +1731,17 @@ pub(crate) mod tests {
         )
         .unwrap();
         let error = refusal(root.path());
-        assert!(
-            matches!(error.reason(), PackageLoadReason::Provider(_)),
-            "{error}"
-        );
         assert_eq!(
             error.path(),
             format!("package.root/{GATEWAY}/scripts/interpret.rhai")
+        );
+        assert_eq!(
+            refused_codes(root.path()),
+            [(
+                "messaging.provider.script-does-not-compile".to_owned(),
+                format!("{GATEWAY}/scripts/interpret.rhai"),
+                String::new()
+            )]
         );
     }
 }

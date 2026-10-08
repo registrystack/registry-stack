@@ -118,14 +118,14 @@ message.not-visible`, the same answer a message that does not exist receives.
 ## Limits
 
 Each access profile limits its callers' submissions. `requestsPerMinute` and `burst` set a request
-rate kept per caller, by token issuer and subject, and `dailyLimit` caps the messages the whole
+rate kept per caller, by token issuer and subject, and `maximumMessagesPerDay` caps the messages the whole
 profile accepts in any 24 hours. A submission past either one is refused with `429` and a
 `Retry-After` header in seconds:
 
 | Code | Refused when | `Retry-After` |
 | --- | --- | --- |
 | `rate-limit.exceeded` | The caller spent its burst | When the caller's rate admits a submission again |
-| `quota.exceeded` | The profile accepted `dailyLimit` messages in the last 24 hours | When the oldest counted message leaves the 24-hour window, at most 86400 |
+| `quota.exceeded` | The profile accepted `maximumMessagesPerDay` messages in the last 24 hours | When the oldest counted message leaves the 24-hour window, at most 86400 |
 
 The rate is charged after the role check and before the body is read. A replayed submission is
 charged to the rate but not to the daily limit. Each runtime process keeps its own rate, so a

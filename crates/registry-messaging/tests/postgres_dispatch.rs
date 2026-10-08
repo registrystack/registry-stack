@@ -441,7 +441,7 @@ async fn a_paced_provider_starts_one_send_per_interval() {
     );
 }
 
-/// A provider whose `concurrencyLimit` is below the worker's concurrency
+/// A provider whose `maximumConcurrentRequests` is below the worker's concurrency
 /// still has its sends leave one interval apart: an attempt takes its turn
 /// at the rate only once it holds one of the provider's slots, so attempts
 /// queued behind a slow send do not leave back to back when it ends.

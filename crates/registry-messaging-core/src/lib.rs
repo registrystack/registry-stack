@@ -19,6 +19,7 @@
 mod access;
 mod callback;
 mod content;
+mod finding;
 mod naming;
 mod package;
 mod problem;
@@ -33,6 +34,7 @@ mod wire;
 pub use access::*;
 pub use callback::*;
 pub use content::*;
+pub use finding::*;
 pub use naming::*;
 pub use package::*;
 pub use problem::*;

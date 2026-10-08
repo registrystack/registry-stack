@@ -7,11 +7,12 @@ use std::time::Duration;
 
 use registry_messaging_core::{
     CallbackBodyEncoding, CallbackRequest, Channel, DeliveryReport, Receipt, RenderedParts,
-    SenderProfile, UncertainPolicy,
+    SenderProfile, UncertainPolicy, MESSAGING_PROVIDER_API_VERSION, MESSAGING_PROVIDER_KIND,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome};
 use registry_platform_testing::MockHttpUpstream;
+use registry_platform_yaml::{Reader, Report};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::io::AsyncReadExt as _;
@@ -77,8 +78,34 @@ fn no_secrets() -> Secrets {
     secrets(&[])
 }
 
+/// Read `body` as a `provider.yaml` under its envelope.
+fn decode_package(body: &str) -> Result<HttpProviderPackage, Report> {
+    let yaml = format!(
+        "apiVersion: {MESSAGING_PROVIDER_API_VERSION}\nkind: {MESSAGING_PROVIDER_KIND}\n{body}"
+    );
+    HttpProviderPackage::decode(Reader::new("provider.yaml"), yaml.as_bytes())
+        .map(|decoded| decoded.value)
+}
+
+/// The code and pointer of every diagnostic refusing `body`.
+fn package_refusal(body: &str) -> Vec<(String, String)> {
+    decode_package(body)
+        .expect_err("package is refused")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect()
+}
+
 fn package(yaml: &str) -> HttpProviderPackage {
-    serde_norway::from_str(yaml).expect("package parses")
+    decode_package(yaml).expect("package parses")
+}
+
+/// Read a whole example `provider.yaml`, envelope included.
+fn example_package(yaml: &str) -> HttpProviderPackage {
+    HttpProviderPackage::decode(Reader::new("provider.yaml"), yaml.as_bytes())
+        .expect("example package parses")
+        .value
 }
 
 fn plain_package(interpret: bool) -> HttpProviderPackage {
@@ -91,7 +118,7 @@ request:
 responseHeaders: [x-request-id]
 capabilities:
   receipts: none
-  concurrencyLimit: 4
+  maximumConcurrentRequests: 4
 ",
     );
     if interpret {
@@ -1466,11 +1493,16 @@ async fn a_script_referring_to_anything_outside_its_arguments_fails() {
 
 #[test]
 fn idempotent_submission_is_declared_in_the_manifest_not_in_capabilities() {
-    let declared_here = serde_norway::from_str::<HttpProviderPackage>(
-        "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, idempotentSubmit: true, concurrencyLimit: 1}\n",
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, idempotentSubmit: true, maximumConcurrentRequests: 1}\n",
+        ),
+        [(
+            "config.unknown-key".to_owned(),
+            "/capabilities/idempotentSubmit".to_owned()
+        )]
     );
-    assert!(declared_here.is_err());
 }
 
 #[test]
@@ -1499,17 +1531,83 @@ fn unknown_configuration_members_are_refused() {
          authentication: {type: none}\n",
     );
     assert!(follow_redirects.is_err());
-    let unknown_package_member = serde_norway::from_str::<HttpProviderPackage>(
-        "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, concurrencyLimit: 1}\n\
-         endpoint: https://gateway.example.org/\n",
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, maximumConcurrentRequests: 1}\n\
+             endpoint: https://gateway.example.org/\n",
+        ),
+        [("config.unknown-key".to_owned(), "/endpoint".to_owned())]
     );
-    assert!(unknown_package_member.is_err());
-    let unknown_capability = serde_norway::from_str::<HttpProviderPackage>(
-        "prepareScript: p.rhai\nrequest: {method: post}\n\
-         capabilities: {receipts: none, concurrencyLimit: 1, burst: 3}\n",
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, maximumConcurrentRequests: 1, burst: 3}\n",
+        ),
+        [(
+            "config.unknown-key".to_owned(),
+            "/capabilities/burst".to_owned()
+        )]
     );
-    assert!(unknown_capability.is_err());
+}
+
+#[test]
+fn package_members_out_of_bounds_are_refused_at_their_pointer() {
+    let cases = [
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 0}",
+            "config.out-of-range",
+            "/capabilities/maximumConcurrentRequests",
+        ),
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 65}",
+            "config.out-of-range",
+            "/capabilities/maximumConcurrentRequests",
+        ),
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 1, ratePerSecond: 0}",
+            "config.out-of-range",
+            "/capabilities/ratePerSecond",
+        ),
+        (
+            "capabilities: {receipts: none, maximumConcurrentRequests: 1, ratePerSecond: 1001}",
+            "config.out-of-range",
+            "/capabilities/ratePerSecond",
+        ),
+    ];
+    for (capabilities, code, pointer) in cases {
+        assert_eq!(
+            package_refusal(&format!(
+                "prepareScript: p.rhai\nrequest: {{method: post}}\n{capabilities}\n"
+            )),
+            [(code.to_owned(), pointer.to_owned())],
+            "{capabilities}"
+        );
+    }
+    // The replacement is missing too, so both are named.
+    assert_eq!(
+        package_refusal(
+            "prepareScript: p.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, concurrencyLimit: 1}\n",
+        ),
+        [
+            ("config.missing-key".to_owned(), "/capabilities".to_owned()),
+            (
+                "config.removed-key".to_owned(),
+                "/capabilities/concurrencyLimit".to_owned()
+            )
+        ]
+    );
+    assert_eq!(
+        package_refusal(
+            "prepareScript: ../outside.rhai\nrequest: {method: post}\n\
+             capabilities: {receipts: none, maximumConcurrentRequests: 1}\n",
+        ),
+        [(
+            "config.invalid-value".to_owned(),
+            "/prepareScript".to_owned()
+        )]
+    );
 }
 
 type PackageChange = fn(&mut HttpProviderPackage);
@@ -1518,11 +1616,11 @@ type SettingsChange = fn(&mut HttpProviderSettings);
 #[test]
 fn package_capabilities_and_script_paths_are_bounded() {
     let cases: [(&str, PackageChange); 7] = [
-        ("capabilities.concurrencyLimit", |package| {
-            package.capabilities.concurrency_limit = 0;
+        ("capabilities.maximumConcurrentRequests", |package| {
+            package.capabilities.maximum_concurrent_requests = 0;
         }),
-        ("capabilities.concurrencyLimit", |package| {
-            package.capabilities.concurrency_limit = MAXIMUM_CONCURRENT_REQUESTS + 1;
+        ("capabilities.maximumConcurrentRequests", |package| {
+            package.capabilities.maximum_concurrent_requests = MAXIMUM_CONCURRENT_REQUESTS + 1;
         }),
         ("capabilities.ratePerSecond", |package| {
             package.capabilities.rate_per_second = Some(0);
@@ -1710,7 +1808,7 @@ fn json_response(status: u16, body: &str) -> ResponseTemplate {
 }
 
 async fn form_sms_gateway(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider {
-    let package = package(FORM_SMS_PACKAGE);
+    let package = example_package(FORM_SMS_PACKAGE);
     let mut settings: HttpProviderSettings =
         serde_norway::from_str(FORM_SMS_CONNECTION).expect("example connection parses");
     settings.base_url = format!(
@@ -1879,7 +1977,7 @@ async fn the_form_sms_example_reads_recorded_shape_status_callbacks() {
 }
 
 async fn mock_gateway(upstream: &MockHttpUpstream, secrets: &Secrets) -> HttpProvider {
-    let package = package(MOCK_PACKAGE);
+    let package = example_package(MOCK_PACKAGE);
     let mut settings: HttpProviderSettings =
         serde_norway::from_str(MOCK_CONNECTION).expect("example connection parses");
     settings.base_url = base(upstream);

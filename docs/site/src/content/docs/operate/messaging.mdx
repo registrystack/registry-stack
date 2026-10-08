@@ -795,7 +795,7 @@ provider and the runtime file.
 No throughput figure is part of the contract. What bounds dispatch is the provider: each runtime
 process sends through eight worker lanes, each claiming, sending, and recording one message at a
 time, so a provider that takes 200 ms to answer caps one process at 40 sends per second. A
-provider's `ratePerSecond` and `concurrencyLimit` lower that further.
+provider's `ratePerSecond` and `maximumConcurrentRequests` lower that further.
 
 The product's own measurement, with the `messagingctl dev` mock gateway answering every SMS after
 200 ms and PostgreSQL in a container on the same Apple M5 Max running macOS, reached a steady 21.3 to

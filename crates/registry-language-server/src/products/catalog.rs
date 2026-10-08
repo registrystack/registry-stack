@@ -609,8 +609,8 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
         ),
         ProductKind::Messaging => (
             "messaging.yaml",
-            "registry.registrystack.org/messaging-package/",
-            "MessagingPackage",
+            "id.registrystack.org/formats/messaging/project/",
+            "MessagingProject",
             MESSAGING_DOCUMENTS,
         ),
         _ => return None,

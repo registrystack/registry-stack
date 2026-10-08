@@ -21,13 +21,20 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use ipnet::IpNet;
-use registry_messaging_core::{typed, valid_header_name};
+use registry_messaging_core::{
+    typed, valid_header_name, FindingReason, MessagingFinding, MESSAGING_PROVIDER_API_VERSION,
+    MESSAGING_PROVIDER_KIND,
+};
 use registry_platform_config::{ProtectedSecret, SecretReference, SecretResolver};
 use registry_platform_httputil::destination::{
     is_script_visible_response_header_name, is_script_writable_request_header_name,
     MAX_DESTINATION_OPERATION_TIMEOUT, MAX_DESTINATION_PRIVATE_CIDRS,
 };
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, RemovedKey, Report,
+    UniqueList,
+};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use url::Url;
 use zeroize::Zeroizing;
@@ -69,40 +76,74 @@ pub const MINIMUM_TOKEN_CACHE_SECONDS: u64 = 10;
 /// parameter.
 pub(crate) const MAXIMUM_CREDENTIAL_VALUE_BYTES: usize = 4_096;
 
+/// `providers/<id>/provider.yaml`: the package half of one HTTP provider.
+pub const MESSAGING_PROVIDER_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: MESSAGING_PROVIDER_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(MESSAGING_PROVIDER_API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/capabilities/concurrencyLimit",
+        replacement: "Write maximumConcurrentRequests.",
+    }],
+};
+
 /// Package material for one HTTP provider.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderPackage {
+    pub api_version: String,
+    pub kind: String,
     /// Package path of the script whose `prepare(message, profile)` returns
     /// the request.
+    #[serde(deserialize_with = "script_path")]
+    #[cfg_attr(feature = "schema", schemars(with = "ScriptPath"))]
     pub prepare_script: String,
     /// Package path of the script whose `interpret(response)` classifies the
     /// response. Without one, the status code decides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "optional_script_path")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<ScriptPath>"))]
     pub interpret_script: Option<String>,
     /// Package path of the script whose `receipt(request)` reads a verified
     /// delivery callback. Required exactly when `capabilities.receipts` is
     /// `callback`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "optional_script_path")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<ScriptPath>"))]
     pub receipt_script: Option<String>,
     pub request: HttpProviderRequest,
-    /// Response headers the interpret script may read, lowercase.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Response headers the interpret script may read, lowercase, at most
+    /// 16. Omitted, a script reads none.
+    #[serde(default, deserialize_with = "response_headers")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "UniqueList<ResponseHeaderName>",
+            length(max = MAXIMUM_SCRIPT_HEADERS)
+        )
+    )]
     pub response_headers: Vec<String>,
     pub capabilities: HttpProviderCapabilities,
 }
 
 /// The request shape a prepare script fills.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderRequest {
     pub method: HttpSendMethod,
-    /// Request headers the prepare script may set, lowercase. The
-    /// authorization, host, content, cookie, and forwarding headers are never
-    /// script-writable.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Request headers the prepare script may set, lowercase, at most 16.
+    /// The authorization, host, content, cookie, and forwarding headers are
+    /// never script-writable. Omitted, a script sets none.
+    #[serde(default, deserialize_with = "request_headers")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "UniqueList<RequestHeaderName>",
+            length(max = MAXIMUM_SCRIPT_HEADERS)
+        )
+    )]
     pub headers: Vec<String>,
 }
 
@@ -123,16 +164,185 @@ pub enum HttpSendMethod {
 /// deduplicates submissions is declared once, as `idempotentSubmit` on the
 /// provider in `messaging.yaml`, where the sender profile checks read it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpProviderCapabilities {
     pub receipts: ReceiptCapability,
-    /// The most sends the provider accepts at once, 1 to 64.
-    pub concurrency_limit: u16,
-    /// The provider's documented send rate. The worker enforces it at claim
-    /// time; this module only checks it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The most sends the provider accepts at once, 1 to 64. A deployment's
+    /// `maximumConcurrentRequests` for the provider is at most this.
+    #[serde(
+        deserialize_with = "typed::bounded_u16::<_, 1, { MAXIMUM_CONCURRENT_REQUESTS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_CONCURRENT_REQUESTS))
+    )]
+    pub maximum_concurrent_requests: u16,
+    /// The provider's documented send rate, 1 to 1000. The worker enforces
+    /// it at claim time; this module only checks it.
+    #[serde(
+        default,
+        deserialize_with = "typed::optional_bounded_u32::<_, 1, MAXIMUM_RATE_PER_SECOND>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_RATE_PER_SECOND))
+    )]
     pub rate_per_second: Option<u32>,
+}
+
+/// A script's path relative to the provider directory: lowercase segments
+/// that do not start with a dot, ending in `.rhai`, at most 256 bytes.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ScriptPath(String);
+
+const SCRIPT_PATH_EXPECTED: &str =
+    "a relative path of lowercase segments ending in .rhai, at most 256 bytes";
+const SCRIPT_PATH_ACTION: &str = "Write a path such as scripts/prepare.rhai.";
+
+impl<'de> Deserialize<'de> for ScriptPath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let path = String::deserialize(deserializer)?;
+        if valid_script_path(&path) {
+            Ok(Self(path))
+        } else {
+            Err(serde::de::Error::custom(Invalid::expected(
+                SCRIPT_PATH_EXPECTED,
+                SCRIPT_PATH_ACTION,
+            )))
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ScriptPath {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ScriptPath".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "maxLength": MAXIMUM_SCRIPT_PATH_BYTES,
+            "pattern": "^([a-z0-9_-][a-z0-9._-]*/)*[a-z0-9_-][a-z0-9._-]*\\.rhai$",
+        })
+    }
+}
+
+fn script_path<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    ScriptPath::deserialize(deserializer).map(|path| path.0)
+}
+
+fn optional_script_path<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    script_path(deserializer).map(Some)
+}
+
+/// A request header a prepare script may set.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct RequestHeaderName(String);
+
+impl<'de> Deserialize<'de> for RequestHeaderName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = lowercase_header_name(deserializer)?;
+        if script_may_set(&name) {
+            Ok(Self(name))
+        } else {
+            Err(serde::de::Error::custom(Invalid::expected(
+                "a header a script may set, not one the runtime sets: authorization, host, \
+                 content, cookie, and forwarding headers are the runtime's",
+                "Remove the header from request.headers; the runtime sets it.",
+            )))
+        }
+    }
+}
+
+/// A response header an interpret script may read.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ResponseHeaderName(String);
+
+impl<'de> Deserialize<'de> for ResponseHeaderName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = lowercase_header_name(deserializer)?;
+        if is_script_visible_response_header_name(&name) {
+            Ok(Self(name))
+        } else {
+            Err(serde::de::Error::custom(Invalid::expected(
+                "a response header scripts may read, not one the runtime withholds",
+                "Remove the header from responseHeaders; scripts cannot read it.",
+            )))
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+fn header_name_schema() -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": registry_messaging_core::MAXIMUM_CALLBACK_HEADER_BYTES,
+        "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$",
+    })
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RequestHeaderName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RequestHeaderName".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        header_name_schema()
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ResponseHeaderName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ResponseHeaderName".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        header_name_schema()
+    }
+}
+
+fn lowercase_header_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let name = String::deserialize(deserializer)?;
+    if valid_lowercase_header_name(&name) {
+        Ok(name)
+    } else {
+        Err(serde::de::Error::custom(Invalid::expected(
+            "a lowercase HTTP header name",
+            "Write the header name in lowercase, such as x-request-id.",
+        )))
+    }
+}
+
+const HEADERS_EXPECTED: &str = "a list of at most 16 header names";
+const HEADERS_ACTION: &str = "Remove the headers no script sets or reads.";
+
+fn request_headers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let names = UniqueList::<RequestHeaderName>::deserialize(deserializer)?.into_vec();
+    if names.len() > MAXIMUM_SCRIPT_HEADERS {
+        return Err(serde::de::Error::custom(Invalid::expected(
+            HEADERS_EXPECTED,
+            HEADERS_ACTION,
+        )));
+    }
+    Ok(names.into_iter().map(|name| name.0).collect())
+}
+
+fn response_headers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let names = UniqueList::<ResponseHeaderName>::deserialize(deserializer)?.into_vec();
+    if names.len() > MAXIMUM_SCRIPT_HEADERS {
+        return Err(serde::de::Error::custom(Invalid::expected(
+            HEADERS_EXPECTED,
+            HEADERS_ACTION,
+        )));
+    }
+    Ok(names.into_iter().map(|name| name.0).collect())
 }
 
 /// How a provider reports delivery after accepting a message.
@@ -183,7 +393,7 @@ pub struct HttpProviderSettings {
     )]
     pub maximum_response_bytes: u64,
     /// The most sends this deployment has in flight to the provider, at most
-    /// the package's declared `capabilities.concurrencyLimit`.
+    /// the package's declared `capabilities.maximumConcurrentRequests`.
     #[serde(
         deserialize_with = "typed::bounded_u16::<_, 1, { MAXIMUM_CONCURRENT_REQUESTS as u32 }>"
     )]
@@ -448,7 +658,34 @@ pub(crate) fn invalid(field: &'static str, reason: impl Into<String>) -> HttpPro
 }
 
 impl HttpProviderPackage {
-    /// Check the package half on its own.
+    /// Read one `provider.yaml` through `reader`, without the checks that
+    /// read two members together. A refusal is the report a check prints
+    /// unchanged.
+    pub fn decode(reader: Reader<'_>, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
+        reader.decode(bytes, &Expect::one(&MESSAGING_PROVIDER_FORMAT))
+    }
+
+    /// Every finding about the file that reads two members together. What
+    /// one member decides by itself the reader already refused.
+    #[must_use]
+    pub fn findings(&self) -> Vec<MessagingFinding> {
+        match (self.capabilities.receipts, self.receipt_script.is_some()) {
+            (ReceiptCapability::Callback, false) => vec![MessagingFinding::new(
+                FindingReason::ReceiptScriptRequired,
+                "/capabilities/receipts",
+            )],
+            (ReceiptCapability::None | ReceiptCapability::Reconcile, true) => {
+                vec![MessagingFinding::new(
+                    FindingReason::ReceiptScriptNotAllowed,
+                    "/receiptScript",
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Check the package half on its own, as activation does with a package
+    /// that was not read from a file.
     ///
     /// # Errors
     ///
@@ -464,19 +701,19 @@ impl HttpProviderPackage {
         check_header_names(
             "request.headers",
             &self.request.headers,
-            |name| is_script_writable_request_header_name(name) && name != "content-type",
-            "is set by the runtime and cannot be named",
+            script_may_set,
+            "names a header the runtime sets; scripts cannot set it",
         )?;
         check_header_names(
             "responseHeaders",
             &self.response_headers,
             is_script_visible_response_header_name,
-            "is withheld by the runtime; scripts cannot read it",
+            "names a header the runtime withholds; scripts cannot read it",
         )?;
         let capabilities = &self.capabilities;
-        if !(1..=MAXIMUM_CONCURRENT_REQUESTS).contains(&capabilities.concurrency_limit) {
+        if !(1..=MAXIMUM_CONCURRENT_REQUESTS).contains(&capabilities.maximum_concurrent_requests) {
             return Err(invalid(
-                "capabilities.concurrencyLimit",
+                "capabilities.maximumConcurrentRequests",
                 format!("must be 1 to {MAXIMUM_CONCURRENT_REQUESTS}"),
             ));
         }
@@ -503,21 +740,30 @@ impl HttpProviderPackage {
     }
 }
 
-fn check_script_path(field: &'static str, path: &str) -> Result<(), HttpProviderError> {
-    let valid = !path.is_empty()
-        && path.len() <= MAXIMUM_SCRIPT_PATH_BYTES
+/// Whether a prepare script may set the request header `name`.
+fn script_may_set(name: &str) -> bool {
+    is_script_writable_request_header_name(name) && name != "content-type"
+}
+
+fn valid_script_path(path: &str) -> bool {
+    path.len() <= MAXIMUM_SCRIPT_PATH_BYTES
         && path.ends_with(".rhai")
         && path.split('/').all(|segment| {
-            !segment.is_empty()
-                && segment != "."
-                && segment != ".."
+            segment.bytes().next().is_some_and(|byte| byte != b'.')
                 && segment.bytes().all(|byte| {
                     byte.is_ascii_lowercase()
                         || byte.is_ascii_digit()
                         || matches!(byte, b'.' | b'_' | b'-')
                 })
-        });
-    if valid {
+        })
+}
+
+fn valid_lowercase_header_name(name: &str) -> bool {
+    valid_header_name(name) && !name.bytes().any(|byte| byte.is_ascii_uppercase())
+}
+
+fn check_script_path(field: &'static str, path: &str) -> Result<(), HttpProviderError> {
+    if valid_script_path(path) {
         Ok(())
     } else {
         Err(invalid(
@@ -531,7 +777,7 @@ fn check_header_names(
     field: &'static str,
     names: &[String],
     allowed: impl Fn(&str) -> bool,
-    refused: &str,
+    refused: &'static str,
 ) -> Result<(), HttpProviderError> {
     if names.len() > MAXIMUM_SCRIPT_HEADERS {
         return Err(invalid(
@@ -540,14 +786,14 @@ fn check_header_names(
         ));
     }
     for (index, name) in names.iter().enumerate() {
-        if !valid_header_name(name) || name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        if !valid_lowercase_header_name(name) {
             return Err(invalid(field, "every name must be a lowercase header name"));
         }
         if !allowed(name) {
-            return Err(invalid(field, format!("`{name}` {refused}")));
+            return Err(invalid(field, refused));
         }
         if names[..index].contains(name) {
-            return Err(invalid(field, format!("`{name}` is named twice")));
+            return Err(invalid(field, "names a header twice"));
         }
     }
     Ok(())
@@ -688,11 +934,11 @@ impl HttpProviderSettings {
             ));
         }
         if self.maximum_concurrent_requests == 0
-            || self.maximum_concurrent_requests > package.capabilities.concurrency_limit
+            || self.maximum_concurrent_requests > package.capabilities.maximum_concurrent_requests
         {
             return Err(invalid(
                 "maximumConcurrentRequests",
-                "must be 1 to the package's capabilities.concurrencyLimit",
+                "must be 1 to the package's capabilities.maximumConcurrentRequests",
             ));
         }
         if self.allowed_private_cidrs.len() > MAX_DESTINATION_PRIVATE_CIDRS {

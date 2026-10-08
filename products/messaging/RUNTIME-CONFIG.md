@@ -216,7 +216,7 @@ An `http` connection:
 | `baseUrl` | yes | Origin and path prefix ending in `/`; `https`, or `http` only to a loopback host |
 | `attemptTimeoutMilliseconds` | yes | One send's whole budget, 1 to 10000 |
 | `maximumResponseBytes` | yes | The largest response body read, at most 1 MiB |
-| `maximumConcurrentRequests` | yes | Sends in flight, 1 to 64 and at most the package's `capabilities.concurrencyLimit` |
+| `maximumConcurrentRequests` | yes | Sends in flight, 1 to 64 and at most the package's `capabilities.maximumConcurrentRequests` |
 | `redirects` | yes | `deny`, the only policy |
 | `authentication` | yes | One of the types below |
 | `callbackVerifier` | when the package declares `receipts: callback`, and only then | See Provider callbacks |
@@ -317,25 +317,38 @@ a provider retries, and is counted in
 `package.root/messaging.yaml` carries:
 
 ```yaml
-apiVersion: registry.registrystack.org/messaging-package/v1alpha1
-kind: MessagingPackage
+apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+kind: MessagingProject
+project: {id: starter, version: "1"}
 accessProfiles: [...]
 ```
 
+The former kind `MessagingPackage` is refused as `config.wrong-kind`,
+naming `MessagingProject`, and the former
+`registry.registrystack.org/messaging-package/v1alpha1` as
+`config.retired-api-version`, naming the envelope above. `project.id` is a
+local identifier and `project.version` a text label; together they are the
+identity a package built from the project carries.
+
 Each access profile is `{id, principalClaim, requiredScopes, requesterClients,
 actorKind, role, senderProfiles, templates, allowDirectContent,
-requestsPerMinute, burst, dailyLimit}`. `actorKind` is `human`, `agent`, or
+requestsPerMinute, burst, maximumMessagesPerDay}`. `id` is a local
+identifier: a lowercase letter, then at most 63 lowercase letters, digits,
+underscores, or hyphens. `requiredScopes` is required: a list of at least one
+scope a token must carry, or `unrestricted` to require none. `requesterClients`
+lists at least one client. `actorKind` is `human`, `agent`, or
 `service`, and omitted means any. `role` is `sender` or `operator`. A sender
 lists at least one sender profile and one template; an operator lists none and
 may not allow direct content. A requester client belongs to exactly one
-profile. Rates, bursts, and daily limits must be positive.
+profile. `requestsPerMinute` is 1 to 60000, `burst` 1 to 10000, and
+`maximumMessagesPerDay`, when set, 1 to 10000000.
 
 `requestsPerMinute` and `burst` bound how fast each caller of the profile
 submits: every `POST /v1/messages` after the role check is charged to a
 token bucket keyed by the caller's issuer and subject, and one past the
 burst is refused `429 rate-limit.exceeded` with `Retry-After`. The bucket
 lives in the runtime process, so each replica enforces it on its own and a
-restart refills it. `dailyLimit`, when set, bounds the messages the whole
+restart refills it. `maximumMessagesPerDay`, when set, bounds the messages the whole
 profile has accepted in the last 24 hours. It is counted from the accepted
 messages in the acceptance transaction, so it holds across replicas and
 restarts; a submission past it is refused `429 quota.exceeded` with
@@ -346,8 +359,8 @@ The rest of the manifest declares what callers send through:
 
 ```yaml
 providers:
-  - {id: mail-relay, kind: smtp}
-  - {id: sms-gateway, kind: http, idempotentSubmit: true}
+  - {id: mail-relay, type: smtp}
+  - {id: sms-gateway, type: http, idempotentSubmit: true}
 senderProfiles:
   - {id: transactional, channel: email, provider: mail-relay, sender: notices@example.org}
   - {id: reminders-sms, channel: sms, provider: sms-gateway, sender: Registry, maximumSegments: 2}
@@ -355,7 +368,7 @@ templates:
   - {id: appointment-reminder, version: "1"}
 ```
 
-A provider declares its `kind`, `smtp` or `http`, and `idempotentSubmit`
+A provider declares its `type`, `smtp` or `http`, and `idempotentSubmit`
 when it deduplicates submissions on the idempotency key the runtime sends.
 `idempotentSubmit` is the one declaration of that capability: only an `http`
 provider may set it, and only then does its prepare script see the key. Its
@@ -398,6 +411,8 @@ Every `http` provider has a directory `providers/<id>/` holding
 that directory:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
+kind: MessagingProvider
 prepareScript: scripts/prepare.rhai
 interpretScript: scripts/interpret.rhai   # optional; the status code decides without one
 receiptScript: scripts/receipt.rhai       # exactly when receipts is callback
@@ -407,7 +422,7 @@ request:
 responseHeaders: [x-request-id]
 capabilities:
   receipts: callback                      # none, callback, or reconcile
-  concurrencyLimit: 8                     # 1 to 64
+  maximumConcurrentRequests: 8            # 1 to 64
   ratePerSecond: 20                       # optional, 1 to 1000
 ```
 
@@ -437,7 +452,9 @@ provider directories, and the starter ships the mock one as `sms-gateway`.
 
 Each template version lives under `templates/<id>/<version>/`:
 
-- `template.yaml`, closed: `channel`, `locales` (at most 32 simple language
+- `template.yaml`, closed: the envelope `apiVersion:
+  id.registrystack.org/formats/messaging/template/v1alpha1` and `kind:
+  MessagingTemplate`, then `channel`, `locales` (at most 32 simple language
   tags such as `en` or `pt-BR`), and `parts`. An email version renders
   `subject`, `text`, and optionally `html`; an SMS version renders exactly
   `text`.

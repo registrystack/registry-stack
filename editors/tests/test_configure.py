@@ -147,6 +147,28 @@ class ConfigureTests(unittest.TestCase):
         tasks = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"]
         self.assertEqual(tasks[0]["command"], "registry-manifest")
 
+    def test_messaging_maps_each_authored_file_to_its_schema(self):
+        project = self.project("messaging", "messaging.yaml")
+        configure.configure("messaging", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "project.schema.json").as_uri(): [str(project / "messaging.yaml")],
+                (managed / "template.schema.json").as_uri(): [
+                    str(project / "templates/*/*/template.yaml")
+                ],
+                (managed / "provider.schema.json").as_uri(): [
+                    str(project / "providers/*/provider.yaml")
+                ],
+                (managed / "runtime.schema.json").as_uri(): [
+                    str(project / "runtime.yaml"),
+                    str(project / "runtime.example.yaml"),
+                ],
+            },
+        )
+
     def test_refuses_modified_managed_schema_and_task(self):
         project = self.project("messaging", "messaging.yaml")
         configure.configure("messaging", project, self.workspace, None)

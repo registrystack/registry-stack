@@ -71,6 +71,9 @@ SCHEMAS = {
         ("products/scheduling/generated/fixture/fixture.schema.json", "fixtures/*.yml"),
     ),
     "messaging": (
+        ("products/messaging/generated/authoring/project.schema.json", "messaging.yaml"),
+        ("products/messaging/generated/authoring/template.schema.json", "templates/*/*/template.yaml"),
+        ("products/messaging/generated/authoring/provider.schema.json", "providers/*/provider.yaml"),
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
     ),

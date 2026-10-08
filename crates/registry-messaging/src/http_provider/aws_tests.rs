@@ -8,6 +8,7 @@ use registry_messaging_core::{Channel, RenderedParts, SenderProfile, UncertainPo
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_dispatch::{FailureCode, ReceiverReference, SendOutcome};
 use registry_platform_testing::MockHttpUpstream;
+use registry_platform_yaml::Reader;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::ResponseTemplate;
@@ -83,7 +84,9 @@ fn aws_secrets() -> Secrets {
 }
 
 fn aws_package() -> HttpProviderPackage {
-    serde_norway::from_str(AWS_PACKAGE).expect("AWS example package parses")
+    HttpProviderPackage::decode(Reader::new("provider.yaml"), AWS_PACKAGE.as_bytes())
+        .expect("AWS example package parses")
+        .value
 }
 
 fn aws_settings(base_url: Option<&str>, session_token: bool) -> HttpProviderSettings {
@@ -642,8 +645,22 @@ fn packages_naming_response_headers_scripts_cannot_read_are_refused() {
             .to_string();
 
         assert!(error.contains("responseHeaders"), "{error}");
-        assert!(error.contains(&format!("`{name}`")), "{error}");
+        assert!(!error.contains(name), "{error}");
         assert!(error.contains("scripts cannot read it"), "{error}");
+
+        let refused = format!("{AWS_PACKAGE}responseHeaders: [{name}]\n");
+        let report = HttpProviderPackage::decode(Reader::new("provider.yaml"), refused.as_bytes())
+            .expect_err("a withheld response header is refused at read");
+        let refusals: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(refusals, [("config.invalid-value", "/responseHeaders/0")]);
+        assert!(report
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains(name)));
     }
     let mut package = aws_package();
     package.response_headers = vec!["x-request-id".to_owned()];

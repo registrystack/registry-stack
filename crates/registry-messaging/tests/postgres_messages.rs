@@ -1044,7 +1044,7 @@ fn with_daily_limit(limit: u32) -> impl FnOnce(&std::path::Path) {
         let text = std::fs::read_to_string(&manifest).unwrap();
         let limited = text.replacen(
             "    burst: 10\n",
-            &format!("    burst: 10\n    dailyLimit: {limit}\n"),
+            &format!("    burst: 10\n    maximumMessagesPerDay: {limit}\n"),
             1,
         );
         assert_ne!(limited, text, "the starter's sender profile moved");

@@ -1,27 +1,40 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The authored package manifest.
+//! The authored project file, `messaging.yaml`.
 //!
-//! A package is the directory `package.root` names, holding `messaging.yaml`
-//! and one directory per template version under `templates/<id>/<version>/`.
-//! The manifest declares the providers a deployment routes through (by kind,
-//! never by endpoint or credential, which are runtime configuration), the
-//! sender profiles callers select, the template versions the package ships,
-//! and who may call the runtime, as `accessProfiles[]`, so a reviewer reads
-//! the callers next to what they may send. Every member is closed, so an
+//! A Messaging project is the directory `package.root` names, holding
+//! `messaging.yaml` and one directory per template version under
+//! `templates/<id>/<version>/`. The project file names the project in its
+//! `project` block, declares the providers a deployment routes through (by
+//! type, never by endpoint or credential, which are runtime configuration),
+//! the sender profiles callers select, the template versions the project
+//! ships, and who may call the runtime, as `accessProfiles[]`, so a reviewer
+//! reads the callers next to what they may send. Every member is closed, so an
 //! unknown key is refused rather than ignored.
+//!
+//! The shared reader refuses what one member decides by itself: its type,
+//! its identifier grammar, its bounds, a repeated identifier. What reads two
+//! members together, such as a reference to a declaration, is a
+//! [`MessagingFinding`] the check reports at the member.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, Invalid, ProjectIdentity,
+    Reader, RemovedKey, Report, RetiredApiVersion,
+};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
-use crate::access::{valid_identifier, AccessProfile, AccessProfileError, AccessProfiles};
-use crate::naming::{MESSAGING_PACKAGE_API_VERSION, MESSAGING_PACKAGE_KIND};
+use crate::access::{AccessProfile, AccessProfileError, AccessProfiles, AccessRole};
+use crate::finding::{FindingReason, MessagingFinding};
+use crate::naming::{
+    MESSAGING_PROJECT_API_VERSION, MESSAGING_PROJECT_KIND, RETIRED_MESSAGING_PROJECT_API_VERSION,
+};
 use crate::sms::MAXIMUM_SMS_SEGMENTS;
 
-/// The most providers, sender profiles, or template versions one package
-/// declares.
+/// The most providers, sender profiles, template versions, or access
+/// profiles one project declares.
 pub const MAXIMUM_PACKAGE_DECLARATIONS: usize = 256;
 
 /// The longest template version label accepted.
@@ -55,8 +68,38 @@ pub const MINIMUM_EXPIRY_SECONDS: u32 = 60;
 /// The longest default expiry a sender profile may declare: thirty days.
 pub const MAXIMUM_EXPIRY_SECONDS: u32 = 2_592_000;
 
+// The reader bounds below are const generics, which take a `u32`.
+const MAXIMUM_ATTEMPTS_BOUND: u32 = MAXIMUM_ATTEMPTS as u32;
+const MAXIMUM_SMS_SEGMENTS_BOUND: u32 = MAXIMUM_SMS_SEGMENTS as u32;
+
+/// The format a `messaging.yaml` file declares (CFG-ENV-1).
+pub const MESSAGING_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: MESSAGING_PROJECT_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(MESSAGING_PROJECT_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: RETIRED_MESSAGING_PROJECT_API_VERSION,
+            replacement:
+                "Write apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1 \
+                          and kind: MessagingProject, and add a project block with id and a text \
+                          version.",
+        }],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/providers/*/kind",
+            replacement: "Write type.",
+        },
+        RemovedKey {
+            pointer: "/accessProfiles/*/dailyLimit",
+            replacement: "Write maximumMessagesPerDay.",
+        },
+    ],
+};
+
 /// A delivery channel.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Channel {
     Email,
@@ -74,8 +117,9 @@ impl Channel {
 }
 
 /// The transport a provider speaks. Its endpoint and credentials are runtime
-/// configuration; only the kind is package.
+/// configuration; only the type is project.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
     Smtp,
@@ -83,7 +127,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    /// Whether this kind can carry `channel`.
+    /// Whether this type can carry `channel`.
     #[must_use]
     pub const fn carries(self, channel: Channel) -> bool {
         match self {
@@ -94,49 +138,83 @@ impl ProviderKind {
 }
 
 /// One declared provider, referenced by sender profiles through `id`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderDeclaration {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(rename = "type")]
     pub kind: ProviderKind,
     /// The provider deduplicates submissions on the idempotency key the
     /// runtime sends, so sending one message twice delivers it once. This is
     /// the one declaration of that capability: an HTTP provider's scripts
     /// see the key only when it is set, and an `smtp` provider may not set
     /// it.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub idempotent_submit: bool,
+}
+
+impl Identified for ProviderDeclaration {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// What a caller selects: a channel, the provider carrying it, the sender
 /// identity, for SMS the most segments one message may use, and how the
 /// worker retries, holds, and expires its messages.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SenderProfile {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub channel: Channel,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub provider: String,
     /// The from address for email, the sender identifier for SMS.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 254)))]
     pub sender: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// For SMS, and only for SMS, the most segments one message may use.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u8::<_, 1, MAXIMUM_SMS_SEGMENTS_BOUND>"
+    )]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 10)))]
     pub maximum_segments: Option<u8>,
     /// How a send that definitely failed is retried. Absent means the
     /// defaults [`SenderProfile::retry_policy`] reports.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub retry: Option<RetryPolicy>,
     /// What happens when a send may have reached the provider.
-    #[serde(default, skip_serializing_if = "UncertainPolicy::is_hold")]
+    #[serde(default)]
     pub on_uncertain: UncertainPolicy,
     /// The operator's explicit choice that a duplicate message is better
     /// than a missed one, which permits `onUncertain: retry` through a
     /// provider that does not deduplicate.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub accept_duplicates: bool,
     /// How long an accepted message may wait to be sent when its request
-    /// names no `expiresAt`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// names no `expiresAt`. Absent means [`DEFAULT_EXPIRY_SECONDS`].
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u32::<_, MINIMUM_EXPIRY_SECONDS, MAXIMUM_EXPIRY_SECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = MINIMUM_EXPIRY_SECONDS, max = MAXIMUM_EXPIRY_SECONDS))
+    )]
     pub default_expiry_seconds: Option<u32>,
+}
+
+impl Identified for SenderProfile {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 impl SenderProfile {
@@ -161,25 +239,25 @@ impl SenderProfile {
 /// How a send that definitely failed is retried: exponential backoff that
 /// doubles from `initialDelaySeconds` up to `maximumDelaySeconds`, with
 /// jitter, until `maximumAttempts` attempts were made.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetryPolicy {
+    #[serde(deserialize_with = "crate::typed::bounded_u8::<_, 1, MAXIMUM_ATTEMPTS_BOUND>")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 20)))]
     pub maximum_attempts: u8,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RETRY_DELAY_SECONDS>")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAXIMUM_RETRY_DELAY_SECONDS)))]
     pub initial_delay_seconds: u32,
+    /// At least `initialDelaySeconds`.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RETRY_DELAY_SECONDS>")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAXIMUM_RETRY_DELAY_SECONDS)))]
     pub maximum_delay_seconds: u32,
-}
-
-impl RetryPolicy {
-    fn is_valid(self) -> bool {
-        (1..=MAXIMUM_ATTEMPTS).contains(&self.maximum_attempts)
-            && self.initial_delay_seconds >= 1
-            && (self.initial_delay_seconds..=MAXIMUM_RETRY_DELAY_SECONDS)
-                .contains(&self.maximum_delay_seconds)
-    }
 }
 
 /// What the worker does with a send that may have reached the provider.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum UncertainPolicy {
     /// Stop the message as `unknown` until an operator settles it.
@@ -204,12 +282,8 @@ impl UncertainPolicy {
     }
 }
 
-const fn is_false(value: &bool) -> bool {
-    !*value
-}
-
-/// One template version the package ships, under
-/// `templates/<id>/<version>/`.
+/// One template version, under `templates/<id>/<version>/`, as the wire
+/// contract names it.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TemplateReference {
@@ -217,104 +291,138 @@ pub struct TemplateReference {
     pub version: String,
 }
 
-/// The package manifest as authored.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// One template version the project declares.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MessagingPackage {
+pub struct TemplateDeclaration {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
+    /// A version label: 1 to 32 lowercase letters, digits, dots, or hyphens,
+    /// starting with a letter or digit. Quote a numeric one.
+    #[serde(deserialize_with = "template_version")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            length(min = 1, max = 32),
+            regex(pattern = r"^[a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)*$")
+        )
+    )]
+    pub version: String,
+}
+
+impl TemplateDeclaration {
+    #[must_use]
+    pub fn reference(&self) -> TemplateReference {
+        TemplateReference {
+            id: self.id.clone(),
+            version: self.version.clone(),
+        }
+    }
+}
+
+// The refusal below states this bound in static text.
+const _: () = assert!(MAXIMUM_TEMPLATE_VERSION_BYTES == 32);
+
+fn template_version<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let version = String::deserialize(deserializer)?;
+    if valid_template_version(&version) {
+        Ok(version)
+    } else {
+        Err(serde::de::Error::custom(Invalid::expected(
+            "a version label: 1 to 32 lowercase letters, digits, dots, or hyphens, starting with \
+             a letter or digit",
+            "Write a version such as \"1\" or \"2026.1\".",
+        )))
+    }
+}
+
+/// The project file as authored.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MessagingProject {
     pub api_version: String,
     pub kind: String,
-    #[serde(default)]
+    pub project: ProjectIdentity,
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<ProviderDeclaration>",
+            length(max = 256)
+        )
+    )]
     pub providers: Vec<ProviderDeclaration>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::typed::unique_id_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<SenderProfile>",
+            length(max = 256)
+        )
+    )]
     pub sender_profiles: Vec<SenderProfile>,
-    #[serde(default)]
-    pub templates: Vec<TemplateReference>,
+    #[serde(default, deserialize_with = "crate::typed::unique_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<TemplateDeclaration>",
+            length(max = 256)
+        )
+    )]
+    pub templates: Vec<TemplateDeclaration>,
+    /// Who may call the deployment, at least one profile: a project that
+    /// names no caller serves none.
+    #[serde(deserialize_with = "access_profiles")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueIdList<AccessProfile>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub access_profiles: Vec<AccessProfile>,
 }
 
-/// Why a parsed package cannot be used. Identifiers are package content an
-/// author wrote, never caller data, so they are named to point at the entry.
+fn access_profiles<'de, D>(deserializer: D) -> Result<Vec<AccessProfile>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let profiles = crate::typed::unique_id_list::<D, AccessProfile>(deserializer)?;
+    if profiles.is_empty() {
+        return Err(serde::de::Error::custom(Invalid::expected(
+            "a list of at least one access profile",
+            "Declare the access profile each calling client resolves to.",
+        )));
+    }
+    Ok(profiles)
+}
+
+/// Why a project cannot be used. Every message is the project's own
+/// finding or a fixed sentence: none repeats a value the files hold.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum PackageError {
-    #[error("unsupported Messaging package apiVersion; expected {MESSAGING_PACKAGE_API_VERSION}")]
-    InvalidApiVersion,
-    #[error("unsupported Messaging package kind; expected {MESSAGING_PACKAGE_KIND}")]
-    InvalidKind,
-    #[error("the Messaging package declares no access profile")]
-    NoAccessProfiles,
+    #[error("{}", first_message(.0))]
+    Findings(Vec<MessagingFinding>),
     #[error(transparent)]
     AccessProfile(#[from] AccessProfileError),
-    #[error("the package declares more than {MAXIMUM_PACKAGE_DECLARATIONS} {0}")]
-    TooManyDeclarations(&'static str),
-    #[error("{kind} identifier `{id}` is not a lowercase kebab identifier of at most 64 bytes")]
-    InvalidIdentifier { kind: &'static str, id: String },
-    #[error("{kind} `{id}` is declared more than once")]
-    Duplicate { kind: &'static str, id: String },
-    #[error(
-        "template `{id}` version `{version}` is not a version label: 1 to 32 lowercase letters, \
-         digits, dots, or hyphens, starting with a letter or digit"
-    )]
-    InvalidTemplateVersion { id: String, version: String },
-    #[error("sender profile `{profile}` names provider `{provider}`, which the package does not declare")]
-    UnknownProvider { profile: String, provider: String },
-    #[error("sender profile `{profile}` routes {channel} through provider `{provider}`, whose kind cannot carry it")]
-    ProviderChannel {
-        profile: String,
-        channel: &'static str,
-        provider: String,
-    },
-    #[error(
-        "sender profile `{0}` names an invalid sender: an email sender is one address, an SMS \
-         sender is an E.164 number or 1 to 11 letters, digits, or spaces"
-    )]
-    InvalidSender(String),
-    #[error(
-        "sender profile `{0}` must declare maximumSegments from 1 to {MAXIMUM_SMS_SEGMENTS} for \
-         SMS and none for email"
-    )]
-    InvalidMaximumSegments(String),
-    #[error(
-        "sender profile `{0}` declares an invalid retry: maximumAttempts from 1 to \
-         {MAXIMUM_ATTEMPTS}, initialDelaySeconds at least 1, and maximumDelaySeconds from \
-         initialDelaySeconds to {MAXIMUM_RETRY_DELAY_SECONDS}"
-    )]
-    InvalidRetry(String),
-    #[error(
-        "sender profile `{0}` declares defaultExpirySeconds outside {MINIMUM_EXPIRY_SECONDS} to \
-         {MAXIMUM_EXPIRY_SECONDS}"
-    )]
-    InvalidExpiry(String),
-    #[error(
-        "sender profile `{profile}` declares onUncertain: retry, but provider `{provider}` does \
-         not declare idempotentSubmit and the profile does not set acceptDuplicates"
-    )]
-    UncertainRetry { profile: String, provider: String },
-    #[error(
-        "provider `{0}` is an smtp provider, which cannot declare idempotentSubmit: an SMTP \
-         relay does not deduplicate on a key the runtime sends"
-    )]
-    IdempotentSmtp(String),
-    #[error("access profile `{profile}` names {kind} `{id}`, which the package does not declare")]
-    UnknownReference {
-        profile: String,
-        kind: &'static str,
-        id: String,
-    },
-    #[error("template `{id}` version `{version}`: {reason}")]
-    Template {
-        id: String,
-        version: String,
-        reason: String,
-    },
-    #[error("the package ships template `{id}` version `{version}` without declaring it")]
-    UndeclaredTemplate { id: String, version: String },
-    #[error("the package declares template `{id}` version `{version}` but ships no such template")]
-    MissingTemplate { id: String, version: String },
     #[error("the package digest must be sha256: followed by 64 lowercase hexadecimal digits")]
     InvalidDigest,
 }
 
-/// The manifest after its own checks, indexed for the package it belongs to.
+fn first_message(findings: &[MessagingFinding]) -> &'static str {
+    findings.first().map_or(
+        "the Messaging project does not pass its checks",
+        |finding| finding.reason.message(),
+    )
+}
+
+/// The project after its own checks, indexed for the package it belongs to.
 #[derive(Clone, Debug)]
 pub struct CheckedManifest {
     pub access_profiles: AccessProfiles,
@@ -323,172 +431,255 @@ pub struct CheckedManifest {
     pub templates: BTreeSet<TemplateReference>,
 }
 
-impl MessagingPackage {
-    /// Check the envelope, every declaration, and every reference between
-    /// them. Template contents are checked when the package is assembled.
-    pub fn check(&self) -> Result<CheckedManifest, PackageError> {
-        if self.api_version != MESSAGING_PACKAGE_API_VERSION {
-            return Err(PackageError::InvalidApiVersion);
-        }
-        if self.kind != MESSAGING_PACKAGE_KIND {
-            return Err(PackageError::InvalidKind);
-        }
-        if self.access_profiles.is_empty() {
-            return Err(PackageError::NoAccessProfiles);
-        }
-        for (kind, count) in [
-            ("providers", self.providers.len()),
-            ("sender profiles", self.sender_profiles.len()),
-            ("templates", self.templates.len()),
+impl MessagingProject {
+    /// Read one `messaging.yaml` through `reader`, without the checks that
+    /// read two members together. A refusal is the report a check prints
+    /// unchanged.
+    pub fn decode(reader: Reader<'_>, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
+        reader.decode(bytes, &Expect::one(&MESSAGING_PROJECT_FORMAT))
+    }
+
+    /// Every finding about the file, in document order: what reads two
+    /// members together. What one member decides by itself the reader
+    /// already refused. Template contents are checked with each template.
+    #[must_use]
+    pub fn findings(&self) -> Vec<MessagingFinding> {
+        let mut findings = Vec::new();
+        for (member, count) in [
+            ("/providers", self.providers.len()),
+            ("/senderProfiles", self.sender_profiles.len()),
+            ("/templates", self.templates.len()),
+            ("/accessProfiles", self.access_profiles.len()),
         ] {
             if count > MAXIMUM_PACKAGE_DECLARATIONS {
-                return Err(PackageError::TooManyDeclarations(kind));
+                findings.push(MessagingFinding::new(FindingReason::TooManyEntries, member));
             }
         }
-        let providers = index("provider", &self.providers, |provider| &provider.id)?;
-        if let Some(provider) = self
+        for (index, provider) in self.providers.iter().enumerate() {
+            if provider.kind == ProviderKind::Smtp && provider.idempotent_submit {
+                findings.push(MessagingFinding::new(
+                    FindingReason::IdempotentSmtp,
+                    format!("/providers/{index}/idempotentSubmit"),
+                ));
+            }
+        }
+        for (index, profile) in self.sender_profiles.iter().enumerate() {
+            self.sender_profile_findings(index, profile, &mut findings);
+        }
+        self.access_profile_findings(&mut findings);
+        findings
+    }
+
+    fn sender_profile_findings(
+        &self,
+        index: usize,
+        profile: &SenderProfile,
+        findings: &mut Vec<MessagingFinding>,
+    ) {
+        let at = |member: &str| format!("/senderProfiles/{index}/{member}");
+        let provider = self
             .providers
             .iter()
-            .find(|provider| provider.kind == ProviderKind::Smtp && provider.idempotent_submit)
+            .find(|provider| provider.id == profile.provider);
+        match provider {
+            None => findings.push(MessagingFinding::new(
+                FindingReason::UnknownProvider,
+                at("provider"),
+            )),
+            Some(provider) if !provider.kind.carries(profile.channel) => findings.push(
+                MessagingFinding::new(FindingReason::ProviderCannotCarryChannel, at("provider")),
+            ),
+            Some(_) => {}
+        }
+        match profile.channel {
+            Channel::Email if !valid_email_sender(&profile.sender) => findings.push(
+                MessagingFinding::new(FindingReason::InvalidEmailSender, at("sender")),
+            ),
+            Channel::Sms if !valid_sms_sender(&profile.sender) => findings.push(
+                MessagingFinding::new(FindingReason::InvalidSmsSender, at("sender")),
+            ),
+            _ => {}
+        }
+        match (profile.channel, profile.maximum_segments) {
+            (Channel::Sms, None) => findings.push(MessagingFinding::new(
+                FindingReason::MissingMaximumSegments,
+                at("maximumSegments"),
+            )),
+            (Channel::Email, Some(_)) => findings.push(MessagingFinding::new(
+                FindingReason::EmailMaximumSegments,
+                at("maximumSegments"),
+            )),
+            _ => {}
+        }
+        if profile
+            .retry
+            .is_some_and(|retry| retry.maximum_delay_seconds < retry.initial_delay_seconds)
         {
-            return Err(PackageError::IdempotentSmtp(provider.id.clone()));
+            findings.push(MessagingFinding::new(
+                FindingReason::RetryDelayOrder,
+                at("retry/maximumDelaySeconds"),
+            ));
         }
-        let sender_profiles = index("sender profile", &self.sender_profiles, |profile| {
-            &profile.id
-        })?;
-        for profile in self.sender_profiles.iter() {
-            check_sender_profile(profile, &providers)?;
+        // A send that may have reached the provider is sent again only when a
+        // second send cannot deliver twice, or the operator chose duplicates.
+        if let Some(provider) = provider {
+            if profile.on_uncertain == UncertainPolicy::Retry
+                && !provider.idempotent_submit
+                && !profile.accept_duplicates
+            {
+                findings.push(MessagingFinding::new(
+                    FindingReason::UncertainRetryDuplicates,
+                    at("onUncertain"),
+                ));
+            }
         }
-        let mut templates = BTreeSet::new();
-        for template in &self.templates {
-            if !valid_identifier(&template.id) {
-                return Err(PackageError::InvalidIdentifier {
-                    kind: "template",
-                    id: template.id.clone(),
-                });
+    }
+
+    fn access_profile_findings(&self, findings: &mut Vec<MessagingFinding>) {
+        let template_ids: BTreeSet<&str> = self
+            .templates
+            .iter()
+            .map(|template| template.id.as_str())
+            .collect();
+        let mut clients = BTreeSet::new();
+        for (index, profile) in self.access_profiles.iter().enumerate() {
+            let at = |member: &str| format!("/accessProfiles/{index}/{member}");
+            for (item, scope) in profile.required_scopes.iter().enumerate() {
+                if wildcard_spelled(scope) {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::WildcardSpelledItem,
+                        at(&format!("requiredScopes/{item}")),
+                    ));
+                }
             }
-            if !valid_template_version(&template.version) {
-                return Err(PackageError::InvalidTemplateVersion {
-                    id: template.id.clone(),
-                    version: template.version.clone(),
-                });
+            for (item, client) in profile.requester_clients.iter().enumerate() {
+                let pointer = at(&format!("requesterClients/{item}"));
+                if wildcard_spelled(client) {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::WildcardSpelledItem,
+                        pointer.clone(),
+                    ));
+                }
+                if !clients.insert(client.as_str()) {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::SharedRequesterClient,
+                        pointer,
+                    ));
+                }
             }
-            if !templates.insert(template.clone()) {
-                return Err(PackageError::Duplicate {
-                    kind: "template version",
-                    id: format!("{}@{}", template.id, template.version),
-                });
+            match profile.role {
+                AccessRole::Sender if profile.sends_nothing() => findings.push(
+                    MessagingFinding::new(FindingReason::SenderWithoutTargets, at("role")),
+                ),
+                AccessRole::Operator if profile.declares_sending_permissions() => {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::OperatorWithSendingPermissions,
+                        at("role"),
+                    ))
+                }
+                _ => {}
             }
+            for (item, sender) in profile.sender_profiles.iter().enumerate() {
+                let pointer = at(&format!("senderProfiles/{item}"));
+                if wildcard_spelled(sender) {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::WildcardSpelledItem,
+                        pointer.clone(),
+                    ));
+                }
+                if !self
+                    .sender_profiles
+                    .iter()
+                    .any(|declared| &declared.id == sender)
+                {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::UnknownSenderProfile,
+                        pointer,
+                    ));
+                }
+            }
+            for (item, template) in profile.templates.iter().enumerate() {
+                let pointer = at(&format!("templates/{item}"));
+                if wildcard_spelled(template) {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::WildcardSpelledItem,
+                        pointer.clone(),
+                    ));
+                }
+                if !template_ids.contains(template.as_str()) {
+                    findings.push(MessagingFinding::new(
+                        FindingReason::UnknownTemplate,
+                        pointer,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// A finding for each declared template version `shipped` lacks.
+    #[must_use]
+    pub fn missing_templates(
+        &self,
+        shipped: &BTreeSet<TemplateReference>,
+    ) -> Vec<MessagingFinding> {
+        self.templates
+            .iter()
+            .enumerate()
+            .filter(|(_, template)| !shipped.contains(&template.reference()))
+            .map(|(index, _)| {
+                MessagingFinding::new(
+                    FindingReason::MissingTemplate,
+                    format!("/templates/{index}"),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether the project declares the template version.
+    #[must_use]
+    pub fn declares_template(&self, reference: &TemplateReference) -> bool {
+        self.templates
+            .iter()
+            .any(|template| template.id == reference.id && template.version == reference.version)
+    }
+
+    /// Check every declaration and every reference between them, and index
+    /// them. Template contents are checked when the package is assembled.
+    pub fn check(&self) -> Result<CheckedManifest, PackageError> {
+        let errors: Vec<MessagingFinding> = self
+            .findings()
+            .into_iter()
+            .filter(MessagingFinding::is_error)
+            .collect();
+        if !errors.is_empty() {
+            return Err(PackageError::Findings(errors));
         }
         let access_profiles = AccessProfiles::new(self.access_profiles.clone())?;
-        let template_ids: BTreeSet<&str> = templates.iter().map(|t| t.id.as_str()).collect();
-        for profile in access_profiles.iter() {
-            for sender in &profile.sender_profiles {
-                if !sender_profiles.contains_key(sender) {
-                    return Err(PackageError::UnknownReference {
-                        profile: profile.id.clone(),
-                        kind: "sender profile",
-                        id: sender.clone(),
-                    });
-                }
-            }
-            for template in &profile.templates {
-                if !template_ids.contains(template.as_str()) {
-                    return Err(PackageError::UnknownReference {
-                        profile: profile.id.clone(),
-                        kind: "template",
-                        id: template.clone(),
-                    });
-                }
-            }
-        }
         Ok(CheckedManifest {
             access_profiles,
-            sender_profiles,
-            providers,
-            templates,
+            sender_profiles: self
+                .sender_profiles
+                .iter()
+                .map(|profile| (profile.id.clone(), profile.clone()))
+                .collect(),
+            providers: self
+                .providers
+                .iter()
+                .map(|provider| (provider.id.clone(), provider.clone()))
+                .collect(),
+            templates: self
+                .templates
+                .iter()
+                .map(TemplateDeclaration::reference)
+                .collect(),
         })
     }
 }
 
-fn index<T: Clone>(
-    kind: &'static str,
-    entries: &[T],
-    id: impl Fn(&T) -> &String,
-) -> Result<BTreeMap<String, T>, PackageError> {
-    let mut indexed = BTreeMap::new();
-    for entry in entries {
-        let key = id(entry);
-        if !valid_identifier(key) {
-            return Err(PackageError::InvalidIdentifier {
-                kind,
-                id: key.clone(),
-            });
-        }
-        if indexed.insert(key.clone(), entry.clone()).is_some() {
-            return Err(PackageError::Duplicate {
-                kind,
-                id: key.clone(),
-            });
-        }
-    }
-    Ok(indexed)
-}
-
-fn check_sender_profile(
-    profile: &SenderProfile,
-    providers: &BTreeMap<String, ProviderDeclaration>,
-) -> Result<(), PackageError> {
-    let provider =
-        providers
-            .get(&profile.provider)
-            .ok_or_else(|| PackageError::UnknownProvider {
-                profile: profile.id.clone(),
-                provider: profile.provider.clone(),
-            })?;
-    if !provider.kind.carries(profile.channel) {
-        return Err(PackageError::ProviderChannel {
-            profile: profile.id.clone(),
-            channel: profile.channel.as_str(),
-            provider: provider.id.clone(),
-        });
-    }
-    let sender_valid = match profile.channel {
-        Channel::Email => valid_email_sender(&profile.sender),
-        Channel::Sms => valid_sms_sender(&profile.sender),
-    };
-    if !sender_valid {
-        return Err(PackageError::InvalidSender(profile.id.clone()));
-    }
-    let segments_valid = match profile.channel {
-        Channel::Email => profile.maximum_segments.is_none(),
-        Channel::Sms => profile
-            .maximum_segments
-            .is_some_and(|maximum| (1..=MAXIMUM_SMS_SEGMENTS).contains(&maximum)),
-    };
-    if !segments_valid {
-        return Err(PackageError::InvalidMaximumSegments(profile.id.clone()));
-    }
-    if profile.retry.is_some_and(|retry| !retry.is_valid()) {
-        return Err(PackageError::InvalidRetry(profile.id.clone()));
-    }
-    if profile.default_expiry_seconds.is_some_and(|seconds| {
-        !(MINIMUM_EXPIRY_SECONDS..=MAXIMUM_EXPIRY_SECONDS).contains(&seconds)
-    }) {
-        return Err(PackageError::InvalidExpiry(profile.id.clone()));
-    }
-    // A send that may have reached the provider is sent again only when a
-    // second send cannot deliver twice, or the operator chose duplicates.
-    if profile.on_uncertain == UncertainPolicy::Retry
-        && !provider.idempotent_submit
-        && !profile.accept_duplicates
-    {
-        return Err(PackageError::UncertainRetry {
-            profile: profile.id.clone(),
-            provider: provider.id.clone(),
-        });
-    }
-    Ok(())
+/// An item spelled like a wildcard, which a list of names reads as one name
+/// (CFG-EMPTY-2).
+fn wildcard_spelled(item: &str) -> bool {
+    matches!(item, "*" | "unrestricted")
 }
 
 /// Whether `value` is a template version label: 1 to 32 lowercase letters,
@@ -564,17 +755,26 @@ pub(crate) mod tests {
     use super::*;
     use serde_json::json;
 
-    fn package(value: serde_json::Value) -> Result<MessagingPackage, serde_json::Error> {
-        serde_json::from_value(value)
+    pub(crate) fn decode(value: &serde_json::Value) -> Result<MessagingProject, Report> {
+        MessagingProject::decode(
+            Reader::new("messaging.yaml"),
+            &serde_json::to_vec(value).unwrap(),
+        )
+        .map(|decoded| decoded.value)
+    }
+
+    pub(crate) fn project(value: serde_json::Value) -> MessagingProject {
+        decode(&value).unwrap()
     }
 
     pub(crate) fn valid() -> serde_json::Value {
         json!({
-            "apiVersion": MESSAGING_PACKAGE_API_VERSION,
-            "kind": MESSAGING_PACKAGE_KIND,
+            "apiVersion": MESSAGING_PROJECT_API_VERSION,
+            "kind": MESSAGING_PROJECT_KIND,
+            "project": {"id": "notices", "version": "2026.1"},
             "providers": [
-                {"id": "relay", "kind": "smtp"},
-                {"id": "sms-gateway", "kind": "http"}
+                {"id": "relay", "type": "smtp"},
+                {"id": "sms-gateway", "type": "http"}
             ],
             "senderProfiles": [
                 {"id": "transactional", "channel": "email", "provider": "relay",
@@ -600,13 +800,36 @@ pub(crate) mod tests {
         })
     }
 
-    fn refusal(value: serde_json::Value) -> PackageError {
-        package(value).unwrap().check().unwrap_err()
+    /// The codes and paths a refused read reports.
+    fn refused(value: &serde_json::Value) -> Vec<(String, String)> {
+        decode(value)
+            .unwrap_err()
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect()
+    }
+
+    /// The codes and paths of the findings a read file carries.
+    fn findings(value: serde_json::Value) -> Vec<(String, String)> {
+        project(value)
+            .findings()
+            .iter()
+            .map(|finding| (finding.code(), finding.path.clone()))
+            .collect()
+    }
+
+    fn one(code: &str, path: &str) -> Vec<(String, String)> {
+        vec![(code.to_owned(), path.to_owned())]
     }
 
     #[test]
-    fn a_valid_package_yields_its_declarations() {
-        let checked = package(valid()).unwrap().check().unwrap();
+    fn a_valid_project_yields_its_declarations() {
+        let project = project(valid());
+        assert_eq!(project.project.id.as_str(), "notices");
+        assert_eq!(project.project.version, "2026.1");
+        assert!(project.findings().is_empty());
+        let checked = project.check().unwrap();
         assert!(checked.access_profiles.get("case-notices").is_some());
         assert_eq!(checked.sender_profiles.len(), 2);
         assert_eq!(checked.providers.len(), 2);
@@ -614,103 +837,129 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_unknown_member_is_refused() {
+    fn every_unknown_member_is_refused_at_its_key() {
         let mut value = valid();
         value["templatez"] = json!([]);
-        assert!(package(value).is_err());
-        let mut value = valid();
         value["accessProfiles"][0]["allowEverything"] = json!(true);
-        assert!(package(value).is_err());
-        let mut value = valid();
         value["senderProfiles"][0]["endpoint"] = json!("https://relay.example.org");
-        assert!(package(value).is_err());
-        let mut value = valid();
         value["providers"][0]["credentialRef"] = json!("secret:env/RELAY");
-        assert!(package(value).is_err());
-        let mut value = valid();
         value["templates"][0]["latest"] = json!(true);
-        assert!(package(value).is_err());
+        let reported = refused(&value);
+        for path in [
+            "/templatez",
+            "/accessProfiles/0/allowEverything",
+            "/senderProfiles/0/endpoint",
+            "/providers/0/credentialRef",
+            "/templates/0/latest",
+        ] {
+            assert!(
+                reported.contains(&("config.unknown-key".to_owned(), path.to_owned())),
+                "{path}: {reported:?}"
+            );
+        }
         let mut value = valid();
-        value["providers"][0]["kind"] = json!("sendmail");
-        assert!(package(value).is_err());
+        value["providers"][0]["type"] = json!("sendmail");
+        assert_eq!(refused(&value)[0].1, "/providers/0/type");
     }
 
     #[test]
-    fn the_envelope_and_the_profile_list_are_checked() {
+    fn the_envelope_the_project_block_and_the_profile_list_are_checked() {
         let mut value = valid();
-        value["apiVersion"] = json!("registry.registrystack.org/messaging-package/v0");
-        assert_eq!(refusal(value), PackageError::InvalidApiVersion);
+        value["apiVersion"] = json!(RETIRED_MESSAGING_PROJECT_API_VERSION);
+        assert_eq!(refused(&value)[0].0, "config.retired-api-version");
         let mut value = valid();
-        value["kind"] = json!("SchedulingPolicyPackage");
-        assert_eq!(refusal(value), PackageError::InvalidKind);
+        value["kind"] = json!("SchedulingProject");
+        assert_eq!(refused(&value)[0].0, "config.wrong-kind");
+        let mut value = valid();
+        value.as_object_mut().unwrap().remove("project");
+        assert_eq!(refused(&value)[0].1, "");
+        let mut value = valid();
+        value["project"]["id"] = json!("Notices");
+        assert_eq!(refused(&value)[0].1, "/project/id");
         let mut value = valid();
         value["accessProfiles"] = json!([]);
-        assert_eq!(refusal(value), PackageError::NoAccessProfiles);
+        assert_eq!(refused(&value)[0].1, "/accessProfiles");
+    }
+
+    #[test]
+    fn the_former_spellings_name_their_replacements() {
+        let mut value = valid();
+        value["providers"][0] = json!({"id": "relay", "kind": "smtp"});
+        value["accessProfiles"][0]["dailyLimit"] = json!(100);
+        let reported = refused(&value);
+        assert!(reported.contains(&(
+            "config.removed-key".to_owned(),
+            "/providers/0/kind".to_owned()
+        )));
+        assert!(reported.contains(&(
+            "config.removed-key".to_owned(),
+            "/accessProfiles/0/dailyLimit".to_owned()
+        )));
     }
 
     #[test]
     fn every_reference_must_name_a_declaration() {
         let mut value = valid();
         value["accessProfiles"][0]["templates"] = json!(["unknown-template"]);
-        assert!(matches!(
-            refusal(value),
-            PackageError::UnknownReference {
-                kind: "template",
-                ..
-            }
-        ));
-        let mut value = valid();
         value["accessProfiles"][0]["senderProfiles"] = json!(["unknown-profile"]);
-        assert!(matches!(
-            refusal(value),
-            PackageError::UnknownReference {
-                kind: "sender profile",
-                ..
-            }
-        ));
-        let mut value = valid();
         value["senderProfiles"][0]["provider"] = json!("elsewhere");
-        assert!(matches!(
-            refusal(value),
-            PackageError::UnknownProvider { .. }
-        ));
+        assert_eq!(
+            findings(value),
+            vec![
+                (
+                    "messaging.project.unknown-provider".to_owned(),
+                    "/senderProfiles/0/provider".to_owned()
+                ),
+                (
+                    "messaging.project.unknown-sender-profile".to_owned(),
+                    "/accessProfiles/0/senderProfiles/0".to_owned()
+                ),
+                (
+                    "messaging.project.unknown-template".to_owned(),
+                    "/accessProfiles/0/templates/0".to_owned()
+                ),
+            ]
+        );
     }
 
     #[test]
-    fn a_provider_kind_carries_only_its_channels() {
+    fn a_provider_type_carries_only_its_channels() {
         let mut value = valid();
         value["senderProfiles"][1]["provider"] = json!("relay");
-        assert!(matches!(
-            refusal(value),
-            PackageError::ProviderChannel { channel: "sms", .. }
-        ));
+        assert_eq!(
+            findings(value),
+            one(
+                "messaging.project.provider-cannot-carry-channel",
+                "/senderProfiles/1/provider"
+            )
+        );
     }
 
     #[test]
-    fn identifiers_versions_and_duplicates_are_checked() {
+    fn identifiers_versions_and_duplicates_are_refused_by_the_reader() {
         let mut value = valid();
         value["templates"][1]["version"] = json!("1");
-        assert!(matches!(refusal(value), PackageError::Duplicate { .. }));
+        assert_eq!(
+            refused(&value)[0],
+            (
+                "config.duplicate-item".to_owned(),
+                "/templates/1".to_owned()
+            )
+        );
         let mut value = valid();
         value["providers"][1]["id"] = json!("relay");
-        assert!(matches!(refusal(value), PackageError::Duplicate { .. }));
+        assert_eq!(refused(&value)[0].1, "/providers/1/id");
         for version in ["", "latest/1", "1..2", ".1", "V1", "-1", &"1".repeat(33)] {
             let mut value = valid();
             value["templates"][1]["version"] = json!(version);
-            assert!(
-                matches!(refusal(value), PackageError::InvalidTemplateVersion { .. }),
-                "{version}"
-            );
+            assert_eq!(refused(&value)[0].1, "/templates/1/version", "{version}");
         }
         for version in ["1", "2026-09", "1.2.0"] {
             assert!(valid_template_version(version), "{version}");
         }
         let mut value = valid();
         value["templates"][0]["id"] = json!("Appointment");
-        assert!(matches!(
-            refusal(value),
-            PackageError::InvalidIdentifier { .. }
-        ));
+        assert_eq!(refused(&value)[0].1, "/templates/0/id");
     }
 
     #[test]
@@ -723,41 +972,67 @@ pub(crate) mod tests {
         ] {
             let mut value = valid();
             value["senderProfiles"][0]["sender"] = json!(sender);
-            assert!(
-                matches!(refusal(value), PackageError::InvalidSender(_)),
+            assert_eq!(
+                findings(value),
+                one(
+                    "messaging.project.invalid-email-sender",
+                    "/senderProfiles/0/sender"
+                ),
                 "{sender}"
             );
         }
         for sender in ["+0123", "+1", "TwelveChars1", " Lead", "Reg!stry"] {
             let mut value = valid();
             value["senderProfiles"][1]["sender"] = json!(sender);
-            assert!(
-                matches!(refusal(value), PackageError::InvalidSender(_)),
+            assert_eq!(
+                findings(value),
+                one(
+                    "messaging.project.invalid-sms-sender",
+                    "/senderProfiles/1/sender"
+                ),
                 "{sender}"
             );
         }
         let mut value = valid();
         value["senderProfiles"][1]["sender"] = json!("+15551234567");
-        assert!(package(value).unwrap().check().is_ok());
-        for segments in [json!(null), json!(0), json!(11)] {
+        assert!(project(value).check().is_ok());
+        let mut value = valid();
+        value["senderProfiles"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("maximumSegments");
+        assert_eq!(
+            findings(value),
+            one(
+                "messaging.project.missing-maximum-segments",
+                "/senderProfiles/1/maximumSegments"
+            )
+        );
+        for segments in [0, 11] {
             let mut value = valid();
-            value["senderProfiles"][1]["maximumSegments"] = segments;
-            assert!(matches!(
-                refusal(value),
-                PackageError::InvalidMaximumSegments(_)
-            ));
+            value["senderProfiles"][1]["maximumSegments"] = json!(segments);
+            assert_eq!(
+                refused(&value)[0],
+                (
+                    "config.out-of-range".to_owned(),
+                    "/senderProfiles/1/maximumSegments".to_owned()
+                )
+            );
         }
         let mut value = valid();
         value["senderProfiles"][0]["maximumSegments"] = json!(1);
-        assert!(matches!(
-            refusal(value),
-            PackageError::InvalidMaximumSegments(_)
-        ));
+        assert_eq!(
+            findings(value),
+            one(
+                "messaging.project.email-maximum-segments",
+                "/senderProfiles/0/maximumSegments"
+            )
+        );
     }
 
     #[test]
     fn a_sender_profile_carries_a_bounded_dispatch_policy() {
-        let checked = package(valid()).unwrap().check().unwrap();
+        let checked = project(valid()).check().unwrap();
         let profile = &checked.sender_profiles["transactional"];
         assert_eq!(
             profile.retry_policy(),
@@ -776,30 +1051,57 @@ pub(crate) mod tests {
             "maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 60
         });
         value["senderProfiles"][0]["defaultExpirySeconds"] = json!(3600);
-        let checked = package(value).unwrap().check().unwrap();
+        let checked = project(value).check().unwrap();
         let profile = &checked.sender_profiles["transactional"];
         assert_eq!(profile.retry_policy().maximum_attempts, 3);
         assert_eq!(profile.expiry_seconds(), 3600);
 
-        for retry in [
-            json!({"maximumAttempts": 0, "initialDelaySeconds": 10, "maximumDelaySeconds": 60}),
-            json!({"maximumAttempts": 21, "initialDelaySeconds": 10, "maximumDelaySeconds": 60}),
-            json!({"maximumAttempts": 3, "initialDelaySeconds": 0, "maximumDelaySeconds": 60}),
-            json!({"maximumAttempts": 3, "initialDelaySeconds": 60, "maximumDelaySeconds": 10}),
-            json!({"maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 86_401}),
+        for (retry, member) in [
+            (
+                json!({"maximumAttempts": 0, "initialDelaySeconds": 10, "maximumDelaySeconds": 60}),
+                "maximumAttempts",
+            ),
+            (
+                json!({"maximumAttempts": 21, "initialDelaySeconds": 10, "maximumDelaySeconds": 60}),
+                "maximumAttempts",
+            ),
+            (
+                json!({"maximumAttempts": 3, "initialDelaySeconds": 0, "maximumDelaySeconds": 60}),
+                "initialDelaySeconds",
+            ),
+            (
+                json!({"maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 86_401}),
+                "maximumDelaySeconds",
+            ),
         ] {
             let mut value = valid();
             value["senderProfiles"][0]["retry"] = retry.clone();
-            assert!(
-                matches!(refusal(value), PackageError::InvalidRetry(_)),
+            assert_eq!(
+                refused(&value)[0],
+                (
+                    "config.out-of-range".to_owned(),
+                    format!("/senderProfiles/0/retry/{member}")
+                ),
                 "{retry}"
             );
         }
+        let mut value = valid();
+        value["senderProfiles"][0]["retry"] = json!({
+            "maximumAttempts": 3, "initialDelaySeconds": 60, "maximumDelaySeconds": 10
+        });
+        assert_eq!(
+            findings(value),
+            one(
+                "messaging.project.retry-delay-order",
+                "/senderProfiles/0/retry/maximumDelaySeconds"
+            )
+        );
         for expiry in [0, 59, MAXIMUM_EXPIRY_SECONDS + 1] {
             let mut value = valid();
             value["senderProfiles"][0]["defaultExpirySeconds"] = json!(expiry);
-            assert!(
-                matches!(refusal(value), PackageError::InvalidExpiry(_)),
+            assert_eq!(
+                refused(&value)[0].1,
+                "/senderProfiles/0/defaultExpirySeconds",
                 "{expiry}"
             );
         }
@@ -808,10 +1110,10 @@ pub(crate) mod tests {
             "maximumAttempts": 3, "initialDelaySeconds": 10, "maximumDelaySeconds": 60,
             "jitter": false
         });
-        assert!(package(value).is_err());
+        assert_eq!(refused(&value)[0].1, "/senderProfiles/0/retry/jitter");
         let mut value = valid();
         value["senderProfiles"][0]["onUncertain"] = json!("resend");
-        assert!(package(value).is_err());
+        assert_eq!(refused(&value)[0].1, "/senderProfiles/0/onUncertain");
     }
 
     #[test]
@@ -819,22 +1121,26 @@ pub(crate) mod tests {
         let mut value = valid();
         value["senderProfiles"][1]["onUncertain"] = json!("retry");
         assert_eq!(
-            refusal(value.clone()),
-            PackageError::UncertainRetry {
-                profile: "notices-sms".to_owned(),
-                provider: "sms-gateway".to_owned(),
-            }
+            findings(value.clone()),
+            one(
+                "messaging.project.uncertain-retry-duplicates",
+                "/senderProfiles/1/onUncertain"
+            )
         );
+        assert!(matches!(
+            project(value.clone()).check(),
+            Err(PackageError::Findings(_))
+        ));
         let mut deduplicating = value.clone();
         deduplicating["providers"][1]["idempotentSubmit"] = json!(true);
-        let checked = package(deduplicating).unwrap().check().unwrap();
+        let checked = project(deduplicating).check().unwrap();
         assert_eq!(
             checked.sender_profiles["notices-sms"].on_uncertain,
             UncertainPolicy::Retry
         );
         let mut accepting = value;
         accepting["senderProfiles"][1]["acceptDuplicates"] = json!(true);
-        assert!(package(accepting).unwrap().check().is_ok());
+        assert!(project(accepting).check().is_ok());
     }
 
     #[test]
@@ -842,8 +1148,60 @@ pub(crate) mod tests {
         let mut value = valid();
         value["providers"][0]["idempotentSubmit"] = json!(true);
         assert_eq!(
-            refusal(value),
-            PackageError::IdempotentSmtp("relay".to_owned())
+            findings(value),
+            one(
+                "messaging.project.idempotent-smtp",
+                "/providers/0/idempotentSubmit"
+            )
+        );
+    }
+
+    #[test]
+    fn every_finding_is_reported_together() {
+        let mut value = valid();
+        value["providers"][0]["idempotentSubmit"] = json!(true);
+        value["senderProfiles"][0]["sender"] = json!("no-at-sign");
+        value["accessProfiles"][0]["templates"] = json!(["unknown-template"]);
+        let Err(PackageError::Findings(findings)) = project(value).check() else {
+            panic!("the project passed its checks");
+        };
+        assert_eq!(findings.len(), 3);
+    }
+
+    #[test]
+    fn an_allow_list_item_spelled_as_a_wildcard_is_a_warning() {
+        let mut value = valid();
+        value["accessProfiles"][0]["requesterClients"] = json!(["case-system", "*"]);
+        let project = project(value);
+        assert_eq!(
+            project
+                .findings()
+                .iter()
+                .map(|finding| (finding.code(), finding.path.clone(), finding.is_error()))
+                .collect::<Vec<_>>(),
+            vec![(
+                "messaging.project.wildcard-spelled-item".to_owned(),
+                "/accessProfiles/0/requesterClients/1".to_owned(),
+                false
+            )]
+        );
+        assert!(project.check().is_ok());
+    }
+
+    #[test]
+    fn a_missing_template_version_is_reported_at_its_declaration() {
+        let project = project(valid());
+        let shipped = BTreeSet::from([TemplateReference {
+            id: "appointment-reminder".to_owned(),
+            version: "1".to_owned(),
+        }]);
+        assert_eq!(
+            project
+                .missing_templates(&shipped)
+                .iter()
+                .map(|finding| (finding.code(), finding.path.clone()))
+                .collect::<Vec<_>>(),
+            one("messaging.project.missing-template", "/templates/1")
         );
     }
 

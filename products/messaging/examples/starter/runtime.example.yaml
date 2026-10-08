@@ -117,7 +117,7 @@ providers:
     baseUrl: https://sms-gateway.example.org/v1/
     attemptTimeoutMilliseconds: 5000
     maximumResponseBytes: 65536
-    # At most the package's capabilities.concurrencyLimit.
+    # At most the package's capabilities.maximumConcurrentRequests.
     maximumConcurrentRequests: 4
     redirects: deny
     authentication:

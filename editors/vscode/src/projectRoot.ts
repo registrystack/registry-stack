@@ -13,7 +13,7 @@ const PRODUCT_MARKERS = [
   ['registry.yaml', 'kind', 'RegistryProject', 'apiVersion', 'registry.registrystack.org/v1alpha1', true],
   ['casework.yaml', 'kind', 'CaseworkProject', 'apiVersion', 'registry.registrystack.org/casework/'],
   ['scheduling.yaml', 'kind', 'SchedulingProject', 'apiVersion', 'id.registrystack.org/formats/scheduling/project/'],
-  ['messaging.yaml', 'kind', 'MessagingPackage', 'apiVersion', 'registry.registrystack.org/messaging-package/'],
+  ['messaging.yaml', 'kind', 'MessagingProject', 'apiVersion', 'id.registrystack.org/formats/messaging/project/'],
   ['origins.yaml', '', '', 'schemaVersion', 'registry-discovery/origins/'],
   ['manifest.yaml', 'kind', 'RenderBundle', 'apiVersion', 'id.registrystack.org/formats/render/bundle/'],
   ['metadata.yaml', '', '', 'schema_version', 'registry-manifest/v1', true],

@@ -1016,6 +1016,9 @@ jobs:
       - name: Messaging contract consistency
         run: products/messaging/scripts/check-contracts.sh
 
+      - name: Check Messaging schemas and OpenAPI against their generators
+        run: products/messaging/scripts/check-schemas.sh
+
       - name: Self-test the Messaging vendor-neutrality gate
         run: products/messaging/scripts/test-check-vendor-neutrality.sh
 

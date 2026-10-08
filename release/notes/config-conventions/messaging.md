@@ -146,3 +146,130 @@ the local identifiers the file declares.
 | `package.root` or a file under it | `messaging.package.invalid` | `/package/root` |
 | the member, for an unknown, removed, null, mistyped, or out-of-range member | the shared code: `config.unknown-key`, `config.removed-key`, `config.retired-api-version`, `config.null-value`, `config.out-of-range`, `config.invalid-value`, and the other `config.*` and `yaml.*` codes | the member |
 | the file, exit 3, when the runtime file cannot be read | `platform.runtime-config.unavailable` | the file |
+
+## BREAKING: the project, template, and provider files carry the shared envelope
+
+`messaging.yaml`, every `templates/<id>/<version>/template.yaml`, and every
+`providers/<id>/provider.yaml` are read by the shared reader under their own
+envelope. `messagingctl check --project`, `messagingctl package`, and the
+runtime refuse a file without it.
+
+| File | Old first lines | New first lines | Migration |
+|---|---|---|---|
+| `messaging.yaml` | `apiVersion: registry.registrystack.org/messaging-package/v1alpha1`, `kind: MessagingPackage` | `apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1`, `kind: MessagingProject`, and a `project` block with `id` and `version` | Replace both lines and add `project: {id: <local id>, version: "<label>"}`; quote a numeric version. |
+| `template.yaml` | none | `apiVersion: id.registrystack.org/formats/messaging/template/v1alpha1`, `kind: MessagingTemplate` | Add both lines at the top of every template version's file. |
+| `provider.yaml` | none | `apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1`, `kind: MessagingProvider` | Add both lines at the top of every HTTP provider's file. |
+
+An old `messaging.yaml` is refused as `config.wrong-kind` at `/kind`, naming
+`MessagingProject`; once the kind is replaced, the old `apiVersion` is
+refused as `config.retired-api-version`, naming the new envelope. A template
+or provider file without an envelope is refused as `config.missing-envelope`,
+whose next step names both lines. `project.id` is a local identifier (below)
+and `project.version` a text label.
+
+Each file may name its editor schema on its first line, as the starter does:
+`# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/project/project.v1alpha1.schema.json`,
+and `.../messaging/template/template.v1alpha1.schema.json` and
+`.../messaging/provider/provider.v1alpha1.schema.json` for the other two. The
+schemas are generated into `products/messaging/generated/authoring/`.
+
+The editor integrations and the language server recognize a Messaging
+project by a `messaging.yaml` declaring `kind: MessagingProject` under the
+new `apiVersion`. Migration: update the file, then reopen the folder or rerun
+`python3 editors/configure.py messaging DIRECTORY`.
+
+## BREAKING: three authored members are renamed
+
+Each old key is refused at its position as `config.removed-key`, and the
+message names its replacement. A required replacement that is absent is also
+reported as `config.missing-key` at the parent.
+
+| File | Old spelling | New spelling | Migration |
+|---|---|---|---|
+| `messaging.yaml` | `providers[].kind` | `providers[].type` | Rename the key; keep the value (`smtp` or `http`). |
+| `messaging.yaml` | `accessProfiles[].dailyLimit` | `accessProfiles[].maximumMessagesPerDay` | Rename the key; keep the value (1 to 10000000). |
+| `provider.yaml` | `capabilities.concurrencyLimit` | `capabilities.maximumConcurrentRequests` | Rename the key; keep the value (1 to 64). |
+
+The `maximumMessagesPerDay` limit still counts over any 24 hours and still
+answers `429 rate-limit.exceeded` past it; the
+`messaging_limit_refusals_total` label is unchanged.
+
+## BREAKING: authored members are typed and bounded when the file is read
+
+Each member below is refused when the file is read, at its line and column,
+with the shared code (`config.invalid-value`, `config.out-of-range`,
+`config.duplicate-item`, `config.missing-key`, or another `config.*` code),
+where some were refused later as one `config.refused` for the whole project
+and others were not refused at all.
+
+| Member | Rule now | Migration |
+|---|---|---|
+| Every `id` and reference in `messaging.yaml` (`providers[].id`, `senderProfiles[].id` and `.provider`, `templates[].id`, `accessProfiles[].id`, `.senderProfiles[]`, `.templates[]`), and `project.id` | A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, underscores, or hyphens | Rename an identifier that starts with a digit, and every reference to it. An identifier was lowercase letters, digits, and hyphens, starting and ending with a letter or digit. |
+| `accessProfiles[].requiredScopes` | Required: a list of at least one scope, each once, or `unrestricted` | A profile that omitted the member or listed none required no scope: write `requiredScopes: unrestricted` to keep that, or list the scopes. |
+| `accessProfiles[].requesterClients` | A list of at least one client, each once | Remove a repeated client. |
+| `accessProfiles[].senderProfiles`, `.templates` | Local identifiers, each once | Remove a repeated entry. |
+| `accessProfiles[].requestsPerMinute` | 1 to 60000 | Lower a larger value. |
+| `accessProfiles[].burst` | 1 to 10000 | Lower a larger value. |
+| `accessProfiles[].maximumMessagesPerDay` | 1 to 10000000, when set | Lower a larger value, or omit the member for no daily bound. |
+| `template.yaml` `locales` | 1 to 32 language tags, each once | Remove a repeated tag. |
+| `template.yaml` `parts` | At least one part, each once | Remove a repeated part. |
+| `provider.yaml` `capabilities.maximumConcurrentRequests` (1 to 64), `capabilities.ratePerSecond` (1 to 1000, when set), `request.headers` and `responseHeaders` (at most 16 lowercase header names a script may set or read, each once) | Unchanged rules, refused when the file is read where they were refused when the provider was assembled | None; such a file was already refused. |
+| `provider.yaml` script paths (`prepareScript`, `interpretScript`, `receiptScript`) | A relative path of lowercase segments ending in `.rhai`, at most 256 bytes, no segment starting with `.` | Rename a script whose path has a segment starting with `.`, such as `.hidden.rhai`; only `.` and `..` segments were refused. |
+
+The references between declarations (an unknown provider, sender profile, or
+template; a requester client in two profiles; a sender profile that does not
+fit its provider) are refused as before, now each as its own diagnostic at
+the member, with a `messaging.project.*`, `messaging.template.*`, or
+`messaging.provider.*` code. An item spelled `*` or `unrestricted` inside a
+`requiredScopes`, `requesterClients`, `senderProfiles`, or `templates` list
+is reported as the warning `messaging.project.wildcard-spelled-item`: a
+list item grants only itself, so the spelling names no wildcard. Migration:
+write `requiredScopes: unrestricted` without a list, or list the items
+meant.
+
+## BREAKING: `messagingctl check --project`, `package`, and the runtime report every finding at its file
+
+- A refused project or package prints the shared report, one diagnostic per
+  finding, each with its code, JSON Pointer `path`, and a `source` naming the
+  file, line, and column, where it printed one `config.refused` (or, for
+  `check --project`, one `package.project-refused`) at the first problem.
+  `package.project-refused` is removed. Migration: a script that matched
+  `package.project-refused` or `config.refused` matches the exit status (1
+  refused, 3 a file could not be read) or the codes above.
+- A file the project cannot use for its layout (a symbolic link, an
+  undeclared entry, a template file over 64 KiB that is not YAML, a file that
+  is not UTF-8 outside the YAML files) remains one `config.refused`, now with
+  `source.file` naming the file.
+- A YAML file over its bound is refused as `yaml.too-large` at the file,
+  naming the bound: 1 MiB for `messaging.yaml`, 64 KiB for `template.yaml`
+  and `provider.yaml`. A YAML file that is not UTF-8 is refused as
+  `yaml.not-utf8` at its first invalid byte. Both were `config.refused`.
+- The JSON report of a successful check carries `filesChecked` and a
+  `diagnostics` list holding any warning; a refusal carries `filesChecked`
+  too. `--deny-warnings` refuses a project or package check that reports a
+  warning, as it already did for a runtime file.
+- `messaging serve` prints the same report on standard error when it refuses
+  its package.
+
+## BREAKING: Rust API
+
+- `registry-messaging-core`: `MessagingPackage` is `MessagingProject`, read
+  with `MessagingProject::decode` through the shared reader;
+  `MESSAGING_PACKAGE_API_VERSION` and `MESSAGING_PACKAGE_KIND` are
+  `MESSAGING_PROJECT_API_VERSION` and `MESSAGING_PROJECT_KIND`, with
+  `RETIRED_MESSAGING_PROJECT_API_VERSION`, `MESSAGING_TEMPLATE_*`, and
+  `MESSAGING_PROVIDER_*` beside them. `AccessProfile::daily_limit` is
+  `maximum_messages_per_day`, `ProviderDeclaration::kind` is read from
+  `type`, and package checks return `MessagingFinding` values (with
+  `FindingReason` and a `code()` of the form `messaging.<area>.<condition>`)
+  where they returned text. The authored types no longer implement
+  `Serialize`.
+- `registry-messaging`: `PackageLoadReason::Authored`, `::Parse`, and
+  `::Provider` are removed; a refused file is `PackageLoadReason::Refused`,
+  whose report `PackageLoadError::report` returns. `LoadedPackage::warnings`
+  returns the warnings a clean load found, and `RuntimeCheck::files_checked`
+  the files a check read. `HttpProviderPackage` is read with
+  `HttpProviderPackage::decode`, and its `capabilities.concurrency_limit` is
+  `maximum_concurrent_requests`.
+- `registry-messaging` no longer depends on `serde_norway` outside its tests,
+  or on `serde_path_to_error`.

@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/messaging/provider/provider.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1
+kind: MessagingProvider
 # Example HTTP provider package: an SMS provider that takes a form POST to
 # Messages.json, answers 201 with a message sid, and reports delivery through
 # a signed form callback. It follows Twilio's Programmable Messaging API
@@ -16,5 +19,5 @@ request:
 # never retried unless the sender profile accepts duplicates.
 capabilities:
   receipts: callback
-  concurrencyLimit: 16
+  maximumConcurrentRequests: 16
   ratePerSecond: 1
