@@ -994,27 +994,7 @@ fn vocabularies_protect_builtins_and_validate_custom_namespaces() {
 
 #[test]
 fn expanded_iris_are_sanity_checked_after_curie_expansion() {
-    for suffix in [
-        "Bad Suffix",
-        "Bad<Suffix",
-        "Bad>Suffix",
-        "Bad\"Suffix",
-        "Bad{Suffix",
-        "Bad}Suffix",
-        "Bad|Suffix",
-        "Bad^Suffix",
-        "Bad`Suffix",
-        "Bad\\u0001Suffix",
-    ] {
-        let iri = if suffix.contains("\\u") {
-            format!("example:{suffix}")
-        } else {
-            format!("example:{suffix}")
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-        };
-        let raw = format!(
-            r#"
+    let raw = r#"
 schema_version: registry-manifest/v1
 catalog:
   id: iri-sanity
@@ -1027,13 +1007,27 @@ vocabularies:
 requirements:
   - id: eligibility
     title: Eligibility
-    rdf_type: "{}"
+    rdf_type: example:Placeholder
 datasets: []
 codelists: []
-"#,
-            iri
-        );
-        let manifest: MetadataManifest = support::from_yaml(&raw).expect("manifest parses");
+"#;
+    let read: MetadataManifest = support::from_yaml(raw).expect("manifest parses");
+    for suffix in [
+        "Bad Suffix",
+        "Bad<Suffix",
+        "Bad>Suffix",
+        "Bad\"Suffix",
+        "Bad{Suffix",
+        "Bad}Suffix",
+        "Bad|Suffix",
+        "Bad^Suffix",
+        "Bad`Suffix",
+        "Bad\u{1}Suffix",
+    ] {
+        // The member is set after reading: the shared reader refuses a
+        // control character in YAML text before validation sees it.
+        let mut manifest = read.clone();
+        manifest.requirements[0].rdf_type = Some(format!("example:{suffix}"));
         assert!(
             validation_errors(&manifest)
                 .iter()
