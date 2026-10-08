@@ -140,7 +140,7 @@ error[config.unknown-key] {runtime}:{one}:1 /unknownOne
   next: Remove `unknownOne`; the accepted keys are {accepted}.
 error[config.unknown-key] {runtime}:{two}:1 /unknownTwo
   `unknownTwo` is not a member of this mapping
-  next: Remove `unknownTwo`; the accepted keys are {accepted}.
+  next: Remove `unknownTwo`; the accepted keys are listed at line {one}.
 2 errors, 0 warnings in 1 file
 ",
         runtime = runtime.display(),
