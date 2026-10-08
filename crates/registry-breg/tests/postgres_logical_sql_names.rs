@@ -54,7 +54,7 @@ fn fields_that_only_differ_after_postgres_identifier_limit_are_refused() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "field.sql_name.duplicate"));
+        .any(|diagnostic| diagnostic.code == "breg.field.sql-name-duplicate"));
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn entities_that_only_differ_after_postgres_identifier_limit_are_refused() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "entity.sql_name.duplicate"));
+        .any(|diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

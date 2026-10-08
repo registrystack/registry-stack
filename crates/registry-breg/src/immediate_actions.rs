@@ -123,14 +123,14 @@ fn compile_action(
     crate::consent::validate_action(action, entities, profiles, errors);
     if action.inputs.is_empty() {
         errors.push(Diagnostic::error(
-            "action.inputs.empty",
+            "breg.action.inputs-empty",
             "actions[].inputs",
             "an immediate action must declare at least one typed input",
         ));
     }
     if action.effects.is_empty() == action.handler.is_none() {
         errors.push(Diagnostic::error(
-            "action.implementation.exclusive",
+            "breg.action.implementation-exclusive",
             "actions[]",
             "an immediate action requires exactly one fixed effects list or handler",
         ));
@@ -177,7 +177,7 @@ fn compile_action(
     );
     if permissions.is_empty() {
         errors.push(Diagnostic::error(
-            "action.permission.missing",
+            "breg.action.permission-missing",
             "project.accessProfiles[].permissions",
             "an immediate action requires at least one explicit invoke permission",
         ));
@@ -235,7 +235,7 @@ fn compile_handler(
         // executor on this path, so the kind is refused rather than compiled
         // into a handler that never runs.
         errors.push(Diagnostic::error(
-            "action.handler.kind.unsupported",
+            "breg.action.handler-kind-unsupported",
             format!("{path}.kind"),
             "an action handler runs in the registry; declare handler kind rhai or wasm",
         ));
@@ -248,7 +248,7 @@ fn compile_handler(
         && abi != crate::contract::ACTION_HANDLER_ABI_V2
     {
         errors.push(Diagnostic::error(
-            "action.handler.abi_invalid",
+            "breg.action.handler-abi-invalid",
             format!("{path}.abi"),
             "the action handler ABI is not supported",
         ));
@@ -259,7 +259,7 @@ fn compile_handler(
         // release, in any build. Refuse it before any other WASM-shaped
         // validation could misreport the module.
         errors.push(Diagnostic::error(
-            "action.handler.wasm_abi_unsupported",
+            "breg.action.handler-wasm-abi-unsupported",
             format!("{path}.kind"),
             "WASM action handlers do not support the Evidence-enabled v2 ABI in this release",
         ));
@@ -271,7 +271,7 @@ fn compile_handler(
         // validation could misreport the module: this build carries no WASM
         // compiler support.
         errors.push(Diagnostic::error(
-            "action.handler.wasm_build_unsupported",
+            "breg.action.handler-wasm-build-unsupported",
             format!("{path}.kind"),
             "this build of the compiler does not admit WASM action handlers",
         ));
@@ -294,7 +294,7 @@ fn compile_handler(
         *wasm_module_count += 1;
         if *wasm_module_count > crate::wasm_handler::MAX_PACKAGE_WASM_MODULES {
             errors.push(Diagnostic::error(
-                "action.handler.modules_bound",
+                "breg.action.handler-modules-bound",
                 format!("{path}.module"),
                 &format!(
                     "a package carries at most {} WASM handler modules",
@@ -306,14 +306,14 @@ fn compile_handler(
     }
     if source.writes.is_empty() {
         errors.push(Diagnostic::error(
-            "action.handler.writes_empty",
+            "breg.action.handler-writes-empty",
             format!("{path}.writes"),
             "a handler requires at least one single-use write slot",
         ));
     }
     if inputs.len() > crate::rhai_planner::MAXIMUM_MAP_ENTRIES {
         errors.push(Diagnostic::error(
-            "action.handler.inputs_bound",
+            "breg.action.handler-inputs-bound",
             format!("actions[{}].inputs", collected.source.id),
             "handler input count exceeds the engine map bound",
         ));
@@ -326,7 +326,7 @@ fn compile_handler(
                     > crate::rhai_planner::MAXIMUM_STRING_BYTES as u64 =>
             {
                 errors.push(Diagnostic::error(
-                    "action.handler.input.string_bound",
+                    "breg.action.handler-input-string-bound",
                     format!("{input_path}.maxLength"),
                     &format!(
                         "{} input strings support at most {} UTF-8 bytes; set maxLength to {} or less so every Unicode value fits",
@@ -338,7 +338,7 @@ fn compile_handler(
             }
             FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => {
                 errors.push(Diagnostic::error(
-                    "action.handler.input.type_unsupported",
+                    "breg.action.handler-input-type-unsupported",
                     format!("{input_path}.type"),
                     &format!("{} accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values", abi),
                 ));
@@ -348,7 +348,7 @@ fn compile_handler(
     }
     if source.writes.len() > usize::from(MAX_CHANGE_REQUEST_TARGETS) {
         errors.push(Diagnostic::error(
-            "action.handler.slots_bound",
+            "breg.action.handler-slots-bound",
             format!("{path}.writes"),
             "handler slot count exceeds the target ceiling",
         ));
@@ -370,7 +370,7 @@ fn compile_handler(
         validate_id(&slot.id, &format!("{slot_path}.id"), errors);
         if !ids.insert(slot.id.clone()) {
             errors.push(Diagnostic::error(
-                "action.handler.slot_duplicate",
+                "breg.action.handler-slot-duplicate",
                 &slot_path,
                 "handler slot identifiers must be unique",
             ));
@@ -396,7 +396,7 @@ fn compile_handler(
                 .is_some_and(|input| input.required)
             {
                 errors.push(Diagnostic::error(
-                    "action.handler.target_required",
+                    "breg.action.handler-target-required",
                     &slot_path,
                     "a patch slot requires a required reference input",
                 ));
@@ -410,7 +410,7 @@ fn compile_handler(
         let mut mutations = Vec::new();
         if slot.fields.is_empty() {
             errors.push(Diagnostic::error(
-                "action.handler.fields_empty",
+                "breg.action.handler-fields-empty",
                 &slot_path,
                 "a write slot must declare at least one stored field",
             ));
@@ -419,14 +419,14 @@ fn compile_handler(
             let field_path = format!("{slot_path}.fields[field={field_id}]");
             if !fields.insert(field_id.clone()) {
                 errors.push(Diagnostic::error(
-                    "action.handler.field_duplicate",
+                    "breg.action.handler-field-duplicate",
                     &field_path,
                     "slot fields must be unique",
                 ));
             }
             let Some(field) = target_entity.fields.get(field_id) else {
                 errors.push(Diagnostic::error(
-                    "action.handler.field_unknown",
+                    "breg.action.handler-field-unknown",
                     &field_path,
                     "a slot field must name a stored target field",
                 ));
@@ -436,7 +436,7 @@ fn compile_handler(
                 .is_some_and(|classification| classification > field.classification)
             {
                 errors.push(Diagnostic::error(
-                    "action.handler.classification_ceiling",
+                    "breg.action.handler-classification-ceiling",
                     &field_path,
                     "handler inputs cannot flow to a less classified target field",
                 ));
@@ -458,7 +458,7 @@ fn compile_handler(
                     .collect::<BTreeSet<_>>();
                 if request_fields.is_empty() && allowed_creates.is_empty() {
                     errors.push(Diagnostic::error(
-                        "action.handler.reference_source_missing",
+                        "breg.action.handler-reference-source-missing",
                         &field_path,
                         "a reference write requires a compatible declared input or create slot",
                     ));
@@ -466,7 +466,7 @@ fn compile_handler(
                 for input in &request_fields {
                     if !inputs[input.as_str()].required {
                         errors.push(Diagnostic::error(
-                            "action.handler.reference_required",
+                            "breg.action.handler-reference-required",
                             format!("actions[{}].inputs[{input}]", collected.source.id),
                             "reference sources admitted by a handler must be required inputs",
                         ));
@@ -505,7 +505,7 @@ fn compile_handler(
                 .collect();
             if !required_fields.is_subset(&fields) {
                 errors.push(Diagnostic::error(
-                    "action.handler.create_fields_incomplete",
+                    "breg.action.handler-create-fields-incomplete",
                     &slot_path,
                     "a create slot must include every required stored field",
                 ));
@@ -548,12 +548,12 @@ fn compile_handler(
                 .insert(refusal.code.clone(), refusal.label.clone())
                 .is_some()
         {
-            errors.push(Diagnostic::error("action.handler.refusal_invalid", format!("{path}.refusals"), "refusals require unique bounded codes and non-empty static labels of at most 256 bytes without control characters"));
+            errors.push(Diagnostic::error("breg.action.handler-refusal-invalid", format!("{path}.refusals"), "refusals require unique bounded codes and non-empty static labels of at most 256 bytes without control characters"));
         }
     }
     if refusals.len() > crate::rhai_planner::MAXIMUM_MAP_ENTRIES {
         errors.push(Diagnostic::error(
-            "action.handler.refusal_bound",
+            "breg.action.handler-refusal-bound",
             format!("{path}.refusals"),
             "the refusal catalogue exceeds its fixed bound",
         ));
@@ -564,13 +564,13 @@ fn compile_handler(
     else {
         let (code, member, message) = if is_wasm {
             (
-                "action.handler.module_asset_missing",
+                "breg.action.handler-module-asset-missing",
                 "module",
                 format!("supply the action's owned handler module asset at {source_path}"),
             )
         } else {
             (
-                "action.handler.source_missing",
+                "breg.action.handler-source-missing",
                 "script",
                 format!("supply the action's owned handler asset at {source_path}"),
             )
@@ -587,7 +587,7 @@ fn compile_handler(
             || asset.bytes.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
         {
             errors.push(Diagnostic::error(
-                "action.handler.module_bound",
+                "breg.action.handler-module-bound",
                 format!("{path}.module"),
                 &format!(
                     "the handler module must be non-empty and at most {} bytes; {} bytes supplied",
@@ -599,7 +599,7 @@ fn compile_handler(
         }
         if !crate::wasm_handler::is_wasm_binary(&asset.bytes) {
             errors.push(Diagnostic::error(
-                "action.handler.module_invalid",
+                "breg.action.handler-module-invalid",
                 format!("{path}.module"),
                 "the handler module must be a WebAssembly binary, not WebAssembly text",
             ));
@@ -613,7 +613,7 @@ fn compile_handler(
     } else {
         if asset.bytes.is_empty() || asset.bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
             errors.push(Diagnostic::error(
-                "action.handler.source_bound",
+                "breg.action.handler-source-bound",
                 format!("{path}.script"),
                 "the handler source must be non-empty and within its fixed byte bound",
             ));
@@ -621,7 +621,7 @@ fn compile_handler(
         }
         let Ok(script) = std::str::from_utf8(&asset.bytes) else {
             errors.push(Diagnostic::error(
-                "action.handler.source_encoding",
+                "breg.action.handler-source-encoding",
                 format!("{path}.script"),
                 "the handler source must be UTF-8",
             ));
@@ -631,7 +631,7 @@ fn compile_handler(
             use crate::rhai_planner::EntrypointCompileError;
             let (code, message) = match error {
                 EntrypointCompileError::SourceBound => (
-                    "action.handler.source_bound",
+                    "breg.action.handler-source-bound",
                     "the handler source exceeds its fixed byte bound".to_owned(),
                 ),
                 EntrypointCompileError::Parse(position) => {
@@ -641,12 +641,12 @@ fn compile_handler(
                         _ => String::new(),
                     };
                     (
-                        "action.handler.parse",
+                        "breg.action.handler-parse",
                         format!("correct the Rhai syntax or unsupported construct{location}"),
                     )
                 }
                 EntrypointCompileError::Entrypoint => (
-                    "action.handler.entrypoint",
+                    "breg.action.handler-entrypoint",
                     "declare exactly one public fn handle(ctx) entry point and do not overload functions".to_owned(),
                 ),
             };
@@ -655,7 +655,7 @@ fn compile_handler(
         }
         if crate::action_handler::compile_source_for_abi(script, abi).is_err() {
             errors.push(Diagnostic::error(
-                "action.handler.helper_contract",
+                "breg.action.handler-helper-contract",
                 format!("{path}.script"),
                 "Evidence helpers require registry.action-handler/v2 and evidence::resolve with exactly two arguments",
             ));
@@ -751,7 +751,7 @@ fn rhai_handler_script_path<'a>(
     let script = source.script()?;
     if !crate::change_request::valid_planner_path(script) {
         errors.push(Diagnostic::error(
-            "action.handler.source_invalid",
+            "breg.action.handler-source-invalid",
             format!("{path}.script"),
             "the handler script must be a bounded relative .rhai path",
         ));
@@ -774,7 +774,7 @@ fn wasm_handler_module_path<'a>(
     let module = source.module()?;
     if !crate::wasm_handler::valid_wasm_module_path(module) {
         errors.push(Diagnostic::error(
-            "action.handler.module_source_invalid",
+            "breg.action.handler-module-source-invalid",
             format!("{path}.module"),
             "the handler module must be a bounded relative .wasm path",
         ));
@@ -796,7 +796,7 @@ fn compile_requirements(
         })
     {
         errors.push(Diagnostic::error(
-            "action.requires.bounds",
+            "breg.action.requires-bounds",
             "actions[].requires",
             "action requirements exceed the supported count or byte ceiling",
         ));
@@ -807,7 +807,7 @@ fn compile_requirements(
     for requirement in &action.requires {
         if !seen.insert((&requirement.input, &requirement.field)) {
             errors.push(Diagnostic::error(
-                "action.requires.duplicate",
+                "breg.action.requires-duplicate",
                 "actions[].requires",
                 "an action can require a target field only once per reference input",
             ));
@@ -815,7 +815,7 @@ fn compile_requirements(
         }
         let Some(input) = inputs.get(requirement.input.as_str()) else {
             errors.push(Diagnostic::error(
-                "action.requires.input_unknown",
+                "breg.action.requires-input-unknown",
                 "actions[].requires[].input",
                 "an action requirement must name a declared reference input",
             ));
@@ -823,7 +823,7 @@ fn compile_requirements(
         };
         let FieldTypeSource::Reference { target, .. } = &input.field_type else {
             errors.push(Diagnostic::error(
-                "action.requires.reference_required",
+                "breg.action.requires-reference-required",
                 "actions[].requires[].input",
                 "an action requirement must name a required reference input used by its effects",
             ));
@@ -834,7 +834,7 @@ fn compile_requirements(
                 && matches!(&target_use.source, CompiledActionTargetUseSource::Input { input } if input == &requirement.input)
         }) {
             errors.push(Diagnostic::error(
-                "action.requires.reference_required",
+                "breg.action.requires-reference-required",
                 "actions[].requires[].input",
                 "an action requirement must name a required reference input used by its effects",
             ));
@@ -845,7 +845,7 @@ fn compile_requirements(
             .and_then(|entity| entity.fields.get(&requirement.field))
         else {
             errors.push(Diagnostic::error(
-                "action.requires.field_unknown",
+                "breg.action.requires-field-unknown",
                 "actions[].requires[].field",
                 "an action requirement must name a stored field of its reference target",
             ));
@@ -853,7 +853,7 @@ fn compile_requirements(
         };
         if field.encryption.is_some() {
             errors.push(Diagnostic::error(
-                "action.requires.field_encrypted",
+                "breg.action.requires-field-encrypted",
                 "actions[].requires[].field",
                 "an action requirement cannot name an encrypted field",
             ));
@@ -892,7 +892,7 @@ fn compile_requirements(
             || input_invalid
         {
             errors.push(Diagnostic::error(
-                "action.requires.value_invalid",
+                "breg.action.requires-value-invalid",
                 "actions[].requires[]",
                 "an action requirement must declare exactly one compatible scalar literal or action input",
             ));
@@ -922,14 +922,14 @@ fn compile_inputs(
         validate_id(&input.id, "actions[].inputs[].id", errors);
         if reserved_logical_name(&input.id) {
             errors.push(Diagnostic::error(
-                "action.input.id.reserved",
+                "breg.action.input-id-reserved",
                 "actions[].inputs[].id",
                 "an action input identifier collides with a reserved Registry field",
             ));
         }
         if !ids.insert(input.id.as_str()) {
             errors.push(Diagnostic::error(
-                "action.input.id.duplicate",
+                "breg.action.input-id-duplicate",
                 "actions[].inputs[].id",
                 "action input identifiers must be duplicate-free",
             ));
@@ -940,14 +940,14 @@ fn compile_inputs(
             .unwrap_or_else(|| default_api_name(&input.id));
         if !valid_api_name(&api_name) || reserved_logical_name(&api_name) {
             errors.push(Diagnostic::error(
-                "action.input.api_name.invalid",
+                "breg.action.input-api-name-invalid",
                 "actions[].inputs[].apiName",
                 "an action input API name must be a non-reserved lower camelCase identifier",
             ));
         }
         if !api_names.insert(api_name.clone()) {
             errors.push(Diagnostic::error(
-                "action.input.api_name.duplicate",
+                "breg.action.input-api-name-duplicate",
                 "actions[].inputs[].apiName",
                 "action input API names must be unique within the action",
             ));
@@ -956,7 +956,7 @@ fn compile_inputs(
         if let FieldTypeSource::Reference { target, .. } = &input.field_type {
             if !entities.contains_key(target) {
                 errors.push(Diagnostic::error(
-                    "action.input.reference.target_unknown",
+                    "breg.action.input-reference-target-unknown",
                     "actions[].inputs[].target",
                     "an action reference input target does not resolve",
                 ));
@@ -986,7 +986,7 @@ fn compile_effects(
         validate_id(&id, "actions[].effects[].id", errors);
         if !effect_ids.insert(id.clone()) {
             errors.push(Diagnostic::error(
-                "action.effect.id_duplicate",
+                "breg.action.effect-id-duplicate",
                 "actions[].effects[].id",
                 "immediate-action effect identifiers must be duplicate-free",
             ));
@@ -994,7 +994,7 @@ fn compile_effects(
         if effect.operation == Operation::Create {
             if effect.id.is_none() {
                 errors.push(Diagnostic::error(
-                    "action.effect.create_id_required",
+                    "breg.action.effect-create-id-required",
                     "actions[].effects[].id",
                     "create effects require an explicit identifier for reserved-record references",
                 ));
@@ -1018,7 +1018,7 @@ fn compile_effects(
         };
         if effect.set.is_empty() && effect.clear.is_empty() {
             errors.push(Diagnostic::error(
-                "action.effect.empty",
+                "breg.action.effect-empty",
                 "actions[].effects[]",
                 "an immediate-action effect must set or clear at least one field",
             ));
@@ -1028,7 +1028,7 @@ fn compile_effects(
         for (field, value) in &effect.set {
             let Some(target_field) = target_entity.fields.get(field) else {
                 errors.push(Diagnostic::error(
-                    "action.effect.field_unknown",
+                    "breg.action.effect-field-unknown",
                     "actions[].effects[].set",
                     "an immediate-action effect writes an unknown stored target field",
                 ));
@@ -1066,7 +1066,7 @@ fn compile_effects(
         for field in &effect.clear {
             let Some(target_field) = target_entity.fields.get(field) else {
                 errors.push(Diagnostic::error(
-                    "action.effect.field_unknown",
+                    "breg.action.effect-field-unknown",
                     "actions[].effects[].clear",
                     "an immediate-action effect clears an unknown stored target field",
                 ));
@@ -1074,14 +1074,14 @@ fn compile_effects(
             };
             if effect.operation == Operation::Create {
                 errors.push(Diagnostic::error(
-                    "action.effect.clear_on_create",
+                    "breg.action.effect-clear-on-create",
                     "actions[].effects[].clear",
                     "create effects cannot clear target fields",
                 ));
             }
             if target_field.required {
                 errors.push(Diagnostic::error(
-                    "action.effect.clear_required",
+                    "breg.action.effect-clear-required",
                     "actions[].effects[].clear",
                     "required target fields cannot be cleared",
                 ));
@@ -1155,7 +1155,7 @@ fn compile_target(
 ) -> Option<CompiledActionTarget> {
     if !matches!(effect.operation, Operation::Create | Operation::Patch) {
         errors.push(Diagnostic::error(
-            "action.effect.operation.unsupported",
+            "breg.action.effect-operation-unsupported",
             "actions[].effects[].operation",
             "immediate-action effects can only create or patch target records",
         ));
@@ -1169,7 +1169,7 @@ fn compile_target(
         (Some(entity_id), None, Operation::Create) => {
             let Some(entity) = entities.get(entity_id) else {
                 errors.push(Diagnostic::error(
-                    "action.effect.target.unknown",
+                    "breg.action.effect-target-unknown",
                     "actions[].effects[].target.entity",
                     "an immediate-action create target refers to an unknown entity",
                 ));
@@ -1184,7 +1184,7 @@ fn compile_target(
         (None, Some(input_id), Operation::Patch) => {
             let Some(input) = inputs.get(input_id.as_str()) else {
                 errors.push(Diagnostic::error(
-                    "action.effect.target.input_unknown",
+                    "breg.action.effect-target-input-unknown",
                     "actions[].effects[].target.fromField",
                     "an immediate-action patch target must refer to a declared reference input",
                 ));
@@ -1192,7 +1192,7 @@ fn compile_target(
             };
             let FieldTypeSource::Reference { target, .. } = &input.field_type else {
                 errors.push(Diagnostic::error(
-                    "action.effect.target.reference_required",
+                    "breg.action.effect-target-reference-required",
                     "actions[].effects[].target.fromField",
                     "an immediate-action patch target must refer to a reference input",
                 ));
@@ -1210,7 +1210,7 @@ fn compile_target(
         _ => {
             let _ = effect_id;
             errors.push(Diagnostic::error(
-                "action.effect.target.invalid",
+                "breg.action.effect-target-invalid",
                 "actions[].effects[].target",
                 "create effects must name an entity and patch effects must name one reference input",
             ));
@@ -1226,7 +1226,7 @@ fn validate_mutable_target(
 ) -> Option<()> {
     if entity.change_request.is_some() {
         errors.push(Diagnostic::error(
-            "action.effect.request_target",
+            "breg.action.effect-request-target",
             "actions[].effects[].target",
             "immediate actions cannot target change-request workflow entities",
         ));
@@ -1236,7 +1236,7 @@ fn validate_mutable_target(
         && entity.mutation_mode == crate::contract::MutationMode::CreateOnly
     {
         errors.push(Diagnostic::error(
-            "action.effect.operation.unavailable",
+            "breg.action.effect-operation-unavailable",
             "actions[].effects[].operation",
             "immediate actions cannot patch create-only entities",
         ));
@@ -1248,7 +1248,7 @@ fn validate_mutable_target(
         .is_some_and(|control| control.required_for.contains(&operation))
     {
         errors.push(Diagnostic::error(
-            "action.effect.controlled_target",
+            "breg.action.effect-controlled-target",
             "actions[].effects[].target",
             "immediate actions cannot target operations that require reviewed change control",
         ));
@@ -1270,7 +1270,7 @@ fn compile_value(
         (Some(input_id), None) => {
             let Some(input) = inputs.get(input_id.as_str()) else {
                 errors.push(Diagnostic::error(
-                    "action.effect.value.input_unknown",
+                    "breg.action.effect-value-input-unknown",
                     "actions[].effects[].set",
                     "fromField must refer to a declared action input",
                 ));
@@ -1278,14 +1278,14 @@ fn compile_value(
             };
             if target_required && !input.required {
                 errors.push(Diagnostic::error(
-                    "action.effect.value_nullable",
+                    "breg.action.effect-value-nullable",
                     "actions[].effects[].set",
                     "a nullable action input cannot populate a required target field",
                 ));
             }
             if !compatible_field_types(&input.field_type, target_type) {
                 errors.push(Diagnostic::error(
-                    "action.effect.value.type_mismatch",
+                    "breg.action.effect-value-type-mismatch",
                     format!("actions[].effects[].set.{target_field}"),
                     "fromField input type must match the target field type",
                 ));
@@ -1298,7 +1298,7 @@ fn compile_value(
         (None, Some(effect_id)) => {
             let Some(target_entity_id) = create_targets.get(effect_id) else {
                 errors.push(Diagnostic::error(
-                    "action.effect.value.effect_unknown",
+                    "breg.action.effect-value-effect-unknown",
                     "actions[].effects[].set",
                     "fromEffect must refer to a declared create effect",
                 ));
@@ -1313,7 +1313,7 @@ fn compile_value(
                 }
                 FieldTypeSource::Reference { .. } => {
                     errors.push(Diagnostic::error(
-                        "action.effect.value_reference_mismatch",
+                        "breg.action.effect-value-reference-mismatch",
                         format!("actions[].effects[].set.{target_field}"),
                         "fromEffect reserved identity does not match the target reference field",
                     ));
@@ -1321,7 +1321,7 @@ fn compile_value(
                 }
                 _ => {
                     errors.push(Diagnostic::error(
-                        "action.effect.value_reference_required",
+                        "breg.action.effect-value-reference-required",
                         format!("actions[].effects[].set.{target_field}"),
                         "fromEffect can populate only typed reference fields",
                     ));
@@ -1331,7 +1331,7 @@ fn compile_value(
         }
         _ => {
             errors.push(Diagnostic::error(
-                "action.effect.value.invalid",
+                "breg.action.effect-value-invalid",
                 "actions[].effects[].set",
                 "effect mappings must declare exactly one fromField or fromEffect source",
             ));
@@ -1363,7 +1363,7 @@ fn validate_required_create_fields(
         for field in entity.fields.values().filter(|field| field.required) {
             if !written.contains(field.id.as_str()) {
                 errors.push(Diagnostic::error(
-                    "action.effect.create_required_field_missing",
+                    "breg.action.effect-create-required-field-missing",
                     "actions[].effects[].set",
                     "create effects must set every required target field",
                 ));
@@ -1460,13 +1460,13 @@ fn remember_write(
     if let Some(existing) = writes.insert(key, effect_id.to_owned()) {
         if existing != effect_id {
             errors.push(Diagnostic::error(
-                "action.effect.overlapping_write",
+                "breg.action.effect-overlapping-write",
                 path,
                 "immediate-action effects cannot write the same target field more than once",
             ));
         } else {
             errors.push(Diagnostic::error(
-                "action.effect.overlapping_write",
+                "breg.action.effect-overlapping-write",
                 path,
                 "an immediate-action effect cannot both set and clear the same target field",
             ));
@@ -1485,7 +1485,7 @@ fn order_effects(
     }
     if errors
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.effect.dependency_cycle")
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-dependency-cycle")
     {
         return None;
     }
@@ -1508,7 +1508,7 @@ fn visit_effect(
         Some(VisitState::Done) => return,
         Some(VisitState::Visiting) => {
             errors.push(Diagnostic::error(
-                "action.effect.dependency_cycle",
+                "breg.action.effect-dependency-cycle",
                 "actions[].effects[]",
                 "reserved-create references cannot contain dependency cycles",
             ));
@@ -1554,7 +1554,7 @@ fn validate_plan_bounds(
         .len();
     if target_count > usize::from(MAX_CHANGE_REQUEST_TARGETS) {
         errors.push(Diagnostic::error(
-            "action.bounds.targets",
+            "breg.action.bounds-targets",
             path,
             "an immediate-action plan exceeds the supported target-record ceiling",
         ));
@@ -1562,7 +1562,7 @@ fn validate_plan_bounds(
     let mutation_count: usize = effects.iter().map(|effect| effect.mutations.len()).sum();
     if mutation_count > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS) {
         errors.push(Diagnostic::error(
-            "action.bounds.field_mutations",
+            "breg.action.bounds-field-mutations",
             path,
             "an immediate-action plan exceeds the supported field-mutation ceiling",
         ));
@@ -1570,12 +1570,12 @@ fn validate_plan_bounds(
     match maximum_snapshot_bytes(inputs, entities, effects) {
         Some(bytes) if bytes <= u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES) => {}
         Some(_) => errors.push(Diagnostic::error(
-            "action.bounds.snapshot_bytes",
+            "breg.action.bounds-snapshot-bytes",
             path,
             "an immediate-action plan exceeds the supported snapshot-size ceiling",
         )),
         None => errors.push(Diagnostic::error(
-            "action.bounds.snapshot_unknown",
+            "breg.action.bounds-snapshot-unknown",
             path,
             "an immediate-action plan contains a field whose snapshot size cannot be bounded",
         )),
@@ -1637,14 +1637,14 @@ fn compile_permissions(
         {
             if !profile_action.insert((profile.id.as_str(), action.id.as_str())) {
                 errors.push(Diagnostic::error(
-                    "action.permission.duplicate",
+                    "breg.action.permission-duplicate",
                     "project.accessProfiles[].permissions[].action",
                     "an access profile cannot grant the same action more than once",
                 ));
             }
             if profile.anonymous {
                 errors.push(Diagnostic::error(
-                    "action.permission.anonymous_forbidden",
+                    "breg.action.permission-anonymous-forbidden",
                     "project.accessProfiles[].permissions[].action",
                     "anonymous access profiles cannot invoke immediate actions",
                 ));
@@ -1652,21 +1652,21 @@ fn compile_permissions(
             crate::consent::validate_action_permission(profile, grant, entities, errors);
             if !grant.entity.is_empty() {
                 errors.push(Diagnostic::error(
-                    "action.permission.exclusive",
+                    "breg.action.permission-exclusive",
                     "project.accessProfiles[].permissions[]",
                     "an access permission must name either one entity or one action",
                 ));
             }
             if grant.operations != BTreeSet::from([Operation::Invoke]) {
                 errors.push(Diagnostic::error(
-                    "action.permission.operation.invalid",
+                    "breg.action.permission-operation-invalid",
                     "project.accessProfiles[].permissions[].operations",
                     "immediate-action permissions support only the invoke operation",
                 ));
             }
             if !entity_permission_fields_empty(grant) {
                 errors.push(Diagnostic::error(
-                    "action.permission.entity_fields_forbidden",
+                    "breg.action.permission-entity-fields-forbidden",
                     "project.accessProfiles[].permissions[]",
                     "action permissions cannot declare entity projection, query, request, or writable fields",
                 ));
@@ -1677,7 +1677,7 @@ fn compile_permissions(
             for result in &grant.results {
                 if !result_effects.contains(result) {
                     errors.push(Diagnostic::error(
-                        "action.permission.result_unknown",
+                        "breg.action.permission-result-unknown",
                         "project.accessProfiles[].permissions[].results",
                         "action result permissions must name declared effect identifiers",
                     ));
@@ -1711,18 +1711,18 @@ fn validate_action_permission_sources(
         for grant in &profile.permissions {
             match (grant.entity.is_empty(), grant.action.as_deref()) {
                 (true, None) => errors.push(Diagnostic::error(
-                    "access_profile.permission.target_missing",
+                    "breg.access-profile.permission-target-missing",
                     "project.accessProfiles[].permissions[]",
                     "an access permission must name either one entity or one action",
                 )),
                 (false, Some(_)) => errors.push(Diagnostic::error(
-                    "access_profile.permission.target_exclusive",
+                    "breg.access-profile.permission-target-exclusive",
                     "project.accessProfiles[].permissions[]",
                     "an access permission must name either one entity or one action",
                 )),
                 (true, Some(action)) if !actions.contains_key(action) => {
                     errors.push(Diagnostic::error(
-                        "action.permission.action_unknown",
+                        "breg.action.permission-action-unknown",
                         "project.accessProfiles[].permissions[].action",
                         "an action permission refers to an unknown action",
                     ));
@@ -1751,14 +1751,14 @@ fn compile_permission_targets(
     for target in &grant.targets {
         if !seen.insert(target.entity.as_str()) {
             errors.push(Diagnostic::error(
-                "action.permission.target.duplicate",
+                "breg.action.permission-target-duplicate",
                 "project.accessProfiles[].permissions[].targets[].entity",
                 "action target permissions must be unique per entity",
             ));
         }
         let Some(entity) = entities.get(&target.entity) else {
             errors.push(Diagnostic::error(
-                "action.permission.target_unknown",
+                "breg.action.permission-target-unknown",
                 "project.accessProfiles[].permissions[].targets[].entity",
                 "an action target grant refers to an unknown entity",
             ));
@@ -1808,7 +1808,7 @@ fn discriminate_permission_targets(
         }
         if !matched {
             errors.push(Diagnostic::error(
-                "action.permission.targets.unused",
+                "breg.action.permission-targets-unused",
                 "project.accessProfiles[].permissions[].targets",
                 "action permission targets must name an entity the action creates, patches, or references",
             ));
@@ -1828,7 +1828,7 @@ fn validate_permission_covers_uses(
             .any(|target| target.entity_id == use_.entity_id)
         {
             errors.push(Diagnostic::error(
-                "action.permission.targets.incomplete",
+                "breg.action.permission-targets-incomplete",
                 "project.accessProfiles[].permissions[].targets",
                 "action permissions must cover every created, patched, and referenced target entity",
             ));
@@ -1852,7 +1852,7 @@ fn validate_row_boundaries(
             ))
         {
             errors.push(Diagnostic::error(
-                "action.permission.row_boundary_invalid",
+                "breg.action.permission-row-boundary-invalid",
                 path,
                 "action target row boundaries must be direct, non-empty, and duplicate-free",
             ));
@@ -1862,7 +1862,7 @@ fn validate_row_boundaries(
         }
         let Some(field) = entity.fields.get(&boundary.field) else {
             errors.push(Diagnostic::error(
-                "action.permission.row_boundary_field_unknown",
+                "breg.action.permission-row-boundary-field-unknown",
                 path,
                 "an action target row boundary refers to an unknown field",
             ));
@@ -1873,7 +1873,7 @@ fn validate_row_boundaries(
             FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
         ) {
             errors.push(Diagnostic::error(
-                "action.permission.row_boundary_type_unsupported",
+                "breg.action.permission-row-boundary-type-unsupported",
                 path,
                 "CRS84 point and structured fields cannot be action target row-boundary fields",
             ));
@@ -1992,7 +1992,7 @@ fn route_default_profile<'a>(
         .collect::<Vec<_>>();
     if defaults.len() > 1 {
         errors.push(Diagnostic::error(
-            "action.route_access.default_multiple",
+            "breg.action.route-access-default-multiple",
             "project.accessProfiles[].default",
             "an action route accepts at most one default profile; clear default on the other profiles",
         ));
@@ -2216,14 +2216,14 @@ fn validate_field_type_bounds(
             max_length,
         } if *max_length == 0 || *max_length > 1_000_000 || min_length > max_length => {
             errors.push(Diagnostic::error(
-                "action.input.string.bounds_invalid",
+                "breg.action.input-string-bounds-invalid",
                 path,
                 "string length bounds are invalid",
             ))
         }
         FieldTypeSource::Text { max_length } if *max_length == 0 || *max_length > 10_000_000 => {
             errors.push(Diagnostic::error(
-                "action.input.text.bound_invalid",
+                "breg.action.input-text-bound-invalid",
                 path,
                 "text length bound must be positive",
             ));
@@ -2234,7 +2234,7 @@ fn validate_field_type_bounds(
                 || values.iter().any(|value| !valid_code(value)) =>
         {
             errors.push(Diagnostic::error(
-                "action.input.vocabulary.values_invalid",
+                "breg.action.input-vocabulary-values-invalid",
                 path,
                 "a vocabulary input requires a non-empty duplicate-free value set",
             ));
@@ -2252,14 +2252,14 @@ fn validate_field_type_bounds(
         ) =>
         {
             errors.push(Diagnostic::error(
-                "action.input.decimal.bounds_invalid",
+                "breg.action.input-decimal-bounds-invalid",
                 path,
                 "decimal precision, scale, or canonical bounds are invalid",
             ));
         }
         FieldTypeSource::Reference { target, .. } if target.is_empty() => {
             errors.push(Diagnostic::error(
-                "action.input.reference.target_invalid",
+                "breg.action.input-reference-target-invalid",
                 path,
                 "a reference input must name a target entity",
             ));
@@ -2271,7 +2271,7 @@ fn validate_field_type_bounds(
                 }) =>
         {
             errors.push(Diagnostic::error(
-                "action.input.crs84_point.bounds_invalid",
+                "breg.action.input-crs84-point-bounds-invalid",
                 path,
                 "CRS84 point precision or CRS84 bounding box is invalid",
             ));
@@ -2282,7 +2282,7 @@ fn validate_field_type_bounds(
                 || !crate::contract::valid_structured_schema(schema) =>
         {
             errors.push(Diagnostic::error(
-                "action.input.structured.schema_invalid",
+                "breg.action.input-structured-schema-invalid",
                 path,
                 "structured input schema or byte bound is invalid",
             ));
@@ -2371,7 +2371,7 @@ fn validate_id(value: &str, path: &str, errors: &mut Vec<Diagnostic>) {
         });
     if !valid {
         errors.push(Diagnostic::error(
-            "identifier.invalid",
+            "breg.identifier.invalid",
             path,
             "an identifier must use the closed lowercase identifier grammar",
         ));

@@ -3340,7 +3340,7 @@ fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, F
 fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> FailureReport {
     let error = match error {
         HistoryErasureLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("history erase", "history.erase", error);
+            return runtime_config_failure("history erase", error);
         }
         HistoryErasureLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history erase", "history.erase", error);
@@ -3485,7 +3485,7 @@ fn history_rebaseline(
 fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) -> FailureReport {
     let error = match error {
         HistoryRebaselineLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("history rebaseline", "history.rebaseline", error);
+            return runtime_config_failure("history rebaseline", error);
         }
         HistoryRebaselineLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("history rebaseline", "history.rebaseline", error);
@@ -3701,11 +3701,7 @@ fn field_encryption_preflight_failure(
 ) -> FailureReport {
     let error = match error {
         FieldEncryptionPreflightLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure(
-                "field-encryption preflight",
-                "field_encryption.preflight",
-                error,
-            );
+            return runtime_config_failure("field-encryption preflight", error);
         }
         FieldEncryptionPreflightLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure(
@@ -3852,11 +3848,7 @@ fn field_encryption_erase_history_failure(
 ) -> FailureReport {
     let error = match error {
         FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure(
-                "field-encryption erase-history",
-                "field_encryption.erase_history",
-                error,
-            );
+            return runtime_config_failure("field-encryption erase-history", error);
         }
         FieldEncryptionEraseHistoryLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure(
@@ -4911,7 +4903,7 @@ fn capture_candidate(
         .collect();
     let fixture_journey_bytes = read_bounded_source_file(
         &args.project.join(FIXTURE_JOURNEYS_PATH),
-        "source.fixture_journeys.missing",
+        "breg.source.fixture-journeys-missing",
         FIXTURE_JOURNEYS_PATH,
         MAX_PACKAGE_SOURCE_FILE_BYTES,
     )
@@ -5160,7 +5152,7 @@ fn status(args: &StatusArgs) -> Result<StatusSuccessReport, FailureReport> {
 fn status_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
         ApplyLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("status", "status", error);
+            return runtime_config_failure("status", error);
         }
         ApplyLifecycleError::RuntimeConfigPath => (
             "status.runtime_config.path_invalid",
@@ -5376,7 +5368,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                 ok: false,
                 command: "test",
                 diagnostics: vec![tool_diagnostic(
-                    diagnostic("field.pattern.syntax_invalid", &format!("entities[{entity_id}].fields[{field_id}].pattern"),
+                    diagnostic("breg.field.pattern-syntax-invalid", &format!("entities[{entity_id}].fields[{field_id}].pattern"),
                         "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test"),
                     DiagnosticArtifact::SchemaTestCandidate,
                     SuggestedAction::CorrectSchemaTestCandidate,
@@ -5395,7 +5387,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             };
         }
         TestLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("test", "test", error);
+            return runtime_config_failure("test", error);
         }
         TestLifecycleError::JourneySyntax { path, message } => {
             return FailureReport {
@@ -5619,7 +5611,7 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
 fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> FailureReport {
     let error = match error {
         ApplyLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure(command, "apply", error);
+            return runtime_config_failure(command, error);
         }
         ApplyLifecycleError::CurrentPackage(PackageError::ExpectedDigestMismatch(mismatch)) => {
             return package_pin_failure(
@@ -5745,7 +5737,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "field.pattern.syntax_invalid",
+                        "breg.field.pattern-syntax-invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
                         "PostgreSQL rejected the native pattern syntax. The exact target remains pinned in maintenance; restore the pre-activation backup before correcting the PostgreSQL ARE syntax, schema-testing, and packaging the correction. Do not retry changed package bytes as the pinned target.",
                     ),
@@ -5760,7 +5752,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 return source_failure(
                     command,
                     diagnostic(
-                        "field.pattern.existing_rows_invalid",
+                        "breg.field.pattern-existing-rows-invalid",
                         &format!("entities[{entity_id}].fields[{field_id}].pattern"),
                         "Existing stored values do not satisfy the native pattern. The exact target remains pinned in maintenance; repair the violating values through operator recovery and retry the exact pinned target.",
                     ),
@@ -6136,7 +6128,7 @@ fn migration_reconcile_report(
 fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport {
     let error = match error {
         ReconcileLifecycleError::RuntimeConfig(error) => {
-            return runtime_config_failure("migration reconcile", "migration.reconcile", error);
+            return runtime_config_failure("migration reconcile", error);
         }
         ReconcileLifecycleError::ActiveRegistry(error) => {
             return active_registry_failure("migration reconcile", "migration.reconcile", error);
@@ -6289,7 +6281,7 @@ fn inspection_failure(
 ) -> FailureReport {
     let error = match error {
         RuntimePackageInspectionError::RuntimeConfig(error) => {
-            return runtime_config_failure(command, prefix, error);
+            return runtime_config_failure(command, error);
         }
         RuntimePackageInspectionError::SharedPackage(message) => {
             return FailureReport {
@@ -6472,27 +6464,14 @@ fn baseline_package_failure(command: &'static str, error: PackageError) -> Failu
 }
 
 fn runtime_config_diff_failure(error: RuntimeConfigError) -> FailureReport {
-    runtime_config_failure("diff", "diff", error)
+    runtime_config_failure("diff", error)
 }
 
-/// The runtime configuration refusal as command diagnostics. A file the
-/// shared reader refused keeps every reader diagnostic's code and pointer
-/// unchanged; a rule the runtime decides itself is named under the
-/// command's prefix.
-fn runtime_config_diagnostics(prefix: &str, error: &RuntimeConfigError) -> Vec<Diagnostic> {
-    if matches!(error, RuntimeConfigError::Reader(_)) {
-        return runtime_config_reader_diagnostics(error);
-    }
-    vec![diagnostic(
-        &format!("{prefix}.{}", error.code()),
-        error.path(),
-        &error.to_string(),
-    )]
-}
-
-/// Every diagnostic the shared reader reported, with its code and pointer
+/// The runtime configuration refusal as command diagnostics: every
+/// diagnostic the shared reader reported, or the one rule the runtime
+/// decides itself, with its `breg.runtime.*` or reader code and pointer
 /// unchanged and its fix after the message.
-fn runtime_config_reader_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnostic> {
+fn runtime_config_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnostic> {
     error
         .diagnostics(None)
         .into_iter()
@@ -6506,15 +6485,11 @@ fn runtime_config_reader_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnost
         .collect()
 }
 
-fn runtime_config_failure(
-    command: &'static str,
-    prefix: &str,
-    error: RuntimeConfigError,
-) -> FailureReport {
+fn runtime_config_failure(command: &'static str, error: RuntimeConfigError) -> FailureReport {
     FailureReport {
         ok: false,
         command,
-        diagnostics: runtime_config_diagnostics(prefix, &error)
+        diagnostics: runtime_config_diagnostics(&error)
             .into_iter()
             .map(|diagnostic| {
                 tool_diagnostic(
@@ -6976,7 +6951,7 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
             command: "project lock",
             diagnostics: vec![tool_diagnostic(
                 diagnostic(
-                    "module.lock.stale",
+                    "breg.module.lock-stale",
                     "project.modules",
                     "the project module locks are not up to date",
                 ),
@@ -7204,7 +7179,7 @@ fn planner_test(args: &ProjectPlannerTestArgs) -> Result<PlannerTestSuccessRepor
         MAX_PLANNER_TEST_REQUEST_BYTES,
     )
     .map_err(|diagnostic| {
-        let (code, message) = if diagnostic.code == "source.file.bounds" {
+        let (code, message) = if diagnostic.code == "breg.source.file-bounds" {
             (
                 "planner_test.request.bounds",
                 "the synthetic request exceeds its fixed size bound",
@@ -7693,7 +7668,7 @@ fn capture_project_source(project_path: &Path) -> Result<CapturedProjectSource, 
     let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
-        "source.project.missing",
+        "breg.source.project-missing",
         "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
@@ -7737,7 +7712,7 @@ fn ensure_module_id_matches_directory(
         return Ok(());
     }
     Err(diagnostic(
-        "source.module.id_mismatch",
+        "breg.source.module-id-mismatch",
         &format!("modules/{directory_id}/module.yaml"),
         "the module source id must match its directory name",
     ))
@@ -7759,7 +7734,7 @@ fn ensure_every_lock_has_a_source(
         .any(|lock| !discovered.contains(lock.id.as_str()))
     {
         return Err(diagnostic(
-            "module.lock.source_missing",
+            "breg.module.lock-source-missing",
             "project.modules",
             "every module lock must have a discovered module source",
         ));
@@ -7773,7 +7748,7 @@ fn capture_project_source_for_lock(
     let project_directory = validate_project_directory(project_path)?;
     let project_bytes = read_bounded_source_file(
         &project_path.join("registry.yaml"),
-        "source.project.missing",
+        "breg.source.project-missing",
         "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
@@ -7783,7 +7758,7 @@ fn capture_project_source_for_lock(
     for lock in &project.modules {
         if !locked.insert(lock.id.as_str()) {
             return Err(diagnostic(
-                "module.lock.duplicate",
+                "breg.module.lock-duplicate",
                 "project.modules",
                 "module lock identifiers must be unique",
             ));
@@ -7830,7 +7805,7 @@ fn load_module_files(
     for id in &modules.names {
         if !locked.contains(id.as_str()) {
             return Err(diagnostic(
-                "source.modules.unlocked",
+                "breg.source.modules-unlocked",
                 "modules",
                 "every authored module directory must be declared by the project module lock",
             ));
@@ -7854,14 +7829,14 @@ struct ModuleDirectories {
 fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories, Diagnostic> {
     let unreadable = || {
         diagnostic(
-            "source.modules.unreadable",
+            "breg.source.modules-unreadable",
             "modules",
             "module sources cannot be read",
         )
     };
     let invalid = || {
         diagnostic(
-            "source.modules.invalid",
+            "breg.source.modules-invalid",
             "modules",
             "module sources must be directories and must not be symbolic links",
         )
@@ -7878,7 +7853,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
         Err(error) => {
             return Err(path_diagnostic(
                 error,
-                "source.modules.invalid",
+                "breg.source.modules-invalid",
                 "project",
                 "the project directory is not available",
                 "the project directory must be a directory and must not be a symbolic link",
@@ -7897,7 +7872,7 @@ fn read_module_directory_names(project_path: &Path) -> Result<ModuleDirectories,
         }
         let Some(name) = entry.name.to_str() else {
             return Err(diagnostic(
-                "source.modules.invalid",
+                "breg.source.modules-invalid",
                 "modules",
                 "module source names must be valid UTF-8 identifiers",
             ));
@@ -7936,7 +7911,7 @@ fn read_module_yaml_files(modules: ModuleDirectories) -> Result<Vec<ModuleSource
             let module_directory = directory.open_directory(OsStr::new(&id)).map_err(|error| {
                 path_diagnostic(
                     error,
-                    "source.module.missing",
+                    "breg.source.module-missing",
                     &report_path,
                     "the required authoring source is not available",
                     "authoring sources must be regular files and must not be symbolic links",
@@ -7945,7 +7920,7 @@ fn read_module_yaml_files(modules: ModuleDirectories) -> Result<Vec<ModuleSource
             let entry = SafeEntry::in_directory(module_directory, OsStr::new("module.yaml"));
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.module.missing",
+                "breg.source.module-missing",
                 &report_path,
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )?;
@@ -8010,7 +7985,7 @@ fn load_project_planner_asset_files(
         let location = format!("evidenceProviders[{}].contracts", provider.id);
         if !registry_breg::action_evidence_contracts::valid_contract_path(&provider.contracts) {
             return Err(diagnostic(
-                "source.evidence_contract.path_unsafe",
+                "breg.source.evidence-contract-path-unsafe",
                 &location,
                 "Evidence contracts require normalized project-relative JSON paths",
             ));
@@ -8020,7 +7995,7 @@ fn load_project_planner_asset_files(
             &provider.contracts,
             || {
                 diagnostic(
-                    "source.evidence_contract.path_unsafe",
+                    "breg.source.evidence-contract-path-unsafe",
                     &location,
                     "Evidence contracts require normalized project-relative JSON paths",
                 )
@@ -8028,7 +8003,7 @@ fn load_project_planner_asset_files(
             |error| {
                 path_diagnostic(
                     error,
-                    "source.evidence_contract.missing",
+                    "breg.source.evidence-contract-missing",
                     &location,
                     "the required Evidence contract is unavailable",
                     "Evidence contracts must be regular files without symbolic links",
@@ -8037,7 +8012,7 @@ fn load_project_planner_asset_files(
         )?;
         let bytes = read_bounded_source_entry(
             &entry,
-            "source.evidence_contract.missing",
+            "breg.source.evidence-contract-missing",
             &location,
             registry_breg::action_evidence_contracts::MAX_EVIDENCE_CONTRACT_BYTES as u64,
         )?;
@@ -8067,7 +8042,7 @@ fn load_module_asset_files(
             validate_module_sql_asset_path(module_id, &derived.sql)?;
             if !paths.insert(derived.sql.clone()) {
                 return Err(diagnostic(
-                    "source.module_asset.duplicate",
+                    "breg.source.module-asset-duplicate",
                     &format!("modules/{module_id}/module.yaml"),
                     "derived SQL assets must be unique within a module",
                 ));
@@ -8079,7 +8054,7 @@ fn load_module_asset_files(
             validate_module_sql_asset_path(module_id, &derived.sql)?;
             if !paths.insert(derived.sql.clone()) {
                 return Err(diagnostic(
-                    "source.module_asset.duplicate",
+                    "breg.source.module-asset-duplicate",
                     &format!("modules/{module_id}/module.yaml"),
                     "derived SQL assets must be unique within a module",
                 ));
@@ -8097,7 +8072,7 @@ fn load_module_asset_files(
                 |error| {
                     path_diagnostic(
                         error,
-                        "source.module_asset.missing",
+                        "breg.source.module-asset-missing",
                         &report_path,
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
@@ -8106,13 +8081,13 @@ fn load_module_asset_files(
             )?;
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.module_asset.missing",
+                "breg.source.module-asset-missing",
                 &report_path,
                 MAX_DERIVED_SQL_ASSET_BYTES,
             )?;
             if bytes.is_empty() {
                 return Err(diagnostic(
-                    "source.module_asset.bounds",
+                    "breg.source.module-asset-bounds",
                     &format!("modules/{module_id}/{path}"),
                     "derived SQL assets must be non-empty bounded regular files",
                 ));
@@ -8244,7 +8219,7 @@ fn load_planner_asset_files(
                 |error| {
                     let mut diagnostic = path_diagnostic(
                         error,
-                        "source.planner_asset.missing",
+                        "breg.source.planner-asset-missing",
                         &declaring_path,
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
@@ -8263,7 +8238,7 @@ fn load_planner_asset_files(
             })?;
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.planner_asset.missing",
+                "breg.source.planner-asset-missing",
                 &declaring_path,
                 MAX_RHAI_PLANNER_SOURCE_BYTES,
             )
@@ -8275,7 +8250,7 @@ fn load_planner_asset_files(
             })?;
             if bytes.is_empty() {
                 return Err(diagnostic(
-                    "source.planner_asset.bounds",
+                    "breg.source.planner-asset-bounds",
                     &declaring_path,
                     &format!("referenced Rhai script {path:?} must be a non-empty bounded regular file"),
                 ));
@@ -8303,7 +8278,7 @@ fn load_wasm_module_asset_files(
                 |error| {
                     let mut diagnostic = path_diagnostic(
                         error,
-                        "source.wasm_module.missing",
+                        "breg.source.wasm-module-missing",
                         &declaring_path,
                         "the required handler module is not available",
                         "handler modules must be regular files and must not be symbolic links",
@@ -8316,13 +8291,13 @@ fn load_wasm_module_asset_files(
             )?;
             let bytes = read_bounded_source_entry(
                 &entry,
-                "source.wasm_module.missing",
+                "breg.source.wasm-module-missing",
                 &declaring_path,
                 registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64,
             )?;
             if bytes.is_empty() {
                 return Err(diagnostic(
-                    "source.wasm_module.bounds",
+                    "breg.source.wasm-module-bounds",
                     &declaring_path,
                     &format!("referenced WASM module {path:?} must be a non-empty bounded regular file"),
                 ));
@@ -8369,7 +8344,7 @@ fn validate_wasm_module_asset_path(
 
 fn wasm_module_asset_path_diagnostic(declaring_path: &str) -> Diagnostic {
     diagnostic(
-        "source.wasm_module.path_unsafe",
+        "breg.source.wasm-module-path-unsafe",
         declaring_path,
         "WASM handler modules must use bounded declaring-origin-relative .wasm paths",
     )
@@ -8440,7 +8415,7 @@ fn validate_rhai_planner_asset_path(
 
 fn planner_asset_path_diagnostic(declaring_path: &str) -> Diagnostic {
     diagnostic(
-        "source.planner_asset.path_unsafe",
+        "breg.source.planner-asset-path-unsafe",
         declaring_path,
         "Rhai planner scripts must use bounded declaring-origin-relative .rhai paths",
     )
@@ -8480,7 +8455,7 @@ fn validate_module_sql_asset_path(module_id: &str, asset_path: &str) -> Result<(
 
 fn module_asset_path_diagnostic(module_id: &str) -> Diagnostic {
     diagnostic(
-        "source.module_asset.path_unsafe",
+        "breg.source.module-asset-path-unsafe",
         &format!("modules/{module_id}/module.yaml"),
         "derived SQL assets must be bounded module-relative .sql paths",
     )
@@ -8530,9 +8505,9 @@ bregctl explain events .
 ```
 
 `check` compiles the project and reports problems and findings. It reports two
-findings for this project on purpose: `access.profile.unrestricted_collection`,
+findings for this project on purpose: `breg.access.profile-unrestricted-collection`,
 because the `operator` profile can list every record, and
-`access.profile.unrestricted_rows`, because the `evidence-source` profile can
+`breg.access.profile-unrestricted-rows`, because the `evidence-source` profile can
 look up any record by its code. The comment above each profile says how to
 close it.
 
@@ -8717,7 +8692,7 @@ accessProfiles:
   # carry, `writableFields` what a create or patch may set, and
   # `filterableFields` which fields a caller may filter and sort a list by.
   #
-  # `check` reports `access.profile.unrestricted_collection` for this profile:
+  # `check` reports `breg.access.profile-unrestricted-collection` for this profile:
   # it can list every record, and a caller-supplied filter is not authorization.
   # That is intended for a single operations team running the whole registry.
   # Close it by giving the grant a `rowBoundaries` entry, the way `record-reader`
@@ -8770,7 +8745,7 @@ accessProfiles:
   # `bregctl generate evidence-source .` exports this grant as an Evidence
   # source definition, so a project written by `init` exports unmodified.
   #
-  # `check` reports `access.profile.unrestricted_rows` for this profile: any
+  # `check` reports `breg.access.profile-unrestricted-rows` for this profile: any
   # record's code answers it, and the value a caller supplies is not
   # authorization. That is intended for a source that vouches for the whole
   # registry. Close it by giving the grant a `rowBoundaries` entry, the way
@@ -9217,7 +9192,7 @@ fn write_project_registry(
     })?;
     let current = read_bounded_source_entry(
         &destination,
-        "source.project.missing",
+        "breg.source.project-missing",
         "registry.yaml",
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
@@ -10312,12 +10287,12 @@ fn decimal_literal_order(left: &str, right: &str) -> Option<std::cmp::Ordering> 
 fn validate_project_directory(project_path: &Path) -> Result<SafeDir, Diagnostic> {
     if project_path.as_os_str().is_empty() || has_parent_component(project_path) {
         return Err(diagnostic(
-            "source.project.path_unsafe",
+            "breg.source.project-path-unsafe",
             "project",
             "the project path must not contain parent-directory components",
         ));
     }
-    validate_directory(project_path, "source.project.invalid")
+    validate_directory(project_path, "breg.source.project-invalid")
 }
 
 /// Resolve a directory to a held descriptor, refusing a symbolic link at every
@@ -10429,7 +10404,7 @@ fn read_bounded_source_entry_with_identity(
 ) -> Result<(Vec<u8>, fs::Metadata), Diagnostic> {
     let invalid = || {
         diagnostic(
-            "source.file.invalid",
+            "breg.source.file-invalid",
             report_path,
             "authoring sources must be regular files and must not be symbolic links",
         )
@@ -10447,7 +10422,7 @@ fn read_bounded_source_entry_with_identity(
     }
     if stat.len() > bound {
         return Err(diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         ));
@@ -10458,14 +10433,14 @@ fn read_bounded_source_entry_with_identity(
     // rejects a name relinked between the stat above and this open.
     let file = entry.open_read().map_err(|_| {
         diagnostic(
-            "source.file.unreadable",
+            "breg.source.file-unreadable",
             report_path,
             "an authoring source cannot be read",
         )
     })?;
     let opened = file.metadata().map_err(|_| {
         diagnostic(
-            "source.file.unreadable",
+            "breg.source.file-unreadable",
             report_path,
             "an authoring source cannot be read",
         )
@@ -10476,14 +10451,14 @@ fn read_bounded_source_entry_with_identity(
     ensure_source_entry_identity(stat, &opened, report_path)?;
     if opened.len() > bound {
         return Err(diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         ));
     }
     let capacity = usize::try_from(opened.len()).map_err(|_| {
         diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         )
@@ -10493,14 +10468,14 @@ fn read_bounded_source_entry_with_identity(
         .read_to_end(&mut bytes)
         .map_err(|_| {
             diagnostic(
-                "source.file.unreadable",
+                "breg.source.file-unreadable",
                 report_path,
                 "an authoring source cannot be read",
             )
         })?;
     if bytes.len() as u64 > bound || bytes.len() as u64 != opened.len() {
         return Err(diagnostic(
-            "source.file.bounds",
+            "breg.source.file-bounds",
             report_path,
             "an authoring source exceeds its fixed size bound",
         ));
@@ -10526,7 +10501,7 @@ fn ensure_source_entry_identity(
         return Ok(());
     }
     Err(diagnostic(
-        "source.file.invalid",
+        "breg.source.file-invalid",
         report_path,
         "an authoring source changed while it was being read",
     ))
@@ -10722,7 +10697,7 @@ fn has_parent_component(path: &Path) -> bool {
 fn first_diagnostic(failure: CompileFailure) -> Diagnostic {
     failure.diagnostics().first().cloned().unwrap_or_else(|| {
         diagnostic(
-            "source.invalid",
+            "breg.source.invalid",
             "project",
             "the authoring source is invalid",
         )
@@ -10733,7 +10708,7 @@ fn remap_derived_diagnostic_path(
     mut diagnostic: Diagnostic,
     source: &CapturedProjectSource,
 ) -> Diagnostic {
-    if !diagnostic.code.starts_with("derived.sql.") {
+    if !diagnostic.code.starts_with("breg.derived.sql-") {
         return diagnostic;
     }
     diagnostic.message =
@@ -13974,7 +13949,7 @@ mod tests {
                 validate_rhai_planner_asset_path("registry.yaml", path)
                     .unwrap_err()
                     .code,
-                "source.planner_asset.path_unsafe"
+                "breg.source.planner-asset-path-unsafe"
             );
         }
 
@@ -13991,7 +13966,7 @@ mod tests {
             )]),
         )
         .unwrap_err();
-        assert_eq!(oversized.code, "source.file.bounds");
+        assert_eq!(oversized.code, "breg.source.file-bounds");
     }
 
     #[test]
@@ -14027,7 +14002,7 @@ mod tests {
                 validate_wasm_module_asset_path("registry.yaml", path)
                     .unwrap_err()
                     .code,
-                "source.wasm_module.path_unsafe"
+                "breg.source.wasm-module-path-unsafe"
             );
         }
 
@@ -14041,7 +14016,7 @@ mod tests {
             BTreeMap::from([("wasm/oversized.wasm".to_owned(), "registry.yaml".to_owned())]),
         )
         .unwrap_err();
-        assert_eq!(oversized.code, "source.file.bounds");
+        assert_eq!(oversized.code, "breg.source.file-bounds");
     }
 
     /// The asset readers refuse an escaping path themselves, so the module and
@@ -14063,7 +14038,7 @@ mod tests {
                 |error| {
                     path_diagnostic(
                         error,
-                        "source.module_asset.missing",
+                        "breg.source.module-asset-missing",
                         "modules/persons",
                         "the required authoring source is not available",
                         "authoring sources must be regular files and must not be symbolic links",
@@ -14074,7 +14049,7 @@ mod tests {
 
             // The path arm answered, so no component of the escaping path was
             // opened on the way to a missing-source refusal.
-            assert_eq!(refused.code, "source.module_asset.path_unsafe");
+            assert_eq!(refused.code, "breg.source.module-asset-path-unsafe");
         }
         assert_eq!(
             fs::read(directory.path.join("modules/outside.sql")).unwrap(),
@@ -15440,7 +15415,7 @@ accessProfiles:
             let guard = tree.arm();
             let bytes = read_bounded_source_file(
                 &named,
-                "source.project.missing",
+                "breg.source.project-missing",
                 "registry.yaml",
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )
@@ -15634,7 +15609,7 @@ actions:
             let entry = SafeEntry::resolve(&named).unwrap();
             let (bytes, metadata) = read_bounded_source_entry_with_identity(
                 &entry,
-                "source.project.missing",
+                "breg.source.project-missing",
                 "registry.yaml",
                 AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
             )
@@ -15694,7 +15669,7 @@ actions:
             let refused = ensure_source_entry_identity(stat, &opened, "registry.yaml")
                 .expect_err("a descriptor that is not the stat'ed entry is refused");
 
-            assert_eq!(refused.code, "source.file.invalid");
+            assert_eq!(refused.code, "breg.source.file-invalid");
             assert_eq!(refused.path, "registry.yaml");
         }
 
@@ -15718,7 +15693,7 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
                 entity_id: "person".to_owned(),
                 field_id: "identifier".to_owned(),
             },
-            "field.pattern.syntax_invalid",
+            "breg.field.pattern-syntax-invalid",
             "restore the pre-activation backup",
         ),
         (
@@ -15726,7 +15701,7 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
                 entity_id: "person".to_owned(),
                 field_id: "identifier".to_owned(),
             },
-            "field.pattern.existing_rows_invalid",
+            "breg.field.pattern-existing-rows-invalid",
             "retry the exact pinned target",
         ),
     ] {
@@ -16385,7 +16360,7 @@ fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
     });
     assert_eq!(report.diagnostics.len(), 1);
     let diagnostic = &report.diagnostics[0];
-    assert_eq!(diagnostic.code, "field.pattern.syntax_invalid");
+    assert_eq!(diagnostic.code, "breg.field.pattern-syntax-invalid");
     assert_eq!(
         diagnostic.path,
         "entities[person].fields[identifier].pattern"

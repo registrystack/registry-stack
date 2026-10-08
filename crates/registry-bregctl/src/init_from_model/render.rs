@@ -63,7 +63,7 @@ pub(crate) fn reader_entities(plan: &Plan) -> Vec<&PlannedEntity> {
 }
 
 /// The fields classified above their entity, which `check` reports as
-/// `access.profile.higher_classification` for every profile reading them.
+/// `breg.access.profile-higher-classification` for every profile reading them.
 /// This mixes two distinct causes: a field the model marks sensitive inside
 /// an entity that is not `restricted`, and an ordinarily `internal` field
 /// (the generated identifier, or a property the model does not mark
@@ -124,7 +124,7 @@ fn sensitive_note(plan: &Plan) -> Option<String> {
         ("the fields", "them")
     };
     Some(format!(
-        "`check` also reports `access.profile.higher_classification` for {names}: {model} \
+        "`check` also reports `breg.access.profile-higher-classification` for {names}: {model} \
          marks {noun} sensitive, so the derivation classified {pronoun} `restricted` inside \
          an entity that is not, and `{OPERATOR_PROFILE}` reads {pronoun} anyway. Keep the \
          finding as a reminder of what that profile discloses, or raise the entity's \
@@ -147,7 +147,7 @@ fn public_mismatch_note(plan: &Plan) -> Option<String> {
         ("they", "sit", "carry", "them")
     };
     Some(format!(
-        "`check` also reports `access.profile.higher_classification` for {}: {subject} \
+        "`check` also reports `breg.access.profile-higher-classification` for {}: {subject} \
          {sit} in an entity the selection classified `public`, but {subject} still {carry} \
          the derivation's ordinary `internal` classification, since {} does not mark \
          {pronoun} sensitive, so `{OPERATOR_PROFILE}` reads {pronoun} anyway. Keep the \
@@ -432,7 +432,7 @@ fn registry(plan: &Plan) -> String {
         "A token selects one profile per request, and that profile decides everything the \
          request may touch. `operator` may create, read, list, and patch every entity; it is \
          the profile `bregctl dev` and the journeys use first. `check` reports \
-         `access.profile.unrestricted_collection` for it: it can list every record, and a \
+         `breg.access.profile-unrestricted-collection` for it: it can list every record, and a \
          caller-supplied filter is not authorization. That is intended for a single \
          operations team; close it with a `rowBoundaries` entry or by removing `list`.",
     );
@@ -1232,7 +1232,7 @@ fn readme(plan: &Plan) -> String {
     }
     let _ = writeln!(
         out,
-        "\n`bregctl check .` reports `access.profile.unrestricted_collection` for each \
+        "\n`bregctl check .` reports `breg.access.profile-unrestricted-collection` for each \
          profile: it can list a whole collection, and a caller-supplied filter is not \
          authorization. Leave the findings while you explore; before a production package, \
          bind a `rowBoundaries` entry to whatever field carries your registry's tenancy, or \
@@ -1623,8 +1623,8 @@ mod tests {
             .collect();
         assert!(
             findings.iter().all(|code| {
-                code == "access.profile.unrestricted_collection"
-                    || code == "access.profile.higher_classification"
+                code == "breg.access.profile-unrestricted-collection"
+                    || code == "breg.access.profile-higher-classification"
             }),
             "{findings:?}"
         );
@@ -1632,7 +1632,7 @@ mod tests {
         assert_eq!(
             findings
                 .iter()
-                .filter(|code| *code == "access.profile.higher_classification")
+                .filter(|code| *code == "breg.access.profile-higher-classification")
                 .count(),
             elevated.len(),
             "{findings:?}"

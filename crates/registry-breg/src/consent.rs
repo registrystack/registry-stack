@@ -192,14 +192,14 @@ fn validate_recipients(project: &RegistryProject, errors: &mut Vec<Diagnostic>) 
     {
         if !valid_identifier(id) || !ids.insert(id.as_str()) {
             errors.push(Diagnostic::error(
-                "recipients.id",
+                "breg.recipients.id",
                 format!("{path}.id"),
                 "organization and group ids share one namespace; each must be unique and use the lowercase identifier grammar",
             ));
         }
         if name.trim().is_empty() || contact.is_some_and(|contact| contact.trim().is_empty()) {
             errors.push(Diagnostic::error(
-                "recipients.id",
+                "breg.recipients.id",
                 path,
                 "every recipient declares a name, and every organization a contact, shown in notices",
             ));
@@ -210,7 +210,7 @@ fn validate_recipients(project: &RegistryProject, errors: &mut Vec<Diagnostic>) 
         for client in &organization.clients {
             if client.trim().is_empty() || !clients.insert(client.as_str()) {
                 errors.push(Diagnostic::error(
-                    "recipients.client_unique",
+                    "breg.recipients.client-unique",
                     format!("recipients.organizations[id={}].clients", organization.id),
                     "a client acts for at most one organization; list each non-empty client once",
                 ));
@@ -228,7 +228,7 @@ fn validate_recipients(project: &RegistryProject, errors: &mut Vec<Diagnostic>) 
             || members.iter().any(|member| !organizations.contains(member))
         {
             errors.push(Diagnostic::error(
-                "recipients.group_members",
+                "breg.recipients.group-members",
                 format!("recipients.groups[id={}].members", group.id),
                 "group members are distinct declared organizations; groups do not nest",
             ));
@@ -240,7 +240,7 @@ fn validate_recipients(project: &RegistryProject, errors: &mut Vec<Diagnostic>) 
     for (organization, count) in memberships {
         if count > MAX_GROUPS_PER_ORGANIZATION {
             errors.push(Diagnostic::error(
-                "recipients.set_bound",
+                "breg.recipients.set-bound",
                 format!("recipients.organizations[id={organization}]"),
                 "an organization belongs to at most 63 groups, so its recipient set fits one row-boundary value set",
             ));
@@ -268,7 +268,7 @@ fn validate_retired_scopes(
     for scope in &project.retired_consent_scopes {
         if !valid_identifier(scope) || current.contains(scope.as_str()) || !seen.insert(scope) {
             errors.push(Diagnostic::error(
-                "consent.vocabulary.reserved",
+                "breg.consent.vocabulary-reserved",
                 "retiredConsentScopes",
                 "a retired consent scope is a unique former profile id that no current profile uses",
             ));
@@ -286,7 +286,7 @@ fn validate_record(
     let location = format!("entities[id={}].consentRecord", entity.id);
     if entity.mutation_mode != MutationMode::CreateOnly {
         errors.push(Diagnostic::error(
-            "consent.record.mutation_mode",
+            "breg.consent.record-mutation-mode",
             format!("entities[id={}].mutationMode", entity.id),
             "a consent-record entity is createOnly; a decision is changed only by a later decision",
         ));
@@ -323,7 +323,7 @@ fn validate_record(
         && project.recipients.is_some();
     if !fields_valid {
         errors.push(Diagnostic::error(
-            "consent.record.fields",
+            "breg.consent.record-fields",
             &location,
             "subject is a reference; recipient uses registry-recipients (declare project recipients); scope uses registry-consent-scopes; purpose and decision are vocabulary codes; from is a required timestamp and until an optional timestamp",
         ));
@@ -347,14 +347,14 @@ fn validate_record(
             .any(|code| !codes.contains(code))
     {
         errors.push(Diagnostic::error(
-            "consent.record.values",
+            "breg.consent.record-values",
             format!("{location}.decision"),
             "gives and revokes are non-empty, distinct, disjoint codes of the decision vocabulary, at most 64 together, and refusals are a subset of revokes",
         ));
     }
     if parse_duration(&record.validity.max_duration).is_none() {
         errors.push(Diagnostic::error(
-            "consent.record.max_duration",
+            "breg.consent.record-max-duration",
             format!("{location}.validity.maxDuration"),
             "maxDuration is a positive ISO 8601 duration such as P365D, at most ten years",
         ));
@@ -374,7 +374,7 @@ fn validate_record(
         .any(|id| field(id).is_some_and(|field| field.encrypted))
     {
         errors.push(Diagnostic::error(
-            "consent.record.plaintext",
+            "breg.consent.record-plaintext",
             &location,
             "consent key and validity fields are plaintext; the consent check compares stored values, so ciphertext could never match",
         ));
@@ -398,7 +398,7 @@ fn validate_record(
         || subject_is_record
     {
         errors.push(Diagnostic::error(
-            "consent.record.leaf",
+            "breg.consent.record-leaf",
             &location,
             "a consent-record entity is a leaf: no change request, no requireConsent on its own profiles, no incoming read paths, and its subject is not another consent record",
         ));
@@ -409,7 +409,7 @@ fn validate_record(
             || profile.operations.contains(&Operation::Import)
         {
             errors.push(Diagnostic::error(
-                "consent.record.direct_write",
+                "breg.consent.record-direct-write",
                 format!(
                     "entities[id={}].accessProfiles[id={}].operations",
                     entity.id, profile.id
@@ -446,28 +446,28 @@ fn validate_requirements(
         || profile.request_visibility.is_some()
     {
         errors.push(Diagnostic::error(
-            "consent.require.read_only",
+            "breg.consent.require-read-only",
             &location,
             "requireConsent supports get, lookup, list, revisions and snapshot only; use a separate profile for writes",
         ));
     }
     if profile.anonymous {
         errors.push(Diagnostic::error(
-            "consent.require.anonymous",
+            "breg.consent.require-anonymous",
             &location,
             "requireConsent needs a verified requester client; anonymous profiles cannot carry it",
         ));
     }
     if profile.spatial_queries.is_some() {
         errors.push(Diagnostic::error(
-            "consent.require.spatial_unsupported",
+            "breg.consent.require-spatial-unsupported",
             &location,
             "spatial bbox uses a separate database authority role that cannot evaluate consent; use ordinary consent-checked reads",
         ));
     }
     if profile.allow_data_export {
         errors.push(Diagnostic::error(
-            "consent.require.export_unsupported",
+            "breg.consent.require-export-unsupported",
             &location,
             "bulk data export is refused on consent-checked permissions",
         ));
@@ -485,7 +485,7 @@ fn validate_requirements(
             .any(|client| !clients.contains(client.as_str()))
     {
         errors.push(Diagnostic::error(
-            "consent.require.clients",
+            "breg.consent.require-clients",
             &location,
             "requireConsent needs requesterClients (with actorKind), each listed by a declared recipient organization",
         ));
@@ -501,7 +501,7 @@ fn validate_requirements(
             })
         else {
             errors.push(Diagnostic::error(
-                "consent.require.key",
+                "breg.consent.require-key",
                 &path,
                 "record must name a consent-record entity",
             ));
@@ -530,7 +530,7 @@ fn validate_requirements(
         };
         if !key_valid {
             errors.push(Diagnostic::error(
-                "consent.require.key",
+                "breg.consent.require-key",
                 &path,
                 "on: id needs a consent subject referencing this entity; any other field is a plaintext stored reference to the consent subject's entity",
             ));
@@ -552,7 +552,7 @@ fn validate_requirements(
             })
         {
             errors.push(Diagnostic::error(
-                "consent.require.purpose",
+                "breg.consent.require-purpose",
                 &path,
                 "requireConsent needs requiredPurposes, each a code of the consent record's purpose vocabulary",
             ));
@@ -578,7 +578,7 @@ fn validate_read_paths(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 };
                 if gated(&path.through) || gated(&path.to) {
                     errors.push(Diagnostic::error(
-                        "consent.require.read_path_target",
+                        "breg.consent.require-read-path-target",
                         format!(
                             "entities[id={}].accessProfiles[id={}].readPaths",
                             entity.id, profile.id
@@ -606,7 +606,7 @@ fn validate_submitter_targets(
                 )
             }) {
                 errors.push(Diagnostic::error(
-                    "consent.require.read_only",
+                    "breg.consent.require-read-only",
                     format!(
                         "entities[id={}].accessProfiles[id={}].submitterTargets",
                         entity.id, profile.id
@@ -744,7 +744,7 @@ fn validate_reserved_claims(
 
 fn refuse_claim(path: &str, errors: &mut Vec<Diagnostic>) {
     errors.push(Diagnostic::error(
-        "consent.feed.claim",
+        "breg.consent.feed-claim",
         path,
         "registry:recipients binds only an in row boundary on a consent record's recipient field in a get and list permission, and registry:consent-decisions claims are synthesized by the compiler",
     ));
@@ -859,7 +859,7 @@ pub(crate) fn validate_action(
     let Some(issuer) = action.consent_issuer else {
         if !creates.is_empty() || handler_creates {
             errors.push(Diagnostic::error(
-                "consent.issuer.declared",
+                "breg.consent.issuer-declared",
                 "actions[].consentIssuer",
                 "an action creating consent rows declares consentIssuer: self or steward",
             ));
@@ -868,7 +868,7 @@ pub(crate) fn validate_action(
     };
     if creates.is_empty() && !handler_creates {
         errors.push(Diagnostic::error(
-            "consent.issuer.declared",
+            "breg.consent.issuer-declared",
             "actions[].consentIssuer",
             "consentIssuer is declared only on actions that create consent rows",
         ));
@@ -899,7 +899,7 @@ pub(crate) fn validate_action(
         });
     if !bound {
         errors.push(Diagnostic::error(
-            "consent.issuer.self_binding",
+            "breg.consent.issuer-self-binding",
             "actions[].consentIssuer",
             "a self issuer uses fixed effects, sets the subject from an input S, requires {input: L, field: <link subject>, equalsInput: S} and {input: L, field: <link active>, equals: true}, and every permission bounds L's target to the caller's principal",
         ));
@@ -1065,7 +1065,7 @@ pub(crate) fn validate_action_permission(
         })
     {
         errors.push(Diagnostic::error(
-            "consent.require.read_only",
+            "breg.consent.require-read-only",
             "project.accessProfiles[].permissions[].action",
             "a consent-checked profile is read-only: it cannot carry requireConsent on an action or invoke an action targeting its gated entity",
         ));
@@ -1381,16 +1381,15 @@ mod tests {
         ] {
             assert!(
                 codes_with_encrypted("consent-decision", field)
-                    .contains(&"consent.record.plaintext".to_owned()),
+                    .contains(&"breg.consent.record-plaintext".to_owned()),
                 "{field}"
             );
         }
-        assert!(
-            codes_with_encrypted("enrolment", "person").contains(&"consent.require.key".to_owned())
-        );
+        assert!(codes_with_encrypted("enrolment", "person")
+            .contains(&"breg.consent.require-key".to_owned()));
         let unrelated = codes_with_encrypted("enrolment", "programme");
-        assert!(!unrelated.contains(&"consent.require.key".to_owned()));
-        assert!(!unrelated.contains(&"consent.record.plaintext".to_owned()));
+        assert!(!unrelated.contains(&"breg.consent.require-key".to_owned()));
+        assert!(!unrelated.contains(&"breg.consent.record-plaintext".to_owned()));
     }
 
     #[test]

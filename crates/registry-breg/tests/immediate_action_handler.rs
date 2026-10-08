@@ -486,19 +486,19 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
     for (field_type, code, member, repair) in [
         (
             json!({"type":"string","maxLength":17_000}),
-            "action.handler.input.string_bound",
+            "breg.action.handler-input-string-bound",
             "maxLength",
             "4096",
         ),
         (
             json!({"type":"text","maxLength":20_000}),
-            "action.handler.input.string_bound",
+            "breg.action.handler-input-string-bound",
             "maxLength",
             "4096",
         ),
         (
             json!({"type":"crs84-point","precision":6}),
-            "action.handler.input.type_unsupported",
+            "breg.action.handler-input-type-unsupported",
             "type",
             "scalar",
         ),
@@ -507,7 +507,7 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
                 "type":"object","properties":{"value":{"type":"number"}},
                 "additionalProperties":false
             }}),
-            "action.handler.input.type_unsupported",
+            "breg.action.handler-input-type-unsupported",
             "type",
             "scalar",
         ),
@@ -594,7 +594,7 @@ fn handler_string_declarations_cover_the_full_unicode_boundary() {
             .unwrap_err()
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "action.handler.input.string_bound"));
+            .any(|diagnostic| diagnostic.code == "breg.action.handler-input-string-bound"));
     }
 }
 
@@ -815,7 +815,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     source["entities"][0]["fields"][0]["classification"] = json!("public");
     assert_diagnostic(
         source,
-        "action.handler.classification_ceiling",
+        "breg.action.handler-classification-ceiling",
         "actions[register-person].handler.writes[slot=person].fields[field=name]",
     );
 
@@ -826,7 +826,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     ]);
     assert_diagnostic(
         source,
-        "action.handler.refusal_invalid",
+        "breg.action.handler-refusal-invalid",
         "actions[register-person].handler.refusals",
     );
 
@@ -834,7 +834,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     source["actions"][0]["effects"] = json!([{"id":"fixed","target":{"entity":"person"},"operation":"create","set":{"name":{"fromField":"given-name"}}}]);
     assert_diagnostic(
         source,
-        "action.implementation.exclusive",
+        "breg.action.implementation-exclusive",
         "actions[register-person]",
     );
 
@@ -847,7 +847,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
         }));
     assert_diagnostic(
         source,
-        "action.effect.overlapping_write",
+        "breg.action.effect-overlapping-write",
         "actions[register-person].handler.writes[slot=overlap].fields[field=name]",
     );
 
@@ -855,7 +855,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     source["actions"][0]["inputs"][2]["required"] = json!(false);
     assert_diagnostic(
         source,
-        "action.handler.reference_required",
+        "breg.action.handler-reference-required",
         "actions[register-person].inputs[person]",
     );
 
@@ -865,7 +865,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     })).collect());
     assert_diagnostic(
         source,
-        "action.bounds.targets",
+        "breg.action.bounds-targets",
         "actions[register-person].handler.writes",
     );
 
@@ -885,7 +885,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     }
     assert_diagnostic(
         source,
-        "action.bounds.field_mutations",
+        "breg.action.bounds-field-mutations",
         "actions[register-person].handler.writes",
     );
 
@@ -893,7 +893,7 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
     source["entities"][0]["fields"][0]["maxLength"] = json!(1_000_000);
     assert_diagnostic(
         source,
-        "action.bounds.snapshot_bytes",
+        "breg.action.bounds-snapshot-bytes",
         "actions[register-person].handler.writes",
     );
 }
@@ -902,19 +902,19 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
 fn handler_source_diagnostics_distinguish_assets_parse_positions_and_entrypoints() {
     let source = parse_project_json(&serde_json::to_vec(&project()).unwrap()).unwrap();
     for (script, code) in [
-        (None, "action.handler.source_missing"),
+        (None, "breg.action.handler-source-missing"),
         (
             Some(&[b' '; registry_breg::rhai_planner::MAXIMUM_SOURCE_BYTES + 1][..]),
-            "action.handler.source_bound",
+            "breg.action.handler-source-bound",
         ),
-        (Some(&b"\xff"[..]), "action.handler.source_encoding"),
+        (Some(&b"\xff"[..]), "breg.action.handler-source-encoding"),
         (
             Some(&b"fn handle(ctx) {\n let private_source_canary = ;\n}"[..]),
-            "action.handler.parse",
+            "breg.action.handler-parse",
         ),
         (
             Some(&b"fn private_source_canary(ctx) { #{} }"[..]),
-            "action.handler.entrypoint",
+            "breg.action.handler-entrypoint",
         ),
     ] {
         let assets = script
@@ -938,10 +938,10 @@ fn handler_source_diagnostics_distinguish_assets_parse_positions_and_entrypoints
             "actions[register-person].handler.script"
         );
         assert!(!diagnostics[0].message.contains("private_source_canary"));
-        if code == "action.handler.parse" {
+        if code == "breg.action.handler-parse" {
             assert!(diagnostics[0].message.contains("line 2, column "));
         }
-        if code == "action.handler.source_missing" {
+        if code == "breg.action.handler-source-missing" {
             assert!(diagnostics[0].message.contains("handlers/register.rhai"));
         }
     }

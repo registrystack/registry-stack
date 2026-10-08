@@ -86,11 +86,11 @@ Initialized a registry project. 6 artifacts written.
   runtime.example.yaml
   tests/journeys.yaml
 
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
            this profile has no claim-bound row restriction for its granted operations;
            requestVisibility owner limits request reads only, and other lifecycle rules
            still apply. Review this registry-wide access

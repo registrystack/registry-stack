@@ -96,7 +96,7 @@ Profile members:
 | `default: true` | The profile selected when a request names none. At most one default may expose a route. If several profiles expose a route and none is default, the request must name its profile. A sole profile is selected automatically. |
 | `anonymous: true` | No token needed. Anonymous profiles cannot carry row boundaries, lookups from claims, or write operations. |
 
-A profile with no required scope raises `access.profile.no_required_scope`, because any authenticated principal satisfying its purpose and row claims could then select it.
+A profile with no required scope raises `breg.access.profile-no-required-scope`, because any authenticated principal satisfying its purpose and row claims could then select it.
 
 ## Grant operations, fields, and rows
 
@@ -106,7 +106,7 @@ Three field lists bound every entity permission.
 `readableFields` decide what a response may carry, `writableFields` what a create or patch may set, and `filterableFields` which fields `$filter` may name; `sortableFields` and `allowCount` do the same for `$orderby` and `$count`.
 A write never reveals a field the profile cannot read.
 Field ids in permissions are the authored ids, `asset-code`, not the API names, `assetCode`, and a permission that names a field the entity does not have fails `check`.
-A profile that grants `create` or `patch` without any writable field raises `access.profile.no_writable_fields`, because every write naming a field would then be refused.
+A profile that grants `create` or `patch` without any writable field raises `breg.access.profile-no-writable-fields`, because every write naming a field would then be refused.
 
 Every entity permission declares `rowBoundaries` explicitly, as do action targets, review targets, apply targets, and request-presence permissions.
 Write `rowBoundaries: []` when the permission intentionally has no row restriction; omitting the member is an error.
@@ -118,8 +118,8 @@ Writes check both the existing record, where one exists, and the proposed record
 Bind the boundary to whatever field carries your registry's tenancy, an owning office, a jurisdiction code, a programme.
 Decide deliberately which profiles that only patch may write that field, because a profile that can patch it moves records in and out of another caller's rows.
 A permission that also creates has no such choice: the boundary compiles to an INSERT `WITH CHECK` pinning the field to the caller's claim, so the field has to stay in `writableFields` and each create has to send a value the claim allows.
-`check` reports a writable boundary field as `access.profile.writable_row_boundary` either way, with the advice the permission's operations call for, and reports a create whose boundary field is missing from `writableFields` as `access.profile.row_boundary_not_writable`, because the row policy refuses every such create.
-A profile that can list an entity with no row boundary raises `access.profile.unrestricted_collection`, because caller-supplied filters are never authorization; accept it only for a registry-wide role.
+`check` reports a writable boundary field as `breg.access.profile-writable-row-boundary` either way, with the advice the permission's operations call for, and reports a create whose boundary field is missing from `writableFields` as `breg.access.profile-row-boundary-not-writable`, because the row policy refuses every such create.
+A profile that can list an entity with no row boundary raises `breg.access.profile-unrestricted-collection`, because caller-supplied filters are never authorization; accept it only for a registry-wide role.
 
 Use the principal claim for an ownership boundary when the field stores that same identity, for example
 `{field: owner, claim: registry_principal, operator: equals}`.
@@ -135,8 +135,8 @@ The remaining permission members:
 | `lookups` | The selector profiles this permission may use, and whether the values come from the `request` or from a `verified_claim` with a `claimMapping`. |
 | `readPaths` | The read paths this permission may follow and the target fields it may read. |
 | `spatialQueries.bbox` | Allows bounding-box queries and caps their longitude and latitude span in degrees. |
-| `revisionAccess` | With the `revisions` operation, lets the profile read a record's revision history. `check` reports `access.profile.revision_history`, because history can disclose values removed from the current record. |
-| `allowDataExport` | Enables bulk export through the profile. `check` reports `access.profile.data_export`, because disabling it later cannot recall downloaded data. |
+| `revisionAccess` | With the `revisions` operation, lets the profile read a record's revision history. `check` reports `breg.access.profile-revision-history`, because history can disclose values removed from the current record. |
+| `allowDataExport` | Enables bulk export through the profile. `check` reports `breg.access.profile-data-export`, because disabling it later cannot recall downloaded data. |
 | `requestPresence` | Lets a reader of a target entity see that a change request of the named `requestType` is pending against a record. |
 | `readableRequestFields` | Which engine-owned request metadata the selected profile may receive, including external `review_state`, application `reason`, and actor references. |
 | `applyTargets` | Which target entities an applier may write when using the ordinary `apply_request` action. |
@@ -229,7 +229,7 @@ Added the consent module. 2 artifacts written.
 
 The module adds a privacy notice and its clauses, a principal link, a create-only consent decision, the actions that record a decision, and five profiles: self, assisted capture, steward, link steward, and a recipient feed.
 Its `Next:` list names the line that gates a permission on the new decision.
-Until a permission carries it, `check` refuses with `consent.require.unused`.
+Until a permission carries it, `check` refuses with `breg.consent.require-unused`.
 Add it to a read-only profile for the recipient's client:
 
 ```yaml
@@ -255,7 +255,7 @@ The profile id is the consent scope subjects agree to. To widen a gated profile 
 The project now passes `check`, with a finding the gate cannot close by itself:
 
 ```text
-  finding  access.consent.ungated_client  3 paths
+  finding  breg.access.consent-ungated-client  3 paths
            this profile admits any client and reads `record` without consent, so a
            client of the consent-gated `food-targeting` can read the same rows through
            it. List requesterClients that no gated profile admits
@@ -270,7 +270,7 @@ At startup, every client a recipient organization lists must also be in the issu
 
 {/* Evidence: crates/registry-bregctl/src/consent_module.rs, plan();
     crates/registry-breg/src/consent.rs, validate_recipients();
-    crates/registry-breg/src/access.rs, access.consent.ungated_client;
+    crates/registry-breg/src/access.rs, breg.access.consent-ungated-client;
     crates/registry-breg/src/auth.rs, validate_claim_mapping();
     products/breg/consent.md. */}
 
@@ -407,9 +407,9 @@ Follow its README to compare profile admission with the limits that need a runni
 | The preview refuses with `required_scope_missing`, `purpose_missing_or_not_allowed`, or `principal_missing_or_mismatched`. | The scenario's claims do not satisfy the profile. Compare `scopes`, `purpose`, and `principalClaim` with the profile's `requiredScopes`, `requiredPurposes`, and `principalClaim`. |
 | The preview refuses with `row_claim_missing_or_wrong_cardinality`. | A row boundary found no claim, or an `in` boundary found a single value where it needs a list. Add the claim under `directClaims` with the cardinality the operator expects. |
 | The preview refuses with `operation_not_granted` or `entity_or_profile_not_found`. | The scenario names an operation the permission does not list, or an entity or profile the project does not declare. Check the ids against `explain access`. |
-| `check` reports `access.profile.unrestricted_collection`. | A profile lists an entity with no row boundary. Add a claim-bound boundary, or accept a registry-wide role knowingly and record why. |
-| `check` refuses with `consent.require.unused`. | A consent record exists and no permission requires it yet. Add the `requireConsent` line the error names to a read permission, or list a former gated profile id under `retiredConsentScopes`. |
-| `check` reports `access.consent.ungated_client`. | A profile reads a gated entity without `requireConsent` and admits any client, or a client a gated profile admits. List `requesterClients` on it that no gated profile admits. |
+| `check` reports `breg.access.profile-unrestricted-collection`. | A profile lists an entity with no row boundary. Add a claim-bound boundary, or accept a registry-wide role knowingly and record why. |
+| `check` refuses with `breg.consent.require-unused`. | A consent record exists and no permission requires it yet. Add the `requireConsent` line the error names to a read permission, or list a former gated profile id under `retiredConsentScopes`. |
+| `check` reports `breg.access.consent-ungated-client`. | A profile reads a gated entity without `requireConsent` and admits any client, or a client a gated profile admits. List `requesterClients` on it that no gated profile admits. |
 | The preview refuses with `actor_kind_missing`, `actor_kind_mismatched`, or `requester_client_missing_or_mismatched`. | The profile declares `actorKind` or `requesterClients`. Add `actorKind` and `requesterClient` to the scenario's `claims` with the values the profile lists. |
 | The preview refuses a scenario with `access.scenario.invalid` naming `registry:recipients`. | `directClaims` named a claim only the engine fills. Remove it and set `requesterClient`; the preview derives the recipients from it. |
 | The server refuses to start after recipients were declared. | A client a recipient organization lists is missing from the issuer's `allowedClients`. Add it there, or remove it from the organization. |

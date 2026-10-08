@@ -201,7 +201,7 @@ eventDestinations: {{}}\n",
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "startup.runtime_config.package_root_unavailable"
+        "breg.runtime.package-root-unavailable"
     );
     assert_eq!(report["diagnostics"][0]["path"], "/package/root");
     assert_tool_diagnostic(

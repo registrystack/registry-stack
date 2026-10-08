@@ -142,7 +142,7 @@ fn an_events_member_is_refused_as_an_unknown_field_in_a_project() {
     entity.insert("events".to_owned(), json!([url_hook()]));
     assert_diagnostic(
         &parse_failure(&project),
-        "source.shape.invalid",
+        "breg.source.shape-invalid",
         "unknown field `events`",
     );
 }
@@ -156,7 +156,11 @@ fn an_events_member_is_refused_as_an_unknown_field_in_a_module() {
     });
     let failure = parse_module_json(&serde_json::to_vec(&module).expect("module serializes"))
         .expect_err("the unknown key is refused");
-    assert_diagnostic(&failure, "source.shape.invalid", "unknown field `events`");
+    assert_diagnostic(
+        &failure,
+        "breg.source.shape-invalid",
+        "unknown field `events`",
+    );
 }
 
 #[test]
@@ -164,7 +168,7 @@ fn an_entity_hook_refuses_the_before_phase() {
     let mut hook = url_hook();
     hook["phase"] = json!("before");
     let failure = compile(&project_with_hooks(json!([hook]))).expect_err("before is refused");
-    assert_diagnostic(&failure, "hook.phase.unsupported", "after");
+    assert_diagnostic(&failure, "breg.hook.phase-unsupported", "after");
 }
 
 #[test]
@@ -172,7 +176,7 @@ fn a_before_phase_hook_still_refuses_the_url_handler_kind() {
     let mut hook = url_hook();
     hook["phase"] = json!("before");
     let failure = compile(&project_with_hooks(json!([hook]))).expect_err("before url is refused");
-    assert_diagnostic(&failure, "hook.handler.kind.unsupported", "before");
+    assert_diagnostic(&failure, "breg.hook.handler-kind-unsupported", "before");
 }
 
 #[test]
@@ -205,7 +209,11 @@ fn an_after_phase_rhai_hook_requires_its_script_asset() {
     hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
                              "abi": "registry.hook-handler/v1"});
     let failure = compile(&project_with_hooks(json!([hook]))).expect_err("the asset is missing");
-    assert_diagnostic(&failure, "hook.handler.source_missing", "hooks/case.rhai");
+    assert_diagnostic(
+        &failure,
+        "breg.hook.handler-source-missing",
+        "hooks/case.rhai",
+    );
 }
 
 #[test]
@@ -218,7 +226,7 @@ fn an_after_phase_rhai_hook_requires_a_handle_entry_point() {
         &[rhai_asset("hooks/case.rhai", "fn other(ctx) { #{} }")],
     )
     .expect_err("a script without handle is refused");
-    assert_diagnostic(&failure, "hook.handler.entrypoint", "handle");
+    assert_diagnostic(&failure, "breg.hook.handler-entrypoint", "handle");
 }
 
 #[test]
@@ -233,7 +241,7 @@ fn an_after_phase_rhai_hook_refuses_a_handler_abi_version_one_does_not_define() 
     .expect_err("an unknown handler abi is refused");
     assert_diagnostic(
         &failure,
-        "hook.handler.abi.unsupported",
+        "breg.hook.handler-abi-unsupported",
         "registry.hook-handler/v1",
     );
 }
@@ -294,7 +302,7 @@ fn an_after_phase_wasm_hook_requires_its_module_asset() {
     let failure = compile(&project_with_hooks(json!([hook]))).expect_err("the asset is missing");
     assert_diagnostic(
         &failure,
-        "hook.handler.module_asset_missing",
+        "breg.hook.handler-module-asset-missing",
         "hooks/case.wasm",
     );
 }
@@ -317,7 +325,7 @@ fn an_after_phase_wasm_hook_refuses_module_text() {
     .expect_err("module text is refused");
     assert_diagnostic(
         &failure,
-        "hook.handler.module_invalid",
+        "breg.hook.handler-module-invalid",
         "WebAssembly binary",
     );
 }
@@ -345,13 +353,13 @@ fn a_wasm_hook_is_refused_by_a_build_without_wasm_support() {
     .expect_err("a WASM hook is refused without WASM support in the build");
     assert_diagnostic(
         &failure,
-        "hook.handler.wasm_build_unsupported",
+        "breg.hook.handler-wasm-build-unsupported",
         "WASM hook handlers",
     );
     let refusal = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "hook.handler.wasm_build_unsupported")
+        .find(|diagnostic| diagnostic.code == "breg.hook.handler-wasm-build-unsupported")
         .expect("the build refusal is reported");
     assert_eq!("entities[].hooks[].handler.kind", refusal.path);
     assert!(
@@ -391,7 +399,7 @@ fn a_hook_without_a_handler_is_recorded_outside_production_and_refused_in_it() {
         failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "event.delivery.required"),
+            .any(|diagnostic| diagnostic.code == "breg.event.delivery-required"),
         "missing production delivery diagnostic: {:?}",
         failure.diagnostics()
     );

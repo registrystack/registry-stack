@@ -225,7 +225,7 @@ fn expected_steward_findings(subject: &str) -> Vec<(String, String)> {
     ] {
         for target in targets {
             expected.push((
-                "access.target.unrestricted_rows".to_owned(),
+                "breg.access.target-unrestricted-rows".to_owned(),
                 format!(
                     "accessProfiles[id={profile}].permissions[action={action}].targets[entity={target}].rowBoundaries"
                 ),
@@ -239,7 +239,7 @@ fn module_findings(report: &Value, subject: &str) -> Vec<(String, String)> {
     let mut findings = finding_codes(report)
         .into_iter()
         .filter(|(_, path)| path.contains(&format!("{subject}-consent")))
-        .filter(|(code, _)| code == "access.target.unrestricted_rows")
+        .filter(|(code, _)| code == "breg.access.target-unrestricted-rows")
         .collect::<Vec<_>>();
     findings.sort();
     findings
@@ -357,7 +357,7 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     let ungated = bregctl(&["--format", "json", "check", path(project.path())]);
     assert!(!ungated.status.success(), "{ungated:?}");
     let refusal = String::from_utf8(ungated.stdout.clone()).expect("utf-8 report");
-    assert!(refusal.contains("consent.require.unused"), "{refusal}");
+    assert!(refusal.contains("breg.consent.require-unused"), "{refusal}");
     assert!(
         refusal.contains("add 'requireConsent: [{record: person-consent-decision, on: id}]' to a permission that reads person rows"),
         "{refusal}"

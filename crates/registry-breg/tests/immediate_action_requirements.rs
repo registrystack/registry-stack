@@ -57,7 +57,10 @@ fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
         .remove("equals");
     wrong_type["actions"][0]["requires"][0]["equalsInput"] = json!("label");
     let report = format!("{:?}", compile(wrong_type).unwrap_err());
-    assert!(report.contains("action.requires.value_invalid"), "{report}");
+    assert!(
+        report.contains("breg.action.requires-value-invalid"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -90,7 +93,8 @@ fn action_inputs_can_narrow_a_target_vocabulary_for_values_and_requirements() {
         .unwrap()
         .remove("equals");
     source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
-    assert!(format!("{:?}", compile(source).unwrap_err()).contains("action.requires.value_invalid"));
+    assert!(format!("{:?}", compile(source).unwrap_err())
+        .contains("breg.action.requires-value-invalid"));
 }
 
 #[test]
@@ -99,23 +103,23 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
         (
             "field",
             json!("unknown-field-canary"),
-            "action.requires.field_unknown",
+            "breg.action.requires-field-unknown",
         ),
         (
             "equals",
             json!("unknown-value-canary"),
-            "action.requires.value_invalid",
+            "breg.action.requires-value-invalid",
         ),
-        ("equals", Value::Null, "action.requires.value_invalid"),
+        ("equals", Value::Null, "breg.action.requires-value-invalid"),
         (
             "input",
             json!("unknown-input-canary"),
-            "action.requires.input_unknown",
+            "breg.action.requires-input-unknown",
         ),
         (
             "input",
             json!("label"),
-            "action.requires.reference_required",
+            "breg.action.requires-reference-required",
         ),
     ] {
         let mut source = support::project();
@@ -162,7 +166,7 @@ fn action_requirements_keep_mandatory_scope_and_public_processing_boundaries() {
         .remove("principalClaim");
     let report = format!("{:?}", compile(source).unwrap_err());
     assert!(
-        report.contains("action.permission.anonymous_forbidden"),
+        report.contains("breg.action.permission-anonymous-forbidden"),
         "{report}"
     );
     let mut source = support::project();
@@ -214,11 +218,13 @@ fn action_requirements_reject_duplicate_and_optional_reference_checks() {
         .as_array_mut()
         .unwrap()
         .push(requirement);
-    assert!(format!("{:?}", compile(source).unwrap_err()).contains("action.requires.duplicate"));
+    assert!(
+        format!("{:?}", compile(source).unwrap_err()).contains("breg.action.requires-duplicate")
+    );
     let mut source = support::project();
     source["actions"][0]["inputs"][0]["required"] = json!(false);
     assert!(format!("{:?}", compile(source).unwrap_err())
-        .contains("action.requires.reference_required"));
+        .contains("breg.action.requires-reference-required"));
 }
 
 #[test]
@@ -235,7 +241,7 @@ fn action_requirements_do_not_bypass_reviewed_change_control() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.effect.controlled_target"));
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-controlled-target"));
 }
 
 #[test]
@@ -253,7 +259,8 @@ fn equality_inputs_must_be_required_and_explicit_null_is_preserved() {
         .unwrap()
         .remove("equals");
     source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
-    assert!(format!("{:?}", compile(source).unwrap_err()).contains("action.requires.value_invalid"));
+    assert!(format!("{:?}", compile(source).unwrap_err())
+        .contains("breg.action.requires-value-invalid"));
 
     let mut source = support::project();
     source["entities"][0]["fields"][0]["required"] = json!(false);
@@ -277,5 +284,6 @@ fn equality_inputs_must_be_required_and_explicit_null_is_preserved() {
         .as_object_mut()
         .unwrap()
         .remove("equals");
-    assert!(format!("{:?}", compile(source).unwrap_err()).contains("action.requires.value_invalid"));
+    assert!(format!("{:?}", compile(source).unwrap_err())
+        .contains("breg.action.requires-value-invalid"));
 }

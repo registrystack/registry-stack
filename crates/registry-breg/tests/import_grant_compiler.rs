@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Proves the `import` operation compiles as a create-only, ingestion-run
 //! capability that change control does not count as a direct write, and that
-//! every `import.*` refusal names the grant it concerns.
+//! every `breg.import.*` refusal names the grant it concerns.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, Operation};
@@ -110,7 +110,7 @@ fn batch_is_still_refused_on_a_controlled_entity_and_the_message_suggests_import
         &["create", "batch"],
     ))
     .expect_err("batch remains a direct write");
-    let found = diagnostic(&failure, "change_control.direct_write_grant");
+    let found = diagnostic(&failure, "breg.change-control.direct-write-grant");
     assert_eq!(
         found.path,
         "entities[id=enrollment].accessProfiles[id=loader].operations"
@@ -167,7 +167,7 @@ fn import_requires_entity_batch_bounds() {
         .remove("batch");
     let failure = compile(&project).expect_err("an import run needs chunk bounds");
     assert_eq!(
-        diagnostic(&failure, "import.batch_bounds.required").path,
+        diagnostic(&failure, "breg.import.batch-bounds-required").path,
         "entities[id=enrollment].accessProfiles[id=loader].operations"
     );
 }
@@ -182,7 +182,7 @@ fn import_refuses_an_anonymous_profile() {
     loader.insert("anonymous".to_owned(), json!(true));
     let failure = compile(&project).expect_err("runs are creator-scoped");
     assert_eq!(
-        diagnostic(&failure, "import.principal.required").path,
+        diagnostic(&failure, "breg.import.principal-required").path,
         "entities[id=enrollment].accessProfiles[id=loader].operations"
     );
 }
@@ -202,7 +202,7 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
     let failure =
         compile(&project).expect_err("batch beside import leaves the authority bounding nothing");
     assert_eq!(
-        diagnostic(&failure, "import.batch.redundant").path,
+        diagnostic(&failure, "breg.import.batch-redundant").path,
         "entities[id=enrollment].accessProfiles[id=loader].operations"
     );
 
@@ -211,7 +211,7 @@ fn import_beside_batch_on_one_entity_is_refused_as_redundant() {
         json!(["create", "batch", "import"]);
     let same_profile =
         compile(&same).expect_err("one profile holding batch and import is refused too");
-    assert!(codes(&same_profile).contains(&"import.batch.redundant".to_owned()));
+    assert!(codes(&same_profile).contains(&"breg.import.batch-redundant".to_owned()));
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn import_is_unavailable_on_a_change_request_entity() {
     project["entities"][1]["batch"] = json!({"maximumItems":10,"maximumBytes":65536});
     let failure = compile(&project).expect_err("request drafts are authored, never imported");
     assert!(
-        codes(&failure).contains(&"access_profile.operation.unavailable".to_owned()),
+        codes(&failure).contains(&"breg.access-profile.operation-unavailable".to_owned()),
         "{:?}",
         codes(&failure)
     );
@@ -234,7 +234,8 @@ fn import_is_a_forbidden_direct_mutation_for_a_task_grant_profile() {
     project["accessProfiles"][0]["taskGrant"] = json!({"sourceIssuer":"https://casework.example"});
     let failure = compile(&project).expect_err("a task grant cannot load records");
     assert!(
-        codes(&failure).contains(&"access_profile.task_grant.direct_mutation_forbidden".to_owned()),
+        codes(&failure)
+            .contains(&"breg.access-profile.task-grant-direct-mutation-forbidden".to_owned()),
         "{:?}",
         codes(&failure)
     );

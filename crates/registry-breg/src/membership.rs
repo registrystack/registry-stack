@@ -23,7 +23,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 entity.id, profile.id
             );
             if profile.anonymous || profile.principal_claim.is_none() {
-                errors.push(Diagnostic::error("access.membership.authentication", &location,
+                errors.push(Diagnostic::error("breg.access.membership-authentication", &location,
                     "membership boundaries require an authenticated profile with a verified principalClaim"));
             }
             if profile.operations.iter().any(|operation| {
@@ -40,20 +40,20 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 || !profile.request_presence.is_empty()
                 || profile.request_visibility.is_some()
             {
-                errors.push(Diagnostic::error("access.membership.read_only", &location,
+                errors.push(Diagnostic::error("breg.access.membership-read-only", &location,
                     "membership boundaries support get, lookup, list, revisions and snapshot only; use a separate directly authorized profile for writes and proposal application"));
             }
             if profile.spatial_queries.is_some() {
-                errors.push(Diagnostic::error("access.membership.spatial_unsupported", &location,
+                errors.push(Diagnostic::error("breg.access.membership-spatial-unsupported", &location,
                     "spatial bbox uses a separate database authority role; use a directly authorized bbox profile or ordinary membership-filtered reads"));
             }
             if entity.change_request.is_some() {
-                errors.push(Diagnostic::error("access.membership.request_unsupported", &location,
+                errors.push(Diagnostic::error("breg.access.membership-request-unsupported", &location,
                     "membership boundaries do not authorize change-request lifecycle or retained request data; use a direct profile"));
             }
             if profile.membership_boundaries.len() > 8 {
                 errors.push(Diagnostic::error(
-                    "access.membership.limit",
+                    "breg.access.membership-limit",
                     &location,
                     "declare at most eight one-hop membership boundaries",
                 ));
@@ -62,14 +62,14 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 let path = format!("{location}[{index}]");
                 if profile.membership_boundaries[..index].contains(boundary) {
                     errors.push(Diagnostic::error(
-                        "access.membership.duplicate",
+                        "breg.access.membership-duplicate",
                         &path,
                         "each membership boundary must be unique",
                     ));
                 }
                 let Some(membership) = entities.get(&boundary.membership_entity) else {
                     errors.push(Diagnostic::error(
-                        "access.membership.entity_unknown",
+                        "breg.access.membership-entity-unknown",
                         &path,
                         "membershipEntity must name a governed entity",
                     ));
@@ -90,7 +90,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                 };
                 if !matching {
                     errors.push(Diagnostic::error(
-                        "access.membership.key_type",
+                        "breg.access.membership-key-type",
                         &path,
                         "field and membershipKeyField must be stored references to the same entity",
                     ));
@@ -102,7 +102,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                             FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
                         )
                 }) {
-                    errors.push(Diagnostic::error("access.membership.principal_type", &path,
+                    errors.push(Diagnostic::error("breg.access.membership-principal-type", &path,
                         "principalField must be a stored string or text field matching the verified principal"));
                 }
                 // The membership predicate compares the principal column to the
@@ -112,14 +112,14 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                     .iter()
                     .any(|field| field.id == boundary.principal_field && field.encrypted)
                 {
-                    errors.push(Diagnostic::error("access.membership.principal_encrypted", &path,
+                    errors.push(Diagnostic::error("breg.access.membership-principal-encrypted", &path,
                         "principalField must be a plaintext stored field; an encrypted field cannot match the verified principal"));
                 }
                 if !membership.fields.iter().any(|field| {
                     field.id == boundary.active_field
                         && matches!(field.field_type, FieldTypeSource::Boolean)
                 }) {
-                    errors.push(Diagnostic::error("access.membership.active_type", &path,
+                    errors.push(Diagnostic::error("breg.access.membership-active-type", &path,
                         "activeField must be a stored Boolean field; only true memberships authorize access"));
                 }
                 // A membership source is a leaf authorization fact. Its own RLS must
@@ -137,7 +137,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                             .any(|path| path.through == membership.id || path.to == membership.id)
                     })
                 {
-                    errors.push(Diagnostic::error("access.membership.source_recursive", &path,
+                    errors.push(Diagnostic::error("breg.access.membership-source-recursive", &path,
                         "membership sources must be ordinary leaf entities without membership boundaries or incoming read paths; use a separate membership fact entity"));
                 }
                 if let Some(requirements) = &membership.access_requirements {
@@ -145,7 +145,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                     processing.row_boundaries.clear();
                     crate::access::check_profile(&processing, profile, &path, errors);
                     if !requirements.row_boundaries.is_empty() {
-                        errors.push(Diagnostic::error("access.membership.source_row_requirement", &path,
+                        errors.push(Diagnostic::error("breg.access.membership-source-row-requirement", &path,
                             "membership source row requirements cannot be inferred from a root profile; use its mandatory scopes and purposes with the fixed principal membership predicate"));
                     }
                 }
@@ -164,7 +164,7 @@ pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut V
                             .any(|candidate| !candidate.membership_boundaries.is_empty())
                     })
                 }) {
-                    errors.push(Diagnostic::error("access.membership.read_path_target", format!("entities[id={}].accessProfiles[id={}].readPaths", entity.id, profile.id),
+                    errors.push(Diagnostic::error("breg.access.membership-read-path-target", format!("entities[id={}].accessProfiles[id={}].readPaths", entity.id, profile.id),
                         "relationship target membership boundaries are not inherited from the root profile; use the protected entity's direct read route"));
                 }
             }

@@ -1092,7 +1092,7 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect::<Vec<_>>(),
         [(
-            "consent.feed.claim",
+            "breg.consent.feed-claim",
             "entities[id=consent-decision].accessProfiles[id=recipient-lookup].lookups[selector=recipient].claimMapping"
         )]
     );

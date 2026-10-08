@@ -4940,7 +4940,7 @@ fn insert_bytes(
 
 fn canonicalization_error() -> Diagnostic {
     Diagnostic::error(
-        "artifact.canonicalization_failed",
+        "breg.artifact.canonicalization-failed",
         "artifacts",
         "the generated artifact could not be canonicalized",
     )

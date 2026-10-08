@@ -48,7 +48,7 @@ fn a_grants_key_on_an_access_profile_is_refused_as_an_unknown_field() {
     let [diagnostic] = failure.diagnostics() else {
         panic!("the key is refused by one diagnostic: {failure:?}");
     };
-    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
     assert!(
         diagnostic.message.contains("unknown field `grants`"),
         "{}",
@@ -75,32 +75,32 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
         (
             "/accessProfiles/0/requiredScopes",
             json!([]),
-            "access.requirements.scope_missing",
+            "breg.access.requirements-scope-missing",
         ),
         (
             "/accessProfiles/0/requiredPurposes",
             json!([]),
-            "access.requirements.purpose_widened",
+            "breg.access.requirements-purpose-widened",
         ),
         (
             "/accessProfiles/0/requiredPurposes",
             json!(["other"]),
-            "access.requirements.purpose_widened",
+            "breg.access.requirements-purpose-widened",
         ),
         (
             "/accessProfiles/0/permissions/0/rowBoundaries",
             json!([]),
-            "access.requirements.row_boundary_missing",
+            "breg.access.requirements-row-boundary-missing",
         ),
         (
             "/accessProfiles/0/permissions/0/rowBoundaries/0/claim",
             json!("caller_district"),
-            "access.requirements.row_boundary_missing",
+            "breg.access.requirements-row-boundary-missing",
         ),
         (
             "/accessProfiles/0/permissions/0/rowBoundaries/0/operator",
             json!("equals"),
-            "access.requirements.row_boundary_missing",
+            "breg.access.requirements-row-boundary-missing",
         ),
     ];
     for (path, replacement, code) in mutations {
@@ -129,14 +129,14 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
 #[test]
 fn requirements_validate_even_without_profiles_and_reject_anonymous_access() {
     for (requirements, code) in [
-        (json!({}), "access.requirements.empty"),
+        (json!({}), "breg.access.requirements-empty"),
         (
             json!({"requiredScopes":[""]}),
-            "access.requirements.empty_value",
+            "breg.access.requirements-empty-value",
         ),
         (
             json!({"rowBoundaries":[{"field":"unknown","claim":"district","operator":"equals"}]}),
-            "access.requirements.row_boundary.invalid",
+            "breg.access.requirements-row-boundary-invalid",
         ),
     ] {
         let mut value = source();
@@ -146,7 +146,7 @@ fn requirements_validate_even_without_profiles_and_reject_anonymous_access() {
     }
     let mut value = source();
     value["accessProfiles"][0]["anonymous"] = json!(true);
-    assert_refused(&value, "access.requirements.authentication");
+    assert_refused(&value, "breg.access.requirements-authentication");
 }
 
 #[test]
@@ -160,9 +160,11 @@ fn additional_profile_cannot_omit_entity_requirements() {
         .unwrap()
         .push(additional);
     let failure = compile(&value).unwrap_err();
-    assert!(failure.diagnostics().iter().any(
-        |d| d.code == "access.requirements.scope_missing" && d.path.contains("another-reader")
-    ));
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|d| d.code == "breg.access.requirements-scope-missing"
+            && d.path.contains("another-reader")));
 }
 
 #[test]
@@ -187,7 +189,7 @@ fn module_extensions_may_add_but_never_replace_requirements() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|d| d.code == "extension.access_requirements.replace_forbidden"));
+        .any(|d| d.code == "breg.extension.access-requirements-replace-forbidden"));
     value["entities"][0]
         .as_object_mut()
         .unwrap()
@@ -217,7 +219,7 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
     assert!(baseline
         .findings()
         .iter()
-        .any(|d| d.code == "access.profile.related_disclosure"
+        .any(|d| d.code == "breg.access.profile-related-disclosure"
             && d.path.contains("readPaths[path=children]")));
     for index in [1, 2] {
         value["entities"][index]["accessRequirements"] = json!({"requiredScopes":["entry:read"]});
@@ -229,7 +231,7 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
             failure
                 .diagnostics()
                 .iter()
-                .any(|d| d.code == "access.requirements.scope_missing"
+                .any(|d| d.code == "breg.access.requirements-scope-missing"
                     && d.path.contains("readPaths[path=children]")),
             "{failure:?}"
         );
@@ -237,7 +239,7 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
             json!({"rowBoundaries":[{"field":"id","claim":"record_id","operator":"equals"}]});
         assert_refused(
             &value,
-            "access.requirements.read_path.row_boundary_unsupported",
+            "breg.access.requirements-read-path-row-boundary-unsupported",
         );
         value["entities"][index]
             .as_object_mut()
@@ -272,7 +274,7 @@ fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
 
     compile(&value).unwrap();
     value["accessProfiles"][0]["requiredScopes"] = json!([]);
-    assert_refused(&value, "access.requirements.scope_missing");
+    assert_refused(&value, "breg.access.requirements-scope-missing");
 }
 
 #[test]
@@ -287,9 +289,9 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
     value["accessProfiles"][0]["permissions"][0]["allowDataExport"] = json!(true);
     let compiled = compile(&value).unwrap();
     for code in [
-        "access.profile.no_required_scope",
-        "access.profile.unrestricted_collection",
-        "access.profile.data_export",
+        "breg.access.profile-no-required-scope",
+        "breg.access.profile-unrestricted-collection",
+        "breg.access.profile-data-export",
     ] {
         let finding = compiled.findings().iter().find(|d| d.code == code).unwrap();
         assert!(finding.path.contains("entry") && finding.path.contains("reader"));
@@ -321,16 +323,16 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
     grant["writableFields"] = json!(["district"]);
     let compiled = compile(&value).unwrap();
     for code in [
-        "access.profile.higher_classification",
-        "access.profile.writable_row_boundary",
-        "access.profile.revision_history",
+        "breg.access.profile-higher-classification",
+        "breg.access.profile-writable-row-boundary",
+        "breg.access.profile-revision-history",
     ] {
         assert!(compiled.findings().iter().any(|d| d.code == code), "{code}");
     }
     let patch_only = compiled
         .findings()
         .iter()
-        .find(|d| d.code == "access.profile.writable_row_boundary")
+        .find(|d| d.code == "breg.access.profile-writable-row-boundary")
         .unwrap();
     assert!(
         patch_only.message.contains("remove it from writableFields"),
@@ -342,7 +344,7 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
         .unwrap()
         .findings()
         .iter()
-        .any(|d| d.code == "access.profile.writable_row_boundary"));
+        .any(|d| d.code == "breg.access.profile-writable-row-boundary"));
 }
 
 /// A row boundary compiles to an INSERT `WITH CHECK` pinning its field to the
@@ -357,7 +359,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     let finding = compiled
         .findings()
         .iter()
-        .find(|d| d.code == "access.profile.writable_row_boundary")
+        .find(|d| d.code == "breg.access.profile-writable-row-boundary")
         .expect("a create-bearing grant still reports the writable boundary for review");
     assert!(
         finding.path.contains("entry")
@@ -379,7 +381,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     assert!(compiled
         .findings()
         .iter()
-        .all(|d| d.code != "access.profile.row_boundary_not_writable"));
+        .all(|d| d.code != "breg.access.profile-row-boundary-not-writable"));
 
     let mut create_only = value.clone();
     create_only["accessProfiles"][0]["permissions"][0]["operations"] =
@@ -388,7 +390,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     let finding = create_only
         .findings()
         .iter()
-        .find(|d| d.code == "access.profile.writable_row_boundary")
+        .find(|d| d.code == "breg.access.profile-writable-row-boundary")
         .unwrap();
     assert!(!finding.message.contains("patch"), "{}", finding.message);
 
@@ -398,7 +400,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     let finding = compiled
         .findings()
         .iter()
-        .find(|d| d.code == "access.profile.row_boundary_not_writable")
+        .find(|d| d.code == "breg.access.profile-row-boundary-not-writable")
         .expect("a create that cannot name its boundary field is reported");
     assert!(
         finding.path.contains("entry")
@@ -413,7 +415,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     assert!(compiled
         .findings()
         .iter()
-        .all(|d| d.code != "access.profile.writable_row_boundary"));
+        .all(|d| d.code != "breg.access.profile-writable-row-boundary"));
     assert_eq!(compiled.findings(), compile(&value).unwrap().findings());
 
     // Without `create` the boundary field may stay unwritable.
@@ -422,7 +424,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
         .unwrap()
         .findings()
         .iter()
-        .all(|d| d.code != "access.profile.row_boundary_not_writable"));
+        .all(|d| d.code != "breg.access.profile-row-boundary-not-writable"));
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -646,7 +648,7 @@ fn default_profile_refusals_name_the_entity_the_operation_and_the_profiles() {
     let failure = compile(&two_defaults).unwrap_err();
     let diagnostic = diagnostic_for(
         &failure,
-        "access_profile.default.invalid",
+        "breg.access-profile.default-invalid",
         "operation `get`",
     );
     assert_eq!(
@@ -680,7 +682,7 @@ fn anonymous_processing_refusals_name_the_entity_or_field_that_is_not_public() {
     let failure = compile(&anonymous_source()).unwrap_err();
     let diagnostic = diagnostic_for(
         &failure,
-        "access_profile.public.processing_non_public",
+        "breg.access-profile.public-processing-non-public",
         "entity `place`",
     );
     assert!(
@@ -701,7 +703,7 @@ fn anonymous_processing_refusals_name_the_entity_or_field_that_is_not_public() {
     let failure = compile(&hidden_field).unwrap_err();
     let diagnostic = diagnostic_for(
         &failure,
-        "access_profile.public.processing_non_public",
+        "breg.access-profile.public-processing-non-public",
         "field `note`",
     );
     assert!(
@@ -720,7 +722,7 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
     let finding = compiled
         .findings()
         .iter()
-        .find(|d| d.code == "access.profile.no_writable_fields")
+        .find(|d| d.code == "breg.access.profile-no-writable-fields")
         .expect("a create or patch grant naming no writable field is reported");
     assert_eq!(
         finding.path,
@@ -735,7 +737,7 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
         .unwrap()
         .findings()
         .iter()
-        .any(|d| d.code == "access.profile.no_writable_fields"));
+        .any(|d| d.code == "breg.access.profile-no-writable-fields"));
 
     let mut public = anonymous_source();
     public["entities"][0]["classification"] = json!("public");
@@ -743,7 +745,7 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
     let finding = compiled
         .findings()
         .iter()
-        .find(|d| d.code == "access.profile.anonymous_collection")
+        .find(|d| d.code == "breg.access.profile-anonymous-collection")
         .expect("an anonymous list grant is reported");
     assert_eq!(
         finding.path,
@@ -754,7 +756,7 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
         !compiled
             .findings()
             .iter()
-            .any(|d| d.code == "access.profile.unrestricted_collection"),
+            .any(|d| d.code == "breg.access.profile-unrestricted-collection"),
         "a public entity keeps the authenticated-only collection finding out of the report"
     );
     public["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get"]);
@@ -762,7 +764,7 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
         .unwrap()
         .findings()
         .iter()
-        .any(|d| d.code == "access.profile.anonymous_collection"));
+        .any(|d| d.code == "breg.access.profile-anonymous-collection"));
 }
 
 #[test]
@@ -778,7 +780,9 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
     let findings = compiled
         .findings()
         .iter()
-        .filter(|diagnostic| diagnostic.code == "access.profile.create_required_field_not_writable")
+        .filter(|diagnostic| {
+            diagnostic.code == "breg.access.profile-create-required-field-not-writable"
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         findings.len(),
@@ -808,7 +812,7 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
             .findings()
             .iter()
             .filter(|diagnostic| {
-                diagnostic.code == "access.profile.create_required_field_not_writable"
+                diagnostic.code == "breg.access.profile-create-required-field-not-writable"
             })
             .map(|diagnostic| diagnostic.path.as_str())
             .collect::<Vec<_>>(),
@@ -824,7 +828,7 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
         .findings()
         .iter()
         .all(|diagnostic| {
-            diagnostic.code != "access.profile.create_required_field_not_writable"
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
         }));
 
     value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list", "patch"]);
@@ -834,7 +838,7 @@ fn create_grants_report_each_required_field_the_profile_cannot_write() {
         .findings()
         .iter()
         .all(|diagnostic| {
-            diagnostic.code != "access.profile.create_required_field_not_writable"
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
         }));
 }
 
@@ -855,7 +859,9 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
     let findings = compiled
         .findings()
         .iter()
-        .filter(|diagnostic| diagnostic.code == "access.profile.create_required_field_not_writable")
+        .filter(|diagnostic| {
+            diagnostic.code == "breg.access.profile-create-required-field-not-writable"
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         findings
@@ -880,7 +886,7 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
             .findings()
             .iter()
             .filter(|diagnostic| {
-                diagnostic.code == "access.profile.create_required_field_not_writable"
+                diagnostic.code == "breg.access.profile-create-required-field-not-writable"
             })
             .map(|diagnostic| diagnostic.path.as_str())
             .collect::<Vec<_>>(),
@@ -896,7 +902,7 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
         .findings()
         .iter()
         .all(|diagnostic| {
-            diagnostic.code != "access.profile.create_required_field_not_writable"
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
         }));
 
     value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list"]);
@@ -906,7 +912,7 @@ fn import_grants_report_each_required_field_the_profile_cannot_write() {
         .findings()
         .iter()
         .all(|diagnostic| {
-            diagnostic.code != "access.profile.create_required_field_not_writable"
+            diagnostic.code != "breg.access.profile-create-required-field-not-writable"
         }));
 }
 
@@ -930,7 +936,7 @@ fn unresolved_access_profile_fields_have_one_concrete_path_per_reference() {
     let paths = failure
         .diagnostics()
         .iter()
-        .filter(|diagnostic| diagnostic.code == "access_profile.field.unknown")
+        .filter(|diagnostic| diagnostic.code == "breg.access-profile.field-unknown")
         .map(|diagnostic| diagnostic.path.as_str())
         .collect::<Vec<_>>();
     assert_eq!(
@@ -965,7 +971,7 @@ fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
     let paths = failure
         .diagnostics()
         .iter()
-        .filter(|diagnostic| diagnostic.code == "access_profile.read_path.field_unknown")
+        .filter(|diagnostic| diagnostic.code == "breg.access-profile.read-path-field-unknown")
         .map(|diagnostic| diagnostic.path.as_str())
         .collect::<Vec<_>>();
     assert_eq!(
@@ -998,7 +1004,7 @@ fn unresolved_constraint_fields_name_the_entity_constraint_and_field() {
     let diagnostics = failure
         .diagnostics()
         .iter()
-        .filter(|diagnostic| diagnostic.code == "constraint.field.unknown")
+        .filter(|diagnostic| diagnostic.code == "breg.constraint.field-unknown")
         .collect::<Vec<_>>();
     assert_eq!(
         diagnostics
@@ -1071,7 +1077,7 @@ fn sole_profile_is_implicit_default_and_workflow_routes_may_require_explicit_sel
         .diagnostics()
         .iter()
         .any(
-            |diagnostic| diagnostic.code == "access_profile.default.invalid"
+            |diagnostic| diagnostic.code == "breg.access-profile.default-invalid"
                 && diagnostic.message.contains(".request.")
         ));
 }

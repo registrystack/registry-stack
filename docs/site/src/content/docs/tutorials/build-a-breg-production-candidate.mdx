@@ -86,11 +86,11 @@ bregctl check --production tutorial-work/candidate-project
 Production check passed.
   revision  sha256:a44d4d1504891639ac3f1ae217ca7df8f50f87dc78e10bd92cdf084a123deccc
 
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
            this profile has no claim-bound row restriction for its granted operations;
            requestVisibility owner limits request reads only, and other lifecycle rules
            still apply. Review this registry-wide access
@@ -112,11 +112,11 @@ bregctl check --production --deny-findings tutorial-work/candidate-project
 ```text
 bregctl check refused.
 
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
            this profile has no claim-bound row restriction for its granted operations;
            requestVisibility owner limits request reads only, and other lifecycle rules
            still apply. Review this registry-wide access
@@ -641,7 +641,7 @@ disposable, and the successor step is the one you repeat for every later build.
 | `bregctl test` reports `test.output.refused` | A receipt already exists at `--output`. The command never overwrites one, so delete `test-receipt.json` or name a new file before the rerun. |
 | `bregctl test` reports `test.step.failed` and `the fixture authority reference was refused` | The token bound to that step does not carry the claims the step declares, or it has expired. The message names the step by index, `journeys[0].steps[3]`. Check the binding in `credentials.yaml`, and reissue both tokens with `issue-token.sh` if the run started more than an hour after you issued them. |
 | `bregctl package` reports `package.output.refused` | `--output` already holds a build. `package` never publishes into a used directory, so name a new one, such as `build-2`. |
-| `bregctl verify` reports `verify.runtime_config.environment_identity_conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
+| `bregctl verify` reports `breg.runtime.environment-identity-conflict` | `identity.environment` and `identity.databaseInitializationEnvironment` in `runtime.yaml` differ. Set both to the same environment. |
 | `verify.package.integrity_refused` and `does not match its SHA256SUMS` | A file in the package changed after `package` published it; the message names each changed file. Rebuild with `bregctl package` into a new directory and deploy the whole directory. |
 | `verify.package.integrity_refused` and `package.expectedDigest is` | The pin names a different package than the one at `package.root`. Deploy the pinned package or update `package.expectedDigest`. |
 | The readiness loop never ends | A runtime refused to start. Read `staging.log` or `production.log` for the refusal code, stop the other runtime with `kill`, and rerun the block once the cause is fixed. |

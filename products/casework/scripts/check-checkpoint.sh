@@ -92,7 +92,7 @@ PY
 # entity its own lifecycle hook (`casework-lifecycle-v1-<entity>`), since BReg
 # hook identifiers are unique across a registry. If both entities shared one
 # bare hook id, the pairing regresses and applying it leaves a registry
-# `bregctl check` refuses with `event.id.registry_duplicate`.
+# `bregctl check` refuses with `breg.event.id-registry-duplicate`.
 source_add_registry="$work/source-add-registry"
 mkdir -p "$source_add_registry"
 cp "$repo_root/products/breg/starters/public-organizations/core/registry.yaml" \

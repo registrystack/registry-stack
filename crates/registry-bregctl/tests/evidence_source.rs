@@ -90,7 +90,10 @@ fn native_export_refuses_unreadable_facts_without_publishing_partial_files() {
     assert!(!result.status.success());
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(report["ok"], false);
-    assert_eq!(report["diagnostics"][0]["code"], "evidence_source.refused");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "breg.evidence-source.refused"
+    );
     assert!(!destination.exists());
 }
 

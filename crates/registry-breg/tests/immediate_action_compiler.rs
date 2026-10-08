@@ -212,7 +212,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
             .diagnostics()
             .to_vec()
             .into_iter()
-            .find(|diagnostic| diagnostic.code == "action.handler.wasm_build_unsupported")
+            .find(|diagnostic| diagnostic.code == "breg.action.handler-wasm-build-unsupported")
             .expect("input-only WASM handlers name the missing build capability");
         assert_eq!(
             not_admitted.path,
@@ -226,7 +226,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
             .diagnostics()
             .to_vec()
             .into_iter()
-            .find(|diagnostic| diagnostic.code == "action.handler.module_asset_missing")
+            .find(|diagnostic| diagnostic.code == "breg.action.handler-module-asset-missing")
             .expect("an admitted WASM backend looks the declared module up");
         assert_eq!(
             missing_asset.path,
@@ -240,7 +240,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
         .to_vec();
     let unsupported_abi = v2
         .iter()
-        .find(|diagnostic| diagnostic.code == "action.handler.wasm_abi_unsupported")
+        .find(|diagnostic| diagnostic.code == "breg.action.handler-wasm-abi-unsupported")
         .expect("Evidence-enabled WASM handlers are refused with their own diagnostic");
     assert_eq!(
         unsupported_abi.path,
@@ -482,7 +482,7 @@ fn action_grants_refuse_request_metadata_projection_overrides() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| { diagnostic.code == "action.permission.entity_fields_forbidden" }));
+        .any(|diagnostic| { diagnostic.code == "breg.action.permission-entity-fields-forbidden" }));
 }
 
 #[test]
@@ -505,8 +505,8 @@ fn action_grants_must_cover_every_derived_target_and_result() {
         .iter()
         .map(|diagnostic| diagnostic.code.as_str())
         .collect::<Vec<_>>();
-    assert!(codes.contains(&"action.permission.targets.incomplete"));
-    assert!(codes.contains(&"action.permission.result_unknown"));
+    assert!(codes.contains(&"breg.action.permission-targets-incomplete"));
+    assert!(codes.contains(&"breg.action.permission-result-unknown"));
 }
 
 #[test]
@@ -531,7 +531,7 @@ fn action_grants_refuse_unused_target_locks() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.permission.targets.unused"));
+        .any(|diagnostic| diagnostic.code == "breg.action.permission-targets-unused"));
 }
 
 #[test]
@@ -545,7 +545,7 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.effect.controlled_target"));
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-controlled-target"));
 
     let request_target = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -595,7 +595,7 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.effect.request_target"));
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-request-target"));
 }
 
 #[test]
@@ -613,7 +613,7 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.effect.value_nullable"));
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-value-nullable"));
 
     let overlap = household_contact_project("").replace(
         r#""set":{"contact-person":{"fromEffect":"person"}}"#,
@@ -623,7 +623,7 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.effect.overlapping_write"));
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-overlapping-write"));
 
     let cycle = br#"{
       "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -667,7 +667,7 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.effect.dependency_cycle"));
+        .any(|diagnostic| diagnostic.code == "breg.action.effect-dependency-cycle"));
 }
 
 #[test]
@@ -729,7 +729,7 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
     )
     .expect_err("unknown action input vocabularies are refused");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "action.input.vocabulary.unknown"
+        diagnostic.code == "breg.action.input-vocabulary-unknown"
             && diagnostic.path == "actions[].inputs[].vocabulary"
     }));
 }
@@ -773,7 +773,7 @@ fn action_bounds_apply_before_runtime_target_work() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.bounds.targets"));
+        .any(|diagnostic| diagnostic.code == "breg.action.bounds-targets"));
 }
 
 #[test]
@@ -784,12 +784,12 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
         (
             129,
             json!({"type": "boolean"}),
-            "action.bounds.field_mutations",
+            "breg.action.bounds-field-mutations",
         ),
         (
             1,
             json!({"type": "string", "maxLength": 1_000_000}),
-            "action.bounds.snapshot_bytes",
+            "breg.action.bounds-snapshot-bytes",
         ),
     ] {
         let mut fields = Vec::new();
@@ -886,5 +886,5 @@ fn ambiguous_action_can_require_explicit_profile_but_cannot_have_two_defaults() 
     assert!(error
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.route_access.default_multiple"));
+        .any(|diagnostic| diagnostic.code == "breg.action.route-access-default-multiple"));
 }

@@ -632,7 +632,7 @@ fn strip_null_members(value: &mut Value) {
 fn manifest_diagnostic(error: MetadataError) -> Diagnostic {
     match error {
         MetadataError::VersionUnsupported => Diagnostic::error(
-            "manifest_projection.invalid",
+            "breg.manifest-projection.invalid",
             "project.manifestProjection",
             "the Registry Manifest projection is invalid",
         ),
@@ -642,7 +642,7 @@ fn manifest_diagnostic(error: MetadataError) -> Diagnostic {
                 .map(|error| format!("project.manifestProjection.{}", error.path))
                 .unwrap_or_else(|| "project.manifestProjection".to_owned());
             Diagnostic::error(
-                "manifest_projection.invalid",
+                "breg.manifest-projection.invalid",
                 path,
                 "the Registry Manifest projection is invalid",
             )
@@ -652,7 +652,7 @@ fn manifest_diagnostic(error: MetadataError) -> Diagnostic {
 
 fn manifest_canonicalization_diagnostic() -> Diagnostic {
     Diagnostic::error(
-        "manifest_projection.canonicalization_failed",
+        "breg.manifest-projection.canonicalization-failed",
         "project.manifestProjection",
         "the Registry Manifest projection could not be canonicalized",
     )

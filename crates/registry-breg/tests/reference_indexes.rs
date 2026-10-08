@@ -9,8 +9,8 @@ mod consent_fixture;
 use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
 use serde_json::{json, Value};
 
-const UNINDEXED_FILTER: &str = "entity.list.unindexed_filter";
-const UNINDEXED_SORT: &str = "entity.list.unindexed_sort";
+const UNINDEXED_FILTER: &str = "breg.entity.list-unindexed-filter";
+const UNINDEXED_SORT: &str = "breg.entity.list-unindexed-sort";
 
 fn source() -> Value {
     json!({

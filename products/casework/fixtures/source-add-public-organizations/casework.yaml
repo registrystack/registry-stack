@@ -4,7 +4,7 @@
 # this fixture to prove that pairing two request entities of one registry
 # leaves a project bregctl check accepts, with its own lifecycle hook per
 # entity: BReg refuses two hooks sharing one identifier as
-# event.id.registry_duplicate.
+# breg.event.id-registry-duplicate.
 apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework:

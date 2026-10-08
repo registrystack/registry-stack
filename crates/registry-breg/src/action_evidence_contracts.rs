@@ -389,7 +389,7 @@ pub(crate) fn compile_evidence(
             {
                 providers.insert(provider.id.clone(), (provider, contract));
             }
-            _ => errors.push(Diagnostic::error("action.evidence.contract.invalid", &path, "declare a unique provider and a bounded valid reviewed Evidence contract in the offline project assets")),
+            _ => errors.push(Diagnostic::error("breg.action.evidence-contract-invalid", &path, "declare a unique provider and a bounded valid reviewed Evidence contract in the offline project assets")),
         }
     }
     for action in &mut inventory.actions {
@@ -404,7 +404,7 @@ pub(crate) fn compile_evidence(
                 }))
         {
             errors.push(Diagnostic::error(
-                "action.evidence.ceiling.invalid",
+                "breg.action.evidence-ceiling-invalid",
                 &path,
                 "Evidence requires handler ABI v2 and permits at most two optional capabilities",
             ));
@@ -415,7 +415,7 @@ pub(crate) fn compile_evidence(
             let location = format!("{path}[{}]", capability.id);
             let Some((provider, contracts)) = providers.get(&capability.provider) else {
                 errors.push(Diagnostic::error(
-                    "action.evidence.provider.unknown",
+                    "breg.action.evidence-provider-unknown",
                     &location,
                     "the capability must reference a declared Evidence provider",
                 ));
@@ -465,7 +465,7 @@ pub(crate) fn compile_evidence(
                         })
                 });
             if !valid {
-                errors.push(Diagnostic::error("action.evidence.capability.invalid", &location, "require one exact signed-JWS audience-scoped contract, request-origin profiles, unique scalar outputs and observation age 1..300 seconds"));
+                errors.push(Diagnostic::error("breg.action.evidence-capability-invalid", &location, "require one exact signed-JWS audience-scoped contract, request-origin profiles, unique scalar outputs and observation age 1..300 seconds"));
                 continue;
             }
             let definition = definition.unwrap().clone();

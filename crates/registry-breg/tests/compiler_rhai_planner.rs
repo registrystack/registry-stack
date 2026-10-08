@@ -246,7 +246,7 @@ fn rhai_planner_authoring_is_strict_and_compiles_declared_policy() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.planner.classification_ceiling"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.planner-classification-ceiling"));
 
     let undeclared_asset = compile_project_with_assets(
         &project,
@@ -270,7 +270,7 @@ fn rhai_planner_authoring_is_strict_and_compiles_declared_policy() {
     assert!(undeclared_asset
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.planner.asset_undeclared"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.planner-asset-undeclared"));
 
     let mut value: serde_json::Value =
         serde_norway::from_slice(&project_bytes).expect("fixture YAML converts");
@@ -319,7 +319,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
     let both_diagnostics = compile_diagnostics(&both, vec![owned_asset()]);
     let exclusive = both_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.plan.exclusive")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.plan-exclusive")
         .expect("effects and planner are mutually exclusive");
     assert_eq!(
         exclusive.path,
@@ -331,14 +331,14 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         .as_object_mut()
         .expect("change request is an object")
         .remove("planner");
-    assert!(compile_codes(&neither, Vec::new()).contains("change_request.plan.exclusive"));
+    assert!(compile_codes(&neither, Vec::new()).contains("breg.change-request.plan-exclusive"));
 
     let mut wrong_abi = base.clone();
     wrong_abi["entities"][1]["changeRequest"]["planner"]["abi"] = json!("unsupported/v9");
     let abi_diagnostics = compile_diagnostics(&wrong_abi, vec![owned_asset()]);
     let invalid_abi = abi_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.abi_invalid")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-abi-invalid")
         .expect("unsupported planner ABI is refused");
     assert_eq!(
         invalid_abi.path,
@@ -350,7 +350,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
     let wasm_diagnostics = compile_diagnostics(&wasm_planner, vec![owned_asset()]);
     let wasm = wasm_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.kind_unsupported")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-kind-unsupported")
         .expect("a WASM planner kind is refused explicitly");
     assert_eq!(
         wasm.path,
@@ -366,7 +366,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         compile_diagnostics(&unknown_request_field, vec![owned_asset()]);
     let unknown_request_field = request_field_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.request_field_unknown")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-request-field-unknown")
         .expect("unknown planner input is refused");
     assert_eq!(
         unknown_request_field.path,
@@ -381,7 +381,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
     let write_diagnostics = compile_diagnostics(&unknown_write_field, vec![owned_asset()]);
     let unknown_field = write_diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "change_request.planner.write_field_unknown")
+        .find(|diagnostic| diagnostic.code == "breg.change-request.planner-write-field-unknown")
         .expect("unknown planner write field is refused");
     assert_eq!(
         unknown_field.path,
@@ -399,11 +399,11 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         }],
     );
     assert!(
-        escaping_codes.contains("change_request.planner.source_invalid"),
+        escaping_codes.contains("breg.change-request.planner-source-invalid"),
         "unexpected diagnostics: {escaping_codes:?}"
     );
 
-    assert!(compile_codes(&base, Vec::new()).contains("change_request.planner.source_missing"));
+    assert!(compile_codes(&base, Vec::new()).contains("breg.change-request.planner-source-missing"));
 
     let invalid_entrypoint = compile_codes(
         &base,
@@ -413,7 +413,7 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
             bytes: b"fn not_plan(ctx) { #{} }".to_vec(),
         }],
     );
-    assert!(invalid_entrypoint.contains("change_request.planner.entrypoint"));
+    assert!(invalid_entrypoint.contains("breg.change-request.planner-entrypoint"));
 
     let wrong_origin = compile_codes(
         &base,
@@ -423,8 +423,8 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
             bytes: script,
         }],
     );
-    assert!(wrong_origin.contains("change_request.planner.source_missing"));
-    assert!(wrong_origin.contains("change_request.planner.asset_undeclared"));
+    assert!(wrong_origin.contains("breg.change-request.planner-source-missing"));
+    assert!(wrong_origin.contains("breg.change-request.planner-asset-undeclared"));
 
     for (path, value) in [
         ("planner kind", json!("javascript")),
@@ -703,10 +703,9 @@ fn anonymous_presence_rejects_a_non_public_rhai_target_link() {
         CompileProfile::Authoring,
     )
     .expect_err("anonymous presence cannot process a classified Rhai target link");
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| { diagnostic.code == "change_request.presence.anonymous_non_public" }));
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.change-request.presence-anonymous-non-public"
+    }));
 }
 
 #[test]

@@ -233,7 +233,7 @@ fn unverified_patterns(compiled: &CompiledRegistry) -> Vec<registry_breg::Diagno
             entity.fields.values().filter_map(move |field| {
                 field.pattern.as_ref().map(|_| registry_breg::Diagnostic {
                     severity: DiagnosticSeverity::Finding,
-                    code: "field.pattern.unverified_offline".to_owned(),
+                    code: "breg.field.pattern-unverified-offline".to_owned(),
                     path: format!("entities[{}].fields[{}].pattern", entity.id, field.id),
                     message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
                 })
@@ -255,7 +255,7 @@ fn severity_of(severity: DiagnosticSeverity) -> Severity {
 fn read_documents(project: &Path, outcome: &mut Outcome) -> Option<Documents> {
     if project.as_os_str().is_empty() || has_parent_component(project) {
         outcome.report.push(file_diagnostic(
-            "source.project.path_unsafe",
+            "breg.source.project-path-unsafe",
             project,
             Some(PROJECT_ARTIFACT),
             "the project path must not contain parent-directory components",
@@ -268,7 +268,7 @@ fn read_documents(project: &Path, outcome: &mut Outcome) -> Option<Documents> {
         Err(error) => {
             let diagnostic = path_diagnostic(
                 error,
-                "source.project.invalid",
+                "breg.source.project-invalid",
                 "project",
                 "the project directory is not available",
                 "the project directory must be a directory and must not be a symbolic link",
@@ -288,8 +288,11 @@ fn read_documents(project: &Path, outcome: &mut Outcome) -> Option<Documents> {
 
     let project_file = project.join("registry.yaml");
     let mut refused = false;
-    let decoded_project = match read_file(&project_file, "registry.yaml", "source.project.missing")
-    {
+    let decoded_project = match read_file(
+        &project_file,
+        "registry.yaml",
+        "breg.source.project-missing",
+    ) {
         Ok(bytes) => {
             outcome.files += 1;
             decode(
@@ -325,7 +328,7 @@ fn read_documents(project: &Path, outcome: &mut Outcome) -> Option<Documents> {
                 match read_file(
                     &file,
                     &format!("modules/{id}/module.yaml"),
-                    "source.module.missing",
+                    "breg.source.module-missing",
                 ) {
                     Ok(bytes) => {
                         outcome.files += 1;
@@ -372,7 +375,7 @@ fn read_documents(project: &Path, outcome: &mut Outcome) -> Option<Documents> {
             // the reader reported none for it.
             if !outcome.report.has_errors() {
                 outcome.report.push(file_diagnostic(
-                    "source.file.invalid",
+                    "breg.source.file-invalid",
                     project,
                     Some(PROJECT_ARTIFACT),
                     "a project file was refused without a reported cause",
@@ -438,19 +441,19 @@ fn read_file(path: &Path, report_path: &str, missing_code: &str) -> Result<Vec<u
     let stat = entry.stat().map_err(|_| unreadable(missing_code))?;
     if stat.is_symlink() || !stat.is_file() {
         return Err(refused(
-            "source.file.invalid",
+            "breg.source.file-invalid",
             "authoring sources must be regular files and must not be symbolic links",
         ));
     }
     let file = entry
         .open_read()
-        .map_err(|_| unreadable("source.file.unreadable"))?;
+        .map_err(|_| unreadable("breg.source.file-unreadable"))?;
     let opened = file
         .metadata()
-        .map_err(|_| unreadable("source.file.unreadable"))?;
+        .map_err(|_| unreadable("breg.source.file-unreadable"))?;
     if !opened.is_file() {
         return Err(refused(
-            "source.file.invalid",
+            "breg.source.file-invalid",
             "authoring sources must be regular files and must not be symbolic links",
         ));
     }
@@ -461,7 +464,7 @@ fn read_file(path: &Path, report_path: &str, missing_code: &str) -> Result<Vec<u
     let mut bytes = Vec::new();
     file.take(MAXIMUM_DOCUMENT_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| unreadable("source.file.unreadable"))?;
+        .map_err(|_| unreadable("breg.source.file-unreadable"))?;
     Ok(bytes)
 }
 
@@ -540,15 +543,33 @@ fn check_package(package: &Path, outcome: &mut Outcome) {
         }
         Err(error) => {
             outcome.unavailable |= matches!(error, PackageError::Read);
-            let (suffix, _) = super::package_refusal(&error);
             outcome.report.push(file_diagnostic(
-                &format!("check.package.{suffix}"),
+                package_code(&error),
                 package,
                 None,
                 &error.to_string(),
                 package_action(&error),
             ));
         }
+    }
+}
+
+/// The package refusal's code, one per class `bregctl` names a package
+/// refusal by.
+fn package_code(error: &PackageError) -> &'static str {
+    match error {
+        PackageError::UnsafePath => "breg.package.path-refused",
+        PackageError::Permissions => "breg.package.permissions-refused",
+        PackageError::Binding => "breg.package.binding-refused",
+        PackageError::Envelope
+        | PackageError::ExpectedDigestMismatch(_)
+        | PackageError::Closure
+        | PackageError::Integrity
+        | PackageError::CanonicalJson
+        | PackageError::Derivation
+        | PackageError::MigrationPlan
+        | PackageError::ReviewedMigration(_) => "breg.package.integrity-refused",
+        PackageError::Bounds | PackageError::Read => "breg.package.refused",
     }
 }
 
@@ -771,15 +792,15 @@ fn without_values(path: &str) -> String {
 
 fn action_for(code: &str, severity: Severity) -> &'static str {
     match code {
-        "field.pattern.unverified_offline" => RUN_SCHEMA_TEST,
-        "module.lock.digest_missing"
-        | "module.lock.digest_required"
-        | "module.lock.digest_mismatch"
-        | "module.lock.version_mismatch"
-        | "module.lock.missing"
-        | "module.lock.stale"
-        | "module.lock.source_missing"
-        | "source.modules.unlocked" => LOCK_MODULES,
+        "breg.field.pattern-unverified-offline" => RUN_SCHEMA_TEST,
+        "breg.module.lock-digest-missing"
+        | "breg.module.lock-digest-required"
+        | "breg.module.lock-digest-mismatch"
+        | "breg.module.lock-version-mismatch"
+        | "breg.module.lock-missing"
+        | "breg.module.lock-stale"
+        | "breg.module.lock-source-missing"
+        | "breg.source.modules-unlocked" => LOCK_MODULES,
         _ if severity == Severity::Warning => REVIEW_FINDING,
         _ => CORRECT_SOURCE,
     }

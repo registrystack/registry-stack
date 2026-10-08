@@ -3,7 +3,6 @@
 
 use std::path::Path;
 
-use registry_breg::runtime_config::RuntimeConfigError;
 use registry_breg::startup::{check, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
@@ -63,14 +62,13 @@ pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, DoctorRefusal
         .map_err(startup_refusal)
 }
 
-/// A refused runtime file reports every reader diagnostic unchanged; any
-/// other refusal names its one startup cause.
+/// A refused runtime file reports every reader diagnostic, or the one rule
+/// the runtime decides itself, unchanged; any other refusal names its one
+/// startup cause.
 fn startup_refusal(error: StartupError) -> DoctorRefusal {
     let runtime_configuration = matches!(error, StartupError::RuntimeConfig(_));
     let diagnostics = match error {
-        StartupError::RuntimeConfig(cause @ RuntimeConfigError::Reader(_)) => {
-            crate::runtime_config_reader_diagnostics(&cause)
-        }
+        StartupError::RuntimeConfig(cause) => crate::runtime_config_diagnostics(&cause),
         other => vec![startup_diagnostic(other)],
     };
     DoctorRefusal {
@@ -86,7 +84,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     } = error
     {
         return diagnostic(
-            "field.pattern.syntax_invalid",
+            "breg.field.pattern-syntax-invalid",
             &format!("entities[{entity_id}].fields[{field_id}].pattern"),
             "the persisted field pattern has invalid PostgreSQL ARE syntax; correct the expression and rerun schema-test before packaging; a failed activation requires restoration of the pre-activation backup before changing the pinned target",
         );
@@ -154,12 +152,6 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
-    // The runtime configuration carries its own closed-vocabulary cause; name
-    // it the way `bregctl verify` already names it instead of collapsing every
-    // configuration mistake into one generic refusal.
-    if let StartupError::RuntimeConfig(cause) = error {
-        return runtime_config_diagnostic(cause);
-    }
     // The package refusal carries its own closed-vocabulary cause. Name it
     // inside the one package check instead of collapsing every package fault
     // into the same sentence; both vocabularies are value free.
@@ -183,8 +175,10 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         );
     }
     let (code, path, message) = match error {
-        StartupError::RuntimeConfig(_)
-        | StartupError::PackageRefused(_)
+        StartupError::RuntimeConfig(_) => {
+            unreachable!("startup_refusal reports every runtime configuration diagnostic")
+        }
+        StartupError::PackageRefused(_)
         | StartupError::PackageEnvelopeRefused(_)
         | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
@@ -318,17 +312,6 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     diagnostic(code, path, message)
 }
 
-/// Names a runtime configuration cause the same way `bregctl verify` already
-/// names it: the closed-vocabulary code and path `RuntimeConfigError` carries,
-/// prefixed for this command instead of `verify`'s.
-fn runtime_config_diagnostic(error: RuntimeConfigError) -> Diagnostic {
-    diagnostic(
-        &format!("startup.{}", error.code()),
-        error.path(),
-        &error.to_string(),
-    )
-}
-
 fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
     Diagnostic {
         severity: DiagnosticSeverity::Error,
@@ -342,6 +325,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
 mod tests {
     use super::*;
     use registry_breg::package::PackageError;
+    use registry_breg::runtime_config::RuntimeConfigError;
     use std::collections::HashSet;
 
     #[test]
@@ -427,7 +411,7 @@ mod tests {
             entity_id: "entry".to_owned(),
             field_id: "identifier".to_owned(),
         });
-        assert_eq!(diagnostic.code, "field.pattern.syntax_invalid");
+        assert_eq!(diagnostic.code, "breg.field.pattern-syntax-invalid");
         assert_eq!(
             diagnostic.path,
             "entities[entry].fields[identifier].pattern"
@@ -680,109 +664,112 @@ mod tests {
     }
 
     #[test]
-    fn runtime_config_causes_are_named_the_way_verify_already_names_them() {
+    fn runtime_config_causes_are_named_by_their_breg_runtime_codes() {
         // Every closed-vocabulary configuration cause `RuntimeConfigError`
-        // carries is named by its own code and path, matching `bregctl verify`,
-        // instead of collapsing into one generic runtime-configuration refusal.
+        // carries is named by its own `breg.runtime.*` code and pointer,
+        // matching `bregctl verify`, instead of collapsing into one generic
+        // runtime-configuration refusal.
         let cases = [
             (
                 RuntimeConfigError::InvalidBinding,
-                "startup.runtime_config.invalid_binding",
+                "breg.runtime.invalid-binding",
                 "",
             ),
             (
                 RuntimeConfigError::InvalidListener,
-                "startup.runtime_config.invalid_listener",
+                "breg.runtime.invalid-listener",
                 "/listener",
             ),
             (
                 RuntimeConfigError::InvalidMetricsListener,
-                "startup.runtime_config.invalid_metrics_listener",
+                "breg.runtime.invalid-metrics-listener",
                 "/metricsListener",
             ),
             (
                 RuntimeConfigError::InvalidSecretProvider,
-                "startup.runtime_config.invalid_secret_provider",
+                "breg.runtime.invalid-secret-provider",
                 "/secretProviders",
             ),
             (
                 RuntimeConfigError::SecretProviderRootUnavailable,
-                "startup.runtime_config.secret_provider_root_unavailable",
+                "breg.runtime.secret-provider-root-unavailable",
                 "/secretProviders/file/root",
             ),
             (
                 RuntimeConfigError::UnsafeSecretProviderRoot,
-                "startup.runtime_config.unsafe_secret_provider_root",
+                "breg.runtime.unsafe-secret-provider-root",
                 "/secretProviders/file/root",
             ),
             (
                 RuntimeConfigError::InvalidDatabase,
-                "startup.runtime_config.invalid_database",
+                "breg.runtime.invalid-database",
                 "/database",
             ),
             (
                 RuntimeConfigError::InvalidPackage,
-                "startup.runtime_config.invalid_package",
+                "breg.runtime.invalid-package",
                 "/package",
             ),
             (
                 RuntimeConfigError::PackageRootUnavailable,
-                "startup.runtime_config.package_root_unavailable",
+                "breg.runtime.package-root-unavailable",
                 "/package/root",
             ),
             (
                 RuntimeConfigError::UnsafePackageRoot,
-                "startup.runtime_config.unsafe_package_root",
+                "breg.runtime.unsafe-package-root",
                 "/package/root",
             ),
             (
                 RuntimeConfigError::InvalidOidc,
-                "startup.runtime_config.invalid_oidc",
+                "breg.runtime.invalid-oidc",
                 "/authentication/oidc",
             ),
             (
                 RuntimeConfigError::InvalidOidcLeeway,
-                "startup.runtime_config.invalid_oidc_leeway",
+                "breg.runtime.invalid-oidc-leeway",
                 "/authentication/oidc/leewayMilliseconds",
             ),
             (
                 RuntimeConfigError::InvalidAudit,
-                "startup.runtime_config.invalid_audit",
+                "breg.runtime.invalid-audit",
                 "/audit",
             ),
             (
                 RuntimeConfigError::InvalidCursor,
-                "startup.runtime_config.invalid_cursor",
+                "breg.runtime.invalid-cursor",
                 "/cursor",
             ),
             (
                 RuntimeConfigError::InvalidEventDestination,
-                "startup.runtime_config.invalid_event_destination",
+                "breg.runtime.invalid-event-destination",
                 "/eventDestinations",
             ),
             (
                 RuntimeConfigError::InvalidFieldEncryption,
-                "startup.runtime_config.invalid_field_encryption",
+                "breg.runtime.invalid-field-encryption",
                 "/fieldEncryption",
             ),
             (
                 RuntimeConfigError::InvalidBounds,
-                "startup.runtime_config.invalid_bounds",
+                "breg.runtime.invalid-bounds",
                 "/operationalTimeouts",
             ),
-            (
-                RuntimeConfigError::Secret,
-                "startup.runtime_config.secret",
-                "",
-            ),
+            (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
         ];
 
         for (cause, expected_code, expected_path) in cases {
             let message = cause.to_string();
-            let diagnostic = startup_diagnostic(StartupError::RuntimeConfig(cause));
+            let refusal = startup_refusal(StartupError::RuntimeConfig(cause));
+            assert!(refusal.runtime_configuration);
+            let [diagnostic] = refusal.diagnostics.as_slice() else {
+                panic!("one runtime rule reports one diagnostic");
+            };
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
-            assert_eq!(diagnostic.message, message);
+            assert!(diagnostic
+                .message
+                .starts_with(&format!("{message}; next: ")));
         }
     }
 

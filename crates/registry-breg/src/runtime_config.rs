@@ -253,40 +253,38 @@ impl RuntimeConfigError {
     /// The code of the refusal: the deciding reader diagnostic's code, or
     /// this runtime's code for a rule the reader cannot state.
     #[must_use]
-    pub fn code(&self) -> &str {
+    fn code(&self) -> &str {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().code,
-            Self::InvalidBinding => "runtime_config.invalid_binding",
-            Self::InvalidInstanceId => "runtime_config.invalid_instance_id",
-            Self::EnvironmentIdentityConflict => "runtime_config.environment_identity_conflict",
-            Self::InvalidListener => "runtime_config.invalid_listener",
-            Self::InvalidMetricsListener => "runtime_config.invalid_metrics_listener",
-            Self::InvalidSecretProvider => "runtime_config.invalid_secret_provider",
-            Self::SecretProviderRootUnavailable => {
-                "runtime_config.secret_provider_root_unavailable"
-            }
-            Self::UnsafeSecretProviderRoot => "runtime_config.unsafe_secret_provider_root",
-            Self::InvalidDatabase => "runtime_config.invalid_database",
-            Self::InvalidPackage => "runtime_config.invalid_package",
-            Self::PackageRootUnavailable => "runtime_config.package_root_unavailable",
-            Self::UnsafePackageRoot => "runtime_config.unsafe_package_root",
-            Self::InvalidOidc => "runtime_config.invalid_oidc",
-            Self::InvalidOidcLeeway => "runtime_config.invalid_oidc_leeway",
-            Self::InvalidAudit => "runtime_config.invalid_audit",
-            Self::InvalidCursor => "runtime_config.invalid_cursor",
-            Self::InvalidEventDestination => "runtime_config.invalid_event_destination",
-            Self::InvalidAttachmentStorage => "runtime_config.invalid_attachment_storage",
-            Self::InvalidAttachmentVerification => "runtime_config.invalid_attachment_verification",
-            Self::InvalidFieldEncryption => "runtime_config.invalid_field_encryption",
-            Self::InvalidBounds => "runtime_config.invalid_bounds",
-            Self::InvalidWasmExecution => "runtime_config.invalid_wasm_execution",
-            Self::Secret => "runtime_config.secret",
+            Self::InvalidBinding => "breg.runtime.invalid-binding",
+            Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
+            Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
+            Self::InvalidListener => "breg.runtime.invalid-listener",
+            Self::InvalidMetricsListener => "breg.runtime.invalid-metrics-listener",
+            Self::InvalidSecretProvider => "breg.runtime.invalid-secret-provider",
+            Self::SecretProviderRootUnavailable => "breg.runtime.secret-provider-root-unavailable",
+            Self::UnsafeSecretProviderRoot => "breg.runtime.unsafe-secret-provider-root",
+            Self::InvalidDatabase => "breg.runtime.invalid-database",
+            Self::InvalidPackage => "breg.runtime.invalid-package",
+            Self::PackageRootUnavailable => "breg.runtime.package-root-unavailable",
+            Self::UnsafePackageRoot => "breg.runtime.unsafe-package-root",
+            Self::InvalidOidc => "breg.runtime.invalid-oidc",
+            Self::InvalidOidcLeeway => "breg.runtime.invalid-oidc-leeway",
+            Self::InvalidAudit => "breg.runtime.invalid-audit",
+            Self::InvalidCursor => "breg.runtime.invalid-cursor",
+            Self::InvalidEventDestination => "breg.runtime.invalid-event-destination",
+            Self::InvalidAttachmentStorage => "breg.runtime.invalid-attachment-storage",
+            Self::InvalidAttachmentVerification => "breg.runtime.invalid-attachment-verification",
+            Self::InvalidFieldEncryption => "breg.runtime.invalid-field-encryption",
+            Self::InvalidBounds => "breg.runtime.invalid-bounds",
+            Self::InvalidWasmExecution => "breg.runtime.invalid-wasm-execution",
+            Self::Secret => "breg.runtime.secret",
         }
     }
 
     /// The RFC 6901 pointer the refusal concerns; `""` for the whole file.
     #[must_use]
-    pub fn path(&self) -> &str {
+    fn path(&self) -> &str {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
             Self::InvalidBinding | Self::Secret => "",

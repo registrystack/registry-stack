@@ -551,7 +551,7 @@ fn check_reports_the_registry_revision_of_a_project_and_of_a_verified_package() 
     let refused = json_stdout(&tampered);
     assert_eq!(refused["command"], "check");
     let diagnostic = &refused["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "check.package.integrity_refused");
+    assert_eq!(diagnostic["code"], "breg.package.integrity-refused");
     assert_eq!(diagnostic["severity"], "error");
     assert_eq!(diagnostic["path"], "");
     assert!(diagnostic.get("artifact").is_none(), "{diagnostic}");

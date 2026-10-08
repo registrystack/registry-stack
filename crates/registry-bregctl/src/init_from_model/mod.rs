@@ -131,7 +131,7 @@ fn read_selection_file(path: &Path) -> Result<selection::Selection, Diagnostic> 
         MAX_SELECTION_FILE_BYTES,
     )
     .map_err(|refusal| {
-        if refusal.code == "source.file.bounds" {
+        if refusal.code == "breg.source.file-bounds" {
             diagnostic(
                 "init.selection.size",
                 &source,
@@ -408,8 +408,8 @@ mod tests {
         assert!(destination.join(render::SELECTION_PATH).is_file());
         assert!(destination.join("registry.yaml").is_file());
         assert!(report.findings.iter().all(|finding| {
-            finding.code == "access.profile.unrestricted_collection"
-                || finding.code == "access.profile.higher_classification"
+            finding.code == "breg.access.profile-unrestricted-collection"
+                || finding.code == "breg.access.profile-higher-classification"
         }));
         assert!(report.next_steps[1].contains("reads 2 fields the model marks sensitive"));
         assert_eq!(report.next_steps.len(), 5);

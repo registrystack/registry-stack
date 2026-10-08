@@ -67,11 +67,11 @@ bregctl check tutorial-work/project
 Authoring check passed.
   revision  sha256:<digest>
 
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
            this profile has no claim-bound row restriction for its granted operations;
            requestVisibility owner limits request reads only, and other lifecycle rules
            still apply. Review this registry-wide access
@@ -176,9 +176,9 @@ bregctl check tutorial-work/project
 ```text test-expect
 bregctl check refused.
 
-  error    module.lock.digest_mismatch  project.modules[].digest
+  error    breg.module.lock-digest-mismatch  project.modules[].digest
            an authored module does not match its locked digest
-  error    module.lock.version_mismatch  project.modules[].version
+  error    breg.module.lock-version-mismatch  project.modules[].version
            an authored module does not match its locked version
 
 2 errors, 0 findings.
@@ -309,7 +309,7 @@ Testing a project against a database and packaging it come next.
 | Symptom | Next move |
 | --- | --- |
 | `generate` reports `output.destination.invalid` | The output directory must not exist yet. Choose a new path, or remove the one left by an earlier run. |
-| `check` reports `module.lock.digest_mismatch` or `module.lock.version_mismatch` | You edited a module after its last lock. Run `bregctl project lock tutorial-work/project`, then check again. |
+| `check` reports `breg.module.lock-digest-mismatch` or `breg.module.lock-version-mismatch` | You edited a module after its last lock. Run `bregctl project lock tutorial-work/project`, then check again. |
 | `check` cannot parse `registry.yaml` after your edit | Compare the indentation of the lines you changed with their neighbours; the grant lists sit eight spaces in. |
 | `bregctl` is not found | Put the installers' directory, `~/.local/bin` unless you changed it, back on `PATH` in this terminal. |
 | The running registry does not show `internalNote` | Expected: it serves the package `bregctl dev` built when it first started. Activating a changed package is covered in [Deploy a registry](../../operate/breg/). |

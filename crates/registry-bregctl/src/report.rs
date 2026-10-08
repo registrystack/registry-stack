@@ -530,13 +530,13 @@ mod tests {
         lines.findings(&[
             finding(
                 Severity::Finding,
-                "access.profile.unrestricted_collection",
+                "breg.access.profile-unrestricted-collection",
                 "entities[id=household].accessProfiles[id=operator].rowBoundaries",
                 "this profile can list all rows, subject only to query bounds",
             ),
             finding(
                 Severity::Finding,
-                "access.profile.unrestricted_collection",
+                "breg.access.profile-unrestricted-collection",
                 "entities[id=person].accessProfiles[id=operator].rowBoundaries",
                 "this profile can list all rows, subject only to query bounds",
             ),
@@ -546,7 +546,7 @@ mod tests {
             concat!(
                 "Initialized a registry project. 6 artifacts written.\n",
                 "\n",
-                "  finding  access.profile.unrestricted_collection  2 paths\n",
+                "  finding  breg.access.profile-unrestricted-collection  2 paths\n",
                 "           this profile can list all rows, subject only to query bounds\n",
                 "             entities[id=household].accessProfiles[id=operator].rowBoundaries\n",
                 "             entities[id=person].accessProfiles[id=operator].rowBoundaries\n",
@@ -563,13 +563,13 @@ mod tests {
         lines.findings(&[
             finding(
                 Severity::Error,
-                "event.when.request_lifecycle_transition_unknown",
+                "breg.event.when-request-lifecycle-transition-unknown",
                 "entities[id=case].onEvents[0].when",
                 "unknown request-lifecycle transition 'submitted'",
             ),
             finding(
                 Severity::Error,
-                "event.when.request_lifecycle_transition_unknown",
+                "breg.event.when-request-lifecycle-transition-unknown",
                 "entities[id=case].onEvents[1].when",
                 "unknown request-lifecycle transition 'closed'",
             ),
@@ -579,9 +579,9 @@ mod tests {
             concat!(
                 "bregctl check refused.\n",
                 "\n",
-                "  error    event.when.request_lifecycle_transition_unknown  entities[id=case].onEvents[0].when\n",
+                "  error    breg.event.when-request-lifecycle-transition-unknown  entities[id=case].onEvents[0].when\n",
                 "           unknown request-lifecycle transition 'submitted'\n",
-                "  error    event.when.request_lifecycle_transition_unknown  entities[id=case].onEvents[1].when\n",
+                "  error    breg.event.when-request-lifecycle-transition-unknown  entities[id=case].onEvents[1].when\n",
                 "           unknown request-lifecycle transition 'closed'\n",
                 "\n",
                 "2 errors, 0 findings.\n",
@@ -595,7 +595,7 @@ mod tests {
         lines.lead("Authoring check passed.");
         lines.findings(&[finding(
             Severity::Finding,
-            "access.profile.higher_classification",
+            "breg.access.profile-higher-classification",
             "entities[id=person].accessProfiles[id=operator]",
             "this field is more sensitive than its entity's classification",
         )]);
@@ -604,7 +604,7 @@ mod tests {
             concat!(
                 "Authoring check passed.\n",
                 "\n",
-                "  finding  access.profile.higher_classification  entities[id=person].accessProfiles[id=operator]\n",
+                "  finding  breg.access.profile-higher-classification  entities[id=person].accessProfiles[id=operator]\n",
                 "           this field is more sensitive than its entity's classification\n",
                 "\n",
                 "0 errors, 1 finding.\n",
@@ -641,7 +641,7 @@ mod tests {
         lines.lead("Authoring check passed.");
         lines.findings(&[finding(
             Severity::Finding,
-            "access.profile.unrestricted_collection",
+            "breg.access.profile-unrestricted-collection",
             "entities[id=person]",
             "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access",
         )]);
@@ -650,7 +650,7 @@ mod tests {
             concat!(
                 "Authoring check passed.\n",
                 "\n",
-                "  finding  access.profile.unrestricted_collection  entities[id=person]\n",
+                "  finding  breg.access.profile-unrestricted-collection  entities[id=person]\n",
                 "           this profile can list all rows, subject only to query bounds; caller filters\n",
                 "           are not authorization. Add a claim-bound row restriction or review this\n",
                 "           registry-wide access\n",

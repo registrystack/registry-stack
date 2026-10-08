@@ -109,10 +109,9 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
             .err()
             .unwrap_or_else(|| panic!("{case} was accepted"));
         assert!(
-            failure
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "change_request.submitter_targets.invalid"),
+            failure.diagnostics().iter().any(
+                |diagnostic| diagnostic.code == "breg.change-request.submitter-targets-invalid"
+            ),
             "{case}: {failure:?}"
         );
     }
@@ -185,5 +184,5 @@ fn create_only_requests_admit_exact_existing_application_guard_targets() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.submitter_targets.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.submitter-targets-invalid"));
 }

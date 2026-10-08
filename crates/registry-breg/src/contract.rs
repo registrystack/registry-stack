@@ -912,7 +912,7 @@ pub struct ChangeRequestPlannerSource {
 /// this build of the compiler carries the `wasm` cargo feature, which
 /// validates a declared WASM handler module against the platform guest
 /// ABI at compile time; without that feature a declared WASM handler is
-/// refused with the pinned `action.handler.wasm_build_unsupported`
+/// refused with the pinned `breg.action.handler-wasm-build-unsupported`
 /// diagnostic.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -3900,7 +3900,7 @@ pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure>
 fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
     let value = parse_json_strict(bytes).map_err(|error| {
         CompileFailure::from_one(Diagnostic::error(
-            "source.json.invalid",
+            "breg.source.json-invalid",
             root,
             &format!(
                 "the JSON source is structurally invalid: {}",
@@ -3918,7 +3918,7 @@ fn deserialize_value<T: DeserializeOwned>(
     let deserializer = value.into_deserializer();
     serde_path_to_error::deserialize(deserializer).map_err(|error| {
         CompileFailure::from_one(Diagnostic::error(
-            "source.shape.invalid",
+            "breg.source.shape-invalid",
             document_path(root, &error),
             &format!(
                 "the source field is unknown, duplicated, missing, or has the wrong type: {}",

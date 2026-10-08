@@ -1103,8 +1103,9 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
         let error =
             parse_runtime_config_with_env(&(valid_runtime.clone() + member.as_str()), |_| None)
                 .expect_err("runtime telemetry authority is absent");
-        assert_eq!(error.code(), "config.unknown-key");
-        assert_eq!(error.path(), expected_path);
+        let diagnostics = error.diagnostics(None);
+        assert_eq!(diagnostics[0].code, "config.unknown-key");
+        assert_eq!(diagnostics[0].path, expected_path);
         assert_forbidden_values_absent(&format!("{error:?} {error} {}", error.render_human(None)));
     }
 

@@ -150,7 +150,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
             compile_with_contract(source.clone(), contract.clone()).unwrap_err()
         );
         assert!(
-            failure.contains("change_request.preconditions.selector_binding_invalid"),
+            failure.contains("breg.change-request.preconditions-selector-binding-invalid"),
             "{failure}"
         );
 
@@ -171,7 +171,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
         "{:?}",
         compile_with_contract(source.clone(), contract.clone()).unwrap_err()
     )
-    .contains("change_request.preconditions.selector_binding_invalid"));
+    .contains("breg.change-request.preconditions-selector-binding-invalid"));
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(25);
     compile_with_contract(source, contract).unwrap();
 
@@ -189,7 +189,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
         "{:?}",
         compile_with_contract(source.clone(), contract.clone()).unwrap_err()
     )
-    .contains("change_request.preconditions.selector_binding_invalid"));
+    .contains("breg.change-request.preconditions-selector-binding-invalid"));
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] = json!(35);
     compile_with_contract(source, contract).unwrap();
 
@@ -210,7 +210,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
         "{:?}",
         compile_with_contract(source.clone(), contract.clone()).unwrap_err()
     )
-    .contains("change_request.preconditions.selector_binding_invalid"));
+    .contains("breg.change-request.preconditions-selector-binding-invalid"));
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(6);
     compile_with_contract(source, contract).unwrap();
 
@@ -220,7 +220,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(7);
     assert!(
         format!("{:?}", compile_with_contract(source, contract).unwrap_err())
-            .contains("change_request.preconditions.selector_binding_invalid")
+            .contains("breg.change-request.preconditions-selector-binding-invalid")
     );
 
     let source = project();
@@ -229,7 +229,7 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(300);
     assert!(
         format!("{:?}", compile_with_contract(source, contract).unwrap_err())
-            .contains("change_request.preconditions.selector_binding_invalid")
+            .contains("breg.change-request.preconditions-selector-binding-invalid")
     );
 }
 
@@ -248,7 +248,7 @@ fn evidence_integer_thresholds_stay_within_verified_safe_integer_range() {
         source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
             ["requires"][1][operator] = json!(value);
         assert!(format!("{:?}", compile(source.clone()).unwrap_err())
-            .contains("change_request.preconditions.evidence_invalid"));
+            .contains("breg.change-request.preconditions-evidence-invalid"));
         source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
             ["requires"][1][operator] = json!(value.signum() * 9_007_199_254_740_991_i64);
         compile(source).unwrap();
@@ -267,7 +267,7 @@ fn evidence_string_literals_fit_verified_public_value_bounds() {
             .remove("equalsFromRequestField");
         requirement["equals"] = json!(literal);
         assert!(format!("{:?}", compile(source).unwrap_err())
-            .contains("change_request.preconditions.evidence_invalid"));
+            .contains("breg.change-request.preconditions-evidence-invalid"));
     }
 
     let mut source = project();
@@ -299,7 +299,7 @@ fn evidence_bucket_literals_fit_the_verified_value_schema() {
         "{:?}",
         compile_with_contract(source.clone(), contract.clone()).unwrap_err()
     )
-    .contains("change_request.preconditions.evidence_invalid"));
+    .contains("breg.change-request.preconditions-evidence-invalid"));
 
     source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
         ["requires"][0]["equals"] =
@@ -358,7 +358,7 @@ fn guard_predicates_and_target_selectors_share_the_context_field_ceiling() {
         .push(json!({"field":"active","equals":true}));
     assert!(
         format!("{:?}", compile_with_contract(source, contract).unwrap_err())
-            .contains("change_request.preconditions.target_fields_exceeded")
+            .contains("breg.change-request.preconditions-target-fields-exceeded")
     );
 }
 
@@ -434,11 +434,12 @@ fn preconditions_refuse_incomplete_profiles_and_wrong_types() {
         let report = format!("{failure:?}");
         assert!(
             report.contains(match change {
-                "missing-selector" => "change_request.preconditions.selector_fields_invalid",
-                "wrong-output-type" => "change_request.preconditions.evidence_requirement_invalid",
-                "wrong-date" => "change_request.preconditions.predicate_current_date_invalid",
+                "missing-selector" => "breg.change-request.preconditions-selector-fields-invalid",
+                "wrong-output-type" =>
+                    "breg.change-request.preconditions-evidence-requirement-invalid",
+                "wrong-date" => "breg.change-request.preconditions-predicate-current-date-invalid",
                 "effect-id-collision" => {
-                    "change_request.preconditions.target_effect_collision"
+                    "breg.change-request.preconditions-target-effect-collision"
                 }
                 _ => unreachable!(),
             }),
@@ -458,7 +459,7 @@ fn evidence_string_equality_requires_a_reachable_request_length() {
     source["entities"][1]["fields"][2]["minLength"] = json!(1025);
     let report = format!("{:?}", compile(source).unwrap_err());
     assert!(
-        report.contains("change_request.preconditions.evidence_requirement_invalid"),
+        report.contains("breg.change-request.preconditions-evidence-requirement-invalid"),
         "a required request string longer than every public Evidence string must be refused: {report}"
     );
 }
@@ -535,7 +536,7 @@ fn request_predicates_distinguish_explicit_null_from_an_absent_equality() {
         .unwrap()
         .remove("equals");
     assert!(format!("{:?}", compile(source).unwrap_err())
-        .contains("change_request.preconditions.predicate_operator_invalid"));
+        .contains("breg.change-request.preconditions-predicate-operator-invalid"));
 }
 
 #[test]
@@ -555,7 +556,7 @@ fn request_field_equality_requires_a_present_stored_value() {
         .push(json!({"field":"lot-reference", "equalsFromRequestField":"optional-owner"}));
     let failure = format!("{:?}", compile(source).unwrap_err());
     assert!(
-        failure.contains("change_request.preconditions.predicate_request_field_invalid"),
+        failure.contains("breg.change-request.preconditions-predicate-request-field-invalid"),
         "{failure}"
     );
 }
@@ -572,7 +573,7 @@ fn frozen_guard_values_are_counted_with_the_original_proposal_snapshot() {
     field["maxLength"] = json!(200_000);
     let failure = format!("{:?}", compile(source).unwrap_err());
     assert!(
-        failure.contains("change_request.preconditions.bounds"),
+        failure.contains("breg.change-request.preconditions-bounds"),
         "{failure}"
     );
 }
@@ -598,7 +599,7 @@ fn duplicated_reviewed_evidence_definitions_count_toward_the_snapshot_ceiling() 
         .push(second);
     let failure = format!("{:?}", compile(source).unwrap_err());
     assert!(
-        failure.contains("change_request.preconditions.bounds"),
+        failure.contains("breg.change-request.preconditions-bounds"),
         "{failure}"
     );
 }

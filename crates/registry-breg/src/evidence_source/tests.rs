@@ -370,7 +370,7 @@ fn refuses_a_string_selector_field_that_accepts_the_empty_value() {
     // Omitting `minLength` defaults it to 0, so `code` accepts the empty value.
     empty_allowed["entities"][0]["fields"][0] = json!({"id":"code","type":"string","maxLength":32,"required":true,"classification":"internal"});
     let diagnostic = refused(&compiled(&empty_allowed, SQL), &options());
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert!(diagnostic.message.contains("minLength"));
     // `alternatives_keep_one_route_and_selected_identity_with_stable_inventories`
     // exports the same fixture with `code` declared at `minLength: 1`, so an
@@ -518,7 +518,7 @@ fn refuses_change_request_lifecycle_entities() {
     selection.fields = vec!["code".into()];
     // The lookup is granted and routed; only the lifecycle shape is refused.
     let diagnostic = refused(&compiled(&original, SQL), &selection);
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "change-request lifecycle records require a reviewed custom Evidence adapter"
@@ -531,7 +531,7 @@ fn refuses_a_profile_that_does_not_grant_lookup() {
     original["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get"]);
     original["accessProfiles"][0]["permissions"][0]["lookups"] = json!([]);
     let diagnostic = refused(&compiled(&original, SQL), &options());
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "the selected profile does not grant lookup; declare and review that authority in BReg first"
@@ -547,7 +547,7 @@ fn refuses_a_lookup_grant_without_a_compiled_lookup_route() {
         .retain(|route| route["operation"] != json!("lookup"));
     let routeless: CompiledRegistry = serde_json::from_value(compiled_registry).unwrap();
     let diagnostic = refused(&routeless, &options());
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "the compiled profile has no lookup route"
@@ -638,7 +638,7 @@ fn refuses_a_composite_selector_beyond_the_aggregate_selector_bound() {
     selection.selectors = vec!["by-parts".into()];
     // Each field stays inside the per-selector bound; only their union crosses it.
     let diagnostic = refused(&compiled(&original, SQL), &selection);
-    assert_eq!(diagnostic.code, "evidence_source.refused");
+    assert_eq!(diagnostic.code, "breg.evidence-source.refused");
     assert_eq!(
         diagnostic.message,
         "the complete composite selector exceeds Evidence's 8192-byte bound"

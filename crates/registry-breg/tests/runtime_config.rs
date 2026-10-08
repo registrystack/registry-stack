@@ -62,14 +62,35 @@ fn refusal(error: RuntimeConfigError) -> Refusal {
     }
 }
 
+/// The deciding diagnostic's code: the reader's, or the one rule the runtime
+/// decides itself.
+fn code_of(error: &RuntimeConfigError) -> String {
+    deciding(error).0
+}
+
+/// The deciding diagnostic's pointer.
+fn path_of(error: &RuntimeConfigError) -> String {
+    deciding(error).1
+}
+
+fn deciding(error: &RuntimeConfigError) -> (String, String) {
+    if let RuntimeConfigError::Reader(refusal) = error {
+        let deciding = refusal.deciding_diagnostic();
+        return (deciding.code.clone(), deciding.path.clone());
+    }
+    let [diagnostic] = <[_; 1]>::try_from(error.diagnostics(None))
+        .expect("a rule the runtime decides reports one diagnostic");
+    (diagnostic.code, diagnostic.path)
+}
+
 /// The deciding diagnostic's code and pointer of a refusal the shared reader
 /// decided.
 fn reader_refusal(error: &RuntimeConfigError) -> (&str, &str) {
-    assert!(
-        matches!(error, RuntimeConfigError::Reader(_)),
-        "the shared reader decides this refusal: {error:?}"
-    );
-    (error.code(), error.path())
+    let RuntimeConfigError::Reader(refusal) = error else {
+        panic!("the shared reader decides this refusal: {error:?}");
+    };
+    let deciding = refusal.deciding_diagnostic();
+    (&deciding.code, &deciding.path)
 }
 
 #[test]
@@ -773,50 +794,48 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
     let cases = [
         (
             RuntimeConfigError::InvalidDatabase,
-            "runtime_config.invalid_database",
+            "breg.runtime.invalid-database",
             "/database",
         ),
         (
             RuntimeConfigError::InvalidOidc,
-            "runtime_config.invalid_oidc",
+            "breg.runtime.invalid-oidc",
             "/authentication/oidc",
         ),
         (
             RuntimeConfigError::InvalidEventDestination,
-            "runtime_config.invalid_event_destination",
+            "breg.runtime.invalid-event-destination",
             "/eventDestinations",
         ),
-        (RuntimeConfigError::Secret, "runtime_config.secret", ""),
+        (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
         (
             RuntimeConfigError::PackageRootUnavailable,
-            "runtime_config.package_root_unavailable",
+            "breg.runtime.package-root-unavailable",
             "/package/root",
         ),
         (
             RuntimeConfigError::UnsafePackageRoot,
-            "runtime_config.unsafe_package_root",
+            "breg.runtime.unsafe-package-root",
             "/package/root",
         ),
         (
             RuntimeConfigError::SecretProviderRootUnavailable,
-            "runtime_config.secret_provider_root_unavailable",
+            "breg.runtime.secret-provider-root-unavailable",
             "/secretProviders/file/root",
         ),
         (
             RuntimeConfigError::UnsafeSecretProviderRoot,
-            "runtime_config.unsafe_secret_provider_root",
+            "breg.runtime.unsafe-secret-provider-root",
             "/secretProviders/file/root",
         ),
         (
             RuntimeConfigError::InvalidOidcLeeway,
-            "runtime_config.invalid_oidc_leeway",
+            "breg.runtime.invalid-oidc-leeway",
             "/authentication/oidc/leewayMilliseconds",
         ),
     ];
 
     for (error, code, path) in cases {
-        assert_eq!(error.code(), code);
-        assert_eq!(error.path(), path);
         let diagnostics = error.diagnostics(None);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, code);
@@ -987,8 +1006,10 @@ fn wasm_execution_backend_refuses_unknown_values() {
         let configured = format!("{base}wasmExecution:\n  backend: {backend}\n");
         let error = parse_runtime_config(&configured)
             .expect_err("an unknown WASM execution backend is refused");
-        assert_eq!(error.code(), "runtime_config.invalid_wasm_execution");
-        assert_eq!(error.path(), "/wasmExecution");
+        let diagnostics = error.diagnostics(None);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "breg.runtime.invalid-wasm-execution");
+        assert_eq!(diagnostics[0].path, "/wasmExecution");
     }
 }
 
@@ -1237,8 +1258,8 @@ fn an_instance_id_outside_the_event_source_grammar_is_refused_naming_the_key() {
             RuntimeConfigError::InvalidInstanceId,
             "{instance_id}"
         );
-        assert_eq!(error.code(), "runtime_config.invalid_instance_id");
-        assert_eq!(error.path(), "/identity/instanceId");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-instance-id");
+        assert_eq!(path_of(&error), "/identity/instanceId");
         assert!(!error.to_string().contains(instance_id));
         assert!(error.to_string().contains("set identity.instanceId"));
     }
@@ -1265,8 +1286,14 @@ fn disagreeing_environment_identity_keys_are_refused_naming_both_keys() {
     let error = parse_runtime_config_with_env(&raw, env_lookup)
         .expect_err("disagreeing environment keys are refused");
     assert_eq!(error, RuntimeConfigError::EnvironmentIdentityConflict);
-    assert_eq!(error.code(), "runtime_config.environment_identity_conflict");
-    assert_eq!(error.path(), "/identity/databaseInitializationEnvironment");
+    assert_eq!(
+        code_of(&error),
+        "breg.runtime.environment-identity-conflict"
+    );
+    assert_eq!(
+        path_of(&error),
+        "/identity/databaseInitializationEnvironment"
+    );
     let message = error.to_string();
     assert!(message.contains("identity.environment"), "{message}");
     assert!(
@@ -1523,8 +1550,8 @@ fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
             RuntimeConfigError::InvalidMetricsListener,
             "binding {bind} refused"
         );
-        assert_eq!(error.path(), "/metricsListener");
-        assert_eq!(error.code(), "runtime_config.invalid_metrics_listener");
+        assert_eq!(path_of(&error), "/metricsListener");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-metrics-listener");
     }
 }
 
@@ -2412,11 +2439,11 @@ fn a_substitution_inside_a_secret_reference_is_refused() {
     ] {
         let error = parse_runtime_config_with_env(&raw, lookup)
             .expect_err("a secret reference or provider takes no substitution");
-        assert_eq!(error.code(), "config.substitution-not-allowed");
+        assert_eq!(code_of(&error), "config.substitution-not-allowed");
         assert!(
-            ["/audit/hashKeyRef", "/secretProviders/file/root"].contains(&error.path()),
+            ["/audit/hashKeyRef", "/secretProviders/file/root"].contains(&path_of(&error).as_str()),
             "{}",
-            error.path()
+            path_of(&error)
         );
     }
 }
@@ -2670,13 +2697,16 @@ fn missing_package_root_and_secret_root_are_reported_at_their_own_paths() {
         .expect_err("a missing file secret provider root is refused");
 
     assert_eq!(root_error, RuntimeConfigError::PackageRootUnavailable);
-    assert_eq!(root_error.path(), "/package/root");
-    assert_eq!(root_error.code(), "runtime_config.package_root_unavailable");
+    assert_eq!(path_of(&root_error), "/package/root");
+    assert_eq!(
+        code_of(&root_error),
+        "breg.runtime.package-root-unavailable"
+    );
     assert_eq!(
         secret_error,
         RuntimeConfigError::SecretProviderRootUnavailable
     );
-    assert_eq!(secret_error.path(), "/secretProviders/file/root");
+    assert_eq!(path_of(&secret_error), "/secretProviders/file/root");
 }
 
 /// The verifier applies leeway in whole seconds, so a sub-second value would be
@@ -2725,8 +2755,8 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
         )
         .expect_err("a leeway the verifier cannot apply exactly is refused");
         assert_eq!(error, RuntimeConfigError::InvalidOidcLeeway, "{refused}");
-        assert_eq!(error.path(), "/authentication/oidc/leewayMilliseconds");
-        assert_eq!(error.code(), "runtime_config.invalid_oidc_leeway");
+        assert_eq!(path_of(&error), "/authentication/oidc/leewayMilliseconds");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-oidc-leeway");
         let message = error.to_string();
         assert!(
             message.contains("whole number of seconds") && message.contains("300000"),
@@ -3699,8 +3729,8 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
     let invalid = format!("{base}\nattachmentStorage:\n  kind: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n");
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
-    assert_eq!(error.path(), "/attachmentStorage");
-    assert_eq!(error.code(), "runtime_config.invalid_attachment_storage");
+    assert_eq!(path_of(&error), "/attachmentStorage");
+    assert_eq!(code_of(&error), "breg.runtime.invalid-attachment-storage");
     let valid = invalid.replace("http://public.example", "https://storage-canary.example");
     let config = parse_runtime_config(&valid).unwrap();
     assert!(!format!("{config:?}").contains("storage-canary"));
@@ -3730,10 +3760,10 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
     let invalid = format!("{base}\nattachmentVerification:\n  kind: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n");
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
-    assert_eq!(error.path(), "/attachmentVerification");
+    assert_eq!(path_of(&error), "/attachmentVerification");
     assert_eq!(
-        error.code(),
-        "runtime_config.invalid_attachment_verification"
+        code_of(&error),
+        "breg.runtime.invalid-attachment-verification"
     );
     fixture.write_secret("verifier-token", b"verifier-token-canary");
     let valid = invalid.replace("http://public.example", "https://verifier-canary.example");
@@ -3784,8 +3814,8 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     ] {
         let error = parse_runtime_config(&invalid).unwrap_err();
         assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
-        assert_eq!(error.path(), "/fieldEncryption");
-        assert_eq!(error.code(), "runtime_config.invalid_field_encryption");
+        assert_eq!(path_of(&error), "/fieldEncryption");
+        assert_eq!(code_of(&error), "breg.runtime.invalid-field-encryption");
     }
     // The request timeout stays above zero and at or below the provider
     // maximum, refused at decode where the member is.

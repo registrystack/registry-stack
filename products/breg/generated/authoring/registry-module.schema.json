@@ -188,7 +188,7 @@
       "type": "object"
     },
     "ActionHandlerKindSource": {
-      "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the `wasm` cargo feature, which\nvalidates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `action.handler.wasm_build_unsupported`\ndiagnostic.",
+      "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the `wasm` cargo feature, which\nvalidates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `breg.action.handler-wasm-build-unsupported`\ndiagnostic.",
       "enum": [
         "rhai",
         "wasm"

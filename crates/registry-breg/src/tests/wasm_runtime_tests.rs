@@ -512,7 +512,7 @@ fn engine_setup_failure_is_an_execution_fault_on_every_path() {
     assert_eq!(invoked.kind, ActionHandlerError::Execution);
     assert_eq!(invoked.message, prepared.message);
     let (code, message) = crate::wasm_handler::admission_violation(setup);
-    assert_eq!(code, "action.handler.execution");
+    assert_eq!(code, "breg.action.handler-execution");
     assert!(
         message.starts_with("this build cannot validate WASM handler modules"),
         "the admission diagnostic stays a build-fault message: {message}"

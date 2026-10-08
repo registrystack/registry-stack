@@ -34,7 +34,7 @@ pub(super) fn compile(
         super::validate_id(&source.id, &format!("{root}.id"), &mut errors);
         if !seen.insert(source.id.clone()) {
             errors.push(error(
-                "statistical_dataset.id.duplicate",
+                "breg.statistical-dataset.id-duplicate",
                 &format!("{root}.id"),
                 &source.id,
                 "use a unique statistical dataset id",
@@ -43,7 +43,7 @@ pub(super) fn compile(
         }
         let Some(unit) = entities.get(&source.unit) else {
             errors.push(error(
-                "statistical_dataset.unit.unknown",
+                "breg.statistical-dataset.unit-unknown",
                 &format!("{root}.unit"),
                 &source.id,
                 &format!("declare the unit entity `{}`", source.unit),
@@ -55,7 +55,7 @@ pub(super) fn compile(
             Ok(filter) => Some(filter),
             Err(_) => {
                 errors.push(error(
-                    "statistical_dataset.population.invalid",
+                    "breg.statistical-dataset.population-invalid",
                     &format!("{root}.population"),
                     &source.id,
                     "write population with the supported $filter grammar",
@@ -89,7 +89,7 @@ pub(super) fn compile(
             );
             if readers.is_empty() {
                 errors.push(error(
-                    "statistical_dataset.releases.readers_empty",
+                    "breg.statistical-dataset.releases-readers-empty",
                     &format!("{root}.releases.readers"),
                     &source.id,
                     "name at least one release reader profile",
@@ -102,7 +102,7 @@ pub(super) fn compile(
         });
         if live_profiles.is_empty() && releases.is_none() {
             errors.push(error(
-                "statistical_dataset.grants.empty",
+                "breg.statistical-dataset.grants-empty",
                 &root,
                 &source.id,
                 "declare live profiles, releases, or both",
@@ -156,7 +156,7 @@ pub(super) fn compile(
         let disclosure_source = source.disclosure.as_ref();
         if disclosure_source.is_none() {
             errors.push(error(
-                "statistical_dataset.disclosure.missing",
+                "breg.statistical-dataset.disclosure-missing",
                 &format!("{root}.disclosure"),
                 &source.id,
                 "declare minimumCount and roundingBase",
@@ -164,7 +164,7 @@ pub(super) fn compile(
         }
         if disclosure_source.is_none_or(|disclosure| disclosure.minimum_count < 2) {
             errors.push(error(
-                "statistical_dataset.disclosure.minimum_count",
+                "breg.statistical-dataset.disclosure-minimum-count",
                 &format!("{root}.disclosure.minimumCount"),
                 &source.id,
                 "set minimumCount to at least 2",
@@ -174,7 +174,7 @@ pub(super) fn compile(
             .is_some_and(|disclosure| disclosure.minimum_count > MAX_EXACT_JSON_INTEGER)
         {
             errors.push(error(
-                "statistical_dataset.disclosure.minimum_count_exceeded",
+                "breg.statistical-dataset.disclosure-minimum-count-exceeded",
                 &format!("{root}.disclosure.minimumCount"),
                 &source.id,
                 &format!("set minimumCount to at most {MAX_EXACT_JSON_INTEGER}"),
@@ -182,7 +182,7 @@ pub(super) fn compile(
         }
         if disclosure_source.is_none_or(|disclosure| disclosure.rounding_base < 2) {
             errors.push(error(
-                "statistical_dataset.disclosure.rounding_base",
+                "breg.statistical-dataset.disclosure-rounding-base",
                 &format!("{root}.disclosure.roundingBase"),
                 &source.id,
                 "set roundingBase to at least 2",
@@ -192,7 +192,7 @@ pub(super) fn compile(
             .is_some_and(|disclosure| disclosure.rounding_base > MAX_EXACT_JSON_INTEGER)
         {
             errors.push(error(
-                "statistical_dataset.disclosure.rounding_base_exceeded",
+                "breg.statistical-dataset.disclosure-rounding-base-exceeded",
                 &format!("{root}.disclosure.roundingBase"),
                 &source.id,
                 &format!("set roundingBase to at most {MAX_EXACT_JSON_INTEGER}"),
@@ -203,7 +203,7 @@ pub(super) fn compile(
         });
         if cell_count.is_none_or(|cells| cells > MAX_STATISTICAL_CELLS_PER_PERIOD) {
             errors.push(error(
-                "statistical_dataset.cells.exceeded",
+                "breg.statistical-dataset.cells-exceeded",
                 &format!("{root}.dimensions"),
                 &source.id,
                 &format!(
@@ -264,7 +264,7 @@ pub(super) fn compile(
                 .is_none_or(|bytes| bytes > super::MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES)
         }) {
             errors.push(error(
-                "statistical_dataset.document.exceeded",
+                "breg.statistical-dataset.document-exceeded",
                 &format!("{root}.dimensions"),
                 &source.id,
                 &format!(
@@ -512,7 +512,7 @@ fn compile_period(
                         fields.insert(temporal.end_field.clone());
                     } else {
                         errors.push(error(
-                            "statistical_dataset.period.temporal_missing",
+                            "breg.statistical-dataset.period-temporal-missing",
                             &format!("{root}.period.validity"),
                             &source.id,
                             &format!(
@@ -535,7 +535,7 @@ fn compile_period(
     let granularity = granularity(granularity_source);
     if !valid_period_code(first_period, granularity) {
         errors.push(error(
-            "statistical_dataset.period.first_period",
+            "breg.statistical-dataset.period-first-period",
             &format!("{root}.period.firstPeriod"),
             &source.id,
             "use a valid firstPeriod matching the declared granularity",
@@ -589,7 +589,7 @@ fn compile_dimensions(
         let path = format!("{root}.dimensions[]");
         if !seen.insert(field_id) {
             errors.push(error(
-                "statistical_dataset.dimension.duplicate",
+                "breg.statistical-dataset.dimension-duplicate",
                 &path,
                 &source.id,
                 &format!("list dimension `{field_id}` once"),
@@ -598,7 +598,7 @@ fn compile_dimensions(
         }
         if matches!(field_id.as_str(), "period" | "value" | "status") {
             errors.push(error(
-                "statistical_dataset.dimension.reserved",
+                "breg.statistical-dataset.dimension-reserved",
                 &path,
                 &source.id,
                 &format!("rename dimension field `{field_id}` because the CSV column is reserved"),
@@ -606,7 +606,7 @@ fn compile_dimensions(
         }
         let Some((field_type, required)) = field(unit, field_id) else {
             errors.push(error(
-                "statistical_dataset.field.unknown",
+                "breg.statistical-dataset.field-unknown",
                 &path,
                 &source.id,
                 &format!(
@@ -624,7 +624,7 @@ fn compile_dimensions(
             FieldTypeSource::VocabularyCode { vocabulary, values } => {
                 if values.iter().any(|value| value.starts_with('_')) {
                     errors.push(error(
-                        "statistical_dataset.dimension.code_reserved",
+                        "breg.statistical-dataset.dimension-code-reserved",
                         &path,
                         &source.id,
                         &format!(
@@ -641,7 +641,7 @@ fn compile_dimensions(
             }
             _ => {
                 errors.push(error(
-                    "statistical_dataset.dimension.type",
+                    "breg.statistical-dataset.dimension-type",
                     &path,
                     &source.id,
                     &format!("make dimension field `{field_id}` boolean or vocabulary-code"),
@@ -669,7 +669,7 @@ fn validate_referenced_fields(
     for field_id in fields {
         let Some((field_type, _)) = field(unit, field_id) else {
             errors.push(error(
-                "statistical_dataset.field.unknown",
+                "breg.statistical-dataset.field-unknown",
                 root,
                 &source.id,
                 &format!(
@@ -685,7 +685,7 @@ fn validate_referenced_fields(
             .is_some_and(|field| field.encryption.is_some())
         {
             errors.push(error(
-                "statistical_dataset.field.encrypted",
+                "breg.statistical-dataset.field-encrypted",
                 root,
                 &source.id,
                 &format!("use an unencrypted field instead of `{field_id}`"),
@@ -705,7 +705,7 @@ fn validate_referenced_fields(
         };
         if is_period_field && !matches!(field_type, FieldTypeSource::Date) {
             errors.push(error(
-                "statistical_dataset.period.field_type",
+                "breg.statistical-dataset.period-field-type",
                 root,
                 &source.id,
                 &format!("make period or validity field `{field_id}` a date"),
@@ -727,13 +727,13 @@ fn validate_named_profile(
         .find(|profile| profile.id == profile_id)
     {
         None => errors.push(error(
-            "statistical_dataset.profile.unknown",
+            "breg.statistical-dataset.profile-unknown",
             root,
             dataset,
             &format!("declare access profile `{profile_id}`"),
         )),
         Some(profile) if profile.anonymous => errors.push(error(
-            "statistical_dataset.profile.anonymous",
+            "breg.statistical-dataset.profile-anonymous",
             root,
             dataset,
             &format!("replace anonymous profile `{profile_id}` with an authenticated profile"),
@@ -752,7 +752,7 @@ fn validate_count_grant(
 ) {
     let Some(grant) = unit.access_profiles.get(profile_id) else {
         errors.push(error(
-            "statistical_dataset.count_grant.missing",
+            "breg.statistical-dataset.count-grant-missing",
             root,
             &source.id,
             &format!(
@@ -764,7 +764,7 @@ fn validate_count_grant(
     };
     if !grant.operations.contains(&Operation::List) {
         errors.push(error(
-            "statistical_dataset.count_grant.list_required",
+            "breg.statistical-dataset.count-grant-list-required",
             root,
             &source.id,
             &format!(
@@ -775,7 +775,7 @@ fn validate_count_grant(
     }
     if !grant.allow_count {
         errors.push(error(
-            "statistical_dataset.count_grant.count_required",
+            "breg.statistical-dataset.count-grant-count-required",
             root,
             &source.id,
             &format!("set allowCount for profile `{profile_id}` on `{}`", unit.id),
@@ -783,7 +783,7 @@ fn validate_count_grant(
     }
     if !grant.require_consent.is_empty() {
         errors.push(error(
-            "statistical_dataset.count_grant.consent",
+            "breg.statistical-dataset.count-grant-consent",
             root,
             &source.id,
             &format!("remove requireConsent from profile `{profile_id}` for dataset counts"),
@@ -792,7 +792,7 @@ fn validate_count_grant(
     for field in referenced_fields {
         if !grant.filterable_fields.contains(field) {
             errors.push(error(
-                "statistical_dataset.count_grant.field_not_filterable",
+                "breg.statistical-dataset.count-grant-field-not-filterable",
                 root,
                 &source.id,
                 &format!("add field `{field}` to filterableFields for profile `{profile_id}`"),
@@ -817,7 +817,7 @@ fn validate_publisher_independence(
             .is_some_and(|requirements| !requirements.row_boundaries.is_empty())
         {
             errors.push(error(
-                "statistical_dataset.publisher.entity_row_boundary",
+                "breg.statistical-dataset.publisher-entity-row-boundary",
                 root,
                 &source.id,
                 &format!(
@@ -827,7 +827,7 @@ fn validate_publisher_independence(
         }
         let Some(grant) = entity.access_profiles.get(publisher) else {
             errors.push(error(
-                "statistical_dataset.publisher.dependency_grant_missing",
+                "breg.statistical-dataset.publisher-dependency-grant-missing",
                 root,
                 &source.id,
                 &format!("grant publisher `{publisher}` access to dependency entity `{entity_id}`"),
@@ -836,7 +836,7 @@ fn validate_publisher_independence(
         };
         if dependency_select_operations(grant).is_empty() {
             errors.push(error(
-                "statistical_dataset.publisher.dependency_read_required",
+                "breg.statistical-dataset.publisher-dependency-read-required",
                 root,
                 &source.id,
                 &format!(
@@ -859,7 +859,7 @@ fn validate_publisher_independence(
         };
         if let Some(member) = violation {
             errors.push(error(
-                "statistical_dataset.publisher.caller_dependent",
+                "breg.statistical-dataset.publisher-caller-dependent",
                 root,
                 &source.id,
                 &format!(
@@ -1121,7 +1121,7 @@ fn unique_profiles(
     let profiles = values.iter().cloned().collect::<BTreeSet<_>>();
     if profiles.len() != values.len() {
         errors.push(error(
-            "statistical_dataset.profile.duplicate",
+            "breg.statistical-dataset.profile-duplicate",
             path,
             dataset,
             fix,
@@ -1179,7 +1179,7 @@ fn validate_population_expr(
             };
             let Some((field_id, field_type)) = field_by_api_name(entity, api_field) else {
                 errors.push(error(
-                    "statistical_dataset.population.field_unknown",
+                    "breg.statistical-dataset.population-field-unknown",
                     &format!("{root}.population"),
                     &source.id,
                     &format!(
@@ -1192,7 +1192,7 @@ fn validate_population_expr(
             field_bindings.insert(api_field.to_owned(), field_id.to_owned());
             if !population_predicate_valid(predicate, field_type) {
                 errors.push(error(
-                    "statistical_dataset.population.invalid",
+                    "breg.statistical-dataset.population-invalid",
                     &format!("{root}.population"),
                     &source.id,
                     &format!(

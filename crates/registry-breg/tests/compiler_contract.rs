@@ -356,7 +356,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
     missing_canonical_iri.registry.canonical_base_iri.clear();
     assert_compile_diagnostic(
         missing_canonical_iri,
-        "registry.canonical_base_iri.required",
+        "breg.registry.canonical-base-iri-required",
     );
 
     let mut duplicate = multi_dataset_project();
@@ -372,7 +372,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "manifest_projection.dataset.duplicate"));
+        .any(|diagnostic| diagnostic.code == "breg.manifest-projection.dataset-duplicate"));
 
     let mut dangling = multi_dataset_project();
     dangling.entities[0].primary_dataset = "missing".to_owned();
@@ -381,18 +381,21 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "manifest_projection.entity.dataset_dangling"));
+        .any(|diagnostic| diagnostic.code == "breg.manifest-projection.entity-dataset-dangling"));
 
     let mut missing = multi_dataset_project();
     missing.entities[0].primary_dataset.clear();
     assert_compile_diagnostic(
         missing,
-        "manifest_projection.entity.primary_dataset_required",
+        "breg.manifest-projection.entity-primary-dataset-required",
     );
 
     let mut empty_dataset = multi_dataset_project();
     empty_dataset.entities[1].primary_dataset = "people".to_owned();
-    assert_compile_diagnostic(empty_dataset, "manifest_projection.dataset.entities_empty");
+    assert_compile_diagnostic(
+        empty_dataset,
+        "breg.manifest-projection.dataset-entities-empty",
+    );
 
     let mut duplicate_service = multi_dataset_project();
     let service = duplicate_service
@@ -409,7 +412,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         .push(service);
     assert_compile_diagnostic(
         duplicate_service,
-        "manifest_projection.data_service.duplicate",
+        "breg.manifest-projection.data-service-duplicate",
     );
 
     let mut dangling_service_dataset = multi_dataset_project();
@@ -422,7 +425,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         .push("missing".to_owned());
     assert_compile_diagnostic(
         dangling_service_dataset,
-        "manifest_projection.data_service.dataset_dangling",
+        "breg.manifest-projection.data-service-dataset-dangling",
     );
 
     let mut duplicate_distribution = multi_dataset_project();
@@ -440,7 +443,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         .push(distribution);
     assert_compile_diagnostic(
         duplicate_distribution,
-        "manifest_projection.distribution.duplicate",
+        "breg.manifest-projection.distribution-duplicate",
     );
 
     let mut dangling_distribution_service = multi_dataset_project();
@@ -452,7 +455,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         .access_service = Some("missing".to_owned());
     assert_compile_diagnostic(
         dangling_distribution_service,
-        "manifest_projection.distribution.access_service_dangling",
+        "breg.manifest-projection.distribution-access-service-dangling",
     );
 
     let mut unknown_effective_profile = multi_dataset_project();
@@ -464,7 +467,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         .access_profile = Some("missing".to_owned());
     assert_compile_diagnostic(
         unknown_effective_profile,
-        "manifest_projection.dataset.access_profile_unknown",
+        "breg.manifest-projection.dataset-access-profile-unknown",
     );
 }
 
@@ -487,11 +490,11 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
         .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
         .collect::<BTreeSet<_>>();
     assert!(project_codes.contains(&(
-        "registry.canonical_base_iri.required",
+        "breg.registry.canonical-base-iri-required",
         "project.registry.canonicalBaseIri"
     )));
     assert!(project_codes.contains(&(
-        "manifest_projection.entity.primary_dataset_required",
+        "breg.manifest-projection.entity-primary-dataset-required",
         "entities[].primaryDataset"
     )));
 
@@ -511,7 +514,7 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
     let module = compile_project(&project, &[module], CompileProfile::Authoring)
         .expect_err("module entity membership is required for compilation");
     assert!(module.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "manifest_projection.entity.primary_dataset_required"
+        diagnostic.code == "breg.manifest-projection.entity-primary-dataset-required"
             && diagnostic.path == "entities[].primaryDataset"
     }));
 }
@@ -688,7 +691,7 @@ fn anonymous_request_presence_processes_only_public_existence_and_linkage() {
         let failure = compile_json(&serde_json::to_vec(&invalid).unwrap())
             .expect_err("an existence-only response still processes classified request linkage");
         assert!(failure.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "change_request.presence.anonymous_non_public"
+            diagnostic.code == "breg.change-request.presence-anonymous-non-public"
         }));
     }
 
@@ -697,7 +700,7 @@ fn anonymous_request_presence_processes_only_public_existence_and_linkage() {
     let failure = compile_json(&serde_json::to_vec(&project).unwrap())
         .expect_err("an anonymous presence grant cannot acquire verified claim authority");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "change_request.presence.anonymous_claim_boundary"
+        diagnostic.code == "breg.change-request.presence-anonymous-claim-boundary"
     }));
 }
 
@@ -1326,27 +1329,27 @@ fn change_request_review_and_apply_cannot_omit_target_access_requirements() {
             (
                 "/requiredScopes",
                 serde_json::json!([]),
-                "access.requirements.scope_missing",
+                "breg.access.requirements-scope-missing",
             ),
             (
                 "/requiredPurposes",
                 serde_json::json!([]),
-                "access.requirements.purpose_widened",
+                "breg.access.requirements-purpose-widened",
             ),
             (
                 "/requiredPurposes",
                 serde_json::json!(["unrelated"]),
-                "access.requirements.purpose_widened",
+                "breg.access.requirements-purpose-widened",
             ),
             (
                 target_path,
                 serde_json::json!([]),
-                "access.requirements.row_boundary_missing",
+                "breg.access.requirements-row-boundary-missing",
             ),
             (
                 target_path,
                 serde_json::json!([{"field":"site","claim":"different_sites","operator":"in"}]),
-                "access.requirements.row_boundary_missing",
+                "breg.access.requirements-row-boundary-missing",
             ),
         ] {
             let mut changed = source.clone();
@@ -1434,22 +1437,22 @@ fn change_request_presence_cannot_omit_request_access_requirements() {
         (
             "/requiredScopes",
             serde_json::json!(["target:manage"]),
-            "access.requirements.scope_missing",
+            "breg.access.requirements-scope-missing",
         ),
         (
             "/requiredPurposes",
             serde_json::json!(["non-review"]),
-            "access.requirements.purpose_widened",
+            "breg.access.requirements-purpose-widened",
         ),
         (
             "/permissions/0/requestPresence/0/rowBoundaries",
             serde_json::json!([]),
-            "access.requirements.row_boundary_missing",
+            "breg.access.requirements-row-boundary-missing",
         ),
         (
             "/permissions/0/requestPresence/0/rowBoundaries",
             serde_json::json!([{"field":"placement","claim":"different_placements","operator":"in"}]),
-            "access.requirements.row_boundary_missing",
+            "breg.access.requirements-row-boundary-missing",
         ),
     ] {
         let mut changed = source.clone();
@@ -1593,14 +1596,14 @@ fn change_request_compile_refuses_direct_write_bypass_and_incomplete_grants() {
     assert!(direct
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_control.direct_write_grant"));
+        .any(|diagnostic| diagnostic.code == "breg.change-control.direct-write-grant"));
 
     let partial_apply = compile_json(source(r#"["get"]"#, r#"[]"#).as_bytes())
         .expect_err("apply grants must cover every target entity");
     assert!(partial_apply
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.apply_targets.incomplete"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.apply-targets-incomplete"));
 }
 
 #[test]
@@ -1650,7 +1653,7 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     assert!(ambiguous_target
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.target.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-target-invalid"));
 
     let nullable_set = compile_json(
         base(
@@ -1664,7 +1667,7 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     assert!(nullable_set
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.value_nullable"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-value-nullable"));
 
     let missing_set_source = compile_json(
         base(
@@ -1678,7 +1681,7 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     assert!(missing_set_source
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.value.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-value-invalid"));
 
     let ambiguous_set_source = compile_json(
         base(
@@ -1692,7 +1695,7 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     assert!(ambiguous_set_source
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.value.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-value-invalid"));
 
     let clear_required = compile_json(
         base(
@@ -1706,7 +1709,7 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     assert!(clear_required
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.clear_required"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-clear-required"));
 
     let overlap = compile_json(
         base(
@@ -1721,7 +1724,7 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     assert!(overlap
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.overlapping_write"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-overlapping-write"));
 
     let cycle = compile_json(
         base(
@@ -1736,7 +1739,7 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
     assert!(cycle
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.dependency_cycle"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-dependency-cycle"));
 
     let wrong_reserved_type = compile_json(
         base(
@@ -1747,10 +1750,13 @@ fn change_request_compile_refuses_ambiguous_references_cycles_overlaps_and_null_
         .as_bytes(),
     )
     .expect_err("reserved ids can populate only reference fields");
-    assert!(wrong_reserved_type
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.value_reference_required"));
+    assert!(
+        wrong_reserved_type
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code
+                == "breg.change-request.effect-value-reference-required")
+    );
 }
 
 #[test]
@@ -1785,7 +1791,7 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
     assert!(uncontrolled
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.uncontrolled_target"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-uncontrolled-target"));
 
     let tombstone_request = compile_json(
         br#"{
@@ -1817,7 +1823,7 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
     assert!(tombstone_request
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.tombstone_forbidden"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.tombstone-forbidden"));
 
     let mut effects = Vec::new();
     let mut target_fields = Vec::new();
@@ -1864,7 +1870,7 @@ fn change_request_compile_refuses_uncontrolled_targets_tombstone_requests_and_pl
     assert!(too_many_fields
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.bounds.field_mutations"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.bounds-field-mutations"));
 }
 
 #[test]
@@ -1883,7 +1889,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
     assert!(misplaced_lifecycle
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access_profile.operation.unavailable"));
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable"));
 
     let unsupported_control = compile_json(
         br#"{
@@ -1899,7 +1905,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
     assert!(unsupported_control
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_control.operation.unsupported"));
+        .any(|diagnostic| diagnostic.code == "breg.change-control.operation-unsupported"));
 
     let self_controlled_request = compile_json(
         br#"{
@@ -1926,7 +1932,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
     assert!(self_controlled_request
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.change_control_conflict"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.change-control-conflict"));
 
     let nested_request_target = compile_json(
         br#"{
@@ -1968,7 +1974,7 @@ fn change_request_compile_refuses_invalid_lifecycle_surface_bounds_and_controls(
     assert!(nested_request_target
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "change_request.effect.nested_request_target"));
+        .any(|diagnostic| diagnostic.code == "breg.change-request.effect-nested-request-target"));
 }
 
 #[test]
@@ -2201,8 +2207,10 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
     assert!(missing
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "derived.sql.asset_missing"
-            && !diagnostic.message.contains("SELECT")));
+        .any(
+            |diagnostic| diagnostic.code == "breg.derived.sql-asset-missing"
+                && !diagnostic.message.contains("SELECT")
+        ));
 
     let wrong_alias = compile_json_with_assets(
         project,
@@ -2215,7 +2223,7 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
     assert!(wrong_alias
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "derived.sql.invalid"
+        .any(|diagnostic| diagnostic.code == "breg.derived.sql-invalid"
             && diagnostic.path == "entities[household].derived[demographics].sql"
             && !diagnostic.message.contains("childCount")));
 
@@ -2230,7 +2238,7 @@ fn derived_sql_is_asset_backed_value_free_and_validates_output_aliases() {
     assert!(wildcard
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "derived.sql.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.derived.sql-invalid"));
 
     compile_json_with_assets(
         project,
@@ -2273,7 +2281,7 @@ fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
     assert!(selector
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access_profile.public.processing_non_public"));
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.public-processing-non-public"));
 
     let derived = compile_json_with_assets(
         source(r#""readableFields":["risk-flag"],"filterableFields":["risk-flag"]"#).as_bytes(),
@@ -2286,7 +2294,7 @@ fn anonymous_access_cannot_process_selector_path_or_derived_private_fields() {
     assert!(derived
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access_profile.public.processing_non_public"));
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.public-processing-non-public"));
 }
 
 #[test]
@@ -2347,7 +2355,7 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     assert!(missing
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "entity.batch.required"));
+        .any(|diagnostic| diagnostic.code == "breg.entity.batch-required"));
 
     for batch in [
         r#", "batch":{"maximumItems":0,"maximumBytes":1}"#,
@@ -2520,7 +2528,7 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     assert!(unavailable
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access_profile.operation.unavailable"));
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable"));
 }
 
 #[test]
@@ -2557,7 +2565,7 @@ fn public_asset_fixture_compiles_to_coherent_deterministic_inventories() {
         .all(|route| !matches!(route.operation, Operation::Patch | Operation::Tombstone)));
     assert!(first.findings().iter().all(|d| matches!(
         d.code.as_str(),
-        "access.profile.no_required_scope" | "access.profile.unrestricted_collection"
+        "breg.access.profile-no-required-scope" | "breg.access.profile-unrestricted-collection"
     )));
 }
 
@@ -2573,14 +2581,14 @@ fn production_refuses_incomplete_authoring_closure() {
         .iter()
         .map(|diagnostic| diagnostic.code.as_str())
         .collect();
-    assert!(codes.contains(&"package.identity.required"));
-    assert!(codes.contains(&"module.lock.digest_required"));
+    assert!(codes.contains(&"breg.package.identity-required"));
+    assert!(codes.contains(&"breg.module.lock-digest-required"));
     assert!(!codes.contains(&"manifest_projection.required"));
 
     let identity = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "package.identity.required")
+        .find(|diagnostic| diagnostic.code == "breg.package.identity-required")
         .expect("the missing package identity is reported");
     assert!(identity.message.contains("sourceRevision"), "{identity:?}");
     for retired in ["environment", "instanceId", "sequence"] {
@@ -2593,7 +2601,7 @@ fn production_refuses_incomplete_authoring_closure() {
         .to_vec();
     let missing = findings
         .iter()
-        .find(|diagnostic| diagnostic.code == "package.identity.missing")
+        .find(|diagnostic| diagnostic.code == "breg.package.identity-missing")
         .expect("the absent package identity is a finding under authoring");
     assert!(missing.message.contains("sourceRevision"), "{missing:?}");
     for retired in ["environment", "instanceId", "sequence"] {
@@ -2666,7 +2674,7 @@ fn deployment_identity_keys_in_the_project_are_refused_as_unknown_fields() {
         for (failure, code) in [
             (
                 parse_project_json(&bytes).expect_err("a deployment key is refused"),
-                "source.shape.invalid",
+                "breg.source.shape-invalid",
             ),
             (
                 parse_project_yaml(&bytes).expect_err("a deployment key is refused in YAML"),
@@ -2731,7 +2739,7 @@ fn singular_manifest_projection_keys_are_refused_as_unknown_fields() {
         for (failure, code) in [
             (
                 parse_project_json(&bytes).expect_err("a singular projection key is refused"),
-                "source.shape.invalid",
+                "breg.source.shape-invalid",
             ),
             (
                 parse_project_yaml(&bytes)
@@ -2801,8 +2809,8 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
             .map(|d| d.code.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "access.profile.no_required_scope",
-            "access.profile.unrestricted_rows"
+            "breg.access.profile-no-required-scope",
+            "breg.access.profile-unrestricted-rows"
         ]
     );
 }
@@ -2897,7 +2905,7 @@ fn root_project_entity_access_profiles_are_compile_time_errors() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "access_profile.project_entity_local.forbidden")
+        .find(|diagnostic| diagnostic.code == "breg.access-profile.project-entity-local-forbidden")
         .expect("root entity-local profile refusal is reported");
     assert_eq!(diagnostic.path, "project.entities[].accessProfiles");
 }
@@ -3029,17 +3037,17 @@ fn anonymous_project_access_profiles_cannot_require_authenticated_claims() {
     for (source, code, path) in [
         (
             source(r#""principalClaim":"sub","#),
-            "access_profile.principal_claim.forbidden",
+            "breg.access-profile.principal-claim-forbidden",
             "project.accessProfiles[].principalClaim",
         ),
         (
             source(r#""requiredScopes":["records.read"],"#),
-            "access_profile.anonymous.claim_requirements_forbidden",
+            "breg.access-profile.anonymous-claim-requirements-forbidden",
             "project.accessProfiles[]",
         ),
         (
             source(r#""requiredPurposes":["case-management"],"#),
-            "access_profile.anonymous.claim_requirements_forbidden",
+            "breg.access-profile.anonymous-claim-requirements-forbidden",
             "project.accessProfiles[]",
         ),
     ] {
@@ -3075,7 +3083,7 @@ fn project_access_profiles_reject_the_legacy_purpose_vocabulary() {
     .expect_err("legacy purposes key is no longer part of the authoring contract");
 
     let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
     assert_eq!(diagnostic.path, "project.accessProfiles[0].purposes");
 }
 
@@ -3101,7 +3109,7 @@ fn project_access_grants_reject_the_legacy_action_vocabulary() {
     .expect_err("legacy actions key is no longer part of the authoring contract");
 
     let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
     assert_eq!(
         diagnostic.path,
         "project.accessProfiles[0].permissions[0].actions"
@@ -3137,7 +3145,7 @@ fn entity_access_grants_reject_action_target_and_result_fields() {
         let failure = compile_json(source.as_bytes())
             .expect_err("entity grants cannot carry action-only fields");
         assert!(failure.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "access_profile.permission.action_fields_forbidden"
+            diagnostic.code == "breg.access-profile.permission-action-fields-forbidden"
                 && diagnostic.path == "project.accessProfiles[].permissions[]"
         }));
     }
@@ -3174,7 +3182,7 @@ fn project_access_grants_reject_mixed_entity_and_action_targets() {
     )
     .expect_err("grants cannot name both an entity and an action");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "access_profile.permission.target_exclusive"
+        diagnostic.code == "breg.access-profile.permission-target-exclusive"
             && diagnostic.path == "project.accessProfiles[].permissions[]"
     }));
 }
@@ -3202,7 +3210,7 @@ fn manifest_projection_unknown_nested_keys_are_rejected_without_values() {
     )
     .expect_err("unknown projection members are refused");
 
-    assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
     assert_eq!(
         failure.diagnostics()[0].path,
         "project.manifestProjection.catalog.publisher.privateKey"
@@ -3476,9 +3484,9 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
         .map(|diagnostic| diagnostic.code.as_str())
         .collect::<BTreeSet<_>>();
 
-    assert!(codes.contains("manifest_projection.field.not_visible"));
-    assert!(codes.contains("manifest_projection.field.not_representable"));
-    assert!(codes.contains("manifest_projection.entity.not_visible"));
+    assert!(codes.contains("breg.manifest-projection.field-not-visible"));
+    assert!(codes.contains("breg.manifest-projection.field-not-representable"));
+    assert!(codes.contains("breg.manifest-projection.entity-not-visible"));
 }
 
 /// A project whose `authorization-status` vocabulary is used by
@@ -3589,7 +3597,7 @@ fn manifest_projection_refuses_a_label_for_a_declared_code_no_visible_field_uses
     assert_eq!(
         refused,
         [(
-            "manifest_projection.vocabulary.concept_invalid",
+            "breg.manifest-projection.vocabulary-concept-invalid",
             "project.manifestProjection.vocabularies[authorization-status].concepts[revoked]",
         )]
     );
@@ -3800,7 +3808,7 @@ fn strict_parse_refuses_unknown_and_duplicate_members_without_echoing_values() {
         }"#,
     )
     .expect_err("unknown member is refused");
-    assert_eq!(unknown.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(unknown.diagnostics()[0].code, "breg.source.shape-invalid");
     assert!(unknown.diagnostics()[0]
         .path
         .starts_with("project.registry"));
@@ -3817,7 +3825,7 @@ fn strict_parse_refuses_unknown_and_duplicate_members_without_echoing_values() {
         }"#,
     )
     .expect_err("duplicate member is refused");
-    assert_eq!(duplicate.diagnostics()[0].code, "source.json.invalid");
+    assert_eq!(duplicate.diagnostics()[0].code, "breg.source.json-invalid");
     assert_eq!(duplicate.diagnostics()[0].path, "project");
 }
 
@@ -3863,7 +3871,7 @@ fn deferred_query_features_are_strictly_unknown_key_rejected() {
         );
         let failure = parse_project_json(source.as_bytes())
             .expect_err("deferred query features remain outside the strict authoring grammar");
-        assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+        assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
         assert!(failure.diagnostics()[0].path.ends_with(key));
         let rendered = format!(
             "{failure:?}\n{failure}\n{}",
@@ -4322,7 +4330,7 @@ entities: do-not-echo
     )
     .expect_err("an unknown enum value is refused");
     let diagnostic = &unknown_enum_value.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
     assert_eq!(diagnostic.path, "project.entities[0].mutationMode");
     assert!(diagnostic.message.contains("unknown variant `append_only`"));
     assert!(diagnostic.message.contains("create_only"));
@@ -4330,7 +4338,7 @@ entities: do-not-echo
     let malformed_json =
         parse_project_json(b"{\"apiVersion\":}").expect_err("malformed JSON is refused");
     let diagnostic = &malformed_json.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.json.invalid");
+    assert_eq!(diagnostic.code, "breg.source.json-invalid");
     assert_eq!(diagnostic.path, "project");
     assert!(diagnostic.message.contains("line 1"));
 }
@@ -4427,7 +4435,7 @@ fn scalar_field_sources_reject_incompatible_type_options_during_strict_parse() {
         }"#,
     )
     .expect_err("type-incompatible option is refused during parse");
-    assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
 }
 
 #[test]
@@ -4528,7 +4536,7 @@ fn scalar_grammar_is_exactly_the_typed_allowlist_and_rejects_json_or_reference_l
         );
         let failure = parse_project_json(source.as_bytes())
             .expect_err("unapproved scalar or reference-list forms fail strict parsing");
-        assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+        assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
         let rendered = format!(
             "{failure:?}\n{failure}\n{}",
             serde_json::to_string(&failure).expect("diagnostic serializes")
@@ -4546,7 +4554,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
         ),
         (
             r#"{"id":"amount","type":"decimal","precision":4,"scale":2,"minimum":"01.00","classification":"internal"}"#,
-            "field.decimal.bounds_invalid",
+            "breg.field.decimal-bounds-invalid",
         ),
         (
             r#"{"id":"location","type":"crs84-point","precision":10,"classification":"internal"}"#,
@@ -4554,7 +4562,7 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
         ),
         (
             r#"{"id":"location","type":"crs84-point","precision":4,"bbox":{"west":"110.0000","south":"10.0000","east":"100.0000","north":"20.0000"},"classification":"internal"}"#,
-            "field.crs84_point.bounds_invalid",
+            "breg.field.crs84-point-bounds-invalid",
         ),
         (
             r#"{"id":"payload","type":"structured","maxBytes":0,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
@@ -4562,15 +4570,15 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
         ),
         (
             r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"type":"object","properties":{"code":{"type":"string"}}}}"#,
-            "field.structured.schema_invalid",
+            "breg.field.structured-schema-invalid",
         ),
         (
             r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{}}"#,
-            "field.structured.schema_invalid",
+            "breg.field.structured-schema-invalid",
         ),
         (
             r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"$ref":"https://schema.example.invalid/payload"}}"#,
-            "field.structured.schema_invalid",
+            "breg.field.structured-schema-invalid",
         ),
     ];
 
@@ -4645,7 +4653,7 @@ fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_
         let failure = compile_project(&project, &[], CompileProfile::Authoring)
             .expect_err("unsupported row-boundary field type fails compilation");
         assert!(failure.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "access_profile.row_boundary.type_unsupported"
+            diagnostic.code == "breg.access-profile.row-boundary-type-unsupported"
         }));
     }
 }
@@ -4769,49 +4777,49 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
         (
             r#""geojson":{"geometryField":"missing"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
-            "geojson.geometry_field.unknown",
+            "breg.geojson.geometry-field-unknown",
             "entities[].geojson.geometryField",
         ),
         (
             r#""geojson":{"geometryField":"code"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
-            "geojson.geometry_field.type_unsupported",
+            "breg.geojson.geometry-field-type-unsupported",
             "entities[].geojson.geometryField",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0,"maximumLatitudeSpanDegrees":2}}"#,
-            "access_profile.spatial_queries.bbox.maximum_longitude_span_degrees.invalid",
+            "breg.access-profile.spatial-queries-bbox-maximum-longitude-span-degrees-invalid",
             "entities[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":361,"maximumLatitudeSpanDegrees":2}}"#,
-            "access_profile.spatial_queries.bbox.maximum_longitude_span_degrees.invalid",
+            "breg.access-profile.spatial-queries-bbox-maximum-longitude-span-degrees-invalid",
             "entities[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":181}}"#,
-            "access_profile.spatial_queries.bbox.maximum_latitude_span_degrees.invalid",
+            "breg.access-profile.spatial-queries-bbox-maximum-latitude-span-degrees-invalid",
             "entities[].accessProfiles[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{}"#,
-            "access_profile.spatial_queries.empty",
+            "breg.access-profile.spatial-queries-empty",
             "entities[].accessProfiles[].spatialQueries",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
-            "access_profile.spatial_queries.bbox.geometry_not_readable",
+            "breg.access-profile.spatial-queries-bbox-geometry-not-readable",
             "entities[].accessProfiles[].readableFields",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["get"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
-            "access_profile.spatial_queries.bbox.list_required",
+            "breg.access-profile.spatial-queries-bbox-list-required",
             "entities[].accessProfiles[].spatialQueries.bbox",
         ),
     ];
@@ -4871,17 +4879,20 @@ fn bbox_authoring_is_strict_and_does_not_make_points_scalar_query_fields() {
         }"#,
     )
     .expect_err("bbox does not accept duplicate geometry declaration");
-    assert_eq!(strict_failure.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(
+        strict_failure.diagnostics()[0].code,
+        "breg.source.shape-invalid"
+    );
 
     for (member, code, message_fragment) in [
         (
             r#""filterableFields":["location"]"#,
-            "query.filter.field_type_unsupported",
+            "breg.query.filter-field-type-unsupported",
             "spatialQueries.bbox",
         ),
         (
             r#""sortableFields":["location"]"#,
-            "query.sort.field_type_unsupported",
+            "breg.query.sort-field-type-unsupported",
             "spatialQueries.bbox",
         ),
     ] {
@@ -4944,7 +4955,7 @@ fn anonymous_bbox_queries_cannot_process_hidden_geometry() {
         .diagnostics()
         .iter()
         .find(|diagnostic| {
-            diagnostic.code == "access_profile.public.processing_non_public"
+            diagnostic.code == "breg.access-profile.public-processing-non-public"
                 && diagnostic.path == "entities[].accessProfiles[].spatialQueries.bbox"
         })
         .expect("spatial public-processing diagnostic is reported");
@@ -5015,7 +5026,7 @@ fn modules_can_add_geojson_once_but_conflicting_geometry_is_refused() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "extension.geojson.conflict")
+        .find(|diagnostic| diagnostic.code == "breg.extension.geojson-conflict")
         .expect("conflict diagnostic is reported");
     assert_eq!(diagnostic.path, "entities[id=site].geojson.geometryField");
 }
@@ -5243,7 +5254,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         );
         let failure = parse_project_json(source.as_bytes())
             .expect_err("SQL and general expression forms fail strict parsing");
-        assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+        assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
         let rendered = format!(
             "{failure:?}\n{failure}\n{}",
             serde_json::to_string(&failure).expect("diagnostic serializes")
@@ -5263,7 +5274,7 @@ fn closed_constraint_grammar_compiles_typed_checks_and_refuses_expression_escape
         }"#,
     )
     .expect_err("reference deletion behavior is closed to restrict");
-    assert_eq!(cascade.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(cascade.diagnostics()[0].code, "breg.source.shape-invalid");
     let rendered = format!(
         "{cascade:?}\n{cascade}\n{}",
         serde_json::to_string(&cascade).expect("diagnostic serializes")
@@ -5293,7 +5304,10 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
         }"#,
     )
     .expect_err("predicate members are closed");
-    assert_eq!(unknown_member.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(
+        unknown_member.diagnostics()[0].code,
+        "breg.source.shape-invalid"
+    );
     assert!(!serde_json::to_string(&unknown_member)
         .expect("diagnostic serializes")
         .contains("record_lifecycle"));
@@ -5316,7 +5330,7 @@ fn partial_unique_when_predicates_are_strictly_tagged_and_closed() {
     .expect_err("lifecycle predicates have no caller-provided value");
     assert_eq!(
         arbitrary_lifecycle.diagnostics()[0].code,
-        "source.shape.invalid"
+        "breg.source.shape-invalid"
     );
 }
 
@@ -5369,27 +5383,27 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
         (
             r#"{"id":"amount","type":"decimal","precision":6,"scale":2,"classification":"internal"}"#,
             r#"{"kind":"field_equals","field":"amount","value":"1.2"}"#,
-            "constraint.unique.when.literal_invalid",
+            "breg.constraint.unique-when-literal-invalid",
         ),
         (
             r#"{"id":"seen-at","type":"timestamp","classification":"internal"}"#,
             r#"{"kind":"field_equals","field":"seen-at","value":"2026-08-29T10:20:30+00:00"}"#,
-            "constraint.unique.when.literal_invalid",
+            "breg.constraint.unique-when-literal-invalid",
         ),
         (
             r#"{"id":"owner","type":"uuid","classification":"internal"}"#,
             r#"{"kind":"field_equals","field":"owner","value":"123E4567-E89B-12D3-A456-426614174000"}"#,
-            "constraint.unique.when.literal_invalid",
+            "breg.constraint.unique-when-literal-invalid",
         ),
         (
             r#"{"id":"shape","type":"crs84-point","precision":4,"classification":"internal"}"#,
             r#"{"kind":"field_is_not_null","field":"shape"}"#,
-            "constraint.unique.when.field_unsupported",
+            "breg.constraint.unique-when-field-unsupported",
         ),
         (
             r#"{"id":"payload","type":"structured","maxBytes":256,"classification":"internal","schema":{"type":"object","additionalProperties":false}}"#,
             r#"{"kind":"field_equals","field":"payload","value":{}}"#,
-            "constraint.unique.when.field_unsupported",
+            "breg.constraint.unique-when-field-unsupported",
         ),
     ];
 
@@ -5420,26 +5434,26 @@ fn partial_unique_rejects_invalid_literals_and_json_predicate_fields() {
 #[test]
 fn partial_unique_rejects_empty_unknown_duplicate_and_contradictory_when_predicates() {
     let cases = [
-        ("[]", "constraint.unique.when.empty"),
+        ("[]", "breg.constraint.unique-when-empty"),
         (
             r#"[{"kind":"active_lifecycle"},{"kind":"active_lifecycle"}]"#,
-            "constraint.unique.when.duplicate",
+            "breg.constraint.unique-when-duplicate",
         ),
         (
             r#"[{"kind":"field_is_null","field":"optional"},{"kind":"field_is_not_null","field":"optional"}]"#,
-            "constraint.unique.when.contradiction",
+            "breg.constraint.unique-when-contradiction",
         ),
         (
             r#"[{"kind":"field_equals","field":"optional","value":"one"},{"kind":"field_equals","field":"optional","value":"two"}]"#,
-            "constraint.unique.when.contradiction",
+            "breg.constraint.unique-when-contradiction",
         ),
         (
             r#"[{"kind":"field_is_not_null","field":"required"}]"#,
-            "constraint.unique.when.null_invalid",
+            "breg.constraint.unique-when-null-invalid",
         ),
         (
             r#"[{"kind":"field_equals","field":"missing","value":"one"}]"#,
-            "constraint.unique.when.field_unknown",
+            "breg.constraint.unique-when-field-unknown",
         ),
     ];
 
@@ -5564,7 +5578,7 @@ fn equivalent_partial_unique_extension_constraints_merge_deterministically() {
         assert!(failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "extension.constraint.duplicate"));
+            .any(|diagnostic| diagnostic.code == "breg.extension.constraint-duplicate"));
     }
 }
 
@@ -5596,7 +5610,7 @@ fn anonymous_profiles_cannot_inherit_partial_unique_processing_over_non_public_f
     let failure = compile_json(source)
         .expect_err("anonymous profile cannot inherit hidden non-public predicate processing");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "access_profile.public.processing_non_public"
+        diagnostic.code == "breg.access-profile.public-processing-non-public"
             && diagnostic.path == "entities[].constraints[]"
     }));
 }
@@ -5672,7 +5686,7 @@ fn anonymous_public_surface_rejects_every_non_public_constraint_field() {
             .diagnostics()
             .iter()
             .filter(|diagnostic| {
-                diagnostic.code == "access_profile.public.processing_non_public"
+                diagnostic.code == "breg.access-profile.public-processing-non-public"
                     && diagnostic.path == "entities[].constraints[]"
             })
             .collect::<Vec<_>>();
@@ -5771,7 +5785,7 @@ fn create_only_operation_conflict_fails_before_artifact_generation() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "access_profile.operation.unavailable"));
+        .any(|diagnostic| diagnostic.code == "breg.access-profile.operation-unavailable"));
 }
 
 #[test]
@@ -6424,10 +6438,9 @@ fn public_profile_cannot_process_an_internal_field() {
 
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("anonymous processing of internal data is refused");
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| { diagnostic.code == "access_profile.public.processing_non_public" }));
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.access-profile.public-processing-non-public"
+    }));
 }
 
 #[test]
@@ -6455,7 +6468,7 @@ fn anonymous_public_profile_cannot_filter_a_non_public_field() {
     )
     .expect_err("an anonymous filter cannot process a non-public field");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "access_profile.public.processing_non_public"
+        diagnostic.code == "breg.access-profile.public-processing-non-public"
             && diagnostic.path == "entities[].accessProfiles[]"
             && diagnostic.message
                 == "anonymous profile `public-reader` may process only public fields: field `hidden-filter-canary` is classified `restricted`"
@@ -6483,7 +6496,7 @@ fn unresolved_reference_is_value_free_and_fails_before_ddl() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "field.reference.target_unknown"));
+        .any(|diagnostic| diagnostic.code == "breg.field.reference-target-unknown"));
     assert!(!serde_json::to_string(&failure)
         .expect("diagnostics serialize")
         .contains("classified-target-name"));
@@ -6517,7 +6530,7 @@ fn additive_module_conflicts_fail_instead_of_using_input_precedence() {
         assert!(failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "extension.field.duplicate"));
+            .any(|diagnostic| diagnostic.code == "breg.extension.field-duplicate"));
     }
 }
 
@@ -6584,8 +6597,10 @@ fn entity_ids_that_share_one_sql_name_are_refused() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "entity.sql_name.duplicate"
-            && diagnostic.path == "entities[].id"));
+        .any(
+            |diagnostic| diagnostic.code == "breg.entity.sql-name-duplicate"
+                && diagnostic.path == "entities[].id"
+        ));
 }
 
 #[test]
@@ -6604,7 +6619,7 @@ fn temporal_non_overlap_refuses_a_nullable_scope_field() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "constraint.temporal.scope_nullable")
+        .find(|diagnostic| diagnostic.code == "breg.constraint.temporal-scope-nullable")
         .expect("nullable temporal scope has a stable diagnostic");
     assert_eq!(diagnostic.path, "entities[].constraints[].scopeFields");
     assert!(!serde_json::to_string(diagnostic)
@@ -6646,7 +6661,9 @@ fn temporal_non_overlap_refuses_structured_and_crs84_point_scope_fields() {
         let diagnostics = failure
             .diagnostics()
             .iter()
-            .filter(|diagnostic| diagnostic.code == "constraint.temporal.scope_type_unsupported")
+            .filter(|diagnostic| {
+                diagnostic.code == "breg.constraint.temporal-scope-type-unsupported"
+            })
             .collect::<Vec<_>>();
         assert_eq!(diagnostics.len(), 1);
         let diagnostic = diagnostics[0];
@@ -7014,7 +7031,7 @@ fn deprecated_temporal_scope_fields_must_match_explicit_non_overlap() {
     )
     .expect_err("deprecated bridge scope must not silently override the constraint scope");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "temporal.scope_fields.deprecated_mismatch"
+        diagnostic.code == "breg.temporal.scope-fields-deprecated-mismatch"
             && diagnostic.path == "entities[].temporal.scopeFields"
     }));
 }
@@ -7045,7 +7062,7 @@ fn anonymous_temporal_processing_floor_survives_without_exclusion() {
     )
     .expect_err("anonymous temporal surfaces cannot process private boundaries");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "access_profile.public.processing_non_public"
+        diagnostic.code == "breg.access-profile.public-processing-non-public"
             && diagnostic.path == "entities[].temporal"
     }));
 }
@@ -7295,10 +7312,9 @@ fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
         }"#,
     )
     .expect_err("snapshot cannot be anonymous");
-    assert!(anonymous
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| { diagnostic.code == "access_profile.snapshot.anonymous_forbidden" }));
+    assert!(anonymous.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.access-profile.snapshot-anonymous-forbidden"
+    }));
 
     let provenance = compile_json(
         br#"{
@@ -7322,7 +7338,7 @@ fn snapshot_operation_rejects_anonymous_and_unauthorized_provenance() {
     assert!(provenance
         .diagnostics()
         .iter()
-        .any(|diagnostic| { diagnostic.code == "access_profile.provenance_fields.invalid" }));
+        .any(|diagnostic| { diagnostic.code == "breg.access-profile.provenance-fields-invalid" }));
 }
 
 #[test]
@@ -7413,7 +7429,7 @@ fn change_request_entity_fields_cannot_shadow_server_owned_query_state_api_names
             failure
                 .diagnostics()
                 .iter()
-                .any(|diagnostic| diagnostic.code == "change_request.field.api_name_reserved"),
+                .any(|diagnostic| diagnostic.code == "breg.change-request.field-api-name-reserved"),
             "diagnostics: {:?}",
             failure.diagnostics()
         );
@@ -7520,11 +7536,11 @@ fn query_inventory_rejects_unsupported_filter_and_sort_field_types() {
     for (member, code) in [
         (
             r#""filterableFields":["payload"]"#,
-            "query.filter.field_type_unsupported",
+            "breg.query.filter-field-type-unsupported",
         ),
         (
             r#""sortableFields":["payload"]"#,
-            "query.sort.field_type_unsupported",
+            "breg.query.sort-field-type-unsupported",
         ),
     ] {
         let source = format!(
@@ -7571,7 +7587,7 @@ fn temporal_queries_require_profile_readable_boundary_fields() {
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("temporal query cannot process hidden boundary fields");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "query.temporal.field_not_readable"
+        diagnostic.code == "breg.query.temporal-field-not-readable"
             && diagnostic.path == "entities[].accessProfiles[].readableFields"
     }));
 }
@@ -7660,7 +7676,7 @@ fn duplicate_routes_fail_before_artifact_generation() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "entity.route.duplicate")
+        .find(|diagnostic| diagnostic.code == "breg.entity.route-duplicate")
         .expect("duplicate route has a stable diagnostic");
     assert_eq!(diagnostic.path, "entities[].route");
     let rendered = serde_json::to_string(&failure).expect("failure serializes");
@@ -7694,7 +7710,7 @@ fn anonymous_profiles_cannot_grant_mutation_operations() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "access_profile.anonymous.mutation_forbidden")
+        .find(|diagnostic| diagnostic.code == "breg.access-profile.anonymous-mutation-forbidden")
         .expect("anonymous mutation has a stable diagnostic");
     assert_eq!(diagnostic.path, "entities[].accessProfiles[].operations");
     assert!(!serde_json::to_string(diagnostic)
@@ -7723,7 +7739,7 @@ fn production_refuses_a_digest_present_lock_without_module_source() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|diagnostic| diagnostic.code == "module.source.required")
+        .find(|diagnostic| diagnostic.code == "breg.module.source-required")
         .expect("missing source has a stable production diagnostic");
     assert_eq!(diagnostic.path, "project.modules[].id");
     let rendered = serde_json::to_string(&failure).expect("failure serializes");
@@ -7820,7 +7836,7 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|item| item.code == "selector_profile.fields.unknown")
+        .find(|item| item.code == "breg.selector-profile.fields-unknown")
         .unwrap_or_else(|| panic!("the unknown selector field is named: {failure:?}"));
     assert_eq!(diagnostic.path, "entities[].selectorProfiles[].fields");
     assert!(
@@ -7834,7 +7850,7 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|item| item.code == "selector_profile.fields.invalid")
+        .find(|item| item.code == "breg.selector-profile.fields-invalid")
         .unwrap_or_else(|| panic!("the empty selector profile is reported: {failure:?}"));
     assert!(
         diagnostic.message.contains("one to sixteen"),
@@ -7846,7 +7862,7 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|item| item.code == "selector_profile.fields.duplicate")
+        .find(|item| item.code == "breg.selector-profile.fields-duplicate")
         .unwrap_or_else(|| panic!("the duplicated selector field is named: {failure:?}"));
     assert!(diagnostic.message.contains("`code`"), "{diagnostic:?}");
 
@@ -7855,7 +7871,7 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|item| item.code == "selector_profile.field_type_unsupported")
+        .find(|item| item.code == "breg.selector-profile.field-type-unsupported")
         .unwrap_or_else(|| panic!("the unsupported selector field is named: {failure:?}"));
     assert!(diagnostic.message.contains("`location`"), "{diagnostic:?}");
 
@@ -7905,7 +7921,7 @@ fn entity_classification_defaults_while_field_classification_stays_explicit() {
     )
     .expect_err("a field never inherits its classification from the entity");
     let diagnostic = &failure.diagnostics()[0];
-    assert_eq!(diagnostic.code, "source.shape.invalid");
+    assert_eq!(diagnostic.code, "breg.source.shape-invalid");
     assert!(
         diagnostic
             .message

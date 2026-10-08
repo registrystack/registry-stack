@@ -67,6 +67,17 @@
   refuses a repeated item as `config.duplicate-item` instead of collapsing
   it. Delete the repeat to migrate. The member list is in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: every configuration diagnostic code is named
+  `breg.<area>.<condition>` in kebab segments, such as
+  `breg.access.profile-unrestricted-collection` for
+  `access.profile.unrestricted_collection`. A runtime rule decided after
+  `runtime.yaml` is read is reported as `breg.runtime.<condition>` by every
+  command, with no `startup.`, `verify.`, or other command prefix, and
+  `bregctl check` reports a refused package as `breg.package.<cause>` rather
+  than `check.package.<cause>`. Codes that name a `bregctl` operation, HTTP
+  problem codes, and the reader's `config.*` and `yaml.*` codes are
+  unchanged. Replace each code a script or alert matches; the old-to-new
+  table is in `release/notes/config-conventions/breg.md`.
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded

@@ -262,7 +262,7 @@ PostgreSQL is the sole Version 1 database. The administrator installs
 
 The compiler gives every reference column a btree index unless an authored
 index or unique constraint already leads with it, and an authoring compile
-reports `entity.list.unindexed_filter` or `entity.list.unindexed_sort` for a
+reports `breg.entity.list-unindexed-filter` or `breg.entity.list-unindexed-sort` for a
 granted list filter or sort that no index leads with. A database activated by
 an engine that predates reference indexes gains them through an ordinary
 successor package: `bregctl package` classifies each one as a compatible

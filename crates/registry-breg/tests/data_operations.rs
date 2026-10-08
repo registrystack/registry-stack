@@ -194,7 +194,7 @@ fn data_export_requires_explicit_nonanonymous_profile_permission() {
         let diagnostics = compile_source(invalid).expect_err("invalid export authority is refused");
         assert!(diagnostics
             .iter()
-            .any(|code| code == "access_profile.data_export.invalid"));
+            .any(|code| code == "breg.access-profile.data-export-invalid"));
     }
 
     let explicit = compiled(true);

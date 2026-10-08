@@ -55,7 +55,7 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|finding| finding["code"] == "field.pattern.unverified_offline")
+        .find(|finding| finding["code"] == "breg.field.pattern-unverified-offline")
         .expect("offline success must identify native syntax as unverified");
     assert_eq!(finding["severity"], "warning");
     assert_check_diagnostic(finding, Some("RegistryProject"));
@@ -93,7 +93,7 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|diagnostic| diagnostic["code"] == "field.pattern.unverified_offline")
+        .find(|diagnostic| diagnostic["code"] == "breg.field.pattern-unverified-offline")
         .expect("denied warning remains in the refusal diagnostics");
     assert_eq!(denied_finding, finding);
 }
@@ -132,7 +132,7 @@ fn explain_access_states_consent_gates_recipients_and_the_ungated_client() {
     let human = String::from_utf8(output.stdout).unwrap();
     let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
     for expected in [
-        "access.consent.ungated_client entities[id=person].accessProfiles[id=steward].requesterClients",
+        "breg.access.consent-ungated-client entities[id=person].accessProfiles[id=steward].requesterClients",
         "consent required (all) [{\"on\":\"id\",\"record\":\"consent-decision\"}]",
         "Consent:",
         "permission food-targeting over person",
@@ -225,7 +225,7 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let report = json_stdout(&output);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "source.planner_asset.missing");
+    assert_eq!(diagnostic["code"], "breg.source.planner-asset-missing");
     assert_eq!(diagnostic["path"], "/actions/0/handler/script");
     assert_eq!(
         diagnostic["source"]["file"],
@@ -325,7 +325,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         .as_array()
         .unwrap()
         .iter()
-        .any(|d| d["code"] == "access.requirements.row_boundary_missing"));
+        .any(|d| d["code"] == "breg.access.requirements-row-boundary-missing"));
     source["entities"][0]
         .as_object_mut()
         .unwrap()
@@ -931,7 +931,7 @@ fn authored_project_findings_use_the_tool_finding_schema() {
         .expect("diagnostics is an array");
     assert!(diagnostics
         .iter()
-        .any(|finding| finding["code"] == "package.identity.missing"));
+        .any(|finding| finding["code"] == "breg.package.identity-missing"));
     for finding in diagnostics {
         assert_eq!(finding["severity"], "warning", "{finding}");
         assert_check_diagnostic(finding, Some("RegistryProject"));
@@ -959,7 +959,7 @@ fn production_profile_refuses_missing_package_closure() {
         .iter()
         .filter_map(|diagnostic| diagnostic["code"].as_str())
         .collect();
-    assert!(codes.contains(&"package.identity.required"));
+    assert!(codes.contains(&"breg.package.identity-required"));
     for diagnostic in report["diagnostics"]
         .as_array()
         .expect("diagnostics is an array")
@@ -1100,8 +1100,8 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert_eq!(
         findings,
         vec![
-            "access.profile.unrestricted_collection",
-            "access.profile.unrestricted_rows"
+            "breg.access.profile-unrestricted-collection",
+            "breg.access.profile-unrestricted-rows"
         ]
     );
     let artifacts = report["artifacts"]
@@ -1265,7 +1265,7 @@ fn project_lock_check_refuses_stale_digest_without_rewriting() {
     assert_eq!(stale.status.code(), Some(1), "{stale:?}");
     assert!(stale.stderr.is_empty());
     let report = json_stdout(&stale);
-    assert_eq!(report["diagnostics"][0]["code"], "module.lock.stale");
+    assert_eq!(report["diagnostics"][0]["code"], "breg.module.lock-stale");
     assert_tool_diagnostic(
         &report["diagnostics"][0],
         "registry_project",
@@ -1460,13 +1460,13 @@ modules:
 fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
     for (case, break_source) in [
         (
-            "module.lock.source_missing",
+            "breg.module.lock-source-missing",
             Box::new(|module_directory: &Path| {
                 fs::remove_dir_all(module_directory).expect("module directory removes");
             }) as Box<dyn Fn(&Path)>,
         ),
         (
-            "source.module.id_mismatch",
+            "breg.source.module-id-mismatch",
             Box::new(|module_directory: &Path| {
                 fs::write(
                     module_directory.join("module.yaml"),
@@ -1513,7 +1513,7 @@ fn check_refuses_a_deleted_or_renamed_module_source_like_the_lock_check() {
         assert_eq!(diagnostic["code"], case);
         // A missing module is a problem of the project's lock; a renamed one
         // is a problem of the module file.
-        let artifact = if case == "module.lock.source_missing" {
+        let artifact = if case == "breg.module.lock-source-missing" {
             "RegistryProject"
         } else {
             "BRegModule"
@@ -1558,7 +1558,7 @@ modules:
     let report: Value = serde_json::from_str(&rendered).expect("diagnostic JSON parses");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "module.lock.source_missing"
+        "breg.module.lock-source-missing"
     );
     assert_eq!(
         fs::read(project.path().join("registry.yaml")).expect("project rereads"),
@@ -1593,7 +1593,7 @@ fn deny_warnings_refuses_on_the_warnings_that_refused_it() {
     let registry = destination.join("registry.yaml");
     assert!(
         rendered.contains(&format!(
-            "\nwarning[access.profile.unrestricted_collection] {}:",
+            "\nwarning[breg.access.profile-unrestricted-collection] {}:",
             registry.display()
         )),
         "{rendered}"
@@ -1943,11 +1943,11 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         .map(|finding| finding["code"].as_str().expect("code"))
         .collect();
     assert!(
-        codes.contains(&"access.profile.unrestricted_collection"),
+        codes.contains(&"breg.access.profile-unrestricted-collection"),
         "{codes:?}"
     );
     assert!(
-        codes.contains(&"access.profile.higher_classification"),
+        codes.contains(&"breg.access.profile-higher-classification"),
         "{codes:?}"
     );
     let next_steps = report["nextSteps"].as_array().expect("next steps");
@@ -2006,7 +2006,7 @@ fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
         "a derived project opens with the report lead sentence: {stdout}"
     );
     assert!(
-        stdout.contains("  finding  access.profile.unrestricted_collection  6 paths\n"),
+        stdout.contains("  finding  breg.access.profile-unrestricted-collection  6 paths\n"),
         "a repeated code counts the paths it collapsed: {stdout}"
     );
     assert!(
@@ -2638,7 +2638,7 @@ fn module_discovery_ignores_only_regular_finder_metadata() {
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         json_stdout(&refused)["diagnostics"][0]["code"],
-        "source.modules.invalid"
+        "breg.source.modules-invalid"
     );
 }
 
@@ -2963,7 +2963,7 @@ fn explain_access_includes_action_only_grants_and_target_reach() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|finding| finding["code"] == "access.target.unrestricted_rows"));
+        .any(|finding| finding["code"] == "breg.access.target-unrestricted-rows"));
 }
 
 #[test]
@@ -3537,7 +3537,7 @@ entities:
     assert!(!rendered.contains("SELECT"));
     let report = json_stdout(&check);
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "derived.sql.invalid");
+    assert_eq!(diagnostic["code"], "breg.derived.sql-invalid");
     assert_eq!(diagnostic["path"], "/entities/0/derived/0/sql");
     assert_eq!(
         diagnostic["source"]["file"],
@@ -4532,7 +4532,7 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     );
     assert_schema_test_refusal(
         test_project,
-        "source.file.bounds",
+        "breg.source.file-bounds",
         "registry_project",
         "correct_authoring_source",
         &project.path().join("oversized-project-receipt.json"),
@@ -4565,7 +4565,7 @@ fn authoring_and_test_candidate_sources_are_read_once_and_bounded() {
     );
     assert_schema_test_refusal(
         test_module,
-        "source.file.bounds",
+        "breg.source.file-bounds",
         "registry_project",
         "correct_authoring_source",
         &project.path().join("oversized-module-receipt.json"),
@@ -4671,7 +4671,7 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     let missing_report = json_stdout(&missing);
     assert_eq!(
         missing_report["diagnostics"][0]["code"],
-        "source.fixture_journeys.missing"
+        "breg.source.fixture-journeys-missing"
     );
     assert_eq!(
         missing_report["diagnostics"][0]["path"],
@@ -4686,7 +4686,7 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     let linked_report = json_stdout(&linked);
     assert_eq!(
         linked_report["diagnostics"][0]["code"],
-        "source.file.invalid"
+        "breg.source.file-invalid"
     );
     assert_eq!(
         linked_report["diagnostics"][0]["path"],
@@ -4704,7 +4704,7 @@ fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     let oversized_report = json_stdout(&oversized);
     assert_eq!(
         oversized_report["diagnostics"][0]["code"],
-        "source.file.bounds"
+        "breg.source.file-bounds"
     );
     assert_eq!(
         oversized_report["diagnostics"][0]["path"],
@@ -4742,7 +4742,7 @@ fn package_always_uses_production_compilation_and_never_offers_a_signing_command
         .as_array()
         .unwrap()
         .iter()
-        .any(|diagnostic| diagnostic["code"] == "package.identity.required"));
+        .any(|diagnostic| diagnostic["code"] == "breg.package.identity-required"));
     assert!(!build.exists());
 
     let help = bregctl(&["--help"]);

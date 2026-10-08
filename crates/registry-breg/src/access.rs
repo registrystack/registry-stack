@@ -28,7 +28,7 @@ pub(crate) fn validate_access_requirements(
                 && requirements.allowed_purposes.is_empty()
                 && requirements.row_boundaries.is_empty()
             {
-                errors.push(Diagnostic::error("access.requirements.empty", &path,
+                errors.push(Diagnostic::error("breg.access.requirements-empty", &path,
                     "declare at least one scope, purpose, or row requirement; an empty block provides no protection"));
             }
             if requirements
@@ -38,7 +38,7 @@ pub(crate) fn validate_access_requirements(
                 .any(|s| s.is_empty())
             {
                 errors.push(Diagnostic::error(
-                    "access.requirements.empty_value",
+                    "breg.access.requirements-empty-value",
                     &path,
                     "scope and purpose requirements must be nonempty strings",
                 ));
@@ -57,7 +57,7 @@ pub(crate) fn validate_access_requirements(
                     || boundary.claim.is_empty()
                     || requirements.row_boundaries[..index].contains(boundary)
                 {
-                    errors.push(Diagnostic::error("access.requirements.row_boundary.invalid",
+                    errors.push(Diagnostic::error("breg.access.requirements-row-boundary-invalid",
                         format!("{path}.rowBoundaries[{index}]"),
                         "use a declared scalar stored field or id, a nonempty verified claim, and a unique binding"));
                 }
@@ -95,7 +95,7 @@ pub(crate) fn validate_access_requirements(
                     request_requirements.row_boundaries.clear();
                     check_profile(&request_requirements, profile, &location, errors);
                     if !requirements.row_boundaries.is_empty() {
-                        errors.push(Diagnostic::error("access.requirements.read_path.row_boundary_unsupported", location,
+                        errors.push(Diagnostic::error("breg.access.requirements-read-path-row-boundary-unsupported", location,
                             "this relationship route enforces root rows only; use a direct grant on the protected entity instead of this read-path grant"));
                     }
                 }
@@ -112,7 +112,7 @@ pub(crate) fn check_profile(
 ) {
     if profile.anonymous {
         errors.push(Diagnostic::error(
-            "access.requirements.authentication",
+            "breg.access.requirements-authentication",
             path,
             "this entity requires authenticated access; remove the anonymous grant",
         ));
@@ -121,7 +121,7 @@ pub(crate) fn check_profile(
         .required_scopes
         .difference(&profile.required_scopes)
     {
-        errors.push(Diagnostic::error("access.requirements.scope_missing", format!("{path}.requiredScopes[value={scope}]"),
+        errors.push(Diagnostic::error("breg.access.requirements-scope-missing", format!("{path}.requiredScopes[value={scope}]"),
             "add the entity's mandatory scope to this profile; granting other scopes does not satisfy it"));
     }
     if !requirements.allowed_purposes.is_empty()
@@ -130,12 +130,12 @@ pub(crate) fn check_profile(
                 .required_purposes
                 .is_subset(&requirements.allowed_purposes))
     {
-        errors.push(Diagnostic::error("access.requirements.purpose_widened", format!("{path}.requiredPurposes"),
+        errors.push(Diagnostic::error("breg.access.requirements-purpose-widened", format!("{path}.requiredPurposes"),
             "require a nonempty subset of the entity's allowedPurposes; an empty list allows every purpose"));
     }
     for boundary in &requirements.row_boundaries {
         if !profile.row_boundaries.contains(boundary) {
-            errors.push(Diagnostic::error("access.requirements.row_boundary_missing", format!("{path}.rowBoundaries[field={}]", boundary.field),
+            errors.push(Diagnostic::error("breg.access.requirements-row-boundary-missing", format!("{path}.rowBoundaries[field={}]", boundary.field),
                 "include the entity's exact field, claim, and operator binding; request filters and other claim names do not satisfy this requirement"));
         }
     }
@@ -147,7 +147,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
         for profile in &entity.access_profiles {
             let path = profile_path(&entity.id, &profile.id);
             if !profile.anonymous && profile.required_scopes.is_empty() {
-                findings.push(Diagnostic::finding("access.profile.no_required_scope", format!("{path}.requiredScopes"),
+                findings.push(Diagnostic::finding("breg.access.profile-no-required-scope", format!("{path}.requiredScopes"),
                     "no scope restricts who may select this profile; any authenticated principal satisfying its purpose and row claims qualifies. Add a required scope unless this is intended"));
             }
             if entity.classification != Classification::Public
@@ -156,7 +156,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 && profile.membership_boundaries.is_empty()
                 && profile.request_visibility.is_none()
             {
-                findings.push(Diagnostic::finding("access.profile.unrestricted_collection", format!("{path}.rowBoundaries"),
+                findings.push(Diagnostic::finding("breg.access.profile-unrestricted-collection", format!("{path}.rowBoundaries"),
                     "this profile can list all rows, subject only to query bounds; caller filters are not authorization. Add a claim-bound row restriction or review this registry-wide access"));
             }
             let unrestricted_non_read = profile.request_visibility.is_some()
@@ -171,7 +171,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                     && profile.request_visibility.is_none())
                     || unrestricted_non_read)
             {
-                findings.push(Diagnostic::finding("access.profile.unrestricted_rows", format!("{path}.rowBoundaries"),
+                findings.push(Diagnostic::finding("breg.access.profile-unrestricted-rows", format!("{path}.rowBoundaries"),
                     "this profile has no claim-bound row restriction for its granted operations; requestVisibility owner limits request reads only, and other lifecycle rules still apply. Review this registry-wide access"));
             }
             if profile.anonymous
@@ -179,7 +179,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 && profile.row_boundaries.is_empty()
                 && profile.membership_boundaries.is_empty()
             {
-                findings.push(Diagnostic::finding("access.profile.anonymous_collection", format!("{path}.operations"),
+                findings.push(Diagnostic::finding("breg.access.profile-anonymous-collection", format!("{path}.operations"),
                     "`list` is granted to unauthenticated callers, so every row this profile can read is world-readable and no claim can narrow it. Confirm the whole collection is meant to be public"));
             }
             let write_operations = [Operation::Create, Operation::Patch, Operation::Import]
@@ -188,7 +188,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 .map(|operation| format!("`{}`", operation_id(operation)))
                 .collect::<Vec<_>>();
             if !write_operations.is_empty() && profile.writable_fields.is_empty() {
-                findings.push(Diagnostic::finding("access.profile.no_writable_fields", format!("{path}.writableFields"),
+                findings.push(Diagnostic::finding("breg.access.profile-no-writable-fields", format!("{path}.writableFields"),
                     &format!("this profile grants {} and names no writable field, so every write naming a field is refused and a required field can never be supplied. List the fields this profile may write, or remove the write operations", write_operations.join(", "))));
             }
             // A row boundary compiles to an INSERT `WITH CHECK` pinning its field to
@@ -214,7 +214,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 } else {
                     ""
                 };
-                findings.push(Diagnostic::finding("access.profile.writable_row_boundary", format!("{path}.writableFields"),
+                findings.push(Diagnostic::finding("breg.access.profile-writable-row-boundary", format!("{path}.writableFields"),
                     &format!("create needs this authorization-bound field in writableFields, because the row policy pins it to the caller's claim on insert; keep it writable, and expect a create naming any other value to be refused{patch_review}")));
             } else if patches
                 && profile
@@ -222,7 +222,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                     .iter()
                     .any(|b| profile.writable_fields.contains(&b.field))
             {
-                findings.push(Diagnostic::finding("access.profile.writable_row_boundary", format!("{path}.writableFields"),
+                findings.push(Diagnostic::finding("breg.access.profile-writable-row-boundary", format!("{path}.writableFields"),
                     "patch can change an authorization-bound field within the caller's allowed values; remove it from writableFields unless moving records is intended"));
             }
             if creates {
@@ -230,20 +230,20 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                     .iter()
                     .filter(|field| !profile.writable_fields.contains(**field))
                 {
-                    findings.push(Diagnostic::finding("access.profile.row_boundary_not_writable", format!("{path}.writableFields"),
+                    findings.push(Diagnostic::finding("breg.access.profile-row-boundary-not-writable", format!("{path}.writableFields"),
                         &format!("create is permitted, but row boundary field `{field}` is not writable: a create cannot name it, the row policy pins it to the caller's claim on insert, and every create is refused. Add `{field}` to writableFields, or remove create from this permission")));
                 }
             }
             if profile.revision_access && profile.operations.contains(&Operation::Revisions) {
-                findings.push(Diagnostic::finding("access.profile.revision_history", format!("{path}.revisionAccess"),
+                findings.push(Diagnostic::finding("breg.access.profile-revision-history", format!("{path}.revisionAccess"),
                     "history can disclose previous values of readable fields, including values removed from the current record; review historical disclosure separately"));
             }
             if profile.operations.contains(&Operation::Snapshot) {
-                findings.push(Diagnostic::finding("access.profile.snapshot_history", format!("{path}.operations"),
+                findings.push(Diagnostic::finding("breg.access.profile-snapshot-history", format!("{path}.operations"),
                     "snapshot reads can reproduce retained historical rows under current authorization; review stored-field projection, filters, and row restrictions separately"));
             }
             if profile.allow_data_export {
-                findings.push(Diagnostic::finding("access.profile.data_export", format!("{path}.allowDataExport"),
+                findings.push(Diagnostic::finding("breg.access.profile-data-export", format!("{path}.allowDataExport"),
                     "bulk export is enabled; disabling it later cannot recall downloaded data. Review the readable fields and row restrictions"));
             }
             for field in &profile.readable_fields {
@@ -257,12 +257,12 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                         .flat_map(|d| &d.fields)
                         .any(|f| &f.id == field && f.classification > entity.classification)
                 {
-                    findings.push(Diagnostic::finding("access.profile.higher_classification", format!("{path}.readableFields[field={field}]"),
+                    findings.push(Diagnostic::finding("breg.access.profile-higher-classification", format!("{path}.readableFields[field={field}]"),
                         "this field is more sensitive than its entity's classification; verify the profile's scope and purpose before disclosing it"));
                 }
             }
             for permission in &profile.read_paths {
-                findings.push(Diagnostic::finding("access.profile.related_disclosure", format!("{path}.readPaths[path={}]", permission.path),
+                findings.push(Diagnostic::finding("breg.access.profile-related-disclosure", format!("{path}.readPaths[path={}]", permission.path),
                     "this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through entity accessRequirements"));
             }
         }
@@ -300,7 +300,7 @@ pub(crate) fn compiled_access_findings(
                 .get(&reach.entity)
                 .is_some_and(|entity| entity.classification != Classification::Public)
         {
-            findings.push(Diagnostic::finding("access.target.unrestricted_rows", &reach.source_path,
+            findings.push(Diagnostic::finding("breg.access.target-unrestricted-rows", &reach.source_path,
                 "this target permission has no claim-bound row restriction, within its configured operation and field limits. Review this registry-wide target authority"));
         }
     }
@@ -310,7 +310,7 @@ pub(crate) fn compiled_access_findings(
     for action in &actions.actions {
         for grant in &action.permissions {
             if !grant.anonymous && grant.required_scopes.is_empty() {
-                findings.push(Diagnostic::finding("access.action.no_required_scope",
+                findings.push(Diagnostic::finding("breg.access.action-no-required-scope",
                     format!("actions[id={}].permissions[profile={}].requiredScopes", action.id, grant.profile_id),
                     "no scope restricts who may select this action profile; any authenticated principal satisfying its purpose and target claims qualifies. Add a required scope unless this is intended"));
             }
@@ -351,7 +351,7 @@ fn ungated_client_findings(entity: &CompiledEntity, findings: &mut Vec<Diagnosti
         }
         let path = format!("{}.requesterClients", profile_path(&entity.id, &profile.id));
         if profile.anonymous || profile.requester_clients.is_empty() {
-            findings.push(Diagnostic::finding("access.consent.ungated_client", path, &format!(
+            findings.push(Diagnostic::finding("breg.access.consent-ungated-client", path, &format!(
                 "this profile admits any client and reads `{}` without consent, so a client of the consent-gated {gated_ids} can read the same rows through it. List requesterClients that no gated profile admits",
                 entity.id)));
             continue;
@@ -366,7 +366,7 @@ fn ungated_client_findings(entity: &CompiledEntity, findings: &mut Vec<Diagnosti
             .map(|client| format!("`{client}`"))
             .collect::<BTreeSet<_>>();
         if !shared.is_empty() {
-            findings.push(Diagnostic::finding("access.consent.ungated_client", path, &format!(
+            findings.push(Diagnostic::finding("breg.access.consent-ungated-client", path, &format!(
                 "{} also select the consent-gated {gated_ids}, and read `{}` without consent through this profile. Give the ungated profile its own client",
                 shared.into_iter().collect::<Vec<_>>().join(", "), entity.id)));
         }

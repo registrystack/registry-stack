@@ -558,13 +558,13 @@ fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
     non_request["entities"][0]["hooks"][0]["trigger"] = json!("request_lifecycle");
     assert_compile_code(
         &non_request,
-        "event.trigger.request_lifecycle_requires_change_request",
+        "breg.event.trigger-request-lifecycle-requires-change-request",
     );
 
     let mut field_condition = change_request_event_project();
     field_condition["entities"][2]["hooks"][0]["when"] =
         json!({"kind":"fields","afterEquals":{"reason":"notify"}});
-    assert_compile_code(&field_condition, "event.when.trigger_incompatible");
+    assert_compile_code(&field_condition, "breg.event.when-trigger-incompatible");
 
     let mut lifecycle_condition = change_request_event_project();
     lifecycle_condition["entities"][2]["hooks"][0]["when"] = json!({
@@ -578,7 +578,7 @@ fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
     bad_transition["entities"][2]["hooks"][0]["when"]["transitions"] = json!(["callback_granted"]);
     assert_compile_code(
         &bad_transition,
-        "event.when.request_lifecycle_transition_unknown",
+        "breg.event.when-request-lifecycle-transition-unknown",
     );
 }
 
@@ -606,7 +606,7 @@ fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|item| item.code == "event.when.request_lifecycle_transition_unknown")
+        .find(|item| item.code == "breg.event.when-request-lifecycle-transition-unknown")
         .expect("the unknown transition is reported");
     assert!(
         diagnostic.message.contains("`callback_granted`"),
@@ -625,7 +625,7 @@ fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
     let diagnostic = failure
         .diagnostics()
         .iter()
-        .find(|item| item.code == "event.when.request_lifecycle_state_unknown")
+        .find(|item| item.code == "breg.event.when-request-lifecycle-state-unknown")
         .expect("the unknown request state is reported");
     assert!(diagnostic.message.contains("`escalated`"), "{diagnostic:?}");
     for state in REQUEST_LIFECYCLE_STATES {
@@ -645,7 +645,7 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
         assert!(failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "event.webhook.destination.invalid"));
+            .any(|diagnostic| diagnostic.code == "breg.event.webhook-destination-invalid"));
         if !destination.is_empty() {
             assert!(!serde_json::to_string(&failure)
                 .expect("failure serializes")
@@ -666,7 +666,7 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
             &serde_json::to_vec(&source).expect("forbidden deployed source serializes"),
         )
         .expect_err("deployed transport or secret authority is not governed");
-        assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+        assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
         let diagnostic = serde_json::to_string(&failure).expect("failure serializes");
         assert!(!diagnostic.contains(canary));
     }
@@ -675,7 +675,7 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
     webhook_mut(&mut source).insert("delivery".to_owned(), json!({"attemptTimeoutMs": 5000}));
     let failure = parse_project_json(&serde_json::to_vec(&source).expect("source serializes"))
         .expect_err("per-event delivery policy is not authored");
-    assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
 }
 
 #[test]
@@ -687,15 +687,15 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         .remove("projection");
     let failure = parse_project_json(&serde_json::to_vec(&missing).expect("source serializes"))
         .expect_err("a missing event projection is refused");
-    assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
 
     let mut empty = project_value();
     empty["entities"][0]["hooks"][0]["projection"] = json!([]);
-    assert_compile_code(&empty, "event.projection.empty");
+    assert_compile_code(&empty, "breg.event.projection-empty");
 
     let mut unknown = project_value();
     unknown["entities"][0]["hooks"][0]["projection"] = json!(["unknown-field"]);
-    assert_compile_code(&unknown, "event.projection.field_unknown");
+    assert_compile_code(&unknown, "breg.event.projection-field-unknown");
 
     let mut restricted = project_value();
     restricted["entities"][0]["hooks"][0]["projection"] = json!(["secret"]);
@@ -748,7 +748,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
 
     let mut oversized = project_value();
     oversized["entities"][0]["fields"][0]["maxLength"] = json!(300_000);
-    assert_compile_code(&oversized, "event.webhook.projection_too_large");
+    assert_compile_code(&oversized, "breg.event.webhook-projection-too-large");
 
     let mut exact_envelope_boundary = project_value();
     exact_envelope_boundary["entities"][0]["fields"][0] = json!({
@@ -779,7 +779,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     exact_envelope_boundary["entities"][0]["fields"][0]["maxBytes"] = json!(1_046_235);
     assert_compile_code(
         &exact_envelope_boundary,
-        "event.webhook.projection_too_large",
+        "breg.event.webhook-projection-too-large",
     );
 
     let mut exact_transport_mismatch = project_value();
@@ -796,7 +796,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     });
     assert_compile_code(
         &exact_transport_mismatch,
-        "event.webhook.projection_too_large",
+        "breg.event.webhook-projection-too-large",
     );
 
     let mut decimal_quote_boundary = project_value();
@@ -820,7 +820,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     decimal_quote_boundary["entities"][0]["hooks"][0]["projection"] = json!(["amount", "label"]);
     assert_compile_code(
         &decimal_quote_boundary,
-        "event.webhook.projection_too_large",
+        "breg.event.webhook-projection-too-large",
     );
 
     let mut all_fractional_decimal_boundary = project_value();
@@ -843,7 +843,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         json!(["a", "amount"]);
     assert_compile_code(
         &all_fractional_decimal_boundary,
-        "event.webhook.projection_too_large",
+        "breg.event.webhook-projection-too-large",
     );
 
     let mut optional_null_boundary = project_value();
@@ -864,7 +864,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     optional_null_boundary["entities"][0]["hooks"][0]["projection"] = json!(["a", "b"]);
     assert_compile_code(
         &optional_null_boundary,
-        "event.webhook.projection_too_large",
+        "breg.event.webhook-projection-too-large",
     );
 }
 
@@ -888,14 +888,17 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
 
     let mut empty = project_value();
     empty["entities"][0]["hooks"][0]["when"] = json!({"kind": "fields"});
-    assert_compile_code(&empty, "event.when.empty");
+    assert_compile_code(&empty, "breg.event.when-empty");
 
     let mut incompatible_created = project_value();
     incompatible_created["entities"][0]["hooks"][0]["when"] = json!({
         "kind": "fields",
         "changed": ["region"]
     });
-    assert_compile_code(&incompatible_created, "event.when.trigger_incompatible");
+    assert_compile_code(
+        &incompatible_created,
+        "breg.event.when-trigger-incompatible",
+    );
 
     let mut incompatible_tombstone = project_value();
     incompatible_tombstone["entities"][0]["hooks"][0]["trigger"] = json!("tombstoned");
@@ -903,7 +906,10 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
         "kind": "fields",
         "afterEquals": {"region": "north"}
     });
-    assert_compile_code(&incompatible_tombstone, "event.when.trigger_incompatible");
+    assert_compile_code(
+        &incompatible_tombstone,
+        "breg.event.when-trigger-incompatible",
+    );
 
     for when in [
         json!({"kind": "fields", "changed": ["unknown"]}),
@@ -912,7 +918,7 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     ] {
         let mut source = patched.clone();
         source["entities"][0]["hooks"][0]["when"] = when;
-        assert_compile_code(&source, "event.when.field_unknown");
+        assert_compile_code(&source, "breg.event.when-field-unknown");
     }
 
     let mut wrong_type = patched;
@@ -920,7 +926,7 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
         "kind": "fields",
         "afterEquals": {"region": 7}
     });
-    assert_compile_code(&wrong_type, "event.when.value_invalid");
+    assert_compile_code(&wrong_type, "breg.event.when-value-invalid");
 
     let mut structured = project_value();
     structured["entities"][0]["hooks"][0]["when"] = json!({
@@ -931,7 +937,7 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
         &serde_json::to_vec(&structured).expect("structured predicate source serializes"),
     )
     .expect_err("comparison values are scalar or null");
-    assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+    assert_eq!(failure.diagnostics()[0].code, "breg.source.shape-invalid");
     let failure = parse_project_yaml(
         &serde_json::to_vec(&structured).expect("structured predicate source serializes"),
     )
@@ -990,7 +996,7 @@ fn additive_modules_add_nonconflicting_subscriptions_deterministically_and_refus
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "extension.event.duplicate"));
+        .any(|diagnostic| diagnostic.code == "breg.extension.event-duplicate"));
 }
 
 #[test]
@@ -1015,7 +1021,7 @@ fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
                 "handler": {"kind":"url","destinationId": "appeal-operations"}
             }]
         }));
-    assert_compile_code(&source, "event.id.registry_duplicate");
+    assert_compile_code(&source, "breg.event.id-registry-duplicate");
 }
 
 #[test]
@@ -1043,7 +1049,7 @@ fn outbox_only_event_is_authoring_only_and_production_requires_delivery() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "event.delivery.required"));
+        .any(|diagnostic| diagnostic.code == "breg.event.delivery-required"));
 }
 
 fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryModule {
@@ -1100,7 +1106,7 @@ fn non_apply_lifecycle_payload_bounds_exclude_impossible_application_text() {
     }
     source["entities"][2]["hooks"][0]["when"] =
         json!({"kind":"request_lifecycle", "transitions":["apply"]});
-    assert_compile_code(&source, "event.webhook.projection_too_large");
+    assert_compile_code(&source, "breg.event.webhook-projection-too-large");
 }
 
 /// The envelope wrapper one hook of `project_value` produces.
@@ -1155,7 +1161,7 @@ fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
         .remove("when");
     assert_compile_code(
         &data_object_at_the_bound,
-        "event.webhook.projection_too_large",
+        "breg.event.webhook-projection-too-large",
     );
 
     let mut envelope_at_the_bound = data_object_at_the_bound.clone();
@@ -1175,7 +1181,7 @@ fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
         structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES + 1);
     assert_compile_code(
         &envelope_one_byte_over,
-        "event.webhook.projection_too_large",
+        "breg.event.webhook-projection-too-large",
     );
 }
 

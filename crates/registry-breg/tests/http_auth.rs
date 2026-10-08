@@ -849,7 +849,7 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("direct target mutation is refused");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "access_profile.task_grant.direct_mutation_forbidden"
+        diagnostic.code == "breg.access-profile.task-grant-direct-mutation-forbidden"
     }));
 
     let task_grant_reviewer = include_str!("fixtures/authority-mapping.yaml").replace(
@@ -878,10 +878,9 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
         .expect("task-grant apply_request project parses");
     let failure = compile_project(&project, &[], CompileProfile::Authoring)
         .expect_err("a task-grant profile cannot apply a reviewed request");
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| { diagnostic.code == "access_profile.task_grant.operation_forbidden" }));
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "breg.access-profile.task-grant-operation-forbidden"
+    }));
 }
 
 fn read_identity() -> ReadRuntimeIdentity {

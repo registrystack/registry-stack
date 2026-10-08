@@ -193,29 +193,29 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
     let cases: Vec<RefusalCase> = vec![
         (
             Box::new(|v| v["statisticalDatasets"][0]["unit"] = json!("missing")),
-            "statistical_dataset.unit.unknown",
+            "breg.statistical-dataset.unit-unknown",
         ),
         (
             Box::new(|v| v["statisticalDatasets"][0]["population"] = json!("active = true")),
-            "statistical_dataset.population.invalid",
+            "breg.statistical-dataset.population-invalid",
         ),
         (
             Box::new(|v| v["statisticalDatasets"][0]["period"]["field"] = json!("missing")),
-            "statistical_dataset.field.unknown",
+            "breg.statistical-dataset.field-unknown",
         ),
         (
             Box::new(|v| v["statisticalDatasets"][0]["period"]["field"] = json!("category")),
-            "statistical_dataset.period.field_type",
+            "breg.statistical-dataset.period-field-type",
         ),
         (
             Box::new(|v| v["statisticalDatasets"][0]["dimensions"] = json!(["event-date"])),
-            "statistical_dataset.dimension.type",
+            "breg.statistical-dataset.dimension-type",
         ),
         (
             Box::new(|v| {
                 v["statisticalDatasets"][0]["dimensions"] = json!(["category", "category"])
             }),
-            "statistical_dataset.dimension.duplicate",
+            "breg.statistical-dataset.dimension-duplicate",
         ),
         (
             Box::new(|v| {
@@ -224,15 +224,15 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
                     .unwrap()
                     .remove("disclosure");
             }),
-            "statistical_dataset.disclosure.missing",
+            "breg.statistical-dataset.disclosure-missing",
         ),
         (
             Box::new(|v| v["statisticalDatasets"][0]["live"] = json!(["analyst", "analyst"])),
-            "statistical_dataset.profile.duplicate",
+            "breg.statistical-dataset.profile-duplicate",
         ),
         (
             Box::new(|v| v["statisticalDatasets"][0]["releases"]["readers"] = json!([])),
-            "statistical_dataset.releases.readers_empty",
+            "breg.statistical-dataset.releases-readers-empty",
         ),
         (
             Box::new(|v| {
@@ -242,7 +242,7 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
                     .unwrap()
                     .remove("releases");
             }),
-            "statistical_dataset.grants.empty",
+            "breg.statistical-dataset.grants-empty",
         ),
         (
             Box::new(|v| {
@@ -256,35 +256,35 @@ fn statistical_dataset_core_refusals_are_stable_and_actionable() {
                     field["classification"] = json!("public");
                 }
             }),
-            "statistical_dataset.profile.anonymous",
+            "breg.statistical-dataset.profile-anonymous",
         ),
         (
             Box::new(|v| v["accessProfiles"][0]["permissions"][0]["allowCount"] = json!(false)),
-            "statistical_dataset.count_grant.count_required",
+            "breg.statistical-dataset.count-grant-count-required",
         ),
         (
             Box::new(|v| {
                 v["accessProfiles"][0]["permissions"][0]["operations"] = json!(["snapshot"])
             }),
-            "statistical_dataset.count_grant.list_required",
+            "breg.statistical-dataset.count-grant-list-required",
         ),
         (
             Box::new(|v| {
                 v["accessProfiles"][0]["permissions"][0]["filterableFields"] =
                     json!(["active", "category"])
             }),
-            "statistical_dataset.count_grant.field_not_filterable",
+            "breg.statistical-dataset.count-grant-field-not-filterable",
         ),
         (
             Box::new(|v| v["accessProfiles"][1]["requiredPurposes"] = json!(["reporting"])),
-            "statistical_dataset.publisher.caller_dependent",
+            "breg.statistical-dataset.publisher-caller-dependent",
         ),
         (
             Box::new(|v| {
                 v["accessProfiles"][1]["permissions"][0]["rowBoundaries"] =
                     json!([{"field":"category","claim":"categories","operator":"in"}])
             }),
-            "statistical_dataset.publisher.caller_dependent",
+            "breg.statistical-dataset.publisher-caller-dependent",
         ),
     ];
     for (mutator, code) in cases {
@@ -333,7 +333,7 @@ fn statistical_dataset_refuses_anonymous_live_publisher_and_reader_profiles() {
                     field["classification"] = json!("public");
                 }
             },
-            "statistical_dataset.profile.anonymous",
+            "breg.statistical-dataset.profile-anonymous",
         );
     }
 }
@@ -374,7 +374,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                 "membershipKeyField":"organization","principalField":"principal","activeField":"active"
             }]);
         },
-        "statistical_dataset.publisher.caller_dependent",
+        "breg.statistical-dataset.publisher-caller-dependent",
     );
     assert_refused(
         |value| {
@@ -401,7 +401,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
             }));
             value["accessProfiles"][1]["permissions"][0]["requestVisibility"] = json!("owner");
         },
-        "statistical_dataset.publisher.caller_dependent",
+        "breg.statistical-dataset.publisher-caller-dependent",
     );
     assert_refused(
         |value| {
@@ -413,7 +413,7 @@ fn statistical_dataset_refuses_caller_dependent_publisher_authority() {
                     json!([boundary.clone()]);
             }
         },
-        "statistical_dataset.publisher.entity_row_boundary",
+        "breg.statistical-dataset.publisher-entity-row-boundary",
     );
 }
 
@@ -437,7 +437,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
             value["statisticalDatasets"][0]["population"] =
                 json!("active eq true and secret eq 'x'");
         },
-        "statistical_dataset.field.encrypted",
+        "breg.statistical-dataset.field-encrypted",
     );
     assert_refused(
         |value| {
@@ -476,7 +476,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
             value["accessProfiles"][1]["permissions"][0]["requireConsent"] =
                 json!([{"record":"consent-decision","on":"id"}])
         },
-        "statistical_dataset.count_grant.consent",
+        "breg.statistical-dataset.count-grant-consent",
     );
 }
 
@@ -484,7 +484,7 @@ fn statistical_dataset_refuses_encrypted_processing_fields_and_consent_gated_cou
 fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
     assert_refused(
         |value| value["vocabularies"][0]["values"] = json!(["_reserved", "a"]),
-        "statistical_dataset.dimension.code_reserved",
+        "breg.statistical-dataset.dimension-code-reserved",
     );
 
     for id in ["period", "value", "status"] {
@@ -498,7 +498,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
                     }));
                 value["statisticalDatasets"][0]["dimensions"] = json!([id]);
             },
-            "statistical_dataset.dimension.reserved",
+            "breg.statistical-dataset.dimension-reserved",
         );
     }
 
@@ -529,7 +529,7 @@ fn statistical_dataset_refuses_reserved_and_unbounded_dimensions() {
             }
             value["statisticalDatasets"][0]["dimensions"] = json!(["category", "category-two"]);
         },
-        "statistical_dataset.cells.exceeded",
+        "breg.statistical-dataset.cells-exceeded",
     );
 }
 
@@ -574,7 +574,7 @@ fn statistical_dimension_reserved_names_follow_emitted_logical_field_ids() {
                 }));
             value["statisticalDatasets"][0]["dimensions"] = json!(["period"]);
         },
-        "statistical_dataset.dimension.reserved",
+        "breg.statistical-dataset.dimension-reserved",
     );
 }
 
@@ -609,7 +609,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
             }
             value["statisticalDatasets"][0]["dimensions"] = json!(dimensions);
         },
-        "statistical_dataset.document.exceeded",
+        "breg.statistical-dataset.document-exceeded",
     );
 }
 
@@ -676,11 +676,11 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
     }
     assert_refused(
         |value| value["entities"][0]["fields"][2]["type"] = json!("timestamp"),
-        "statistical_dataset.period.field_type",
+        "breg.statistical-dataset.period-field-type",
     );
     assert_refused(
         |value| value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!("2025-13"),
-        "statistical_dataset.period.first_period",
+        "breg.statistical-dataset.period-first-period",
     );
     for (granularity, invalid_periods) in [
         (
@@ -697,7 +697,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
                     value["statisticalDatasets"][0]["period"]["granularity"] = json!(granularity);
                     value["statisticalDatasets"][0]["period"]["firstPeriod"] = json!(invalid);
                 },
-                "statistical_dataset.period.first_period",
+                "breg.statistical-dataset.period-first-period",
             );
         }
     }
@@ -722,7 +722,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
                 .unwrap()
                 .remove("temporal");
         },
-        "statistical_dataset.period.temporal_missing",
+        "breg.statistical-dataset.period-temporal-missing",
     );
 }
 
@@ -942,7 +942,7 @@ fn population_uses_api_field_names_and_refuses_invalid_typed_predicates() {
     for population in ["active lt true", "active eq 1", "category eq 'missing'"] {
         assert_refused(
             |value| value["statisticalDatasets"][0]["population"] = json!(population),
-            "statistical_dataset.population.invalid",
+            "breg.statistical-dataset.population-invalid",
         );
     }
 }
@@ -958,7 +958,7 @@ fn population_in_list_refuses_values_the_runtime_would_read_as_duplicates() {
     for population in ["category in ('a','a')", "active in (true,'true')"] {
         assert_refused(
             |value| value["statisticalDatasets"][0]["population"] = json!(population),
-            "statistical_dataset.population.invalid",
+            "breg.statistical-dataset.population-invalid",
         );
     }
 }
@@ -998,7 +998,7 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
     ] {
         assert_refused(
             |value| value["statisticalDatasets"][0]["population"] = json!(population),
-            "statistical_dataset.population.invalid",
+            "breg.statistical-dataset.population-invalid",
         );
     }
 
@@ -1008,7 +1008,7 @@ fn population_text_functions_use_partial_query_terms_with_runtime_bounds() {
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "statistical_dataset.population.invalid"));
+        .any(|diagnostic| diagnostic.code == "breg.statistical-dataset.population-invalid"));
 }
 
 #[test]
@@ -1383,7 +1383,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
         let failure = compile_with_sql(&mutation_only_dependency, sql)
             .expect_err("a publisher needs an ordinary read operation on every derived dependency");
         assert!(failure.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == "statistical_dataset.publisher.dependency_read_required"
+            diagnostic.code == "breg.statistical-dataset.publisher-dependency-read-required"
                 && diagnostic.message.contains("dependency entity `lookup`")
         }));
     }
@@ -1396,7 +1396,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let failure = compile_with_sql(&missing_dependency_grant, sql)
         .expect_err("publisher access to every non-unit dependency is required");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "statistical_dataset.publisher.dependency_grant_missing"
+        diagnostic.code == "breg.statistical-dataset.publisher-dependency-grant-missing"
             && diagnostic.message.contains("dependency entity `lookup`")
     }));
 
@@ -1411,7 +1411,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let failure =
         compile_with_sql(&value, sql).expect_err("caller-dependent dependency is refused");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "statistical_dataset.publisher.caller_dependent"
+        diagnostic.code == "breg.statistical-dataset.publisher-caller-dependent"
             && diagnostic.message.contains("dependency entity `lookup`")
     }));
 
@@ -1426,7 +1426,7 @@ fn derived_dimension_records_entity_and_evaluation_date_dependencies() {
     let failure = compile_with_sql(&value, &long_sql)
         .expect_err("a long caller-dependent relation remains in the dependency closure");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "statistical_dataset.publisher.caller_dependent"
+        diagnostic.code == "breg.statistical-dataset.publisher-caller-dependent"
             && diagnostic
                 .message
                 .contains(&format!("dependency entity `{long_entity}`"))

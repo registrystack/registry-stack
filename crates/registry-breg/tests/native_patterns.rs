@@ -67,7 +67,7 @@ fn native_pattern_is_persisted_bounded_and_not_a_portable_schema_pattern() {
         assert!(error
             .diagnostics()
             .iter()
-            .any(|d| d.code == "field.pattern.bounds_invalid"));
+            .any(|d| d.code == "breg.field.pattern-bounds-invalid"));
         assert!(!format!("{error:?}").contains(&invalid));
     }
 }

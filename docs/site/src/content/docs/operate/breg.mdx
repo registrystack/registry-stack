@@ -1170,7 +1170,7 @@ metricsListener:
 
 The address must be a loopback or private address (an IPv4 private range, or IPv6 unique-local)
 with a non-zero port, and it must differ from `listener.bind`; the runtime file is otherwise
-refused with `runtime_config.invalid_metrics_listener`. The listener answers `GET /metrics` in the
+refused with `breg.runtime.invalid-metrics-listener`. The listener answers `GET /metrics` in the
 Prometheus text format and nothing else, and it carries no authentication, so keep it behind the
 scraper's network boundary rather than a public one.
 
@@ -1334,7 +1334,7 @@ See [publish a statistical series](../../configure/breg-statistics/) and the [AP
 | `doctor` reports `startup.package.refused` with `the package compiler derivation failed` after an engine upgrade | The upgraded compiler derives a different schema from the active package, for example a new reference index. Build and apply a successor package with the upgraded `bregctl` before starting the upgraded `breg`, as [Change an active registry](../breg-changes/#test-and-package-the-successor) describes. `diff --runtime-config` reads the active package, and `test` and `package` accept its directory through `--baseline-package`; `verify` refuses it until the successor is active. |
 | `doctor` or startup warns `postgres.connections.pool_over_half` | Lower `database.pool.maxSize` or raise `max_connections` until every replica, operator command, and monitoring session fits; see [Set a PostgreSQL baseline](#set-a-postgresql-baseline). |
 | `doctor` or startup warns `postgres.autovacuum.off` or `postgres.track_counts.off` | Turn the setting back on in the server configuration and reload PostgreSQL, then run `ANALYZE` in the registry database so planner statistics catch up. |
-| The runtime file is refused with `runtime_config.invalid_metrics_listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
+| The runtime file is refused with `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` must be a loopback or private address with a non-zero port, distinct from `listener.bind`. |
 | Every token is refused | Compare the token's header and claims with the token table; a list-valued `aud` or a missing principal claim refuses the token. |
 | An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
 | A command refuses a path that exists | Some component of the path is a symbolic link. Name the real directory; on macOS pass `/private/tmp` rather than `/tmp`. |

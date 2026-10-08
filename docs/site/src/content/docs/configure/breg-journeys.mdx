@@ -30,11 +30,11 @@ bregctl check ./my-registry
 Authoring check passed.
   revision  sha256:<digest>
 
-  finding  access.profile.unrestricted_collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
+  finding  breg.access.profile-unrestricted-collection  entities[id=record].accessProfiles[id=operator].rowBoundaries
            this profile can list all rows, subject only to query bounds; caller filters
            are not authorization. Add a claim-bound row restriction or review this
            registry-wide access
-  finding  access.profile.unrestricted_rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
+  finding  breg.access.profile-unrestricted-rows  entities[id=record].accessProfiles[id=evidence-source].rowBoundaries
            this profile has no claim-bound row restriction for its granted operations;
            requestVisibility owner limits request reads only, and other lifecycle rules
            still apply. Review this registry-wide access
@@ -48,7 +48,7 @@ A finding is an advisory attached to a document path: the project compiles, but 
 In JSON output, the `findings[]` array carries that classification and each element omits the
 constant `severity` field. Refusal reports use `diagnostics[]` and retain `severity`, including when
 `--deny-findings` promotes findings to a refusal.
-The project `init` wrote reports both findings on purpose: `access.profile.unrestricted_collection`, because its `operator` profile lists every record, and `access.profile.unrestricted_rows`, because its `evidence-source` profile looks up any record by code.
+The project `init` wrote reports both findings on purpose: `breg.access.profile-unrestricted-collection`, because its `operator` profile lists every record, and `breg.access.profile-unrestricted-rows`, because its `evidence-source` profile looks up any record by code.
 
 Two flags change what counts as a failure, and a review gate wants both:
 
@@ -58,7 +58,7 @@ bregctl check ./my-registry --production
 ```
 
 `--deny-findings` makes every finding fail the command, so the first one prints `bregctl check refused.` above the same two findings and exits with status 1 until they are resolved or the profiles are changed.
-`--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a declared handler for every event must all be present, and a project missing one fails with `package.identity.required`, `module.lock.missing`, `module.lock.digest_required`, `module.source.required`, or `event.delivery.required`.
+`--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a declared handler for every event must all be present, and a project missing one fails with `breg.package.identity-required`, `breg.module.lock-missing`, `breg.module.lock-digest-required`, `breg.module.source-required`, or `breg.event.delivery-required`.
 The project `init` wrote already carries all of them, so `check --production` succeeds on it.
 `explain` and `generate` accept `--production` as well; `--deny-findings` belongs to `check` alone.
 
@@ -108,27 +108,27 @@ These are all the findings the compiler can report, each attached to the documen
 
 | Finding | Meaning | What to do |
 |---|---|---|
-| `access.profile.anonymous_collection` | `list` is granted to unauthenticated callers, so every row the profile can read is public. | Confirm the whole collection is meant to be public. |
-| `access.profile.data_export` | Bulk export is enabled, and disabling it later cannot recall downloaded data. | Review the readable fields and row boundaries first. |
-| `access.profile.higher_classification` | A readable field is more sensitive than its entity's classification. | Verify the profile's scope and purpose before disclosing it. |
-| `access.profile.no_required_scope` | No scope restricts who may select the profile. | Add a required scope unless that is intended. |
-| `access.profile.no_writable_fields` | The profile grants `create` or `patch` and names no writable field. | List the writable fields, or remove the write operations. |
-| `access.profile.related_disclosure` | A read path discloses related records under the root profile rather than the target entity's own profiles. | Review its fields and the target entity's access requirements. |
-| `access.profile.revision_history` | History can disclose values removed from the current record. | Review historical disclosure separately. |
-| `access.profile.row_boundary_not_writable` | The profile grants `create` and a row boundary whose field it cannot write, so the row policy refuses every create. | Add the boundary field to the writable fields, or remove `create` from the permission. |
-| `access.profile.snapshot_history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
-| `access.profile.unrestricted_collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
-| `access.profile.unrestricted_rows` | The profile's granted operations reach every row and no claim-bound boundary narrows them. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
-| `access.profile.writable_row_boundary` | The profile can write a field a row boundary depends on. | With `create`, keep it writable: the row policy pins it to the caller's claim on insert. With `patch` alone, remove it from the writable fields unless moving records is intended. |
-| `entity.list.unindexed_filter` | No index leads with a filterable list field, so a filtered list scans every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
-| `entity.list.unindexed_sort` | No index leads with a sortable list field, so a sorted list orders every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
-| `manifest_projection.missing` | No Registry Manifest projection is declared. | Declare one to clear the finding. `check --production` passes without it, and `package` builds a package without one. |
-| `module.lock.digest_missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |
-| `module.lock.missing` | A module source has no lock entry. | Run `project lock`. |
-| `module.source.missing` | A lock entry names a module whose source is not loaded. | Restore the module file or remove the lock entry. |
-| `package.identity.missing` | No package identity is declared. | Declare one before a production package. |
+| `breg.access.profile-anonymous-collection` | `list` is granted to unauthenticated callers, so every row the profile can read is public. | Confirm the whole collection is meant to be public. |
+| `breg.access.profile-data-export` | Bulk export is enabled, and disabling it later cannot recall downloaded data. | Review the readable fields and row boundaries first. |
+| `breg.access.profile-higher-classification` | A readable field is more sensitive than its entity's classification. | Verify the profile's scope and purpose before disclosing it. |
+| `breg.access.profile-no-required-scope` | No scope restricts who may select the profile. | Add a required scope unless that is intended. |
+| `breg.access.profile-no-writable-fields` | The profile grants `create` or `patch` and names no writable field. | List the writable fields, or remove the write operations. |
+| `breg.access.profile-related-disclosure` | A read path discloses related records under the root profile rather than the target entity's own profiles. | Review its fields and the target entity's access requirements. |
+| `breg.access.profile-revision-history` | History can disclose values removed from the current record. | Review historical disclosure separately. |
+| `breg.access.profile-row-boundary-not-writable` | The profile grants `create` and a row boundary whose field it cannot write, so the row policy refuses every create. | Add the boundary field to the writable fields, or remove `create` from the permission. |
+| `breg.access.profile-snapshot-history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
+| `breg.access.profile-unrestricted-collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
+| `breg.access.profile-unrestricted-rows` | The profile's granted operations reach every row and no claim-bound boundary narrows them. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
+| `breg.access.profile-writable-row-boundary` | The profile can write a field a row boundary depends on. | With `create`, keep it writable: the row policy pins it to the caller's claim on insert. With `patch` alone, remove it from the writable fields unless moving records is intended. |
+| `breg.entity.list-unindexed-filter` | No index leads with a filterable list field, so a filtered list scans every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
+| `breg.entity.list-unindexed-sort` | No index leads with a sortable list field, so a sorted list orders every row the caller may read. | For an entity that will hold more than a few thousand rows, declare an index that leads with the field under `entities[].indexes`. |
+| `breg.manifest-projection.missing` | No Registry Manifest projection is declared. | Declare one to clear the finding. `check --production` passes without it, and `package` builds a package without one. |
+| `breg.module.lock-digest-missing` | A module lock entry has no production digest. | Run `project lock` before a production package. |
+| `breg.module.lock-missing` | A module source has no lock entry. | Run `project lock`. |
+| `breg.module.source-missing` | A lock entry names a module whose source is not loaded. | Restore the module file or remove the lock entry. |
+| `breg.package.identity-missing` | No package identity is declared. | Declare one before a production package. |
 
-Under `--production`, the `module.*` and `package.*` findings become errors; `manifest_projection.missing` and the `entity.list.*` findings are reported only in authoring mode, so resolve them before you leave this page.
+Under `--production`, the `breg.module.*` and `breg.package.*` findings become errors; `breg.manifest-projection.missing` and the `breg.entity.list-*` findings are reported only in authoring mode, so resolve them before you leave this page.
 
 {/* Evidence: crates/registry-breg/src/access.rs; crates/registry-breg/src/compiler.rs. */}
 

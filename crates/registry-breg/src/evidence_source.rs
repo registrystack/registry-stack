@@ -37,7 +37,7 @@ pub struct EvidenceSourceExport {
 }
 
 fn refusal(path: &str, message: &str) -> Diagnostic {
-    Diagnostic::error("evidence_source.refused", path, message)
+    Diagnostic::error("breg.evidence-source.refused", path, message)
 }
 
 fn local_name(value: &str) -> bool {
@@ -201,7 +201,7 @@ pub fn export_evidence_source(
         .contains_key(&options.access_profile)
     {
         return Err(Diagnostic::error(
-            "consent.require.evidence_source_unsupported",
+            "breg.consent.require-evidence-source-unsupported",
             "access-profile",
             "a consent-checked profile cannot back an Evidence source; the Evidence runtime is not the recipient the subject consented to",
         ));

@@ -11,10 +11,11 @@ use registry_breg::contract::{parse_module_json, Operation};
 use registry_breg::{compile_project, parse_project_json, CompileFailure, CompileProfile};
 use serde_json::{json, Value};
 
-const OPERATION_FORBIDDEN: &str = "access_profile.standing_agent.operation_forbidden";
-const DIRECT_MUTATION_FORBIDDEN: &str = "access_profile.standing_agent.direct_mutation_forbidden";
-const ACTION_FORBIDDEN: &str = "access_profile.standing_agent.action_forbidden";
-const MODULE_TASK_GRANT_FORBIDDEN: &str = "access_profile.task_grant.module_forbidden";
+const OPERATION_FORBIDDEN: &str = "breg.access-profile.standing-agent-operation-forbidden";
+const DIRECT_MUTATION_FORBIDDEN: &str =
+    "breg.access-profile.standing-agent-direct-mutation-forbidden";
+const ACTION_FORBIDDEN: &str = "breg.access-profile.standing-agent-action-forbidden";
+const MODULE_TASK_GRANT_FORBIDDEN: &str = "breg.access-profile.task-grant-module-forbidden";
 
 fn project() -> Value {
     json!({
@@ -351,7 +352,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         .push(json!("apply_request"));
     let failure = refused(compile(&delegated_apply), "a task grant still cannot apply");
     let apply_codes = codes(&failure);
-    assert!(apply_codes.contains(&"access_profile.task_grant.operation_forbidden"));
+    assert!(apply_codes.contains(&"breg.access-profile.task-grant-operation-forbidden"));
     assert!(!apply_codes.contains(&OPERATION_FORBIDDEN));
 
     let mut delegated_direct = delegated;
@@ -362,7 +363,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         "a task grant still cannot write directly",
     );
     let direct_codes = codes(&failure);
-    assert!(direct_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
+    assert!(direct_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
     assert!(!direct_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
 
     let mut delegated_action = project();
@@ -375,7 +376,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         "a task grant still cannot invoke an immediate action",
     );
     let action_codes = codes(&failure);
-    assert!(action_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
+    assert!(action_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
     assert!(!action_codes.contains(&ACTION_FORBIDDEN));
 
     let mut delegated_import = project();
@@ -389,7 +390,7 @@ fn task_grant_and_human_profiles_keep_their_ceilings() {
         "a task grant still cannot import records",
     );
     let import_codes = codes(&failure);
-    assert!(import_codes.contains(&"access_profile.task_grant.direct_mutation_forbidden"));
+    assert!(import_codes.contains(&"breg.access-profile.task-grant-direct-mutation-forbidden"));
     assert!(!import_codes.contains(&DIRECT_MUTATION_FORBIDDEN));
 }
 

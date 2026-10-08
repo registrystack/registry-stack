@@ -334,8 +334,8 @@ fn consent_dataset_plan(source: &CapturedProjectSource, subject: &str) -> Consen
 /// as the compiler reported it.
 fn dataset_conflict(index: usize, failure: FailureReport) -> FailureReport {
     const CONFLICT_CODES: [&str; 2] = [
-        "manifest_projection.dataset.access_profile_unknown",
-        "manifest_projection.dataset.access_profile_ambiguous",
+        "breg.manifest-projection.dataset-access-profile-unknown",
+        "breg.manifest-projection.dataset-access-profile-ambiguous",
     ];
     let prefix = format!("project.manifestProjection.datasets[{index}]");
     if failure.diagnostics.iter().any(|diagnostic| {

@@ -293,7 +293,7 @@ fn evidence_calls_require_v2_in_statements_expressions_and_nested_blocks() {
                     failure
                         .diagnostics()
                         .iter()
-                        .any(|diagnostic| diagnostic.code == "action.handler.helper_contract"),
+                        .any(|diagnostic| diagnostic.code == "breg.action.handler-helper-contract"),
                     "{body}"
                 );
             } else {
