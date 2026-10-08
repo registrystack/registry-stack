@@ -110,6 +110,8 @@ SCHEMAS = {
             "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
             "source-resolutions.json",
         ),
+        ("products/evidence/generated/client-profile/client-profile.schema.json", "client-profile.json"),
+        ("products/evidence/generated/client-profile/client-profile.schema.json", "*.profile.json"),
     ),
     "evidence-deployment": (
         ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),

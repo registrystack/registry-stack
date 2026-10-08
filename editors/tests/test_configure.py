@@ -363,12 +363,18 @@ class ConfigureTests(unittest.TestCase):
             with patch.object(configure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
                 configure.configure("evidence", evidence, self.workspace, None)
                 configure.configure("evidence", evidence, self.workspace, None)
-        schema = evidence / ".registry-stack-editor/schemas/source-resolution.schema.json"
+        schemas = evidence / ".registry-stack-editor/schemas"
+        schema = schemas / "source-resolution.schema.json"
+        profile = schemas / "client-profile.schema.json"
         expected = [
             {
                 "fileMatch": [str(evidence / "*.resolutions.json"), str(evidence / "source-resolutions.json")],
                 "url": schema.as_uri(),
-            }
+            },
+            {
+                "fileMatch": [str(evidence / "client-profile.json"), str(evidence / "*.profile.json")],
+                "url": profile.as_uri(),
+            },
         ]
         vscode = json.loads((self.workspace / ".vscode/settings.json").read_text())
         self.assertEqual(vscode["json.schemas"], expected)
@@ -376,6 +382,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(zed["lsp"]["json-language-server"]["settings"]["json"]["schemas"], expected)
         self.assertNotIn("yaml-language-server", zed["lsp"])
         self.assertTrue(schema.is_file())
+        self.assertTrue(profile.is_file())
 
     def test_evidence_deployment_maps_runtime_bundle_and_codelists(self):
         source = ROOT / "products/evidence/reference/request-adapter/deployment-projects/protected-read-evidence"
