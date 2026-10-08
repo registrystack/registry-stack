@@ -1085,8 +1085,8 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RENDER_REMOVED_KEYS and load();
     crates/registry-render/src/cli.rs, Command::Serve;
-    crates/registry-render/src/runtime.rs, removed_keys_name_their_replacements;
-    crates/registry-render/src/manifest.rs, an_authored_manifest_carrying_an_environment_expression_is_refused. */}
+    crates/registry-render/src/runtime.rs, cfg_change_2_removed_keys_name_their_replacements;
+    crates/registry-render/src/manifest.rs, cfg_sec_2_an_authored_manifest_carrying_an_environment_expression_is_refused. */}
 
 - BREAKING: Registry Scheduling reads `runtime.yaml` through the shared
   runtime configuration loader. `authentication.oidc.jwksUri` is removed
