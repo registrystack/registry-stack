@@ -32,13 +32,28 @@ formats:
     retiredApiVersions:
       - registry.registrystack.org/breg-review-runtime/v1alpha1
 
+  # The retired apiVersion and renamed keys each Casework reader refuses by
+  # name.
   casework/fixture:
     project: products/casework/examples/payment-review
+    retiredApiVersions:
+      - registry.registrystack.org/casework-fixture/v1alpha1
+    removedKeys:
+      - /name
+      - /source
+      - /expect/targetElapsed
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
   casework/simulation:
     project: products/casework/examples/multi-stage-routing-clocks
+    removedKeys:
+      - /subject/id
+      - /expect/ruleId
   casework/holiday-set:
     project: products/casework/examples/multi-stage-routing-clocks
+  casework/dev-clients:
+    removedKeys:
+      - /version
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: dev-clients.yaml}
 
   # The retired apiVersions and renamed keys each Scheduling reader refuses by
   # name.
@@ -233,8 +248,6 @@ formats:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: casework.yaml}
   casework/runtime:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
-  casework/dev-clients:
-    init: {command: "caseworkctl init --template standalone-decision {directory}", file: dev-clients.yaml}
   scheduling/records:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
   messaging/project:
