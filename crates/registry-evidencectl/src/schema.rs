@@ -11,11 +11,18 @@ use registry_evidence_authoring::formats::{
 };
 use registry_evidence_authoring::schema::publish;
 
+use crate::source_import::{
+    resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_KIND, RESOLUTION_SCHEMA_ID,
+};
+
 /// The schema for one local access client under `access/clients/`.
 pub const ACCESS_CLIENT_SCHEMA_FILE: &str = "access-client.schema.json";
 
 /// The schema for one source mock plan, `mocks/source.yaml`.
 pub const MOCK_PLAN_SCHEMA_FILE: &str = "mock-plan.schema.json";
+
+/// The schema for one source import resolution file.
+pub const SOURCE_RESOLUTION_SCHEMA_FILE: &str = "source-resolution.schema.json";
 
 /// Every generated schema this crate owns, keyed by the filename it is
 /// committed under.
@@ -43,12 +50,23 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
                 (MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND),
             )?,
         ),
+        (
+            SOURCE_RESOLUTION_SCHEMA_FILE,
+            publish(
+                resolution_schema(),
+                "Evidence source import resolution file",
+                RESOLUTION_SCHEMA_ID,
+                (RESOLUTION_API_VERSION, RESOLUTION_KIND),
+            )?,
+        ),
     ]))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{documents, ACCESS_CLIENT_SCHEMA_FILE, MOCK_PLAN_SCHEMA_FILE};
+    use super::{
+        documents, ACCESS_CLIENT_SCHEMA_FILE, MOCK_PLAN_SCHEMA_FILE, SOURCE_RESOLUTION_SCHEMA_FILE,
+    };
 
     fn compile(file: &str) -> jsonschema::JSONSchema {
         let value: serde_json::Value =
@@ -126,5 +144,23 @@ mod tests {
         assert!(schema.is_valid(&plan(0, serde_json::json!("person-123"))));
         assert!(!schema.is_valid(&plan(1 << 60, serde_json::json!("person-123"))));
         assert!(!schema.is_valid(&plan(0, serde_json::json!({"nested": true}))));
+    }
+
+    #[test]
+    fn a_resolution_file_the_schema_turns_away_is_turned_away_by_the_reader() {
+        let schema = compile(SOURCE_RESOLUTION_SCHEMA_FILE);
+        let file = |artifact: serde_json::Value| {
+            serde_json::json!({
+                "apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
+                "kind": "EvidenceSourceResolution",
+                "artifacts": {"sources/lookup.yaml": artifact},
+            })
+        };
+        assert!(schema.is_valid(&file(serde_json::json!({"type": "keep"}))));
+        assert!(schema.is_valid(&file(serde_json::json!({"type": "adopt"}))));
+        assert!(schema.is_valid(&file(serde_json::json!({"type": "file", "path": "a"}))));
+        assert!(!schema.is_valid(&file(serde_json::json!({"type": "merge"}))));
+        assert!(!schema.is_valid(&file(serde_json::json!({"type": "keep", "path": "a"}))));
+        assert!(!schema.is_valid(&file(serde_json::json!({"type": "file"}))));
     }
 }

@@ -33,24 +33,28 @@ const EXPORT_FORMAT: FormatSpec<'static> = FormatSpec {
     ],
 };
 
-/// A `source-export.json` the shared reader refused. Its diagnostics are
-/// printed unchanged, in the human or the JSON shape the command was asked for.
+/// A document the shared reader refused, such as a `source-export.json`. Its
+/// diagnostics are printed unchanged, in the human or the JSON shape the
+/// command was asked for.
 #[derive(Debug)]
-pub(crate) struct ExportRefused {
+pub(crate) struct DocumentRefused {
+    /// What the document is, for the sentence that introduces the diagnostics.
+    pub(crate) document: &'static str,
     pub(crate) report: Report,
 }
 
-impl std::fmt::Display for ExportRefused {
+impl std::fmt::Display for DocumentRefused {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "the Evidence source export manifest was refused.\n{}",
+            "the {} was refused.\n{}",
+            self.document,
             self.report.render_human()
         )
     }
 }
 
-impl std::error::Error for ExportRefused {}
+impl std::error::Error for DocumentRefused {}
 
 /// The export manifest as written. The reader checks and strips its
 /// `apiVersion` and `kind`.
@@ -74,9 +78,12 @@ pub(super) struct ExportDocumentArtifact {
 pub(super) fn read_export_manifest(
     file: &str,
     bytes: &[u8],
-) -> Result<ExportDocument, ExportRefused> {
+) -> Result<ExportDocument, DocumentRefused> {
     Reader::new(file)
         .decode::<ExportDocument>(bytes, &Expect::one(&EXPORT_FORMAT))
         .map(|decoded| decoded.value)
-        .map_err(|report| ExportRefused { report })
+        .map_err(|report| DocumentRefused {
+            document: "Evidence source export manifest",
+            report,
+        })
 }

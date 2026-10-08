@@ -600,8 +600,8 @@ fn run_entry() -> ExitCode {
                 write_bregctl_version_mismatch(mismatch, format);
                 return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
-            if let Some(refused) = error.downcast_ref::<source_import::ExportRefused>() {
-                write_export_refusal(refused, &command_path, format);
+            if let Some(refused) = error.downcast_ref::<source_import::DocumentRefused>() {
+                write_document_refusal(refused, &command_path, format);
                 return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
             let operational = operational_cause(&error);
@@ -1107,15 +1107,16 @@ fn write_bregctl_version_mismatch(
     }
 }
 
-/// A refused `source-export.json`: the shared reader's diagnostics, unchanged.
-fn write_export_refusal(
-    refused: &source_import::ExportRefused,
+/// A document the shared reader refused: its diagnostics, unchanged.
+fn write_document_refusal(
+    refused: &source_import::DocumentRefused,
     command: &str,
     format: OutputFormat,
 ) {
     match format {
         OutputFormat::Human => eprint!(
-            "evidencectl {command} refused the Evidence source export manifest.\n{}",
+            "evidencectl {command} refused the {}.\n{}",
+            refused.document,
             refused.report.render_human()
         ),
         OutputFormat::Json => {

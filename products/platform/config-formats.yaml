@@ -3591,26 +3591,32 @@ formats:
   - id: evidence/source-resolution
     product: evidence
     title: Evidence source import resolution file
-    files: ['*.json']
+    files: [source-resolutions.json, '*.resolutions.json']
     syntax: json
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'formatVersion: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/source-resolution/v1alpha1
+      kind: EvidenceSourceResolution
+      checkedBy:
+        file: crates/registry-evidencectl/src/source_import/resolution.rs
+        symbol: RESOLUTION_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/source-resolution/v1alpha1
       kind: EvidenceSourceResolution
-    schema: none
+    schema:
+      path: crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json
+      id: https://id.registrystack.org/schemas/evidence/source-resolution/source-resolution.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-evidencectl --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
+      driftCheck: products/evidence/scripts/check-authoring-schema.sh
     reader:
       crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/source_import/mod.rs
-      function: read_resolutions
+      file: crates/registry-evidencectl/src/source_import/resolution.rs
+      function: decode_resolution_file
       type: ResolutionFile
     check: none
-    example: none
+    example: products/evidence/examples/formats/source-resolutions.json
     conformance:
       requiredText: none
       optionalText: none

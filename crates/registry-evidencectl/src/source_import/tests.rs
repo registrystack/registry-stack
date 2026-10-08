@@ -1,3 +1,4 @@
+use super::resolution::{RESOLUTION_API_VERSION, RESOLUTION_KIND};
 use super::*;
 use std::os::unix::fs::{symlink, PermissionsExt as _};
 
@@ -169,8 +170,8 @@ fn customization_conflicts_finish_with_keep_adopt_and_resolved_file() {
         let resolved = fixture.root.path().join("resolved.rhai");
         fs::write(&resolved, "reviewed-resolution\n").unwrap();
         let (resolution, expected) = match choice {
-            "keep" => (Resolution::Keep, "authored-customization\n"),
-            "adopt" => (Resolution::Adopt, "upstream-two\n"),
+            "keep" => (Resolution::Keep {}, "authored-customization\n"),
+            "adopt" => (Resolution::Adopt {}, "upstream-two\n"),
             _ => (Resolution::File { path: resolved }, "reviewed-resolution\n"),
         };
         accepted(
@@ -296,7 +297,7 @@ fn deleting_obsolete_artifacts_preserves_customization_and_authored_references()
     let mut candidate = prepare(
         &lock,
         &[next],
-        &BTreeMap::from([("adapters/custom.rhai".to_owned(), Resolution::Keep)]),
+        &BTreeMap::from([("adapters/custom.rhai".to_owned(), Resolution::Keep {})]),
     )
     .unwrap();
     assert_eq!(
@@ -718,7 +719,7 @@ fn exact_authored_destination_collision_requires_an_explicit_ownership_choice() 
     accepted(
         &lock,
         &[export],
-        BTreeMap::from([("sources/lookup.yaml".to_owned(), Resolution::Keep)]),
+        BTreeMap::from([("sources/lookup.yaml".to_owned(), Resolution::Keep {})]),
     );
     let next = fixture.export(
         "next",
@@ -1059,7 +1060,7 @@ fn export_refusal(fixture: &Fixture, directory: &str, manifest: &Value) -> Vec<(
         .err()
         .expect("the manifest is refused");
     let refused = error
-        .downcast_ref::<ExportRefused>()
+        .downcast_ref::<DocumentRefused>()
         .expect("the shared reader refused the manifest");
     refused
         .report
@@ -1256,4 +1257,71 @@ fn a_written_baseline_carries_the_envelope() {
     assert_eq!(written["apiVersion"], STATE_API_VERSION);
     assert_eq!(written["kind"], STATE_KIND);
     assert!(written.get("formatVersion").is_none());
+}
+
+const RESOLUTION_EXAMPLE: &str = "../../products/evidence/examples/formats/source-resolutions.json";
+
+fn resolution_refusal(text: &str) -> Vec<(String, String)> {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("resolutions.json");
+    fs::write(&path, text).unwrap();
+    let error = read_resolutions(Some(&path))
+        .err()
+        .expect("the resolution file is refused");
+    error
+        .downcast_ref::<DocumentRefused>()
+        .expect("the shared reader refused the resolution file")
+        .report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect()
+}
+
+#[test]
+fn the_registered_resolution_example_is_readable() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(RESOLUTION_EXAMPLE);
+    let resolutions = read_resolutions(Some(&path)).expect("the example reads");
+    assert!(matches!(
+        resolutions["adapters/lookup-extract.rhai"],
+        Resolution::Keep {}
+    ));
+    assert!(matches!(
+        resolutions["sources/lookup.yaml"],
+        Resolution::Adopt {}
+    ));
+    let Resolution::File { path: resolved } = &resolutions["adapters/lookup-request.rhai"] else {
+        panic!("the third artifact names a file");
+    };
+    assert!(resolved.is_absolute());
+    assert!(resolved.ends_with("formats/reviewed/lookup-request.rhai"));
+}
+
+#[test]
+fn a_resolution_file_in_the_previous_shape_is_refused() {
+    assert_eq!(
+        resolution_refusal(r#"{"formatVersion": 1, "artifacts": {}}"#),
+        [
+            ("config.missing-envelope".to_owned(), String::new()),
+            ("config.removed-key".to_owned(), "/formatVersion".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn a_resolution_names_a_known_choice_and_no_other_member() {
+    let envelope =
+        format!(r#""apiVersion": "{RESOLUTION_API_VERSION}", "kind": "{RESOLUTION_KIND}""#);
+    let unknown = resolution_refusal(&format!(
+        r#"{{{envelope}, "artifacts": {{"a.yaml": {{"type": "merge"}}}}}}"#
+    ));
+    assert_eq!(unknown.len(), 1, "{unknown:?}");
+    let stray = resolution_refusal(&format!(
+        r#"{{{envelope}, "artifacts": {{"a.yaml": {{"type": "keep", "path": "b"}}}}}}"#
+    ));
+    assert_eq!(stray.len(), 1, "{stray:?}");
+    let missing = resolution_refusal(&format!(
+        r#"{{{envelope}, "artifacts": {{"a.yaml": {{"type": "file"}}}}}}"#
+    ));
+    assert_eq!(missing.len(), 1, "{missing:?}");
 }

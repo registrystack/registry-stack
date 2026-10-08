@@ -33,6 +33,8 @@ PRODUCT_FILES = {
     "evidence-deployment": "runtime.yaml",
 }
 PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
+# A pattern ending in `.json` names a JSON format, mapped through the JSON
+# language server; every other pattern is YAML.
 SCHEMAS = {
     "breg": (
         ("products/breg/generated/authoring/registry-project.schema.json", "registry.yaml"),
@@ -98,6 +100,16 @@ SCHEMAS = {
     ),
     "platform": (
         ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
+    ),
+    "evidence": (
+        (
+            "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
+            "*.resolutions.json",
+        ),
+        (
+            "crates/registry-evidencectl/schemas/authoring/source-resolution.schema.json",
+            "source-resolutions.json",
+        ),
     ),
     "evidence-deployment": (
         ("products/evidence/contracts/runtime.schema.yaml", "runtime.yaml"),
@@ -248,24 +260,66 @@ def task_for(product: str, project: Path, document: Path | None) -> tuple[dict[s
     return vscode, zed
 
 
+def zed_language_server_settings(result: dict[str, Any], server_name: str, section: str) -> dict[str, Any]:
+    lsp = result.setdefault("lsp", {})
+    if not isinstance(lsp, dict):
+        raise SetupError("Zed lsp setting must be an object")
+    server = lsp.setdefault(server_name, {})
+    if not isinstance(server, dict):
+        raise SetupError(f"Zed {server_name} setting must be an object")
+    settings = server.setdefault("settings", {})
+    if not isinstance(settings, dict):
+        raise SetupError("Zed language-server settings must be an object")
+    block = settings.setdefault(section, {})
+    if not isinstance(block, dict):
+        raise SetupError(f"Zed {section} settings must be an object")
+    return block
+
+
+def updated_json_schemas(
+    schemas: Any, previous: dict[str, list[str]], desired: dict[str, list[str]]
+) -> list[Any]:
+    if not isinstance(schemas, list):
+        raise SetupError("JSON schema mappings must be an array")
+    result = list(schemas)
+    for url, patterns in previous.items():
+        entry = {"fileMatch": patterns, "url": url}
+        if entry in result:
+            result.remove(entry)
+        elif any(isinstance(item, dict) and item.get("url") == url for item in result):
+            raise SetupError(f"managed schema mapping was edited: {url}")
+    for url, patterns in desired.items():
+        if any(isinstance(item, dict) and item.get("url") == url for item in result):
+            raise SetupError(f"schema mapping already exists: {url}")
+        result.append({"fileMatch": patterns, "url": url})
+    return result
+
+
 def updated_settings(
-    original: dict[str, Any], previous: dict[str, list[str]], desired: dict[str, list[str]], zed: bool
+    original: dict[str, Any],
+    previous: dict[str, list[str]],
+    desired: dict[str, list[str]],
+    zed: bool,
+    previous_json: dict[str, list[str]] | None = None,
+    desired_json: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     result = json.loads(json.dumps(original))
+    if previous_json or desired_json:
+        if zed:
+            block = zed_language_server_settings(result, "json-language-server", "json")
+            block["schemas"] = updated_json_schemas(
+                block.get("schemas", []), previous_json or {}, desired_json or {}
+            )
+        else:
+            result["json.schemas"] = updated_json_schemas(
+                result.get("json.schemas", []), previous_json or {}, desired_json or {}
+            )
+    if not previous and not desired and (previous_json or desired_json):
+        return result
     if zed:
-        lsp = result.setdefault("lsp", {})
-        if not isinstance(lsp, dict):
-            raise SetupError("Zed lsp setting must be an object")
-        server = lsp.setdefault("yaml-language-server", {})
-        if not isinstance(server, dict):
-            raise SetupError("Zed yaml-language-server setting must be an object")
-        settings = server.setdefault("settings", {})
-        if not isinstance(settings, dict):
-            raise SetupError("Zed language-server settings must be an object")
-        yaml = settings.setdefault("yaml", {})
-        if not isinstance(yaml, dict):
-            raise SetupError("Zed yaml settings must be an object")
-        mappings = yaml.setdefault("schemas", {})
+        mappings = zed_language_server_settings(result, "yaml-language-server", "yaml").setdefault(
+            "schemas", {}
+        )
     else:
         mappings = result.setdefault("yaml.schemas", {})
     if not isinstance(mappings, dict):
@@ -354,26 +408,30 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
 
     schema_bytes: dict[Path, bytes] = {}
     mappings: dict[str, list[str]] = {}
+    json_mappings: dict[str, list[str]] = {}
     for source_name, relative_pattern in SCHEMAS.get(product, ()):
         source = ROOT / source_name
         if not source.is_file():
             raise SetupError(f"maintained schema is missing: {source}")
         destination = project / MANAGED / "schemas" / source.name
         content = source.read_bytes()
-        expected_hash = prior.get("schema_hashes", {}).get(str(destination))
-        if destination.exists() or destination.is_symlink():
-            refuse_symlink_below(destination, project)
-            current_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
-            if expected_hash is None or current_hash != expected_hash:
-                raise SetupError(f"managed schema was edited or not owned: {destination}")
-        schema_bytes[destination] = content
+        if destination not in schema_bytes:
+            expected_hash = prior.get("schema_hashes", {}).get(str(destination))
+            if destination.exists() or destination.is_symlink():
+                refuse_symlink_below(destination, project)
+                current_hash = hashlib.sha256(destination.read_bytes()).hexdigest()
+                if expected_hash is None or current_hash != expected_hash:
+                    raise SetupError(f"managed schema was edited or not owned: {destination}")
+            schema_bytes[destination] = content
         pattern = document_name if relative_pattern == "{document}" else relative_pattern
-        mappings.setdefault(destination.as_uri(), []).append(str(project / pattern))
+        target = json_mappings if pattern.endswith(".json") else mappings
+        target.setdefault(destination.as_uri(), []).append(str(project / pattern))
 
     task_pair = task_for(product, project, document)
     vscode_task, zed_task = task_pair if task_pair else (None, None)
     writes: dict[Path, bytes] = {}
     old_mappings = prior.get("mappings", {})
+    old_json_mappings = prior.get("json_mappings", {})
     old_vscode_task = prior.get("vscode_task")
     old_zed_task = prior.get("zed_task")
     for editor, is_zed, task, old_task in (
@@ -381,13 +439,17 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
         ("zed", True, zed_task, old_zed_task),
     ):
         settings_path = workspace / f".{editor}" / "settings.json"
-        if mappings or old_mappings:
+        if mappings or old_mappings or json_mappings or old_json_mappings:
             original = read_json(settings_path, {}, workspace)
             if not isinstance(original, dict):
                 raise SetupError(f"{settings_path} must contain an object")
             prepare_file(
                 settings_path,
-                json_bytes(updated_settings(original, old_mappings, mappings, is_zed)),
+                json_bytes(
+                    updated_settings(
+                        original, old_mappings, mappings, is_zed, old_json_mappings, json_mappings
+                    )
+                ),
                 writes,
                 workspace,
             )
@@ -424,6 +486,7 @@ def configure(product: str, project: Path, workspace: Path, document_arg: str | 
             for source_name, _ in SCHEMAS.get(product, ())
         },
         "mappings": mappings,
+        "json_mappings": json_mappings,
         "schema_hashes": {
             str(path): hashlib.sha256(content).hexdigest() for path, content in schema_bytes.items()
         },

@@ -25,6 +25,15 @@
 
 ### Evidence authoring tools
 
+- BREAKING: the resolution file `evidencectl source diff` and `evidencectl
+  source update` read through `--resolutions` opens with `apiVersion`
+  (`id.registrystack.org/formats/evidence/source-resolution/v1alpha1`) and
+  `kind` (`EvidenceSourceResolution`) in place of `formatVersion`, names each
+  resolution with `type` in place of `choice`, and is read by the shared
+  configuration reader. A resolution of `keep` or `adopt` takes no other
+  member. A generated JSON Schema ships with it. See "Evidence
+  tooling files" in `release/notes/config-conventions/evidence.md`.
+
 - BREAKING: the source-import baseline (`.evidence/source-imports/state.json`)
   and transaction journal (`.evidence/source-imports/transaction.json`) open
   with `apiVersion` and `kind` in place of `formatVersion`. `evidencectl source

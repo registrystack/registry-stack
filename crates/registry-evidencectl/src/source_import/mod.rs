@@ -3,6 +3,7 @@
 
 mod export;
 mod files;
+mod resolution;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -17,7 +18,7 @@ use registry_platform_yaml::Reader;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) use export::ExportRefused;
+pub(crate) use export::DocumentRefused;
 #[cfg(test)]
 pub(crate) use export::{EXPORT_API_VERSION, EXPORT_KIND};
 pub(crate) use files::ProjectLock;
@@ -25,9 +26,14 @@ use files::{
     artifact_path, authored_bound, digest, read, snapshot, write, Contents, JOURNAL_PATH,
     MAX_FILE_BYTES, MAX_JOURNAL_BYTES, MAX_STATE_BYTES, STATE_PATH,
 };
+pub(crate) use resolution::Resolution;
+use resolution::{decode_resolution_file, MAX_ARTIFACTS};
+#[cfg(feature = "schema")]
+pub(crate) use resolution::{
+    resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_KIND, RESOLUTION_SCHEMA_ID,
+};
 
 const MANIFEST_FILE: &str = "source-export.json";
-const MAX_ARTIFACTS: usize = 256;
 const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
 
 /// The same export set and explicit resolutions are usable for a read-only
@@ -151,21 +157,6 @@ impl Default for State {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "choice", rename_all = "kebab-case", deny_unknown_fields)]
-pub(crate) enum Resolution {
-    Keep,
-    Adopt,
-    File { path: PathBuf },
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ResolutionFile {
-    format_version: u32,
-    artifacts: BTreeMap<String, Resolution>,
-}
-
 pub(crate) fn read_resolutions(path: Option<&Path>) -> Result<BTreeMap<String, Resolution>> {
     let Some(path) = path else {
         return Ok(BTreeMap::new());
@@ -181,10 +172,10 @@ pub(crate) fn read_resolutions(path: Option<&Path>) -> Result<BTreeMap<String, R
         .ok_or_else(|| anyhow!("resolution file needs a UTF-8 name"))?;
     let content =
         read(&parent, name, MAX_FILE_BYTES)?.ok_or_else(|| anyhow!("resolution file is absent"))?;
-    let mut resolutions: ResolutionFile =
-        serde_json::from_str(&content.text).context("parsing the closed source resolution file")?;
-    if resolutions.format_version != 1 || resolutions.artifacts.len() > MAX_ARTIFACTS {
-        bail!("source resolution file requires formatVersion 1 and at most 256 artifacts");
+    let mut resolutions =
+        decode_resolution_file(&path.display().to_string(), content.text.as_bytes())?;
+    if resolutions.artifacts.len() > MAX_ARTIFACTS {
+        bail!("source resolution file allows at most {MAX_ARTIFACTS} artifacts");
     }
     for (artifact, resolution) in &mut resolutions.artifacts {
         artifact_path(artifact)?;
@@ -399,8 +390,8 @@ pub(crate) fn prepare(
             || (retained_by_fork && current != upstream && old != upstream);
         let resolution = resolutions.get(&path);
         let (accepted, resolution_name) = match resolution {
-            Some(Resolution::Keep) => (current.clone(), Some("keep".to_owned())),
-            Some(Resolution::Adopt) => (upstream.clone(), Some("adopt".to_owned())),
+            Some(Resolution::Keep {}) => (current.clone(), Some("keep".to_owned())),
+            Some(Resolution::Adopt {}) => (upstream.clone(), Some("adopt".to_owned())),
             Some(Resolution::File { path }) => {
                 (Some(read_resolution(path)?), Some("file".to_owned()))
             }
@@ -437,7 +428,7 @@ pub(crate) fn prepare(
                 else { None },
         });
         next.accepted.insert(path.clone(), accepted.clone());
-        if collision && matches!(resolution, Some(Resolution::Keep)) {
+        if collision && matches!(resolution, Some(Resolution::Keep {})) {
             for id in &next_owner_ids {
                 if let Some(text) = &upstream {
                     let record = next.imports.get_mut(id).expect("candidate owner exists");
@@ -451,7 +442,7 @@ pub(crate) fn prepare(
                 }
             }
         }
-        if matches!(resolution, Some(Resolution::Adopt)) {
+        if matches!(resolution, Some(Resolution::Adopt {})) {
             for id in &next_owner_ids {
                 next.imports
                     .get_mut(id)

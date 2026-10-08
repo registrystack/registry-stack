@@ -710,3 +710,17 @@ file that differs from the export is then reported as a conflict to resolve.
 Migration for a journal left by an interrupted import: run `evidencectl source
 import` with the evidencectl that started it to finish or roll back, then
 rerun.
+
+### BREAKING: the source resolution file has an envelope
+
+A resolution file passed with `--resolutions` opens with `apiVersion:
+id.registrystack.org/formats/evidence/source-resolution/v1alpha1` and `kind:
+EvidenceSourceResolution`; `formatVersion` is gone and is refused with
+`config.removed-key`. The file is read by the shared configuration reader, so
+a `null` value, a document over 1 MiB, an unknown `type`, and a member a
+`keep` or `adopt` resolution does not take (`path`) are refused with a
+positioned diagnostic. The member that names the resolution is `type` (it was
+`choice`), as in every other tagged union. Migration: replace `"formatVersion":
+1` with the two members above, and rename each `"choice"` member to `"type"`.
+The conventional names `source-resolutions.json` and `*.resolutions.json` have
+a generated schema, mapped by `editors/configure.py`.

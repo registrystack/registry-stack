@@ -537,7 +537,7 @@ mod tests {
         );
 
         let resolutions = fixture.root.path().join("resolutions.json");
-        fs::write(&resolutions, serde_json::to_vec(&json!({"formatVersion": 1, "artifacts": {"adapters/lookup-extract.rhai": {"choice": "keep"}}})).unwrap()).unwrap();
+        fs::write(&resolutions, serde_json::to_vec(&json!({"apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1", "kind": "EvidenceSourceResolution", "artifacts": {"adapters/lookup-extract.rhai": {"type": "keep"}}})).unwrap()).unwrap();
         let mut args = fixture.args(next);
         args.resolutions = Some(resolutions);
         output.clear();

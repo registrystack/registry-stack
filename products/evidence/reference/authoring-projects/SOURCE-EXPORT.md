@@ -122,16 +122,21 @@ requests, audit history, or running-service state. Candidates are bounded to
 
 ## Finish a customization conflict
 
-Write an explicit resolution file and supply it to diff or update:
+Write an explicit resolution file and supply it to diff or update. A
+resolution file is a closed JSON document of kind `EvidenceSourceResolution`;
+the conventional names `source-resolutions.json` and `*.resolutions.json` get
+an editor schema from `editors/configure.py`, and a file written with
+`formatVersion` is refused with `config.removed-key`:
 
 ```json
 {
-  "formatVersion": 1,
+  "apiVersion": "id.registrystack.org/formats/evidence/source-resolution/v1alpha1",
+  "kind": "EvidenceSourceResolution",
   "artifacts": {
-    "adapters/registry-status-extract.rhai": {"choice": "keep"},
-    "schemas/registry-status-response.yaml": {"choice": "adopt"},
+    "adapters/registry-status-extract.rhai": {"type": "keep"},
+    "schemas/registry-status-response.yaml": {"type": "adopt"},
     "adapters/registry-status-prepare.rhai": {
-      "choice": "file",
+      "type": "file",
       "path": "reviewed/registry-status-prepare.rhai"
     }
   }
