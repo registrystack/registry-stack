@@ -459,6 +459,12 @@ fn validate_config_reference(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// The derived JSON Schema of one mock plan document.
+#[cfg(feature = "schema")]
+pub(crate) fn plan_schema() -> Value {
+    serde_json::to_value(schemars::schema_for!(MockPlan)).expect("a derived schema is JSON")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,10 +647,4 @@ mod tests {
         invalid.generation.as_mut().unwrap().as_of = "1899-12-31".to_owned();
         assert!(validate_plan(&invalid).is_err());
     }
-}
-
-/// The derived JSON Schema of one mock plan document.
-#[cfg(feature = "schema")]
-pub(crate) fn plan_schema() -> Value {
-    serde_json::to_value(schemars::schema_for!(MockPlan)).expect("a derived schema is JSON")
 }
