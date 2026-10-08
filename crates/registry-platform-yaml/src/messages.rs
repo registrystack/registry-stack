@@ -852,17 +852,42 @@ pub(crate) fn number_out_of_range(min: &str, max: &str) -> Text {
     )
 }
 
-pub(crate) fn unknown_variant(accepted: &[&str]) -> Text {
+/// The accepted value a refused one most likely meant. It holds only an
+/// accepted name, so the refused value is never kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Suggestion {
+    /// The value differs from this accepted one only in letter case.
+    LetterCase(&'static str),
+    /// The value is a likely misspelling of this accepted one.
+    Close(&'static str),
+}
+
+/// The accepted value `written` most likely meant, if any.
+pub(crate) fn suggest(written: &str, accepted: &[&'static str]) -> Option<Suggestion> {
+    let candidate = closest(written, accepted)?;
+    if candidate == written {
+        return None;
+    }
+    if candidate.eq_ignore_ascii_case(written) {
+        Some(Suggestion::LetterCase(candidate))
+    } else {
+        Some(Suggestion::Close(candidate))
+    }
+}
+
+pub(crate) fn unknown_variant(accepted: &[&str], suggestion: Option<Suggestion>) -> Text {
     if accepted.is_empty() {
         return text(
             "this union accepts no values",
             "Report this to the product maintainers; the format declares a union with no forms.",
         );
     }
-    text(
-        format!("expected one of {}", list(accepted)),
-        format!("Use one of {}.", list(accepted)),
-    )
+    let action = match suggestion {
+        Some(Suggestion::LetterCase(name)) => format!("Use `{name}`; letter case matters."),
+        Some(Suggestion::Close(name)) => format!("Use `{name}`, the closest accepted value."),
+        None => format!("Use one of {}.", list(accepted)),
+    };
+    text(format!("expected one of {}", list(accepted)), action)
 }
 
 pub(crate) fn invalid_type(expected: &str, found: Found) -> Text {
@@ -1046,7 +1071,7 @@ pub(crate) const TYPE_RULES: &[TypeRule] = &[
     },
 ];
 
-/// The closest accepted key, when one is a likely misspelling.
+/// The closest accepted name, when one is a likely misspelling.
 fn closest<'a>(name: &str, accepted: &[&'a str]) -> Option<&'a str> {
     let lower = name.to_ascii_lowercase();
     let mut best: Option<(usize, &str)> = None;

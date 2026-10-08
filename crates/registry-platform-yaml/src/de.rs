@@ -218,7 +218,7 @@ enum Kind {
     InvalidType(String),
     InvalidValue(String),
     InvalidLength(String),
-    UnknownVariant(&'static [&'static str]),
+    UnknownVariant(&'static [&'static str], Option<messages::Suggestion>),
     UnknownField(String, &'static [&'static str]),
     MissingField(&'static str),
     DuplicateField(&'static str),
@@ -268,7 +268,7 @@ impl fmt::Display for Error {
                 Kind::InvalidType(_) => "invalid type",
                 Kind::InvalidValue(_) | Kind::Custom(_) => "invalid value",
                 Kind::InvalidLength(_) => "invalid length",
-                Kind::UnknownVariant(_) => "unknown variant",
+                Kind::UnknownVariant(..) => "unknown variant",
                 Kind::UnknownField(..) => "unknown key",
                 Kind::MissingField(_) => "missing member",
                 Kind::DuplicateField(_) => "duplicate member",
@@ -298,8 +298,11 @@ impl de::Error for Error {
         Error::unlocated(Kind::InvalidLength(expected.to_string()))
     }
 
-    fn unknown_variant(_: &str, expected: &'static [&'static str]) -> Error {
-        Error::unlocated(Kind::UnknownVariant(expected))
+    fn unknown_variant(variant: &str, expected: &'static [&'static str]) -> Error {
+        // Only the accepted name the value is close to is kept, never the
+        // value itself.
+        let suggestion = messages::suggest(variant, expected);
+        Error::unlocated(Kind::UnknownVariant(expected, suggestion))
     }
 
     fn unknown_field(field: &str, expected: &'static [&'static str]) -> Error {
@@ -780,14 +783,16 @@ fn describe(site: &Site<'_>, kind: Kind, buffered: bool) -> Problem {
             unknown_key_problem(site, &name, Some(&visible))
                 .unwrap_or_else(|| approximate("config.unknown-key", None))
         }
-        Kind::UnknownVariant(expected) => {
+        Kind::UnknownVariant(expected, suggestion) => {
             if buffered {
                 let accepted = format!("one of {}", messages::list(expected));
                 approximate("config.unknown-variant", Some(&accepted))
             } else {
+                // A hint about substituted text would reveal part of it.
+                let suggestion = suggestion.filter(|_| found(node) != Found::Substituted);
                 site.problem(
                     "config.unknown-variant",
-                    messages::unknown_variant(expected),
+                    messages::unknown_variant(expected, suggestion),
                 )
             }
         }
@@ -1238,12 +1243,13 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
                 messages::single_variant_key(variants),
             )),
             NodeValue::Null => Err(de.null_error(false)),
-            NodeValue::Sequence(_) => {
-                Err(de.fail("config.invalid-type", messages::unknown_variant(variants)))
-            }
+            NodeValue::Sequence(_) => Err(de.fail(
+                "config.invalid-type",
+                messages::unknown_variant(variants, None),
+            )),
             _ => Err(de.fail(
                 "config.unknown-variant",
-                messages::unknown_variant(variants),
+                messages::unknown_variant(variants, None),
             )),
         })
     }
@@ -1568,11 +1574,11 @@ impl KeyDe<'_> {
                 let at = Some(self.entry.key_span.start);
                 let path = self.path.clone();
                 let problem = match kind {
-                    Kind::UnknownVariant(expected) => Problem::error(
+                    Kind::UnknownVariant(expected, suggestion) => Problem::error(
                         "config.unknown-variant",
                         path,
                         at,
-                        messages::unknown_variant(expected),
+                        messages::unknown_variant(expected, suggestion),
                     ),
                     Kind::Custom(text) => match parse_protocol(&text) {
                         Some(Protocol::Expected { expected, action }) => Problem::error(
@@ -1843,7 +1849,7 @@ fn probe_variants<'de, S: DeserializeSeed<'de>>(seed: S) -> &'static [&'static s
         de::value::StrDeserializer::new(PROBE_VARIANT);
     match seed.deserialize(probe) {
         Err(error) => match *error.0 {
-            Inner::Unlocated(Kind::UnknownVariant(variants)) => variants,
+            Inner::Unlocated(Kind::UnknownVariant(variants, _)) => variants,
             _ => &[],
         },
         Ok(_) => &[],

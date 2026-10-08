@@ -217,6 +217,10 @@ for keys of four characters or fewer), and otherwise lists the accepted keys.
 A mapping lists them once, at its first such unknown key; a later one says
 "the accepted keys are listed at line N". A top-level `x-` key is unknown,
 with the fix "extension fields are not supported; use a comment".
+An unknown variant gets the same closest-name rule: its fix names the
+accepted value that differs only in letter case ("Use `strict`; letter case
+matters.") or is within the same edit distance, and otherwise lists the
+accepted values. No hint is given for a value a `ScalarHook` substituted.
 
 ## Serde recipes
 

@@ -1075,6 +1075,57 @@ fn cfg_sec_3_an_unknown_variant_names_the_accepted_values_only() {
     );
 }
 
+#[test]
+fn cfg_diag_6_an_unknown_variant_names_the_value_it_is_close_to() {
+    for (body, action) in [
+        ("mode: Strict\n", "Use `strict`; letter case matters."),
+        ("mode: LENIENT\n", "Use `lenient`; letter case matters."),
+        (
+            "mode: strcit\n",
+            "Use `strict`, the closest accepted value.",
+        ),
+        (
+            "mode: lenent\n",
+            "Use `lenient`, the closest accepted value.",
+        ),
+    ] {
+        let report = refusal::<Everything>(body);
+        assert_diagnostic(
+            only(&report),
+            "config.unknown-variant",
+            "/mode",
+            (3, 7),
+            "expected one of `strict`, `lenient`",
+            action,
+        );
+    }
+
+    let report = refusal::<Sources>("source:\n  type: htp\n");
+    assert_eq!(
+        only(&report).suggested_action,
+        "Use `http`, the closest accepted value."
+    );
+    let report = refusal::<WithAuth>("auth:\n  Bearer:\n    tokenRef: a\n");
+    assert_diagnostic(
+        only(&report),
+        "config.unknown-variant",
+        "/auth/Bearer",
+        (4, 3),
+        "expected one of `bearer`, `basic`",
+        "Use `bearer`; letter case matters.",
+    );
+}
+
+#[test]
+fn cfg_sec_3_a_substituted_value_gets_no_closest_value_hint() {
+    let report =
+        decode_with_hook::<Everything>("mode: ${MODE}\n", &mut Substitute("Strict")).unwrap_err();
+    assert_eq!(
+        only(&report).suggested_action,
+        "Use one of `strict`, `lenient`."
+    );
+}
+
 // ----- CFG-DIAG-6: a `#` with no space before it is part of the value -----
 
 const HASH_HINT: &str =
