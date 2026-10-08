@@ -1,3 +1,5 @@
+# Registry Evidence: configuration conventions
+
 ## Evidence clients and OID4VCI
 
 Every change the configuration conventions make to the `evidence-oid4vci`
@@ -317,3 +319,155 @@ with one of these codes or a shared `config.` or `yaml.` code.
 | `the client profile is invalid or unavailable` (contracts with a repeated definition) | `evidence.client.duplicate-definition` |
 | `the client profile is invalid or unavailable` (a definition that breaks a contract rule) | `evidence.client.definition-invalid` |
 | `the client profile is invalid or unavailable` (contracts rules) | `evidence.client.contracts-invalid` |
+
+## Evidence authoring tools
+
+Track: Evidence authoring tools (`evidencectl`, `registry-evidence-authoring`,
+`registry-language-server`).
+
+### BREAKING changes
+
+1. **Every authored YAML document except a source and a selector opens with
+   `apiVersion` and `kind`.** A document without them is refused with
+   `config.missing-envelope`, and a version key the format no longer takes is
+   refused with `config.removed-key` at its line. Migration, file by file:
+
+   | File | Delete | Add at the top |
+   |---|---|---|
+   | `evidence-project.yaml` | `version: 1` and `project: evidence-authoring` | `apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1`, `kind: EvidenceAuthoringProject` |
+   | `questions/<id>.yaml` | (nothing) | `apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1`, `kind: EvidenceQuestion` |
+   | `access/policies/<id>.yaml` | `version: 1` | `apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1`, `kind: EvidenceAccessPolicy` |
+   | `access/clients/<id>.yaml` | `version: 1` | `apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1`, `kind: EvidenceAccessClient` |
+   | a target's `governance.yaml` | `version: 1` | `apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1`, `kind: EvidenceTargetGovernance` |
+   | the `settings.yaml` that `evidencectl target new --settings` reads | `formatVersion: 1` and `governance.version: 1` | `apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1`, `kind: EvidenceTargetSettings` |
+   | `mocks/source.yaml` | `version: 1` | `apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1`, `kind: EvidenceMockPlan` |
+
+   Edit each file by hand; `evidencectl check <project>` names every file and
+   line still to change. `evidencectl init`, `access`, `target new`, and
+   `source mock generate` write the new lines in the files they create.
+2. **`--deny-findings` is now `--deny-warnings`.** `evidencectl check
+   --deny-findings` is a usage error (exit 2, `evidence.usage.flag-renamed`)
+   that names the new flag. Migration: replace the flag in scripts and CI.
+3. **`evidencectl check` and `explain` report diagnostics, not findings.** The
+   JSON report lists every diagnostic under `diagnostics`; the `findings` array
+   is gone, and so is the `evidencectl.check.refused` or
+   `evidencectl.explain.refused` wrapper a denied run added. A non-fatal
+   diagnostic has `severity: warning` (was `finding`), and every diagnostic
+   carries the `source` file, line, and column it names. Human output prints
+   the shared shape (`error[code] file:line:col /pointer`, the message, then
+   the next step) and a summary line. `check` exits 0 when it passes, 1 when
+   it refuses the project (or finds a warning under `--deny-warnings`), 2 for
+   a usage error, and 3 when it could not finish. Migration: read
+   `diagnostics` in place of `findings`, match `severity: warning` in place of
+   `finding`, and match codes by the table below.
+4. **`${...}` is refused in every authored document** with
+   `config.substitution-not-allowed`. Nothing in an authoring project was ever
+   substituted; the expression was read as literal text. Migration: write the
+   value itself.
+5. **Every authored document is read by the shared configuration reader.**
+   Anchors, aliases, tags, merge keys, more than one document, duplicate keys,
+   unknown keys, and null values are refused at their line and column
+   (`yaml.anchor`, `yaml.alias`, `yaml.tag`, `yaml.merge-key`,
+   `yaml.multiple-documents`, `yaml.duplicate-key`, `config.unknown-key`,
+   `config.null-value`), with the closest declared key when there is one.
+   Each document holds at most 1 MiB (`yaml.too-large`); this also applies to
+   a target's `governance.yaml` and to `mocks/source.yaml`. Migration: expand
+   each anchor or alias in place, remove the tag or the unknown key, or
+   correct its spelling as the diagnostic names.
+6. **`evidencectl check --production` requires `--target`.** Without it the
+   command is a usage error (exit 2). Migration: name the target, for example
+   `evidencectl check <project> --production --target targets/production`.
+7. **`evidencectl check` reads every YAML file in the project root,
+   `targets/`, and `mocks/`.** A file is checked as the format its `kind`
+   names. Under `targets/`, a file that names no format the target holds and
+   is not named `settings.yaml`, `governance.yaml`, or `runtime.yaml` is
+   refused (`evidence.project.unidentified-file`); under `mocks/`, every file
+   that names no other format is checked as a mock plan; at the project root,
+   a file that is neither a known format nor an OpenAPI description is a
+   warning (`evidence.project.unidentified-file`). A known format in the wrong
+   directory is refused (`evidence.project.misplaced-file`). Migration: move
+   or delete a stray YAML file, or add its envelope.
+8. **`evidencectl source mock check` reports the reader's diagnostics.** Its
+   JSON report carries `diagnostics`, and `--deny-warnings` refuses the plan
+   when any warning is present. An invalid plan is refused as
+   `evidence.mock-plan.invalid` or with the reader's own code. Migration: none
+   beyond item 1 for an existing plan.
+9. **Diagnostic codes follow `evidence.<area>.<condition>`.** See the table
+   below. Migration: update any script or CI rule that matches a code.
+10. **The authoring JSON Schema identifiers moved to id.registrystack.org.**
+    The schema files keep their paths under
+    `crates/registry-evidencectl/schemas/authoring/`, so
+    `editors/configure.py` needs no change. `evidencectl init` writes a
+    `# yaml-language-server: $schema=...` line naming the new identifier.
+    Migration: an editor configuration that names a schema by `$id` uses the
+    new value.
+
+    | Schema | Previous `$id` | `$id` now |
+    |---|---|---|
+    | project marker | `https://registrystack.example/schemas/evidence-authoring/project-marker.v1.json` | `https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json` |
+    | question | `https://registrystack.example/schemas/evidence-authoring/question.v1.json` | `https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json` |
+
+### Other changes
+
+- Size bounds follow the shared reader: the project marker may hold 1 MiB (was
+  4 KiB), and a question or access policy 1 MiB (was 64 KiB).
+- The language server reports the same codes, sentences, and positions as
+  `evidencectl check` for the files it covers.
+- `products/evidence/reference/authoring-projects/example/` is a complete
+  reference project. The format registry names it as the example for every
+  authoring format, and `evidencectl check` and `evidencectl source mock
+  check --project` pass on it with no diagnostic.
+
+### Diagnostic codes, old to new
+
+`evidencectl check`, `explain`, and the authoring commands:
+
+| Before | Code now |
+|---|---|
+| `evidence.authoring.<code>` for a finding in a question, access policy, or derivation file | `evidence.<area>.<condition>`, where the area is `question`, `access-policy`, or `derivation` and a code that began with the area drops it: `evidence.authoring.question-text` is `evidence.question.text`, `evidence.authoring.answer-concept-unique` is `evidence.question.answer-concept-unique`, `evidence.authoring.access-policy-grant-kind` is `evidence.access-policy.grant-kind`, `evidence.authoring.derivation-compile` is `evidence.derivation.compile` |
+| `evidence.authoring.derivation-fact-undeclared` | `evidence.derivation.fact-undeclared` |
+| `evidence.authoring.disclosure-allow` | `evidence.derivation.disclosure-allow` against a derivation file, `evidence.question.disclosure-allow` against a question |
+| `evidence.authoring.bundle-shape` | `evidence.bundle.shape` |
+| `evidence.question.parse`, `evidence.access-policy.parse`, `evidence.authoring.project-marker-parse`, `evidence.target.governance-shape` | the reader's code at the line and column: `yaml.*` (for example `yaml.syntax`, `yaml.duplicate-key`, `yaml.anchor`, `yaml.too-large`) or `config.*` (for example `config.unknown-key`, `config.missing-key`, `config.invalid-type`, `config.null-value`) |
+| `evidence.authoring.project-marker-version`, `evidence.target.governance-version` | `config.missing-envelope`, or `config.removed-key` at `/version` |
+| `evidence.project-marker.missing` | `evidence.project.marker-missing` (warning) |
+| `evidence.project-marker.file-type` | `evidence.project.not-plain-file` |
+| `evidence.authoring.unreadable` | the condition itself: `evidence.project.not-directory`, `evidence.project.not-plain-file`, `evidence.project.file-too-large`, `evidence.project.changed`, `evidence.project.unexpected-file`, or a reader code |
+| `evidence.question.id-duplicate` | not raised: a question's `id` must equal its file name (`evidence.question.id-filename-mismatch`), so two files cannot share one |
+| `evidence.finding` (human output for a finding without a code) | removed: every diagnostic carries its own code |
+| `evidencectl.check.refused`, `evidencectl.explain.refused` | removed: the refusing diagnostics are the report |
+
+The language server (`registry-language-server`, hosted by `evidencectl`):
+
+| Before | Code now |
+|---|---|
+| `evidence/question-shape`, `evidence/access-policy-shape` | the reader's `yaml.*` or `config.*` code |
+| `evidence/<code>` for an authoring finding | the code `evidencectl check` reports, by the rule in the first table |
+| `evidence/question-file-name` | `evidence.question.file-name` |
+| `evidence/access-policy-file-name` | `evidence.access-policy.file-name` |
+| `evidence/operation-identifier` | `evidence.question.operation-identifier` |
+| `evidence/subject-selector` | `evidence.question.subject-selector` |
+| `evidence/undeclared-collection` | `evidence.question.undeclared-collection` |
+| `evidence/unselectable-fact-path` | `evidence.question.unselectable-fact-path` |
+| `evidence/unknown-question` | `evidence.project.unknown-question` |
+| `evidence/project-ceiling` | `evidence.project.ceiling` |
+| `evidence/directory-ceiling` | `evidence.project.directory-ceiling` |
+| `evidence/document-ceiling` | `evidence.project.document-ceiling` |
+| `evidence/openapi-prerequisite` | `evidence.openapi.prerequisite` |
+
+Codes with no predecessor (the condition was an uncoded refusal or was not
+checked): `evidence.usage.flag-renamed`, `evidence.project.misplaced-file`,
+`evidence.project.unidentified-file`, `evidence.question.derivation-shared`,
+`evidence.derivation.encoding`, `evidence.access-policy.id-filename-mismatch`,
+`evidence.mock-plan.invalid`, `evidence.target-settings.invalid`, and
+`evidence.target.runtime-structure`.
+
+Unchanged: `evidence.answer-schema.*`, `evidence.offline-check.refused`,
+`evidence.access.questions-missing`, `evidence.access-policy.question-missing`,
+`evidence.answer.stable-id-missing`, `evidence.question.{missing,
+source-missing, selector-missing, governance-missing, id-filename-mismatch,
+validity-exceeds-signing-maximum}`, `evidence.question.derivation-*` and
+`evidence.question.fixture-*`, `evidence.source.*`, `evidence.package.*`, and
+`evidence.target.{required, incomplete, production-profile-required,
+source-connection-required, assurance-profile, authority-profiles,
+publication-invalid, signing-key-missing}`.

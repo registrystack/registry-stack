@@ -23,6 +23,17 @@
   return positioned, coded diagnostics. Migration steps and codes are in the
   same release-note section.
 
+### Evidence authoring tools
+
+- BREAKING: every authored YAML document except a source and a selector
+  opens with `apiVersion` and `kind`, and is read by the shared configuration
+  reader: `${...}`, anchors, aliases, tags, unknown, duplicate, and null keys
+  are refused at their line and column. `evidencectl check --deny-findings`
+  is now `--deny-warnings`, its report lists `diagnostics` with
+  `severity: warning`, its codes follow `evidence.<area>.<condition>`, and
+  `--production` requires `--target`. `release/notes/config-conventions/evidence.md`
+  ("Evidence authoring tools") gives each migration and the full code table.
+
 ## v0.39.0 - 2026-10-06
 
 - BREAKING: before 1.0, a release reads only the state its immediate
