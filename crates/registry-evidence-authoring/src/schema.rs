@@ -34,8 +34,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     formats::{
-        schema_id, AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND, QUESTION_API_VERSION,
-        QUESTION_KIND,
+        AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND, AUTHORING_PROJECT_SCHEMA_ID,
+        QUESTION_API_VERSION, QUESTION_KIND, QUESTION_SCHEMA_ID,
     },
     marker::ProjectMarker,
     model::Question,
@@ -61,26 +61,23 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
         (
             QUESTION_SCHEMA_FILE,
             "Evidence authored question",
-            "question",
+            QUESTION_SCHEMA_ID,
             (QUESTION_API_VERSION, QUESTION_KIND),
             serde_json::to_value(schemars::schema_for!(Question))?,
         ),
         (
             PROJECT_MARKER_SCHEMA_FILE,
             "Evidence authoring project marker",
-            "authoring-project",
+            AUTHORING_PROJECT_SCHEMA_ID,
             (AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND),
             serde_json::to_value(schemars::schema_for!(ProjectMarker))?,
         ),
     ];
     entries
         .into_iter()
-        .map(|(file, title, format, envelope, derived)| {
+        .map(|(file, title, schema_id, envelope, derived)| {
             let enveloped = with_envelope(derived, envelope);
-            Ok((
-                file,
-                render(published(enveloped, title, &schema_id(format)))?,
-            ))
+            Ok((file, render(published(enveloped, title, schema_id))?))
         })
         .collect()
 }
@@ -160,22 +157,23 @@ mod tests {
     #[test]
     fn every_document_states_its_envelope_and_published_identifier() {
         let documents = documents().expect("the authoring schemas generate");
-        for (file, format, kind) in [
-            (QUESTION_SCHEMA_FILE, "question", "EvidenceQuestion"),
+        for (file, format, kind, id) in [
+            (
+                QUESTION_SCHEMA_FILE,
+                "question",
+                "EvidenceQuestion",
+                "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json",
+            ),
             (
                 PROJECT_MARKER_SCHEMA_FILE,
                 "authoring-project",
                 "EvidenceAuthoringProject",
+                "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json",
             ),
         ] {
             let document: serde_json::Value =
                 serde_json::from_str(&documents[file]).expect("the schema is JSON");
-            assert_eq!(
-                document["$id"],
-                format!(
-                    "https://id.registrystack.org/schemas/evidence/{format}/{format}.v1alpha1.schema.json"
-                )
-            );
+            assert_eq!(document["$id"], id);
             assert_eq!(document["properties"]["kind"]["const"], kind);
             assert_eq!(
                 document["properties"]["apiVersion"]["const"],

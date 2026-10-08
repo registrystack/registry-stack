@@ -2892,6 +2892,18 @@ factSchema: schemas/record-status-facts.schema.yaml
     }
 
     #[test]
+    fn the_reference_authoring_example_checks_with_no_diagnostic() {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/reference/authoring-projects/example");
+        let checked = check(&example, None, false, true).unwrap();
+        assert!(
+            checked.diagnostics.is_empty(),
+            "{}",
+            checked.diagnostics.render_human()
+        );
+    }
+
+    #[test]
     fn a_local_settings_document_may_leave_out_the_paths_target_new_fills() {
         let settings = starter_settings()
             .replace("  package:\n    root: /absolute/path/to/package\n", "")

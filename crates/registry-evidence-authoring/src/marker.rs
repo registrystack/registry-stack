@@ -49,6 +49,7 @@ mod tests {
     use super::{default_project_marker_document, parse_project_marker, PROJECT_MARKER_FILE};
     use crate::formats::{
         envelope_lines, schema_modeline, AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND,
+        AUTHORING_PROJECT_SCHEMA_ID,
     };
 
     fn codes(bytes: &[u8]) -> Vec<String> {
@@ -76,7 +77,7 @@ mod tests {
             default_project_marker_document(),
             format!(
                 "{}{}",
-                schema_modeline("authoring-project"),
+                schema_modeline(AUTHORING_PROJECT_SCHEMA_ID),
                 envelope_lines(AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND)
             )
         );

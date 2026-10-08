@@ -3599,27 +3599,6 @@ exceptions:
   class: stable-move
   reason: shutdownTimeoutSeconds is a refused spelling of 'Time allowed to drain on shutdown'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to shutdownGraceMilliseconds'
-- rule: CFG-ENV-1
-  format: evidence/access-client
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/access-client
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceAccessClient'
-- rule: CFG-SCHEMA-1
-  format: evidence/access-client
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: evidence/access-client
   location: products/platform/config-formats.yaml#/schema
@@ -3634,34 +3613,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/access-client
-  location: crates/registry-evidencectl/src/access.rs#read_client_document()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-1
-  format: evidence/access-policy
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/access-policy
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceAccessPolicy'
-- rule: CFG-SCHEMA-1
-  format: evidence/access-policy
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: evidence/access-policy
   location: products/platform/config-formats.yaml#/schema
@@ -3676,55 +3627,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/access-policy
-  location: crates/registry-evidencectl/src/access.rs#load_policy_documents()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-1
-  format: evidence/authoring-project
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/authoring-project
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceAuthoringProject'
-- rule: CFG-QTY-4
-  format: evidence/authoring-project
-  location: crates/registry-evidencectl/schemas/authoring/project-marker.schema.json#/properties/version
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-SCHEMA-1
-  format: evidence/authoring-project
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-3
-  format: evidence/authoring-project
-  location: crates/registry-evidencectl/schemas/authoring/project-marker.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.example/schemas/evidence-authoring/project-marker.v1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json
-- rule: CFG-YAML-1
-  format: evidence/authoring-project
-  location: crates/registry-evidence-authoring/src/marker.rs#parse_project_marker()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: evidence/bundle
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4323,13 +4225,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: evidence/dev-state
-  location: crates/registry-evidencectl/src/dev.rs#read_state()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: evidence/fixture
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4418,27 +4313,6 @@ exceptions:
   wp: WP3
   reason: the reader does not read through registry-platform-yaml
   resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-1
-  format: evidence/mock-plan
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/mock-plan
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceMockPlan'
-- rule: CFG-SCHEMA-1
-  format: evidence/mock-plan
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: evidence/mock-plan
   location: products/platform/config-formats.yaml#/schema
@@ -4453,13 +4327,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/mock-plan
-  location: crates/registry-evidencectl/src/source_mock/plan.rs#parse_plan()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-NAME-2
   format: evidence/oid4vci-runtime
   location: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
@@ -4478,48 +4345,6 @@ exceptions:
   class: protocol-constant
   reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
-- rule: CFG-EMPTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/id
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionSource/properties/operation
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionSubject/properties/profile
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionSubject/properties/source
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-ENV-1
-  format: evidence/question
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/question
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceQuestion'
 - rule: CFG-ID-1
   format: evidence/question
   location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/id
@@ -4534,20 +4359,6 @@ exceptions:
   wp: WP8
   reason: a mapping whose keys are not typed
   resolution: 'Declare propertyNames: {$ref: #/$defs/LocalId} or ExternalId'
-- rule: CFG-ID-1
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/properties/id
-  class: pending
-  wp: WP8
-  reason: id is not typed as $defs/LocalId
-  resolution: 'Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-6
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/properties/responseFormats
-  class: pending
-  wp: WP3
-  reason: a list of values or identifiers that accepts duplicates
-  resolution: 'Declare uniqueItems: true and read it with UniqueList'
 - rule: CFG-QTY-4
   format: evidence/question
   location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/maximum
@@ -4557,60 +4368,11 @@ exceptions:
   resolution: Read it with BoundedU32/BoundedU64 and state both bounds
 - rule: CFG-QTY-4
   format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/maximumBytes
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/maximumSerializedBytes
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: evidence/question
   location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/minimum
   class: pending
   wp: WP3
   reason: an integer without a stated minimum and maximum
   resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionAnswer/properties/minimumBytes
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionGovernance/properties/validitySeconds
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$defs/QuestionSource/properties/collectionBounds/additionalProperties
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-SCHEMA-3
-  format: evidence/question
-  location: crates/registry-evidencectl/schemas/authoring/question.schema.json#/$id
-  class: pending
-  wp: WP6
-  reason: $id is https://registrystack.example/schemas/evidence-authoring/question.v1.json
-  resolution: Set $id to https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
-- rule: CFG-YAML-1
-  format: evidence/question
-  location: crates/registry-evidencectl/src/authoring.rs#read_inputs()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-2
   format: evidence/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4709,13 +4471,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/selector
-  location: crates/registry-evidencectl/src/authoring.rs#read_named_objects()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: evidence/source
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4744,13 +4499,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/source
-  location: crates/registry-evidencectl/src/authoring.rs#read_named_objects()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: evidence/source-import-journal
   location: products/platform/config-formats.yaml#/check
@@ -4870,20 +4618,6 @@ exceptions:
   wp: WP3
   reason: Resolution/Keep is a unit variant of a tagged union
   resolution: Make it a struct variant (Keep {})
-- rule: CFG-ENV-1
-  format: evidence/target-governance
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/target-governance
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceTargetGovernance'
 - rule: CFG-SCHEMA-2
   format: evidence/target-governance
   location: products/platform/config-formats.yaml#/schema
@@ -4898,27 +4632,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/target-governance
-  location: crates/registry-evidencectl/src/build.rs#read_target_documents()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
-- rule: CFG-ENV-1
-  format: evidence/target-settings
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1'
-- rule: CFG-ENV-1
-  format: evidence/target-settings
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: EvidenceTargetSettings'
 - rule: CFG-SCHEMA-2
   format: evidence/target-settings
   location: products/platform/config-formats.yaml#/schema
@@ -4933,13 +4646,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: evidence/target-settings
-  location: crates/registry-evidencectl/src/target.rs#new()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: evidence/verification-policy
   location: products/platform/config-formats.yaml#/check

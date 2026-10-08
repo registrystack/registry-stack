@@ -343,6 +343,14 @@
       "status": "active",
       "compatibilityLine": "v1",
       "description": "Reviewed Evidence client contracts JSON Schema."
+    },
+    {
+      "glob": "crates/registry-evidencectl/schemas/authoring/*.schema.json",
+      "sourcePath": "crates/registry-evidence-authoring/src/schema.rs",
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Evidence authoring project marker and question JSON Schema."
     }
   ],
   "records": [

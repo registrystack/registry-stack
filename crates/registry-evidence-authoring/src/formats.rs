@@ -35,6 +35,12 @@ pub const AUTHORING_PROJECT_KIND: &str = "EvidenceAuthoringProject";
 pub const QUESTION_API_VERSION: &str = "id.registrystack.org/formats/evidence/question/v1alpha1";
 /// The `kind` of a question.
 pub const QUESTION_KIND: &str = "EvidenceQuestion";
+/// The published `$id` of the project marker's JSON Schema.
+pub const AUTHORING_PROJECT_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json";
+/// The published `$id` of a question's JSON Schema.
+pub const QUESTION_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json";
 /// The `apiVersion` of a local access policy under `access/policies/`.
 pub const ACCESS_POLICY_API_VERSION: &str =
     "id.registrystack.org/formats/evidence/access-policy/v1alpha1";
@@ -490,17 +496,12 @@ pub fn finding_action(code: &str) -> &'static str {
     }
 }
 
-/// The published `$id` of an authoring format's JSON Schema.
+/// The first line an authored file carries, naming the published `$id` of
+/// its format's JSON Schema, so a YAML editor finds the schema without
+/// configuration.
 #[must_use]
-pub fn schema_id(format: &str) -> String {
-    format!("https://id.registrystack.org/schemas/evidence/{format}/{format}.v1alpha1.schema.json")
-}
-
-/// The first line an authored file of `format` carries, so a YAML editor
-/// finds the schema without configuration.
-#[must_use]
-pub fn schema_modeline(format: &str) -> String {
-    format!("# yaml-language-server: $schema={}\n", schema_id(format))
+pub fn schema_modeline(schema_id: &str) -> String {
+    format!("# yaml-language-server: $schema={schema_id}\n")
 }
 
 /// The envelope lines an authored file of `format` opens with, after its

@@ -694,6 +694,18 @@ fn source_mock_check_reports_json_diagnostics() {
     let report: serde_json::Value = serde_json::from_slice(&checked.stdout).expect("json report");
     assert_eq!(report["diagnostics"], serde_json::json!([]));
     assert!(report.get("findings").is_none());
+    let denied = run(
+        temporary.path(),
+        &[
+            "--format",
+            "json",
+            "source",
+            "mock",
+            "check",
+            "--deny-warnings",
+        ],
+    );
+    assert_eq!(denied.status.code(), Some(0));
 
     let plan = temporary.path().join("mocks/source.yaml");
     let written = fs::read_to_string(&plan).expect("plan");
@@ -713,6 +725,27 @@ fn source_mock_check_reports_json_diagnostics() {
         }),
         "{report}"
     );
+}
+
+#[test]
+fn the_reference_authoring_example_mock_plan_checks() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/evidence/reference/authoring-projects/example");
+    let checked = run(
+        &example,
+        &[
+            "--format",
+            "json",
+            "source",
+            "mock",
+            "check",
+            "--deny-warnings",
+        ],
+    );
+    assert_eq!(checked.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).expect("json report");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert_eq!(report["cases"], 1);
 }
 
 #[test]

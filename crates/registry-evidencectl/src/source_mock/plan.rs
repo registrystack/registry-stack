@@ -17,13 +17,15 @@ use registry_evidence_authoring::{
     formats::{decode_authored, envelope_lines, MOCK_PLAN, MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND},
     valid_local_identifier,
 };
+use registry_platform_yaml::Report;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 /// The generator contract written by initial V1 materialization.
 pub(super) const GENERATOR_CONTRACT: &str = "evidencectl-source-mock-v1";
-/// A plan is authoring metadata, not a bulk-data container.
-pub(super) const MAX_PLAN_BYTES: usize = 1024 * 1024;
+/// A plan is authoring metadata, not a bulk-data container: it is held to
+/// the document size the shared reader accepts, which reads it.
+pub(super) const MAX_PLAN_BYTES: usize = registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES;
 pub(super) const MAX_OPERATIONS: usize = 256;
 pub(super) const MAX_CASES_PER_OPERATION: usize = 256;
 pub(super) const MAX_TOTAL_CASES: usize = 1024;
@@ -162,10 +164,16 @@ impl<'de> Deserialize<'de> for Digest {
 
 /// Read one complete plan through the shared reader, then validate its
 /// structure.
+#[cfg(test)]
 pub(super) fn parse_plan(file: &str, bytes: &[u8]) -> Result<MockPlan> {
-    let plan = decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN)?.value;
-    validate_plan(&plan)?;
-    Ok(plan)
+    Ok(parse_plan_reporting(file, bytes)?.0)
+}
+
+/// Parse a plan and keep the warnings the reader reported on it.
+pub(super) fn parse_plan_reporting(file: &str, bytes: &[u8]) -> Result<(MockPlan, Report)> {
+    let decoded = decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN)?;
+    validate_plan(&decoded.value)?;
+    Ok((decoded.value, decoded.document.warnings()))
 }
 
 /// Render the stable authored YAML spelling, envelope first, with one

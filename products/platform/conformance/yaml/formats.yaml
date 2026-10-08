@@ -172,41 +172,26 @@ formats:
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
   evidence/question:
     project: crates/registry-evidencectl/templates/sqlite-extract
-    write:
-      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: questions/record-status.yaml}
   evidence/source:
     project: crates/registry-evidencectl/templates/sqlite-extract
-    write:
-      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: sources/record-status.yaml}
   evidence/selector:
     project: crates/registry-evidencectl/templates/sqlite-extract
-    write:
-      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: selectors/record-reference-v1.yaml}
   evidence/target-governance:
     project: crates/registry-evidencectl/templates/sqlite-extract
-    write:
-      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
     copies:
       target:
         from: products/evidence/reference/deployment-targets/environments/local/evidence
-    # The reference target grants a question no committed project holds, so
-    # its one grant is pointed at the template's question.
-    set:
-      /authorityProfiles/example-requester/grants/0/requirement: urn:example:requirement:record-status:v1
-      /authorityProfiles/example-requester/grants/0/purpose: record-status-check
-      /authorityProfiles/example-requester/grants/0/subjects/0/selectorProfile: record-reference-v1
-  # The registered check reads a target directory, not the settings file
-  # `evidencectl target new --settings` reads, so a mutation of this example
-  # is not seen by its check.
   evidence/target-settings:
-    project: products/breg/evidence/starter
-    write:
-      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
-    values:
-      target: "{project}/targets/local"
+    project: products/evidence/reference/authoring-projects/example
+  evidence/access-policy:
+    project: products/evidence/reference/authoring-projects/example
+  evidence/access-client:
+    project: products/evidence/reference/authoring-projects/example
+  evidence/mock-plan:
+    project: products/evidence/reference/authoring-projects/example
 
   # The bundle is checked through a runtime configuration that points at the
   # staged copy, and its SHA256SUMS is refreshed after each mutation.

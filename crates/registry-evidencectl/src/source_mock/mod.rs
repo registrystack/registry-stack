@@ -173,6 +173,9 @@ pub struct CheckArgs {
     /// Retired spelling of the project directory argument, still accepted.
     #[arg(long = "project", value_name = "PROJECT", hide = true, conflicts_with_all = ["project", "config"])]
     legacy_project: Option<PathBuf>,
+    /// Refuse a plan whose check reports any warning.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
 pub fn run(command: MockCommand, format: OutputFormat) -> Result<ExitCode> {
@@ -736,12 +739,23 @@ fn check(args: CheckArgs, format: OutputFormat) -> Result<ExitCode> {
     let base = args.project.as_deref().unwrap_or_else(|| Path::new(""));
     let checked = load_checked_plan(&root, &config, false)
         .map_err(|error| plan_refusal(error, &config, base))?;
+    let mut warnings = checked.warnings;
+    warnings.set_files_checked(1);
+    let warnings = authored::rebase(warnings, base);
+    if args.deny_warnings && warnings.warning_count() > 0 {
+        return Err(warnings.into());
+    }
     match format {
-        OutputFormat::Human => println!(
-            "Mock plan valid: operations={} cases={}",
-            checked.plan.operations.len(),
-            checked.routes.len()
-        ),
+        OutputFormat::Human => {
+            println!(
+                "Mock plan valid: operations={} cases={}",
+                checked.plan.operations.len(),
+                checked.routes.len()
+            );
+            if !warnings.is_empty() {
+                print!("{}", warnings.render_human());
+            }
+        }
         OutputFormat::Json => report::print(&report::success(
             "source mock check",
             "valid",
@@ -749,7 +763,7 @@ fn check(args: CheckArgs, format: OutputFormat) -> Result<ExitCode> {
                 "config": base.join(&config),
                 "operations": checked.plan.operations.len(),
                 "cases": checked.routes.len(),
-                "diagnostics": [],
+                "diagnostics": warnings.to_json_value(),
             }),
         ))?,
     }
@@ -807,6 +821,8 @@ pub(crate) fn check_plan_document(file: &str, bytes: &[u8]) -> Report {
 
 struct CheckedPlan {
     plan: MockPlan,
+    /// The warnings the reader reported on the plan.
+    warnings: Report,
     prepared: openapi::PreparedOpenApi,
     routes: Vec<server::RouteSpec>,
     missing: Vec<(usize, usize)>,
@@ -816,7 +832,7 @@ fn load_checked_plan(root: &Path, config: &Path, allow_missing: bool) -> Result<
     // One byte past the reader's limit, so an oversized plan is refused by
     // the reader the way every other configuration file is.
     let bytes = files::read_confined(root, config, plan::MAX_PLAN_BYTES as u64 + 1, "mock plan")?;
-    let plan = plan::parse_plan(&config.to_string_lossy(), &bytes)?;
+    let (plan, warnings) = plan::parse_plan_reporting(&config.to_string_lossy(), &bytes)?;
     let openapi_bytes = files::read_openapi_reference(root, config, &plan.openapi)?;
     let mut prepared = openapi::discover(&openapi_bytes, "configured OpenAPI document", None)?;
     let configured_operations = plan
@@ -897,6 +913,7 @@ fn load_checked_plan(root: &Path, config: &Path, allow_missing: bool) -> Result<
     }
     Ok(CheckedPlan {
         plan,
+        warnings,
         prepared,
         routes,
         missing,

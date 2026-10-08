@@ -3010,15 +3010,17 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
+      kind: EvidenceAuthoringProject
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: AUTHORING_PROJECT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
       kind: EvidenceAuthoringProject
     schema:
       path: crates/registry-evidencectl/schemas/authoring/project-marker.schema.json
-      id: https://registrystack.example/schemas/evidence-authoring/project-marker.v1.json
+      id: https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json
       origin: generated
       generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
       driftCheck: products/evidence/scripts/check-authoring-schema.sh
@@ -3028,7 +3030,7 @@ formats:
       function: parse_project_marker
       type: ProjectMarker
     check: evidencectl check {project}
-    example: none
+    example: products/evidence/reference/authoring-projects/example/evidence-project.yaml
     conformance:
       requiredText: none
       optionalText: none
@@ -3045,15 +3047,17 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+      kind: EvidenceQuestion
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: QUESTION_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
       kind: EvidenceQuestion
     schema:
       path: crates/registry-evidencectl/schemas/authoring/question.schema.json
-      id: https://registrystack.example/schemas/evidence-authoring/question.v1.json
+      id: https://id.registrystack.org/schemas/evidence/question/question.v1alpha1.schema.json
       origin: generated
       generator: cargo run -p registry-evidence-authoring --features schema --example authoring-schema -- --output crates/registry-evidencectl/schemas/authoring
       driftCheck: products/evidence/scripts/check-authoring-schema.sh
@@ -3195,9 +3199,11 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
+      kind: EvidenceAccessPolicy
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: ACCESS_POLICY_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
       kind: EvidenceAccessPolicy
@@ -3208,9 +3214,9 @@ formats:
       function: load_policy_documents
       type: AccessPolicy
     check: evidencectl check {project}
-    example: none
+    example: products/evidence/reference/authoring-projects/example/access/policies/record-status-readers.yaml
     conformance:
-      requiredText: none
+      requiredText: /id
       optionalText: none
       integer: none
       boolean: none
@@ -3224,9 +3230,11 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1
+      kind: EvidenceAccessClient
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: ACCESS_CLIENT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1
       kind: EvidenceAccessClient
@@ -3237,9 +3245,9 @@ formats:
       function: read_client_document
       type: ClientDocument
     check: evidencectl check {project}
-    example: none
+    example: products/evidence/reference/authoring-projects/example/access/clients/example-caller.yaml
     conformance:
-      requiredText: none
+      requiredText: /clientId
       optionalText: none
       integer: none
       boolean: none
@@ -3253,10 +3261,11 @@ formats:
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'version: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
+      kind: EvidenceTargetGovernance
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: TARGET_GOVERNANCE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
       kind: EvidenceTargetGovernance
@@ -3283,10 +3292,11 @@ formats:
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'formatVersion: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
+      kind: EvidenceTargetSettings
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: TARGET_SETTINGS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
       kind: EvidenceTargetSettings
@@ -3296,8 +3306,8 @@ formats:
       file: crates/registry-evidencectl/src/target.rs
       function: new
       type: TargetSettings
-    check: evidencectl check {project} --target {target}
-    example: products/breg/evidence/starter/targets/local/settings.yaml
+    check: evidencectl check {project}
+    example: products/evidence/reference/authoring-projects/example/targets/local/settings.yaml
     conformance:
       requiredText: /governance/issuer/id
       optionalText: none
@@ -3313,9 +3323,11 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1
+      kind: EvidenceMockPlan
+      checkedBy:
+        file: crates/registry-evidence-authoring/src/formats.rs
+        symbol: MOCK_PLAN_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1
       kind: EvidenceMockPlan
@@ -3325,10 +3337,10 @@ formats:
       file: crates/registry-evidencectl/src/source_mock/plan.rs
       function: parse_plan
       type: MockPlan
-    check: evidencectl source mock check --config {file}
-    example: none
+    check: evidencectl source mock check --project {project}
+    example: products/evidence/reference/authoring-projects/example/mocks/source.yaml
     conformance:
-      requiredText: none
+      requiredText: /openapi
       optionalText: none
       integer: none
       boolean: none

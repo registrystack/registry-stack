@@ -396,9 +396,8 @@ pub(crate) struct TargetDocuments {
 
 pub(crate) fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
     let root = plain_directory(target, "deployment target")?;
-    let governance_bytes = read_plain_file(
+    let governance_bytes = crate::authored::read_authored_file(
         &root.join("governance.yaml"),
-        MAX_TARGET_BYTES,
         "deployment governance",
     )?;
     let runtime = read_plain_file(
@@ -1150,6 +1149,31 @@ authorityProfiles: {}
         let documents = read_target_documents(target).expect("governance with a BOM");
         assert_eq!(documents.governed_bundle["assuranceProfile"], "local");
         assert_eq!(documents.governed_bundle["version"], 1);
+    }
+
+    #[test]
+    fn an_oversized_governance_file_is_refused_by_the_reader() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = fs::canonicalize(temporary.path()).expect("canonical target");
+        let target = target.as_path();
+        let mut text = governance(
+            "assuranceProfile: local\nservice: {}\nissuer: {}\nauthentication: {}\n\
+             audit: {}\nsubjectBinding: {}\nrateLimits: {}\nsigning: {}\n\
+             authorityProfiles:\n  local: {}\n",
+        );
+        text.push_str(&"#".repeat(registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES + 64));
+        fs::write(target.join("governance.yaml"), text).expect("governance");
+        fs::write(target.join("runtime.yaml"), "outboundTls: {}\n").expect("runtime");
+        let error = read_target_documents(target)
+            .err()
+            .expect("an oversized governance file is refused");
+        let report = crate::authored::report_in(&error).expect("the reader's report");
+        let codes: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect();
+        assert_eq!(codes, ["yaml.too-large"]);
     }
 
     #[test]
