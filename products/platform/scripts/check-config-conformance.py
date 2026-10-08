@@ -371,7 +371,7 @@ ROWS: tuple[Row, ...] = (
         ),
         authored_refusal=TestRef(
             "crates/registry-scheduling/src/config.rs",
-            "an_authored_policy_carrying_an_environment_expression_is_refused",
+            "a_packaged_policy_carrying_an_environment_expression_is_refused",
         ),
         digest_mismatch=TestRef(
             "crates/registry-scheduling/src/config.rs",
