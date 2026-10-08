@@ -29,4 +29,3 @@ thiserror = { version = "2" }
 
 [dev-dependencies]
 oxjsonld = { version = "0.2.5" }
-serde_yaml_ng = { workspace = true }

@@ -7898,8 +7898,24 @@ fn jsonld_context_with_service_catalogue_terms() -> Value {
 mod digest_tests {
     use super::*;
 
+    const FORMAT: registry_platform_yaml::FormatSpec<'static> =
+        registry_platform_yaml::FormatSpec {
+            kind: "ManifestMetadata",
+            envelope: registry_platform_yaml::EnvelopeRule::Exempt {
+                reason: "a metadata manifest names its version in schema_version",
+            },
+            removed_keys: &[],
+        };
+
     fn manifest(raw: &str) -> MetadataManifest {
-        serde_yaml_ng::from_str(raw).expect("manifest parses")
+        let value = registry_platform_yaml::Reader::new("metadata.yaml")
+            .decode::<Value>(
+                raw.as_bytes(),
+                &registry_platform_yaml::Expect::one(&FORMAT),
+            )
+            .expect("the shared reader reads the manifest")
+            .value;
+        serde_json::from_value(value).expect("manifest parses")
     }
 
     #[test]

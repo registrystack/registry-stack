@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod support;
+
 use registry_manifest_core::{
     compile_manifest, compute_evidence_pack_policy_hash, compute_policy_hash, render_base_dcat,
     render_breg_dcat_ap, render_catalog, render_cpsv_ap, render_dataset_policy_document,
@@ -13,7 +15,7 @@ use serde_json::{json, Value};
 
 #[test]
 fn as_needed_update_frequency_maps_to_eu_as_needed_iri() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -52,11 +54,11 @@ fn fixture(path: &str) -> MetadataManifest {
         "example-benefits-sync" => EXAMPLE_BENEFITS_SYNC_FIXTURE,
         other => panic!("unknown fixture: {other}"),
     };
-    serde_yaml_ng::from_str(raw).expect("fixture parses")
+    support::from_yaml(raw).expect("fixture parses")
 }
 
 fn service_first_fixture() -> MetadataManifest {
-    serde_yaml_ng::from_str(include_str!(
+    support::from_yaml(include_str!(
         "../../../products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml"
     ))
     .expect("service-first fixture parses")
@@ -68,7 +70,7 @@ fn assert_matches_golden(label: &str, actual: &Value, expected: &str) {
 }
 
 fn minimal_manifest() -> MetadataManifest {
-    serde_yaml_ng::from_str(
+    support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -97,7 +99,7 @@ catalog:
 datasets: []
 codelists: []
 "#;
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("unsupported core schema_version rejected");
 
@@ -304,7 +306,7 @@ codelists: []
     ];
 
     for (site, raw, hint_key) in cases {
-        let error = serde_yaml_ng::from_str::<MetadataManifest>(raw).expect_err(&format!(
+        let error = support::from_yaml(raw).expect_err(&format!(
             "{site} unknown key must be rejected, got: parsed ok"
         ));
         assert!(
@@ -332,7 +334,7 @@ datasets:
         source: people_table
 codelists: []
 "#;
-    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+    let error = support::from_yaml(raw)
         .expect_err("runtime-only keys are rejected during manifest parsing");
 
     assert!(
@@ -390,7 +392,7 @@ datasets: []
 codelists: []
 "#
         );
-        let error = serde_yaml_ng::from_str::<MetadataManifest>(&raw)
+        let error = support::from_yaml(&raw)
             .expect_err("secret-bearing keys are rejected during manifest parsing");
 
         assert!(
@@ -427,7 +429,7 @@ evaluation_profiles:
 datasets: []
 codelists: []
 "#;
-    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
+    let error = support::from_yaml(raw)
         .expect_err("secret-bearing extension keys are rejected during manifest parsing");
 
     assert!(
@@ -501,7 +503,7 @@ catalog:
 {body}
 "#
         );
-        let error = match serde_yaml_ng::from_str::<MetadataManifest>(&raw) {
+        let error = match support::from_yaml(&raw) {
             Ok(_) => panic!("{label} runtime-only config parsed"),
             Err(error) => error,
         };
@@ -518,7 +520,7 @@ catalog:
 }
 
 fn manifest_with_body(body: &str) -> MetadataManifest {
-    serde_yaml_ng::from_str(&format!(
+    support::from_yaml(&format!(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -827,7 +829,7 @@ datasets:
 codelists: []
 "#
         );
-        let manifest: MetadataManifest = serde_yaml_ng::from_str(&raw).expect("manifest parses");
+        let manifest: MetadataManifest = support::from_yaml(&raw).expect("manifest parses");
         assert!(
             validation_errors(&manifest)
                 .iter()
@@ -870,7 +872,7 @@ datasets:
               - example:%zz
 codelists: []
 "#;
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("manifest parses");
     let errors = validation_errors(&manifest);
     for path in [
         "requirements[0].rdf_type",
@@ -1031,7 +1033,7 @@ codelists: []
 "#,
             iri
         );
-        let manifest: MetadataManifest = serde_yaml_ng::from_str(&raw).expect("manifest parses");
+        let manifest: MetadataManifest = support::from_yaml(&raw).expect("manifest parses");
         assert!(
             validation_errors(&manifest)
                 .iter()
@@ -1058,7 +1060,7 @@ requirements:
 datasets: []
 codelists: []
 "#;
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("manifest parses");
     let compiled = compile_manifest(&manifest).expect("manifest compiles");
 
     assert_eq!(
@@ -1103,7 +1105,7 @@ datasets:
         title: Duplicate Two
 codelists: []
 "#;
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(raw).expect("manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("manifest parses");
     let errors = validation_errors(&manifest);
 
     for index in 0..8 {
@@ -1250,7 +1252,7 @@ fn codelist_concept_iris_expand_configured_prefixes() {
 
 #[test]
 fn codelists_carry_version_and_validity_window() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1740,7 +1742,7 @@ fn validation_rejects_bad_dataset_public_service_ids() {
 
 #[test]
 fn validation_checks_codelist_concepts_and_preserves_real_world_codes() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1770,7 +1772,7 @@ codelists:
 
 #[test]
 fn validation_rejects_invalid_codelist_concepts() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1810,7 +1812,7 @@ codelists:
 
 #[test]
 fn codelist_fallback_ids_percent_encode_unsafe_code_bytes() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1851,7 +1853,7 @@ fn validation_rejects_duplicate_entities() {
 
 #[test]
 fn validation_rejects_duplicate_evidence_offering_ids_globally() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1926,7 +1928,7 @@ datasets:
 
 #[test]
 fn validation_rejects_blank_issuing_authority_country() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -1982,7 +1984,7 @@ datasets:
 
 #[test]
 fn validation_allows_portable_evidence_access_kinds() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -2029,7 +2031,7 @@ datasets:
 
 #[test]
 fn evidence_server_offerings_publish_endpoint_metadata() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -2113,7 +2115,7 @@ datasets:
 }
 
 fn evidence_offering_manifest() -> MetadataManifest {
-    serde_yaml_ng::from_str(
+    support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -2209,7 +2211,7 @@ datasets: []
 codelists: []
 "#;
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("evidence_pack manifest parses");
+        support::from_yaml(raw).expect("evidence_pack manifest parses");
 
     validate_manifest(&manifest).expect("evidence_pack manifest validates");
     let profile = &manifest.evaluation_profiles[0];
@@ -2261,7 +2263,7 @@ codelists: []
 "#
         );
         let manifest: MetadataManifest =
-            serde_yaml_ng::from_str(&raw).expect("blank evidence_pack manifest parses");
+            support::from_yaml(&raw).expect("blank evidence_pack manifest parses");
 
         let error = validate_manifest(&manifest).expect_err("blank evidence_pack field rejected");
         let MetadataError::Validation { errors } = error else {
@@ -2328,7 +2330,7 @@ codelists: []
 "#
         );
         let manifest: MetadataManifest =
-            serde_yaml_ng::from_str(&raw).expect("malformed evidence_pack manifest parses");
+            support::from_yaml(&raw).expect("malformed evidence_pack manifest parses");
 
         let error = validate_manifest(&manifest).expect_err("malformed evidence_pack rejected");
         let MetadataError::Validation { errors } = error else {
@@ -2345,7 +2347,7 @@ codelists: []
 
 #[test]
 fn evidence_pack_odrl_policy_url_serializes_when_present() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -2421,7 +2423,7 @@ fn evidence_pack_policy_hash_helpers_use_canonical_policy_json() {
 
 #[test]
 fn evidence_pack_policy_hash_helpers_verify_inline_pack_policy() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -2501,7 +2503,7 @@ datasets: []
 codelists: []
 "#;
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("inline policy manifest parses");
+        support::from_yaml(raw).expect("inline policy manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("policy hash mismatch rejected");
     let MetadataError::Validation { errors } = error else {
@@ -2637,7 +2639,7 @@ datasets: []
 codelists: []
 "#;
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("ecosystem binding manifest parses");
+        support::from_yaml(raw).expect("ecosystem binding manifest parses");
 
     validate_manifest(&manifest).expect("ecosystem binding manifest validates");
     let binding = &manifest.ecosystem_bindings[0];
@@ -2801,7 +2803,7 @@ codelists: []
 "#
     );
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(&raw).expect("supported ODRL manifest parses");
+        support::from_yaml(&raw).expect("supported ODRL manifest parses");
 
     validate_manifest(&manifest).expect("all supported ODRL terms validate");
     let compiled = compile_manifest(&manifest).expect("all supported ODRL terms compile");
@@ -2837,7 +2839,7 @@ datasets: []
 codelists: []
 "#;
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("unsupported ODRL manifest parses");
+        support::from_yaml(raw).expect("unsupported ODRL manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("unsupported ODRL term rejected");
     let MetadataError::Validation { errors } = error else {
@@ -2878,7 +2880,7 @@ datasets: []
 codelists: []
 "#;
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("wrong ODRL profile manifest parses");
+        support::from_yaml(raw).expect("wrong ODRL profile manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("wrong ODRL profile rejected");
     let MetadataError::Validation { errors } = error else {
@@ -2920,7 +2922,7 @@ datasets: []
 codelists: []
 "#;
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("empty ODRL terms manifest parses");
+        support::from_yaml(raw).expect("empty ODRL terms manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("empty ODRL terms rejected");
     let MetadataError::Validation { errors } = error else {
@@ -2957,8 +2959,7 @@ ecosystem_bindings:
 datasets: []
 codelists: []
 "#;
-    let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("governed manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("missing enforcement profile rejected");
     let MetadataError::Validation { errors } = error else {
@@ -2998,8 +2999,7 @@ ecosystem_bindings:
 datasets: []
 codelists: []
 "#;
-    let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("governed manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("missing policy identity rejected");
     let MetadataError::Validation { errors } = error else {
@@ -3050,8 +3050,7 @@ ecosystem_bindings:
 datasets: []
 codelists: []
 "#;
-    let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("governed manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("missing pack metadata rejected");
     let MetadataError::Validation { errors } = error else {
@@ -3107,8 +3106,7 @@ ecosystem_bindings:
 datasets: []
 codelists: []
 "#;
-    let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("governed manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("missing required gate rejected");
     let MetadataError::Validation { errors } = error else {
@@ -3170,8 +3168,7 @@ ecosystem_bindings:
 datasets: []
 codelists: []
 "#;
-    let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("governed manifest parses");
+    let manifest: MetadataManifest = support::from_yaml(raw).expect("governed manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("unsupported output rejected");
     let MetadataError::Validation { errors } = error else {
@@ -3214,7 +3211,7 @@ datasets: []
 codelists: []
 "#;
     let manifest: MetadataManifest =
-        serde_yaml_ng::from_str(raw).expect("ecosystem binding manifest parses");
+        support::from_yaml(raw).expect("ecosystem binding manifest parses");
 
     let error = validate_manifest(&manifest).expect_err("unknown binding type rejected");
     let MetadataError::Validation { errors } = error else {
@@ -3314,7 +3311,7 @@ codelists: []
 "#
         );
         let manifest: MetadataManifest =
-            serde_yaml_ng::from_str(&raw).expect("blank ecosystem binding manifest parses");
+            support::from_yaml(&raw).expect("blank ecosystem binding manifest parses");
 
         let error =
             validate_manifest(&manifest).expect_err("blank ecosystem binding field rejected");
@@ -3416,8 +3413,7 @@ federation:
     - registry-notary-federation/v0.1
 "#;
 
-    let error = serde_yaml_ng::from_str::<MetadataManifest>(raw)
-        .expect_err("retired federation block rejected");
+    let error = support::from_yaml(raw).expect_err("retired federation block rejected");
 
     assert!(
         error.to_string().contains("federation"),
@@ -3899,7 +3895,7 @@ fn dcat_profiles_render_separate_artifacts() {
 
 #[test]
 fn breg_dcat_corporate_body_publisher_renders_controlled_scheme_reference() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -4117,7 +4113,7 @@ fn breg_dcat_preserves_active_adms_status() {
 
 #[test]
 fn breg_dcat_omits_empty_cccev_predicates_on_requirements() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -4170,7 +4166,7 @@ datasets:
 
 #[test]
 fn validation_rejects_grouped_evidence_list_that_does_not_prove_requirement() {
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -4303,7 +4299,7 @@ fn concept_order_is_significant_and_carries_no_mapping_claim() {
         "              - http://data.europa.eu/m8g/birthDate\n              - https://publicschema.org/date_of_birth\n",
     );
     let semic_first: MetadataManifest =
-        serde_yaml_ng::from_str(&semic_first_source).expect("reordered fixture parses");
+        support::from_yaml(&semic_first_source).expect("reordered fixture parses");
     let semic_first = compile_manifest(&semic_first).expect("compile");
 
     assert_eq!(
@@ -4449,7 +4445,7 @@ fn manifest_with_field_concepts(concepts: &[&str]) -> MetadataManifest {
         .iter()
         .map(|concept| format!("              - {concept}\n"))
         .collect::<String>();
-    serde_yaml_ng::from_str(&format!(
+    support::from_yaml(&format!(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -4524,7 +4520,7 @@ fn semic_and_publicschema_concepts_render_deterministically() {
 fn vocabulary_prefix_expansion_is_string_concatenation_only() {
     // The prefix names a namespace that does not resolve. Expansion must still
     // succeed, which proves nothing is fetched or reasoned over at compile time.
-    let manifest: MetadataManifest = serde_yaml_ng::from_str(
+    let manifest: MetadataManifest = support::from_yaml(
         r#"
 schema_version: registry-manifest/v1
 catalog:
@@ -4564,7 +4560,7 @@ codelists: []
 }
 
 fn aligned_person_concepts_fixture() -> MetadataManifest {
-    serde_yaml_ng::from_str(include_str!(
+    support::from_yaml(include_str!(
         "../../../products/manifest/fixtures/semantic-concepts/aligned-person-concepts.metadata.yaml"
     ))
     .expect("aligned person concepts fixture parses")
