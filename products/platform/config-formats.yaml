@@ -2609,7 +2609,7 @@ formats:
       boolean: none
       idList: /documents
       set: /documents/0/labels
-      relativePath: /documents/0/entry
+      relativePath: /documents/0/entryFile
     securityMembers: []
     restrictingMembers: []
   - id: render/labels

@@ -6,6 +6,22 @@ formats:
   breg/module:
     project: products/breg/acceptance/asset-site-placement
     init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
+  # The removed keys and the retired apiVersion the citizen MCP gateway and
+  # review page runtimes refuse by name; the registry does not declare them yet.
+  breg/mcp-runtime:
+    removedKeys:
+      - /resourceServer/maxTokenLifetimeSeconds
+      - /registry/requestTimeoutMilliseconds
+      - /limits/maxRequestBodyBytes
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/breg-mcp-runtime/v1alpha1
+  breg/review-runtime:
+    removedKeys:
+      - /limits
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/breg-review-runtime/v1alpha1
 
   casework/fixture:
     project: products/casework/examples/payment-review
@@ -34,9 +50,53 @@ formats:
 
   discovery/evidence-mapping:
     project: products/discovery/fixtures/project
+  # The keys the Discovery runtime loader refuses by name.
+  discovery/runtime:
+    removedKeys:
+      - /schemaVersion
+      - /listener/address
+      - /indexPath
 
   manifest/profile:
     project: products/manifest/profiles
+
+  # The maintained bundles are packages, so the staged copy's SHA256SUMS is
+  # refreshed after each mutation. The removed keys and the retired apiVersion
+  # are the ones the bundle and runtime readers refuse by name.
+  render/bundle:
+    digests: SHA256SUMS
+    removedKeys:
+      - /hashes
+      - /documents/0/entry
+      - /documents/0/schema
+    retiredApiVersions:
+      - render.registrystack.org/v1alpha1
+    init: {command: "registry-render init {directory}", file: manifest.yaml}
+  render/labels:
+    project: products/render/bundles/certificate
+    digests: SHA256SUMS
+    init: {command: "registry-render init {directory}", file: labels/en.yaml}
+  render/runtime:
+    removedKeys:
+      - /server
+      - /bundle
+      - /listener/shutdownGraceSeconds
+      - /limits/maxOutputBytes
+      - /limits/maxRequestBodyBytes
+      - /limits/maxConcurrency
+      - /audit/directory
+      - /audit/integrityKeyRef
+      - /audit/maxSegmentBytes
+      - /audit/retainDays
+    retiredApiVersions:
+      - registry.registrystack.org/render-runtime/v1alpha1
+
+  # The removed keys the task connection reader refuses by name, with the
+  # example's one client standing for every client.
+  platform/task-connection:
+    removedKeys:
+      - /version
+      - /clients/task-agent/assertionKeyFile
 
   # The authoring template ships without the project marker and the
   # disposable signing key `evidencectl new` writes, so the copy gets a marker
@@ -138,9 +198,5 @@ formats:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: runtime.example.yaml}
   messaging/project:
     init: {command: "messagingctl init {directory}", file: messaging.yaml}
-  render/bundle:
-    init: {command: "registry-render init {directory}", file: manifest.yaml}
-  render/labels:
-    init: {command: "registry-render init {directory}", file: labels/en.yaml}
   evidence/authoring-project:
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: evidence-project.yaml}
