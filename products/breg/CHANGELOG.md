@@ -200,7 +200,7 @@
   `retentionDays`. Each old key is refused naming its replacement. `check`
   reads no secret, takes `--format json` and `--deny-warnings`, and exits 0,
   1, 2, or 3. Migration steps and the code table are in
-  `release/notes/config-conventions/breg-services.md`.
+  `release/notes/config-conventions/breg.md`, section "BReg citizen services".
 
 - `registry-breg-client` resends an idempotency-keyed mutation whose outcome
   is unknown, a timeout or broken exchange after sending or a 5xx answer, up
