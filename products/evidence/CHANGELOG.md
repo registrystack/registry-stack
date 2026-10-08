@@ -25,6 +25,10 @@
 
 ### Evidence authoring tools
 
+- `evidencectl` writes the mock plan and the access policy and client
+  documents with sequences indented beneath their keys, and reports a refused
+  `source mock` argument combination (`--http-addr`, `--path-parameter`) as a
+  diagnostic with an `evidence.mock.*` code and a fix sentence.
 - `evidencectl check --file <file>` checks one client profile, reviewed contracts
   file, development state file, source-import baseline or journal, source
   resolution file, or source export manifest offline, with the shared
