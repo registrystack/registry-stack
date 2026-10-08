@@ -25,6 +25,10 @@
 
 ### Evidence authoring tools
 
+- `evidencectl check --file <file>` checks one client profile, reviewed contracts
+  file, development state file, source-import baseline or journal, source
+  resolution file, or source export manifest offline, with the shared
+  diagnostics and exit codes 0, 1 and 3.
 - BREAKING: the resolution file `evidencectl source diff` and `evidencectl
   source update` read through `--resolutions` opens with `apiVersion`
   (`id.registrystack.org/formats/evidence/source-resolution/v1alpha1`) and

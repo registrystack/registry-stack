@@ -181,6 +181,13 @@ applies the same authoring validation and reports its status, findings, and
 revision with the authored inventory. Add `--target <environment-target>` to
 include that target's governance.
 
+`evidencectl check --file <file>` checks one tooling file on its own, offline:
+a client profile, reviewed contracts, development state, a source-import
+baseline or journal, a source resolution file, or a source export manifest. The
+file's `kind` (or, for a client profile and reviewed contracts, its `schema`)
+names the format. It exits 0 when the file passes, 1 when it is refused, and 3
+when it cannot be read; it cannot be combined with a project or `--target`.
+
 `evidencectl package <editable-project> --target <environment-target> --output <new-package-directory>`
 is create-only. It reads regular files
 without following symlinks, compiles one closed bundle, and delegates its

@@ -20,18 +20,21 @@ use serde_json::Value;
 
 pub(crate) use export::DocumentRefused;
 #[cfg(test)]
-pub(crate) use export::{EXPORT_API_VERSION, EXPORT_KIND};
+pub(crate) use export::EXPORT_API_VERSION;
+pub(crate) use export::EXPORT_KIND;
 pub(crate) use files::ProjectLock;
 use files::{
     artifact_path, authored_bound, digest, read, snapshot, write, Contents, JOURNAL_PATH,
     MAX_FILE_BYTES, MAX_JOURNAL_BYTES, MAX_STATE_BYTES, STATE_PATH,
 };
-pub(crate) use resolution::Resolution;
 use resolution::{decode_resolution_file, MAX_ARTIFACTS};
 #[cfg(feature = "schema")]
-pub(crate) use resolution::{
-    resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_KIND, RESOLUTION_SCHEMA_ID,
-};
+pub(crate) use resolution::{resolution_schema, RESOLUTION_API_VERSION, RESOLUTION_SCHEMA_ID};
+pub(crate) use resolution::{Resolution, RESOLUTION_KIND};
+
+/// The largest file `evidencectl check --file` reads: the importer's own
+/// largest file, the transaction journal.
+pub(crate) const MAX_CHECKED_FILE_BYTES: u64 = MAX_JOURNAL_BYTES;
 
 const MANIFEST_FILE: &str = "source-export.json";
 const MAX_EXPORT_BYTES: usize = 16 * 1024 * 1024;
@@ -921,21 +924,12 @@ fn transact(lock: &ProjectLock, operations: Vec<Operation>) -> Result<()> {
     Ok(())
 }
 
-fn recover(lock: &ProjectLock) -> Result<()> {
-    if !files::validate_recovery_state(&lock.root)? {
-        return Ok(());
-    }
-    let Some(content) = read(&lock.root, JOURNAL_PATH, MAX_JOURNAL_BYTES)? else {
-        return Ok(());
-    };
-    require_envelope(
-        &content.text,
-        JOURNAL_API_VERSION,
-        JOURNAL_KIND,
-        JOURNAL_EARLIER,
-    )?;
+/// Read a transaction journal: its envelope, its shape and the paths it
+/// names, without touching the project.
+fn parse_journal(text: &str) -> Result<Journal> {
+    require_envelope(text, JOURNAL_API_VERSION, JOURNAL_KIND, JOURNAL_EARLIER)?;
     let journal: Journal =
-        serde_json::from_str(&content.text).context("reading source-import recovery journal")?;
+        serde_json::from_str(text).context("reading source-import recovery journal")?;
     if journal.operations.len() > files::MAX_PROJECT_FILES + 1 {
         bail!("source-import recovery journal exceeds its bound");
     }
@@ -947,6 +941,43 @@ fn recover(lock: &ProjectLock) -> Result<()> {
         if !paths.insert(&operation.path) {
             bail!("source-import recovery journal repeats an artifact");
         }
+    }
+    Ok(journal)
+}
+
+/// Check a baseline file on its own. The error is static text.
+pub(crate) fn check_state_file(text: &str) -> Result<()> {
+    parse_state(Some(&Contents {
+        text: text.to_owned(),
+        mode: 0o600,
+    }))
+    .map(drop)
+}
+
+/// Check a transaction journal file on its own. The error is static text.
+pub(crate) fn check_journal_file(text: &str) -> Result<()> {
+    parse_journal(text).map(drop)
+}
+
+/// Check an export manifest on its own.
+pub(crate) fn check_export_manifest(file: &str, bytes: &[u8]) -> Result<(), DocumentRefused> {
+    export::read_export_manifest(file, bytes).map(drop)
+}
+
+/// Check a resolution file on its own.
+pub(crate) fn check_resolution_file(file: &str, bytes: &[u8]) -> Result<(), DocumentRefused> {
+    decode_resolution_file(file, bytes).map(drop)
+}
+
+fn recover(lock: &ProjectLock) -> Result<()> {
+    if !files::validate_recovery_state(&lock.root)? {
+        return Ok(());
+    }
+    let Some(content) = read(&lock.root, JOURNAL_PATH, MAX_JOURNAL_BYTES)? else {
+        return Ok(());
+    };
+    let journal = parse_journal(&content.text)?;
+    for operation in &journal.operations {
         let current = read(&lock.root, &operation.path, authored_bound(&operation.path))?;
         if current != operation.before && current != operation.after {
             bail!("source-import recovery found an independent edit to {}; preserve it, restore the recorded before or after content, and retry", operation.path);

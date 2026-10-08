@@ -55,7 +55,7 @@ use registry_platform_yaml::{
 };
 
 const DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/evidence/dev-state/v6";
-const DEV_STATE_KIND: &str = "EvidenceDevState";
+pub(crate) const DEV_STATE_KIND: &str = "EvidenceDevState";
 /// The session state `evidencectl dev` retains in `.evidence/dev/state.json`
 /// (CFG-ENV-1). Only evidencectl writes it.
 const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
@@ -3511,6 +3511,17 @@ fn read_state(path: &Path) -> Result<DevState> {
         .decode::<DevState>(&bytes, &Expect::one(&DEV_STATE_FORMAT))
         .map_err(|_| anyhow!(UNREADABLE_STATE))?;
     Ok(decoded.value)
+}
+
+/// Check a retained session state file on its own: its envelope and shape,
+/// without the owner-only checks that guard the file a session reads.
+pub(crate) fn check_state_document(
+    file: &str,
+    bytes: &[u8],
+) -> Result<(), registry_platform_yaml::Report> {
+    Reader::new(file)
+        .decode::<DevState>(bytes, &Expect::one(&DEV_STATE_FORMAT))
+        .map(drop)
 }
 
 fn validate_control_socket(path: &Path) -> Result<()> {

@@ -20,6 +20,7 @@ mod client;
 mod dev;
 mod doctor;
 mod evidence_binary;
+mod file_check;
 mod fixtures;
 mod junit;
 mod jwk;
@@ -146,7 +147,13 @@ enum CliFormat {
 #[derive(Debug, Args)]
 struct CheckArgs {
     /// Editable Evidence project directory.
-    project: PathBuf,
+    #[arg(required_unless_present = "file")]
+    project: Option<PathBuf>,
+    /// Check one tooling file on its own, offline: a client profile, reviewed
+    /// contracts, development state, a source-import baseline or journal, a
+    /// source resolution file, or a source export manifest.
+    #[arg(long, conflicts_with_all = ["project", "target", "production"])]
+    file: Option<PathBuf>,
     /// Explicit deployment target whose governance and runtime structure are checked.
     #[arg(long)]
     target: Option<PathBuf>,
@@ -451,8 +458,11 @@ fn run_entry() -> ExitCode {
                 "Use a new destination and correct the starter or import input named by the command.",
             )
         }
+        Command::Check(CheckArgs {
+            file: Some(file), ..
+        }) => Ok(file_check::run(&file, format)),
         Command::Check(args) => {
-            let artifact = args.project.display().to_string();
+            let artifact = project_of(&args).display().to_string();
             safe_command(
                 run_check_command(args, format),
                 "evidence.check.failed",
@@ -1205,15 +1215,24 @@ fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
     arguments
 }
 
+/// The project a project check was given; clap requires it unless `--file`
+/// is present, and the file check never reaches this.
+fn project_of(args: &CheckArgs) -> &std::path::Path {
+    args.project
+        .as_deref()
+        .expect("clap requires a project unless --file is given")
+}
+
 fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
+    let project = project_of(&args);
     let checked = check::check(
-        &args.project,
+        project,
         args.target.as_deref(),
         args.production,
         args.deny_warnings,
     );
     write_checked(checked, format, |found| {
-        check::refused_check_report(&args.project, args.target.as_deref(), found)
+        check::refused_check_report(project, args.target.as_deref(), found)
     })
 }
 

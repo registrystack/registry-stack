@@ -834,7 +834,7 @@ formats:
       file: crates/registry-evidencectl/src/source_import/export.rs
       function: read_export_manifest
       type: ExportDocument
-    check: none
+    check: evidencectl check --file {file}
     example: products/breg/examples/formats/source-export.json
     conformance:
       requiredText: none
@@ -3511,7 +3511,7 @@ formats:
       file: crates/registry-evidence-client/src/profile_file.rs
       function: read_client_profile
       type: ProfileDocument
-    check: none
+    check: evidencectl check --file {file}
     example: products/evidence/examples/client-profile/client-profile.json
     conformance:
       requiredText: none
@@ -3548,7 +3548,7 @@ formats:
       file: crates/registry-evidence-client/src/profile_file.rs
       function: read_reviewed_contracts
       type: ContractsDocument
-    check: none
+    check: evidencectl check --file {file}
     example: products/evidence/examples/client-contracts/evidence.contracts.json
     conformance:
       requiredText: none
@@ -3579,7 +3579,7 @@ formats:
       file: crates/registry-evidencectl/src/dev.rs
       function: read_state
       type: DevState
-    check: none
+    check: evidencectl check --file {file}
     example: products/evidence/examples/formats/dev-session/.evidence/dev/state.json
     conformance:
       requiredText: none
@@ -3615,7 +3615,7 @@ formats:
       file: crates/registry-evidencectl/src/source_import/resolution.rs
       function: decode_resolution_file
       type: ResolutionFile
-    check: none
+    check: evidencectl check --file {file}
     example: products/evidence/examples/formats/source-resolutions.json
     conformance:
       requiredText: none
@@ -3646,7 +3646,7 @@ formats:
       file: crates/registry-evidencectl/src/source_import/mod.rs
       function: parse_state
       type: State
-    check: none
+    check: evidencectl check --file {file}
     example: products/evidence/examples/formats/source-imports/.evidence/source-imports/state.json
     conformance:
       requiredText: none
@@ -3677,7 +3677,7 @@ formats:
       file: crates/registry-evidencectl/src/source_import/mod.rs
       function: recover
       type: Journal
-    check: none
+    check: evidencectl check --file {file}
     example: products/evidence/examples/formats/source-imports/.evidence/source-imports/transaction.json
     conformance:
       requiredText: none

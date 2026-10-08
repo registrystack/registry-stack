@@ -410,13 +410,6 @@ exceptions:
   class: stable-move
   reason: kind is EventsExplanation
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to BRegEventsExplanation'
-- rule: CFG-CHECK-1
-  format: breg/evidence-source-export
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-6
   format: breg/example-scenarios
   location: editors/configure.py#/SCHEMAS/breg
@@ -3311,13 +3304,6 @@ exceptions:
   class: stable-move
   reason: secretRef is typed through Evidence's frozen $defs/secret-ref
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member as $defs/SecretReference'
-- rule: CFG-CHECK-1
-  format: evidence/client-contracts
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-ENV-1
   format: evidence/client-contracts
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3330,13 +3316,6 @@ exceptions:
   class: stable-move
   reason: the format carries no kind
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: EvidenceClientContracts'
-- rule: CFG-CHECK-1
-  format: evidence/client-profile
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-ENV-1
   format: evidence/client-profile
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -3392,13 +3371,6 @@ exceptions:
   class: stable-move
   reason: key allowed_outputs is not camelCase ASCII
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename allowed_outputs to allowedOutputs'
-- rule: CFG-CHECK-1
-  format: evidence/dev-state
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-2
   format: evidence/fixture
   location: products/platform/config-formats.yaml#/schema
@@ -3596,27 +3568,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-CHECK-1
-  format: evidence/source-import-journal
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-CHECK-1
-  format: evidence/source-import-state
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-CHECK-1
-  format: evidence/source-resolution
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-2
   format: evidence/target-governance
   location: products/platform/config-formats.yaml#/schema
