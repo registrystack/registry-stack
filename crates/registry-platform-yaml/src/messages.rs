@@ -620,6 +620,19 @@ fn substitution() -> Text {
     text(SUBSTITUTION_MESSAGE, SUBSTITUTION_ACTION)
 }
 
+const HASH_HINT: &str =
+    "A `#` starts a comment only after a space: put a space before the `#` that starts the comment.";
+
+/// The fix for a refused unquoted value holding a `#` with no space before
+/// it, which YAML reads as part of the value and not as a comment. The added
+/// sentence names no part of the value (CFG-SEC-3).
+pub(crate) fn with_hash_hint(text: Text) -> Text {
+    Text {
+        action: format!("{} {HASH_HINT}", text.action),
+        ..text
+    }
+}
+
 pub(crate) fn expected_string(found: Found) -> Text {
     let action = match found {
         Found::Null | Found::Boolean | Found::Integer | Found::Number => {
@@ -631,16 +644,56 @@ pub(crate) fn expected_string(found: Found) -> Text {
     text(format!("expected text, not {}", found.phrase()), action)
 }
 
-/// `a whole number of days from 1 to 36500`.
-pub(crate) fn whole_number(unit: Option<&str>, bounds: Option<&(String, String)>) -> String {
-    let mut wanted = "a whole number".to_string();
-    if let Some(unit) = unit {
-        wanted.push_str(&format!(" of {unit}"));
+/// The bounds a message states for a whole number. An end is `None` where
+/// it is only its type's extreme, which no format declared and no author
+/// wrote. An unsigned type's minimum, 0, is a real bound: it refuses negative
+/// numbers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Bounds {
+    pub minimum: Option<i128>,
+    pub maximum: Option<i128>,
+}
+
+impl Bounds {
+    /// Bounds a format declared, both stated.
+    pub(crate) fn declared(minimum: i128, maximum: i128) -> Bounds {
+        Bounds {
+            minimum: Some(minimum),
+            maximum: Some(maximum),
+        }
     }
-    if let Some((min, max)) = bounds {
-        wanted.push_str(&format!(" from {min} to {max}"));
+
+    /// `minimum` to `maximum` for a type that holds `type_minimum` to
+    /// `type_maximum`, leaving out an end at the type's extreme.
+    pub(crate) fn within(
+        minimum: i128,
+        maximum: i128,
+        type_minimum: i128,
+        type_maximum: i128,
+    ) -> Bounds {
+        Bounds {
+            minimum: (minimum > type_minimum || type_minimum >= 0).then_some(minimum),
+            maximum: (maximum < type_maximum).then_some(maximum),
+        }
     }
-    wanted
+}
+
+/// `a whole number of days from 1 to 36500`, `a whole number of 0 or more
+/// seconds`, `a whole number of 10 or less`, or `a whole number of days`.
+pub(crate) fn whole_number(unit: Option<&str>, bounds: &Bounds) -> String {
+    let unit_after = unit.map(|unit| format!(" {unit}")).unwrap_or_default();
+    match (bounds.minimum, bounds.maximum) {
+        (Some(min), Some(max)) => match unit {
+            Some(unit) => format!("a whole number of {unit} from {min} to {max}"),
+            None => format!("a whole number from {min} to {max}"),
+        },
+        (Some(min), None) => format!("a whole number of {min} or more{unit_after}"),
+        (None, Some(max)) => format!("a whole number of {max} or less{unit_after}"),
+        (None, None) => match unit {
+            Some(unit) => format!("a whole number of {unit}"),
+            None => "a whole number".to_string(),
+        },
+    }
 }
 
 fn as_digits(unit: Option<&str>) -> String {
@@ -650,11 +703,7 @@ fn as_digits(unit: Option<&str>) -> String {
     }
 }
 
-pub(crate) fn expected_integer(
-    found: Found,
-    unit: Option<&str>,
-    bounds: Option<&(String, String)>,
-) -> Text {
+pub(crate) fn expected_integer(found: Found, unit: Option<&str>, bounds: &Bounds) -> Text {
     let wanted = whole_number(unit, bounds);
     match found {
         Found::QuotedNumber => text(
@@ -724,9 +773,8 @@ pub(crate) fn expected_collection(list_wanted: bool, found: Found) -> Text {
     }
 }
 
-pub(crate) fn integer_out_of_range(unit: Option<&str>, min: &str, max: &str) -> Text {
-    let bounds = (min.to_string(), max.to_string());
-    let wanted = whole_number(unit, Some(&bounds));
+pub(crate) fn integer_out_of_range(unit: Option<&str>, bounds: &Bounds) -> Text {
+    let wanted = whole_number(unit, bounds);
     text(
         format!("the value is outside its bounds; expected {wanted}"),
         format!("Write {wanted}."),

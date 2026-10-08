@@ -64,7 +64,7 @@ fn cfg_val_1_an_integer_position_refuses_a_number() {
             "config.expected-integer",
             "/port",
             (3, 7),
-            "expected a whole number from 0 to 65535",
+            "expected a whole number of 0 or more",
             "Write digits only.",
         );
     }
@@ -151,7 +151,7 @@ fn cfg_val_3_a_quoted_number_is_refused_at_the_quote() {
         "config.expected-integer",
         "/port",
         (3, 7),
-        "expected a whole number from 0 to 65535; quoted values are text",
+        "expected a whole number of 0 or more; quoted values are text",
         "Remove the quotes.",
     );
 }
@@ -349,6 +349,219 @@ fn cfg_qty_4_a_product_bound_check_is_worded_by_the_reader() {
         (3, 10),
         "expected an even whole number",
         "Write an even number.",
+    );
+}
+
+// ----- CFG-DIAG-6: a type's extremes are not bounds a format declared -----
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct Extremes {
+    #[serde(default)]
+    count: Option<u64>,
+    #[serde(default)]
+    level: Option<u8>,
+    #[serde(default)]
+    timeout_milliseconds: Option<u32>,
+    #[serde(default)]
+    offset: Option<i32>,
+    #[serde(default)]
+    shift_minutes: Option<i64>,
+    #[serde(default)]
+    total: Option<i128>,
+    #[serde(default)]
+    quota: Option<BoundedU64<0, { u64::MAX }>>,
+    #[serde(default)]
+    floor_bytes: Option<BoundedU32<5, { u32::MAX }>>,
+}
+
+#[test]
+fn cfg_diag_6_an_upper_bound_at_the_type_maximum_reads_or_more() {
+    for (body, code, path, column, message, action) in [
+        (
+            "count: \"5\"\n",
+            "config.expected-integer",
+            "/count",
+            8,
+            "expected a whole number of 0 or more; quoted values are text",
+            "Remove the quotes.",
+        ),
+        (
+            "count: many\n",
+            "config.expected-integer",
+            "/count",
+            8,
+            "expected a whole number of 0 or more, not unquoted text",
+            "Write a whole number of 0 or more.",
+        ),
+        (
+            "count: -1\n",
+            "config.out-of-range",
+            "/count",
+            8,
+            "the value is outside its bounds; expected a whole number of 0 or more",
+            "Write a whole number of 0 or more.",
+        ),
+        (
+            "level: 1.5\n",
+            "config.expected-integer",
+            "/level",
+            8,
+            "expected a whole number of 0 or more",
+            "Write digits only.",
+        ),
+        (
+            "timeoutMilliseconds: 5ms\n",
+            "config.expected-integer",
+            "/timeoutMilliseconds",
+            22,
+            "expected a whole number of 0 or more milliseconds",
+            "Write the number of milliseconds as digits.",
+        ),
+        (
+            "quota: \"5\"\n",
+            "config.expected-integer",
+            "/quota",
+            8,
+            "expected a whole number of 0 or more; quoted values are text",
+            "Remove the quotes.",
+        ),
+        (
+            "floorBytes: 2\n",
+            "config.out-of-range",
+            "/floorBytes",
+            13,
+            "the value is outside its bounds; expected a whole number of 5 or more bytes",
+            "Write a whole number of 5 or more bytes.",
+        ),
+    ] {
+        let report = refusal::<Extremes>(body);
+        assert_diagnostic(only(&report), code, path, (3, column), message, action);
+        assert!(
+            !report.render_human().contains("18446744073709551615")
+                && !report.render_human().contains("4294967295"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn cfg_diag_6_a_signed_type_with_both_extremes_names_no_bound() {
+    for (body, path, column, message, action) in [
+        (
+            "offset: \"5\"\n",
+            "/offset",
+            9,
+            "expected a whole number; quoted values are text",
+            "Remove the quotes.",
+        ),
+        (
+            "shiftMinutes: 5m\n",
+            "/shiftMinutes",
+            15,
+            "expected a whole number of minutes",
+            "Write the number of minutes as digits.",
+        ),
+        (
+            "shiftMinutes: soon\n",
+            "/shiftMinutes",
+            15,
+            "expected a whole number of minutes, not unquoted text",
+            "Write a whole number of minutes.",
+        ),
+        (
+            "total: \"1\"\n",
+            "/total",
+            8,
+            "expected a whole number; quoted values are text",
+            "Remove the quotes.",
+        ),
+    ] {
+        let report = refusal::<Extremes>(body);
+        assert_diagnostic(
+            only(&report),
+            "config.expected-integer",
+            path,
+            (3, column),
+            message,
+            action,
+        );
+    }
+}
+
+#[test]
+fn cfg_diag_6_a_value_past_a_type_extreme_is_told_that_extreme() {
+    for (body, path, column, message, action) in [
+        (
+            "level: 256\n",
+            "/level",
+            8,
+            "the value is outside its bounds; expected a whole number from 0 to 255",
+            "Write a whole number from 0 to 255.",
+        ),
+        (
+            "offset: 3000000000\n",
+            "/offset",
+            9,
+            "the value is outside its bounds; expected a whole number of 2147483647 or less",
+            "Write a whole number of 2147483647 or less.",
+        ),
+        (
+            "offset: -3000000000\n",
+            "/offset",
+            9,
+            "the value is outside its bounds; expected a whole number of -2147483648 or more",
+            "Write a whole number of -2147483648 or more.",
+        ),
+        (
+            "floorBytes: 4294967296\n",
+            "/floorBytes",
+            13,
+            "the value is outside its bounds; expected a whole number of bytes from 5 to 4294967295",
+            "Write a whole number of bytes from 5 to 4294967295.",
+        ),
+    ] {
+        let report = refusal::<Extremes>(body);
+        assert_diagnostic(
+            only(&report),
+            "config.out-of-range",
+            path,
+            (3, column),
+            message,
+            action,
+        );
+    }
+}
+
+#[test]
+fn cfg_diag_6_bounds_a_format_declares_are_named_in_full() {
+    let report = refusal::<Settings>("retentionDays: \"90\"\n");
+    assert_eq!(
+        only(&report).message,
+        "expected a whole number of days from 1 to 36500; quoted values are text"
+    );
+    let report = refusal::<Settings>("maxBytes: 0\n");
+    assert_eq!(
+        only(&report).suggested_action,
+        "Write a whole number of bytes from 1 to 10000000000."
+    );
+}
+
+#[test]
+fn cfg_diag_1_the_json_of_a_range_refusal_keeps_its_fields() {
+    let report = refusal::<Extremes>("count: \"5\"\n");
+    assert_eq!(
+        report.to_json_value(),
+        serde_json::json!([{
+            "severity": "error",
+            "code": "config.expected-integer",
+            "artifact": "ExampleRuntimeConfig",
+            "path": "/count",
+            "message": "expected a whole number of 0 or more; quoted values are text",
+            "suggestedAction": "Remove the quotes.",
+            "source": {"file": "runtime.yaml", "line": 3, "column": 8}
+        }])
     );
 }
 
@@ -609,6 +822,10 @@ fn cfg_sec_3_no_diagnostic_repeats_a_value() {
         format!("name: \"{MARKER}\n"),
         format!("name: {MARKER}: b\n"),
         format!("name: [{MARKER}\n"),
+        format!("port: 8080#{MARKER}\n"),
+        format!("mode: strict#{MARKER}\n"),
+        format!("id: core#{MARKER}\n"),
+        format!("url: ftp://{MARKER}.example/#{MARKER}\n"),
     ];
     for body in &cases {
         let report = match decode::<Everything>(body) {
@@ -645,6 +862,131 @@ fn cfg_sec_3_an_unknown_variant_names_the_accepted_values_only() {
         "expected one of `strict`, `lenient`",
         "Use one of `strict`, `lenient`.",
     );
+}
+
+// ----- CFG-DIAG-6: a `#` with no space before it is part of the value -----
+
+const HASH_HINT: &str =
+    "A `#` starts a comment only after a space: put a space before the `#` that starts the comment.";
+const LOCAL_ID_MESSAGE: &str = "expected a local identifier matching `^[a-z][a-z0-9_-]{0,63}$`";
+const LOCAL_ID_ACTION: &str =
+    "Use lowercase letters, digits, `_`, and `-`, starting with a letter, at most 64 characters.";
+
+#[test]
+fn cfg_diag_6_a_refused_value_with_an_unspaced_hash_says_where_comments_start() {
+    let digest = format!("digest: sha256:{}#main\n", "a".repeat(64));
+    for (body, code, path, column, message, action) in [
+        (
+            "port: 8080#main\n",
+            "config.expected-integer",
+            "/port",
+            7,
+            "expected a whole number of 0 or more",
+            "Write digits only.",
+        ),
+        (
+            "retentionDays: 90#days\n",
+            "config.expected-integer",
+            "/retentionDays",
+            16,
+            "expected a whole number of days from 1 to 36500",
+            "Write digits only.",
+        ),
+        (
+            "mode: strict#main\n",
+            "config.unknown-variant",
+            "/mode",
+            7,
+            "expected one of `strict`, `lenient`",
+            "Use one of `strict`, `lenient`.",
+        ),
+        (
+            "id: core#main\n",
+            "config.invalid-value",
+            "/id",
+            5,
+            LOCAL_ID_MESSAGE,
+            LOCAL_ID_ACTION,
+        ),
+        (
+            "enabled: true#main\n",
+            "config.expected-boolean",
+            "/enabled",
+            10,
+            "expected true or false, not unquoted text",
+            "Write true or false.",
+        ),
+        (
+            &digest,
+            "config.invalid-value",
+            "/digest",
+            9,
+            "expected a digest written `sha256:` followed by 64 lowercase hex digits",
+            "Write the digest as `sha256:` followed by 64 lowercase hex digits.",
+        ),
+        (
+            "url: ftp://a.example/#main\n",
+            "config.invalid-value",
+            "/url",
+            6,
+            "expected an absolute http or https URL with a host, no user information, and at most 2048 characters",
+            "Write an absolute URL starting with `https://` or `http://`, without user information.",
+        ),
+    ] {
+        let report = refusal::<Everything>(body);
+        assert_diagnostic(
+            only(&report),
+            code,
+            path,
+            (3, column),
+            message,
+            &format!("{action} {HASH_HINT}"),
+        );
+    }
+}
+
+#[test]
+fn cfg_diag_6_the_hash_hint_is_given_only_for_an_unquoted_value_that_fails() {
+    let text = with_envelope("name: a#b\nid: core\nurl: https://a.example/#main\n");
+    let decoded = Reader::new(FILE)
+        .decode::<Everything>(text.as_bytes(), &EXPECT)
+        .unwrap_or_else(|report| panic!("{report}"));
+    assert_eq!(decoded.value.name.as_deref(), Some("a#b"));
+    assert!(decoded.document.warnings().diagnostics().is_empty());
+    for body in ["port: \"8080#main\"\n", "port: main # 8080\n"] {
+        let report = refusal::<Everything>(body);
+        assert_eq!(
+            only(&report).suggested_action,
+            "Write a whole number of 0 or more.",
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn cfg_sec_3_the_hash_hint_is_never_given_for_a_substituted_value() {
+    for (body, code, message, action) in [
+        (
+            "id: ${ID}\n",
+            "config.invalid-value",
+            LOCAL_ID_MESSAGE,
+            LOCAL_ID_ACTION,
+        ),
+        (
+            "port: ${PORT}\n",
+            "config.expected-integer",
+            "substitution fills text values only",
+            "Write the value, or template the whole file.",
+        ),
+    ] {
+        let report =
+            decode_with_hook::<Everything>(body, &mut Substitute("core#main")).unwrap_err();
+        let diagnostic = only(&report);
+        assert_eq!(diagnostic.code, code, "{body}");
+        assert_eq!(diagnostic.message, message, "{body}");
+        assert_eq!(diagnostic.suggested_action, action, "{body}");
+        assert!(!report.render_human().contains("core#main"), "{report}");
+    }
 }
 
 // ----- CFG-DIAG-1 -----
@@ -1480,7 +1822,7 @@ fn cfg_yaml_1_json_is_read_as_yaml_flow_content() {
         "config.expected-integer",
         "/port",
         (2, 10),
-        "expected a whole number from 0 to 65535; quoted values are text",
+        "expected a whole number of 0 or more; quoted values are text",
         "Remove the quotes.",
     );
     let text = format!(
@@ -1506,7 +1848,7 @@ fn decode_at_reports_full_paths_from_the_root() {
         "config.expected-integer",
         "/listener/port",
         (5, 9),
-        "expected a whole number from 0 to 65535; quoted values are text",
+        "expected a whole number of 0 or more; quoted values are text",
         "Remove the quotes.",
     );
     let report = document.decode_at::<Listener>("/nowhere").unwrap_err();

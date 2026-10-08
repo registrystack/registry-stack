@@ -129,7 +129,7 @@ impl std::error::Error for Invalid {}
 /// [`Invalid`] read back from a custom error's text.
 enum Protocol {
     Expected { expected: String, action: String },
-    OutOfRange { minimum: String, maximum: String },
+    OutOfRange { minimum: i128, maximum: i128 },
     DuplicateItem { first: usize, second: usize },
     DuplicateId { first: usize, second: usize },
 }
@@ -147,14 +147,10 @@ fn parse_protocol(text: &str) -> Option<Protocol> {
             expected: first.to_string(),
             action: second.to_string(),
         }),
-        "out-of-range" => {
-            first.parse::<i128>().ok()?;
-            second.parse::<i128>().ok()?;
-            Some(Protocol::OutOfRange {
-                minimum: first.to_string(),
-                maximum: second.to_string(),
-            })
-        }
+        "out-of-range" => Some(Protocol::OutOfRange {
+            minimum: first.parse().ok()?,
+            maximum: second.parse().ok()?,
+        }),
         "duplicate-item" => Some(Protocol::DuplicateItem {
             first: first.parse().ok()?,
             second: second.parse().ok()?,
@@ -358,8 +354,42 @@ impl<'a> Site<'a> {
     }
 
     fn problem(&self, code: &str, text: messages::Text) -> Problem {
+        let text = if HASH_HINT_CODES.contains(&code) && holds_unspaced_hash(self.node) {
+            messages::with_hash_hint(text)
+        } else {
+            text
+        };
         Problem::error(code, self.path.clone(), self.value_at(), text)
     }
+}
+
+/// The codes of a scalar value that failed to decode, whose fix names the
+/// `#` an unquoted value holds with no space before it.
+const HASH_HINT_CODES: &[&str] = &[
+    "config.expected-integer",
+    "config.expected-number",
+    "config.expected-boolean",
+    "config.unknown-variant",
+    "config.invalid-value",
+];
+
+/// An unquoted value holding a `#` with no space before it: YAML read the
+/// `#` and what follows as part of the value, where the author may have
+/// meant a comment. Substituted text is left out, since its `#` may come
+/// from the environment and not from the file.
+fn holds_unspaced_hash(node: &Node) -> bool {
+    let NodeValue::String(text) = &node.value else {
+        return false;
+    };
+    text.style == ScalarStyle::Plain
+        && !text.substituted
+        && text.text.char_indices().any(|(index, character)| {
+            character == '#'
+                && text.text[..index]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|before| !before.is_whitespace())
+        })
 }
 
 /// The platform shared blocks a host struct holds, and the keys they took.
@@ -496,17 +526,25 @@ impl<'a> NodeDe<'a> {
             Some((low, high)) => (low.max(type_minimum), high.min(type_maximum)),
             None => (type_minimum, type_maximum),
         };
-        let bounds = (minimum.to_string(), maximum.to_string());
+        let bounds = messages::Bounds::within(minimum, maximum, type_minimum, type_maximum);
         match &self.site.node.value {
-            NodeValue::Integer(value) if *value < minimum || *value > maximum => Err(self.fail(
-                "config.out-of-range",
-                messages::integer_out_of_range(self.unit(), &bounds.0, &bounds.1),
-            )),
+            NodeValue::Integer(value) if *value < minimum || *value > maximum => {
+                // The bound the value passed is stated even at the type's
+                // extreme, so the message never contradicts the value.
+                let bounds = messages::Bounds {
+                    minimum: bounds.minimum.or((*value < minimum).then_some(minimum)),
+                    maximum: bounds.maximum.or((*value > maximum).then_some(maximum)),
+                };
+                Err(self.fail(
+                    "config.out-of-range",
+                    messages::integer_out_of_range(self.unit(), &bounds),
+                ))
+            }
             NodeValue::Integer(value) => Ok(*value),
             NodeValue::Null => Err(self.null_error(false)),
             _ => Err(self.fail(
                 "config.expected-integer",
-                messages::expected_integer(self.found(), self.unit(), Some(&bounds)),
+                messages::expected_integer(self.found(), self.unit(), &bounds),
             )),
         }
     }
@@ -768,17 +806,15 @@ fn describe(site: &Site<'_>, kind: Kind, buffered: bool) -> Problem {
                 }
             }
             Some(Protocol::OutOfRange { minimum, maximum }) => {
+                // The text carries no type, so both bounds read as declared.
+                let bounds = messages::Bounds::declared(minimum, maximum);
                 if buffered {
-                    let expected = format!("a whole number from {minimum} to {maximum}");
+                    let expected = messages::whole_number(None, &bounds);
                     approximate("config.out-of-range", Some(&expected))
                 } else {
                     site.problem(
                         "config.out-of-range",
-                        messages::integer_out_of_range(
-                            messages::unit_word(site.member),
-                            &minimum,
-                            &maximum,
-                        ),
+                        messages::integer_out_of_range(messages::unit_word(site.member), &bounds),
                     )
                 }
             }

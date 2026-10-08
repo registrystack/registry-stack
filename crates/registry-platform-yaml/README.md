@@ -193,6 +193,16 @@ the number of seconds as digits." with the member's own unit, `1_000` and
 `1e6` in an integer position get "Write digits only.", and `yes` in a
 boolean position says that `yes`, `no`, `on`, and `off` are text.
 
+A whole number's message states the bounds a format declares and leaves out
+a bound that is only its type's extreme: a `u64` member reads "a whole
+number of 0 or more", an `i32` member "a whole number", and a
+`BoundedU32<5, { u32::MAX }>` member "a whole number of 5 or more". A value
+past a type's extreme is still told the bound it crossed. When an unquoted
+value holding a `#` with no space before it is refused, as `port: 8080#main`
+is, the fix adds "A `#` starts a comment only after a space: put a space
+before the `#` that starts the comment." The sentence names no part of the
+value (CFG-SEC-3) and is not added for a value a `ScalarHook` substituted.
+
 Every struct refuses unknown keys, whatever its serde attributes say; the
 action lists the accepted keys and suggests the closest one when one is
 within two edits (one for keys of four characters or fewer). A top-level `x-`
