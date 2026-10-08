@@ -2291,13 +2291,15 @@ fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
     let list = ["examples", "list", project.to_str().unwrap()];
     // A catalogue an earlier bregctl read, and one whose invoke step names
     // no action or result: the first is refused by the reader, the second
-    // by the catalogue checks, and both at their positions.
-    for (document, code, line, pointer) in [
+    // by the catalogue checks, and both at their positions. The reader names
+    // the removed `version` beside the missing header.
+    for (document, code, line, pointer, count) in [
         (
             "{\"version\": 1, \"scenarios\": []}\n",
             "config.missing-envelope",
             1,
             "",
+            2,
         ),
         (
             r#"{
@@ -2318,6 +2320,7 @@ fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
             "breg.examples.step-members",
             10,
             "/scenarios/0/steps/0",
+            1,
         ),
     ] {
         write(&catalogue, document.as_bytes());
@@ -2328,7 +2331,7 @@ fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
         assert_eq!(report["ok"], false, "{report}");
         assert_eq!(report["command"], "examples", "{report}");
         let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
-        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_eq!(diagnostics.len(), count, "{report}");
         assert_eq!(diagnostics[0]["code"], code, "{report}");
         assert_eq!(diagnostics[0]["path"], pointer, "{report}");
         assert_eq!(
