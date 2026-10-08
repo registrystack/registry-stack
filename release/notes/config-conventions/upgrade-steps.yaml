@@ -1,0 +1,372 @@
+apiVersion: id.registrystack.org/formats/release/upgrade-steps/v1alpha1
+kind: ReleaseUpgradeSteps
+steps:
+- id: casework-fixture-spelling
+  product: casework
+  kind: edit
+  file: fixtures/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/casework/fixture/v1alpha1, kind: CaseworkFixture}
+  - {op: rename, path: name, to: id}
+  - {op: rename, path: source, to: request, optional: true}
+  - {op: rename, path: request.id, to: source, optional: true}
+  - {op: rename, path: request.requestEntity, to: entity, optional: true}
+  - {op: delete, path: request.reviewStage, optional: true}
+- {id: casework-fixture-target, product: casework, kind: manual, file: fixtures/*.yaml, instruction: 'Rewrite
+    expect.targetElapsed: PT48H as expect.target: {elapsedMinutes: 2880} (the duration in minutes), and
+    an empty expect.targetElapsed as expect.target: none.'}
+- id: casework-simulation-spelling
+  product: casework
+  kind: edit
+  file: simulations/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/casework/simulation/v1alpha1, kind: CaseworkSimulation}
+  - {op: rename, path: subject.id, to: recordId, optional: true}
+  - {op: rename, path: expect.ruleId, to: rule, optional: true}
+  - {op: replace-value, path: expect.dueState, from: atRisk, to: at-risk, optional: true}
+- id: casework-holiday-set-envelope
+  product: casework
+  kind: edit
+  file: simulations/holiday-sets/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1, kind: CaseworkHolidaySet}
+- id: casework-dev-clients-envelope
+  product: casework
+  kind: edit
+  file: dev-clients.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1, kind: CaseworkDevClients}
+  - {op: delete, path: version}
+- {id: casework-project-reader-refusals, product: casework, kind: manual, file: casework.yaml, instruction: 'Remove
+    null, empty, anchor, alias and tag forms from casework.yaml, quote a plain number where text is expected,
+    write an integer without a base prefix, remove a routing predicate that compares a field with null,
+    and replace any ${NAME} with the value itself; caseworkctl check names each member.'}
+- {id: casework-project-bounds, product: casework, kind: manual, file: casework.yaml, instruction: 'Write
+    each bounded integer within the range casework.yaml''s schema states, write a repeated set item once,
+    and write reviewProducers[].issuer, trustedInitiatorIssuer and taskTemplates[].agent.issuer as absolute
+    http or https URLs exactly as the token''s iss claim carries them.'}
+- {id: casework-runtime-reader-refusals, product: casework, kind: manual, file: runtime.yaml, instruction: 'Remove
+    a null or empty optional key from runtime.yaml to take its default, and write taskAuthority.issuer
+    as an absolute https URL.'}
+- {id: casework-project-file-bounds, product: casework, kind: manual, file: casework.yaml, instruction: Keep
+    the project within the number of sources and files caseworkctl check reads; split the sources across
+    Casework projects or remove files.}
+- {id: casework-holiday-set-file-name, product: casework, kind: manual, file: simulations/holiday-sets/*.yaml,
+  instruction: Rename a holiday-set file to <holidaySet>-<revision>.yaml so a simulation finds the revision
+    it pins.}
+- {id: casework-dev-session-reset, product: casework, kind: manual, file: .casework/dev, instruction: 'Run
+    caseworkctl dev stop --remove with the caseworkctl that started the session, remove .casework/dev,
+    and start again; if that caseworkctl is gone, docker rm -fv the casework-dev-<owner> database container
+    first.'}
+- id: evidence-project-envelope
+  product: evidence
+  kind: edit
+  file: evidence-project.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1, kind: EvidenceAuthoringProject}
+  - {op: delete, path: version}
+  - {op: delete, path: project}
+- id: evidence-question-envelope
+  product: evidence
+  kind: edit
+  file: questions/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1, kind: EvidenceQuestion}
+- id: evidence-access-policy-envelope
+  product: evidence
+  kind: edit
+  file: access/policies/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1, kind: EvidenceAccessPolicy}
+  - {op: delete, path: version}
+- id: evidence-access-client-envelope
+  product: evidence
+  kind: edit
+  file: access/clients/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1, kind: EvidenceAccessClient}
+  - {op: delete, path: version}
+- id: evidence-target-governance-envelope
+  product: evidence
+  kind: edit
+  root: target
+  file: governance.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1, kind: EvidenceTargetGovernance}
+  - {op: delete, path: version}
+- id: evidence-target-settings-envelope
+  product: evidence
+  kind: edit
+  file: settings.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1, kind: EvidenceTargetSettings}
+  - {op: delete, path: formatVersion}
+  - {op: delete, path: governance.version}
+- id: evidence-mock-plan-envelope
+  product: evidence
+  kind: edit
+  file: mocks/source.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1, kind: EvidenceMockPlan}
+  - {op: delete, path: version}
+- id: evidence-fixture-envelope
+  product: evidence
+  kind: edit
+  file: fixtures/*.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1, kind: EvidenceFixture}
+  - {op: delete, path: fixture}
+- {id: evidence-authoring-reader-refusals, product: evidence, kind: manual, file: evidence-project.yaml,
+  instruction: 'Write the value itself where a ${...} expression stands, and remove anchors, aliases,
+    tags, merge keys, duplicate keys, unknown keys and null values from every authored document; evidencectl
+    check names each file and line.'}
+- {id: evidence-bundle-reader-refusals, product: evidence, kind: manual, file: evidence.yaml, instruction: 'Remove
+    anchors, aliases, tags, merge keys, duplicate keys and unknown keys from the bundle, runtime file,
+    code lists and fact schemas; write each integer unquoted and within its range; write URLs as plain
+    https URLs without credentials; move a removed key to the replacement the diagnostic names; remove
+    empty code lists and repeated codes.'}
+- {id: evidence-check-policy, product: evidence, kind: manual, file: verification-policy.yaml, instruction: Run
+    evidence check-policy --verification-policy FILE (or --holder-bound-policy FILE) and correct the policy
+    as it reports.}
+- {id: evidence-oid4vci-envelope, product: evidence, kind: manual, file: oid4vci-runtime.yaml, instruction: 'Delete
+    version: 1 and write apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1 and
+    kind: EvidenceOid4vciRuntimeConfig at the top of the evidence-oid4vci runtime file.'}
+- {id: evidence-oid4vci-listeners, product: evidence, kind: manual, file: oid4vci-runtime.yaml, instruction: 'Write
+    each evidence-oid4vci listener as bind, as the release note''s listeners section shows.'}
+- {id: evidence-oid4vci-key-ref, product: evidence, kind: manual, file: oid4vci-runtime.yaml, instruction: 'Replace
+    tokenClient.privateKeyFile with tokenClient.privateKeyRef: secret:file/<name> (declaring secretProviders.file.root)
+    or secret:env/<NAME>, and chmod 0400 the key file.'}
+- {id: evidence-oid4vci-offer-restrictions, product: evidence, kind: manual, file: oid4vci-runtime.yaml,
+  instruction: 'Write offers.authorizedClients: unrestricted and offers.requiredScopes: unrestricted where
+    the member was absent or an empty list, and leave a nonempty list as it is.'}
+- id: messaging-runtime-keys
+  product: messaging
+  kind: edit
+  root: runtime
+  file: runtime.yaml
+  edits:
+  - {op: replace-value, path: apiVersion, from: registry.registrystack.org/messaging-runtime/v1alpha1,
+    to: id.registrystack.org/formats/messaging/runtime/v1alpha1}
+  - {op: rename, path: retention.payloadDays, to: payloadRetentionDays, optional: true}
+  - {op: rename, path: retention.recordDays, to: recordRetentionDays, optional: true}
+  - {op: rename, path: retention.submissionReceiptDays, to: submissionReceiptRetentionDays, optional: true}
+  - {op: rename, path: audit.retainDays, to: retentionDays, optional: true}
+  - {op: rename, path: providers.*.kind, to: type, optional: true}
+  - {op: rename, path: providers.*.authentication.kind, to: type, optional: true}
+  - {op: rename, path: providers.*.callbackVerifier.kind, to: type, optional: true}
+  - {op: rename, path: providers.*.attemptTimeoutSeconds, to: attemptTimeoutMilliseconds, multiplyBy: 1000,
+    optional: true}
+  - {op: rename, path: providers.*.timeoutMilliseconds, to: attemptTimeoutMilliseconds, optional: true}
+  - {op: rename, path: providers.*.concurrencyLimit, to: maximumConcurrentRequests, optional: true}
+- {id: messaging-project-envelope, product: messaging, kind: manual, file: messaging.yaml, instruction: 'Replace
+    the apiVersion and kind of messaging.yaml with apiVersion: id.registrystack.org/formats/messaging/project/v1alpha1
+    and kind: MessagingProject, and add project: {id: <local id>, version: "<label>"}.'}
+- id: messaging-template-envelope
+  product: messaging
+  kind: edit
+  file: templates/*/*/template.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/messaging/template/v1alpha1, kind: MessagingTemplate}
+- id: messaging-provider-envelope
+  product: messaging
+  kind: edit
+  file: providers/*/provider.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/messaging/provider/v1alpha1, kind: MessagingProvider}
+- id: messaging-project-renames
+  product: messaging
+  kind: edit
+  file: messaging.yaml
+  edits:
+  - {op: rename, path: providers.*.kind, to: type, optional: true}
+  - {op: rename, path: accessProfiles.*.dailyLimit, to: maximumMessagesPerDay, optional: true}
+- id: messaging-provider-capabilities
+  product: messaging
+  kind: edit
+  file: providers/*/provider.yaml
+  edits:
+  - {op: rename, path: capabilities.concurrencyLimit, to: maximumConcurrentRequests, optional: true}
+- id: messaging-required-scopes
+  product: messaging
+  kind: edit
+  file: messaging.yaml
+  edits:
+  - op: replace-value
+    path: accessProfiles.*.requiredScopes
+    from: []
+    to: unrestricted
+    optional: true
+  - op: set
+    path: accessProfiles.*.requiredScopes
+    value: unrestricted
+    ifAbsent: true
+    optional: true
+- id: breg-journeys
+  product: breg
+  kind: edit
+  file: tests/journeys.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/breg/journeys/v1, kind: BRegJourneys}
+  - {op: rename, path: journeys.*.steps.*.request.operation, to: type}
+  - {op: rename, path: journeys.*.steps.*.request.items.*.operation, to: type, optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.type, from: read_path, to: read-path, optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.type, from: target_conditions, to: target-conditions,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.type, from: submit_request, to: submit-request,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.type, from: revise_request, to: revise-request,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.type, from: cancel_request, to: cancel-request,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.type, from: apply_request, to: apply-request,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.items.*.type, from: read_path, to: read-path,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.items.*.type, from: target_conditions, to: target-conditions,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.items.*.type, from: submit_request, to: submit-request,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.items.*.type, from: revise_request, to: revise-request,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.items.*.type, from: cancel_request, to: cancel-request,
+    optional: true}
+  - {op: replace-value, path: journeys.*.steps.*.request.items.*.type, from: apply_request, to: apply-request,
+    optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.recordRef, to: recordCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.etagRef, to: etagCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.proposalVersionRef, to: proposalVersionCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.effectDigestRef, to: effectDigestCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.precondition.conditionRef, to: conditionCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.data.**.recordRef, to: recordCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.items.*.data.**.recordRef, to: recordCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.items.*.recordRef, to: recordCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.items.*.etagRef, to: etagCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.items.*.proposalVersionRef, to: proposalVersionCapture, optional: true}
+  - {op: rename, path: journeys.*.steps.*.request.items.*.effectDigestRef, to: effectDigestCapture, optional: true}
+- id: breg-example-inputs
+  product: breg
+  kind: edit
+  file: examples/inputs/*.json
+  edits:
+  - {op: rename, path: '**.recordRef', to: recordCapture}
+- {id: breg-schema-test-receipt, product: breg, kind: manual, file: schema-test-receipt.json, instruction: Run
+    bregctl test again with this bregctl to write a current receipt; never edit the file by hand.}
+- id: breg-schema-test-credentials
+  product: breg
+  kind: edit
+  file: credentials.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/breg/schema-test-credentials/v1, kind: BRegSchemaTestCredentials}
+- {id: breg-data-checkpoints, product: breg, kind: manual, file: '*.checkpoint', instruction: 'Finish
+    an in-flight import or export with the bregctl that started it; otherwise remove an export''s output
+    and checkpoint and export again, or restart an import under a fresh checkpoint path with only the
+    lines its run did not commit.'}
+- id: breg-model-selection
+  product: breg
+  kind: edit
+  file: model/selection.yaml
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1, kind: BRegModelSelection}
+- {id: breg-dev-clients, product: breg, kind: manual, file: dev-clients.yaml, instruction: 'Replace version:
+    1 with apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1 and kind: BRegDevClients,
+    rename each *File member to its *Ref member holding secret:file/<name> or secret:env/<NAME>, declare
+    secretProviders, and move the files into the declared owner-only directory.'}
+- id: breg-example-scenarios
+  product: breg
+  kind: edit
+  file: examples/scenarios.json
+  edits:
+  - {op: envelope, apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1, kind: BRegExampleScenarios}
+  - {op: delete, path: version}
+- {id: breg-dev-session-reset, product: breg, kind: manual, file: .breg/dev, instruction: 'Run bregctl
+    dev stop --remove PROJECT with the earlier bregctl, remove PROJECT/.breg/dev, migrate dev-clients.yaml
+    and start again.'}
+- {id: breg-reviewed-migrations, product: breg, kind: manual, file: modules/*/migrations/*/descriptor.json,
+  instruction: 'Migrate each descriptor, rehearsal receipt and backup binding as the release note''s tables
+    show, recompute the receipt''s planDigest over the migrated descriptor, then run bregctl test and
+    bregctl package with --reviewed-migrations again.'}
+- {id: breg-evidence-source-export, product: breg, kind: manual, file: source-export.json, instruction: Generate
+    the export again with this release's bregctl generate evidence-source.}
+- {id: breg-rebuild-package, product: breg, kind: manual, file: package, instruction: 'Run bregctl test
+    and bregctl package on the unchanged project with --baseline-package set to the deployed package,
+    then bregctl plan and apply, and point package.root and package.expectedDigest in runtime.yaml at
+    the rebuild.'}
+- {id: breg-delete-repeated-items, product: breg, kind: manual, file: registry.yaml, instruction: Delete
+    the repeated item in each list that is a set (config.duplicate-item names the first occurrence).}
+- {id: breg-runtime-refused-forms, product: breg, kind: manual, file: runtime.yaml, instruction: 'Delete
+    authentication.oidc.assertionIssuers when it is an empty mapping, and write a task-grant status sourceIssuer
+    as an http or https URL.'}
+- id: breg-statistical-period
+  product: breg
+  kind: edit
+  file: registry.yaml
+  edits:
+  - {op: rename, path: statisticalDatasets.*.period.kind, to: type}
+- {id: breg-remove-anonymous, product: breg, kind: manual, file: registry.yaml, instruction: 'Delete anonymous
+    from every access profile and give each profile the principalClaim and requiredScopes its callers''
+    tokens carry, then rebuild and apply on the earlier release before upgrading.'}
+- id: breg-access-unrestricted
+  product: breg
+  kind: edit
+  file: registry.yaml
+  edits:
+  - op: replace-value
+    path: accessProfiles.*.requiredScopes
+    from: []
+    to: unrestricted
+    optional: true
+  - op: set
+    path: accessProfiles.*.requiredScopes
+    value: unrestricted
+    ifAbsent: true
+    optional: true
+  - op: replace-value
+    path: accessProfiles.*.permissions.*.rowBoundaries
+    from: []
+    to: unrestricted
+    optional: true
+  - op: replace-value
+    path: accessProfiles.*.permissions.*.applyTargets.*.rowBoundaries
+    from: []
+    to: unrestricted
+    optional: true
+  - op: replace-value
+    path: accessProfiles.*.permissions.*.requestPresence.*.rowBoundaries
+    from: []
+    to: unrestricted
+    optional: true
+  - op: replace-value
+    path: accessProfiles.*.permissions.*.targets.*.rowBoundaries
+    from: []
+    to: unrestricted
+    optional: true
+- {id: breg-access-requirements, product: breg, kind: manual, file: registry.yaml, instruction: 'Write
+    requiredScopes: unrestricted on a profile that omitted it, write rowBoundaries: unrestricted on a
+    permission that omitted it, and delete an empty requiredPurposes, requesterClients or accessRequirements
+    list.'}
+- id: breg-runtime-allowed-clients
+  product: breg
+  kind: edit
+  root: runtime
+  file: runtime.yaml
+  edits:
+  - op: replace-value
+    path: authentication.oidc.allowedClients
+    from: []
+    to: unrestricted
+    optional: true
+  - {op: set, path: authentication.oidc.allowedClients, value: unrestricted, ifAbsent: true}
+- {id: breg-statistical-dataset-grants, product: breg, kind: unknown, file: registry.yaml, diagnostic: config.removed-key}
+- {id: breg-service-runtime-keys, product: breg, kind: manual, file: runtime.yaml, instruction: 'Replace
+    the breg-mcp and breg-review apiVersion values and rename their keys as the release note''s table
+    shows (maxTokenLifetimeSeconds, requestTimeoutMilliseconds, maxRequestBodyBytes, limits, retainDays).'}
+- id: breg-tool-file-substitution
+  product: breg
+  kind: manual
+  file: tests/journeys.yaml
+  instruction: Write the value itself in place of a ${...} expression in the fixture journeys, schema-test credentials, model selection, development clients, example scenarios, migration descriptor and backup binding; name a secret with a secret reference instead.
+- id: messaging-authored-bounds
+  product: messaging
+  kind: manual
+  file: messaging.yaml
+  instruction: Lower an access profile's requestsPerMinute, burst or maximumMessagesPerDay that exceeds its bound, remove a repeated client, sender profile, template, locale, part or header name, and rename a script path to lowercase segments ending in .rhai; messagingctl check names each member.
