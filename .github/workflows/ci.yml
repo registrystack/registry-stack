@@ -1408,7 +1408,16 @@ jobs:
               echo "Cannot check CFG-CHANGE-5: the event baseline is unavailable." >&2
               exit 1
             fi
-            "${lint[@]}" --base "${CONVENTIONS_BASE_REF}"
+            register=products/platform/config-conventions-exceptions.yaml
+            if git cat-file -e "${CONVENTIONS_BASE_REF}:${register}" 2>/dev/null; then
+              "${lint[@]}" --base "${CONVENTIONS_BASE_REF}"
+            else
+              # A baseline that predates the register (the change that
+              # introduces it) has nothing to compare with, and the lint
+              # refuses an explicit --base without the register.
+              echo "::notice::CFG-CHANGE-5 not checked: the event baseline predates ${register}."
+              "${lint[@]}"
+            fi
           elif [[ "${CONVENTIONS_COMPARISON_REQUIRED}" == "false" ]]; then
             # A scheduled sweep has no change baseline; the lint compares the
             # register with its merge base with origin/main.
@@ -1417,6 +1426,9 @@ jobs:
             echo "The event comparison policy is unavailable." >&2
             exit 1
           fi
+          # Every rule the convention declares has one Enforcement summary
+          # row, and the gates that row names exist.
+          "${lint[@]}" --rule-coverage
 
       - name: Test configuration conformance corpus runner
         run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py

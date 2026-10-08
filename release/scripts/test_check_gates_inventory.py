@@ -1522,6 +1522,16 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(text),
         )
 
+    def test_missing_config_conventions_rule_coverage_is_reported(self) -> None:
+        text = self.workflow.replace(
+            '"${lint[@]}" --rule-coverage',
+            "true # Configuration conventions rule coverage disabled",
+        )
+        self.assertIn(
+            "Configuration conventions rule coverage",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_config_conformance_corpus_runner_tests_are_reported(self) -> None:
         text = self.workflow.replace(
             "run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_config_conformance.py",

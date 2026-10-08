@@ -769,9 +769,10 @@ class CiChangesTest(unittest.TestCase):
 
     def test_config_check_packages_build_the_programs_the_corpus_runs(self) -> None:
         """The corpus runner executes the registered check command of every
-        format it reaches and the commands its harness prepares with. The
-        packages whose binaries those are: the job builds them, and a change to
-        any of them, or to anything they link, runs the job."""
+        format it reaches, the commands its harness prepares with, and the
+        init commands its harness starts projects with. The packages whose
+        binaries those are: the job builds them, and a change to any of them,
+        or to anything they link, runs the job."""
         runner = config_conformance_runner()
         reached, _ = runner.partition_formats(
             runner.load_registry(Path(runner.REGISTRY))
@@ -779,7 +780,7 @@ class CiChangesTest(unittest.TestCase):
         harness = runner.load_harness(Path(runner.CORPUS) / "formats.yaml")
         commands = [str(fmt.check) for fmt in reached] + [
             command for entry in harness.values() for command in entry.get("prepare", ())
-        ]
+        ] + [entry["init"]["command"] for entry in harness.values() if "init" in entry]
         programs = {shlex.split(command)[0] for command in commands}
         binaries = {
             target["name"]: package["name"]
@@ -788,6 +789,7 @@ class CiChangesTest(unittest.TestCase):
             if "bin" in target["kind"]
         }
         self.assertIn("messagingctl", programs)
+        self.assertIn("registry-render", programs)
         self.assertLessEqual(programs, set(binaries))
         self.assertEqual({binaries[program] for program in programs}, CONFIG_CHECK_PACKAGES)
         steps = {

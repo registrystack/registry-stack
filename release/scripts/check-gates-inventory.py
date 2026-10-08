@@ -160,6 +160,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Runtime configuration conformance gate tests",
         "run: python3 -m unittest products/platform/scripts/test_check_config_conformance.py",
     ),
+    ("Configuration conventions rule coverage", '"${lint[@]}" --rule-coverage'),
     (
         "Configuration conformance corpus",
         "run: products/platform/scripts/run-config-conformance.sh --strict --bin-dir target/debug",
