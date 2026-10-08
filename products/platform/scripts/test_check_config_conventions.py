@@ -1001,14 +1001,14 @@ class IdentifierTests(ConventionsTestCase):
         }
         self.assertNoFinding(self.repo.run(), "CFG-ID-7")
 
-    def test_cfg_id_7_reports_an_exclusive_choice_told_apart_by_which_member_is_present(self) -> None:
+    def test_cfg_id_7_accepts_an_exclusive_choice_of_one_member_as_a_single_key_mapping(self) -> None:
         self.repo.project["properties"]["credential"] = {
             "type": "object",
             "additionalProperties": False,
             "properties": {"tokenRef": {"type": "string"}, "privateKeyJwt": {"type": "string"}},
             "oneOf": [{"required": ["tokenRef"]}, {"required": ["privateKeyJwt"]}],
         }
-        self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/properties/credential"))
+        self.assertNoFinding(self.repo.run(), "CFG-ID-7")
 
     def test_cfg_id_7_accepts_an_untagged_union_of_distinct_node_kinds_and_nullables(self) -> None:
         self.union([{"type": "string"}, {"type": "array", "uniqueItems": True, "items": {"type": "string"}}])
