@@ -744,6 +744,22 @@ class RehearsalEnvelopeTieTest(unittest.TestCase):
             migrated = upgrade_steps.load_document(root / "credentials.yaml")
         self.assertEqual({key: migrated[key] for key in ("apiVersion", "kind")}, envelope["to"])
 
+    def test_every_step_the_rehearsal_applies_is_a_documented_edit(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "rehearse_upgrade_for_lists", SCRIPTS / "rehearse-upgrade.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["rehearse_upgrade_for_lists"] = module
+        spec.loader.exec_module(module)
+        catalog = upgrade_steps.load_catalog()
+        for name in ("BREG_UPGRADE_STEPS", "CASEWORK_UPGRADE_STEPS",
+                     "EVIDENCE_UPGRADE_STEPS"):
+            ids = getattr(module, name)
+            self.assertTrue(ids, name)
+            for step in ids:
+                self.assertIn(step, catalog, f"{name}: {step} is not in the catalog")
+                self.assertIn("edits", catalog[step], f"{name}: {step} is not an edit")
+
 
 if __name__ == "__main__":
     unittest.main()

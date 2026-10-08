@@ -659,12 +659,13 @@ class BregLedgerTest(unittest.TestCase):
                 current["active"] = state["active"]
             return {"epoch": 1}
 
-        def journeys(side):
-            self.assertIs(side, new)
+        def steps(ids, roots, catalog=None):
+            self.assertEqual(tuple(ids), MODULE.BREG_UPGRADE_STEPS)
+            self.assertEqual(roots, {"project": breg.project})
             events.append(("journeys",))
+            return []
 
         breg.package.side_effect = package
-        breg.adopt_journeys.side_effect = journeys
         breg.write_runtime.side_effect = runtime
         breg.seed.side_effect = seed
         breg.views.return_value = {"records/1": {"domainData": {"code": "a"}}}
@@ -676,7 +677,9 @@ class BregLedgerTest(unittest.TestCase):
               unittest.mock.patch.object(MODULE, "Service"),
               unittest.mock.patch.object(MODULE, "instance_claim", side_effect=claim),
               unittest.mock.patch.object(MODULE, "load_yaml", return_value=registry),
-              unittest.mock.patch.object(MODULE, "dump_yaml")):
+              unittest.mock.patch.object(MODULE, "dump_yaml"),
+              unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
+                                         side_effect=steps)):
             MODULE.rehearse_breg(root, unittest.mock.Mock(), postgres, old, new, report)
         packages = {"old": old_package, "upgraded": upgraded_package,
                     "successor": successor_package}
@@ -815,30 +818,9 @@ class BregLedgerTest(unittest.TestCase):
                          "credential": {"type": "bearer",
                                         "tokenRef": "secret:file/journey-token-j-held"}}]})
 
-    def test_a_side_s_starter_journeys_replace_the_project_s_and_nothing_else(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            breg = self.breg(root)
-            (breg.project / "tests").mkdir(parents=True)
-            dump_json(breg.project / "registry.yaml", {"package": {"sourceRevision": "authored"}})
-            dump_json(breg.project / "tests" / "journeys.yaml", {"journeys": ["previous"]})
-
-            def run(binary: str, *arguments: str) -> object:
-                starter = Path(arguments[1])
-                (starter / "tests").mkdir(parents=True)
-                dump_json(starter / "registry.yaml", {"package": {"sourceRevision": "starter"}})
-                dump_json(starter / "tests" / "journeys.yaml", {"journeys": ["current"]})
-                return unittest.mock.Mock(stdout="")
-
-            side = unittest.mock.Mock()
-            side.label = "to"
-            side.run.side_effect = run
-            breg.adopt_journeys(side)
-            side.run.assert_called_once_with("bregctl", "init", str(root / "starter-to"))
-            self.assertEqual(load_json(breg.project / "tests" / "journeys.yaml"),
-                             {"journeys": ["current"]})
-            self.assertEqual(load_json(breg.project / "registry.yaml"),
-                             {"package": {"sourceRevision": "authored"}})
+    def test_the_journeys_step_replaces_the_starter_shortcut(self) -> None:
+        self.assertEqual(MODULE.BREG_UPGRADE_STEPS, ("breg-journeys",))
+        self.assertFalse(hasattr(MODULE.Breg, "adopt_journeys"))
 
     def author(self, root: Path, package: dict[str, Any]) -> dict[str, Any]:
         breg = self.breg(root)
@@ -908,6 +890,41 @@ class BregLedgerTest(unittest.TestCase):
 
 # JSON is YAML, so the journeys document reads without PyYAML.
 @unittest.mock.patch.object(MODULE, "load_yaml", load_json)
+class UpgradeStepsWiringTest(unittest.TestCase):
+    def test_evidence_applies_its_steps_to_project_and_target_before_packaging(self) -> None:
+        events = []
+        evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+        evidence.work = Path("work")
+        evidence.project = Path("project")
+        evidence.target = Path("target")
+        evidence.package = lambda side, output: events.append("package")
+
+        def steps(ids, roots, catalog=None):
+            self.assertEqual(tuple(ids), MODULE.EVIDENCE_UPGRADE_STEPS)
+            self.assertEqual(roots, {"project": Path("project"), "target": Path("target")})
+            events.append("steps")
+            return []
+
+        with unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
+                                        side_effect=steps):
+            evidence.upgrade(unittest.mock.Mock())
+        self.assertEqual(events, ["steps", "package"])
+
+    def test_a_step_failure_is_a_rehearsal_failure_naming_the_product(self) -> None:
+        with unittest.mock.patch.object(
+                MODULE.upgrade_steps, "apply_steps",
+                side_effect=MODULE.upgrade_steps.StepError("no file matches")):
+            with self.assertRaisesRegex(MODULE.RehearsalError, "Casework.*no file matches"):
+                MODULE.apply_upgrade_steps("Casework", ("x",), project=Path("."))
+
+    def test_manual_instructions_are_printed_not_applied(self) -> None:
+        with (unittest.mock.patch.object(MODULE.upgrade_steps, "apply_steps",
+                                         return_value=["edit the thing by hand"]),
+              unittest.mock.patch("builtins.print") as printed):
+            MODULE.apply_upgrade_steps("Evidence", ("x",), project=Path("."))
+        self.assertIn("edit the thing by hand", str(printed.call_args_list))
+
+
 class BregCredentialsTest(unittest.TestCase):
     def side(self) -> object:
         side = unittest.mock.Mock()

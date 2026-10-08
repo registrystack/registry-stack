@@ -53,6 +53,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import release_roster  # noqa: E402
+import upgrade_steps  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -107,6 +108,31 @@ HTTP_TIMEOUT_SECONDS = 30
 
 class RehearsalError(RuntimeError):
     """The rehearsal cannot continue, or the upgraded state is not intact."""
+
+
+# Documented operator steps (release/notes/config-conventions/upgrade-steps.yaml)
+# the rehearsal applies on disk after the previous release wrote state and
+# before the new binaries run. Each id must name an `edit` step. Messaging is
+# not listed: its stored package ledger names a digest an applied step changes.
+BREG_UPGRADE_STEPS = ("breg-journeys",)
+CASEWORK_UPGRADE_STEPS = ("casework-fixture-spelling", "casework-dev-clients-envelope")
+EVIDENCE_UPGRADE_STEPS = (
+    "evidence-project-envelope",
+    "evidence-question-envelope",
+    "evidence-fixture-envelope",
+    "evidence-target-governance-envelope",
+)
+
+
+def apply_upgrade_steps(product: str, ids: tuple[str, ...], **roots: Path) -> None:
+    """Apply the documented steps to the on-disk roots; report manual ones."""
+
+    try:
+        manual = upgrade_steps.apply_steps(list(ids), roots)
+    except upgrade_steps.StepError as error:
+        raise RehearsalError(f"{product} upgrade step failed: {error}") from error
+    for instruction in manual:
+        print(f"{product} manual upgrade step (not applied): {instruction}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1027,20 +1053,6 @@ class Breg:
             for journey in journeys["journeys"] for step in journey["steps"]
             if "requesterClient" in (step.get("claims") or {})})
 
-    def adopt_journeys(self, side: Side) -> None:
-        """Replace the project's journeys with the starter journeys `side` writes.
-
-        Journeys are an authored test file, not state: a release may read them
-        in a format its predecessor did not write, and an operator brings
-        them forward by hand. The registry the project describes is left as
-        the previous release authored it.
-        """
-
-        starter = self.work / f"starter-{side.label}"
-        side.run("bregctl", "init", str(starter))
-        shutil.copyfile(starter / "tests" / "journeys.yaml",
-                        self.project / "tests" / "journeys.yaml")
-
     @staticmethod
     def claims(claims: dict[str, Any]) -> dict[str, Any]:
         """Turn a journey step's claims into the access token that carries them."""
@@ -1257,7 +1269,7 @@ def rehearse_breg(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Si
     # digest, so an unchanged registry shows only as bregctl refusing the
     # rebuild as an empty plan; the operator then keeps the active package.
     predecessor_activation = "initial"
-    breg.adopt_journeys(new)
+    apply_upgrade_steps("BReg", BREG_UPGRADE_STEPS, project=breg.project)
     upgraded, upgraded_digest = breg.package(new, work / "build-upgraded", baseline=package)
     if breg_rebuild_changes(new, breg.runtime, upgraded):
         apply(upgraded, upgraded_digest)
@@ -1546,6 +1558,7 @@ def rehearse_casework(work: Path, keys: Keys, postgres: Postgres, old: Side, new
     before_counts = postgres.row_counts("casework")
     records_before = audit_record_count(casework.audit, "casework.ndjson")
 
+    apply_upgrade_steps("Casework", CASEWORK_UPGRADE_STEPS, project=casework.project)
     activation = casework.activate(new, seeded)
     losses = row_count_losses(before_counts, postgres.row_counts("casework"))
     service = Service(new, "casework", [*runtime, "serve"], work / "casework-new.log", ready)
@@ -1925,8 +1938,11 @@ class Evidence:
         """Package the unchanged target with this side's evidencectl, install
         the package, and point the operative runtime at it, the documented
         upgrade step. The audit stream, secrets, and keys stay where they are.
+        The documented authoring-file steps are applied first.
         """
 
+        apply_upgrade_steps("Evidence", EVIDENCE_UPGRADE_STEPS,
+                            project=self.project, target=self.target)
         self.package(side, self.work / "candidate-upgraded")
 
     def extract(self) -> Path:
