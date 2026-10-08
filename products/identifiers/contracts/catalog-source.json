@@ -100,6 +100,11 @@
       "reason": "Convention lint tests build throwaway schemas whose identifiers are test inputs, not Registry Stack resolver contracts."
     },
     {
+      "glob": "products/platform/scripts/test_run_config_conformance.py",
+      "classification": "fixture",
+      "reason": "Conformance runner tests build throwaway schemas whose identifiers are test inputs, not Registry Stack resolver contracts."
+    },
+    {
       "glob": "release/*.schema.json",
       "classification": "retired-product",
       "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
