@@ -111,7 +111,7 @@ pub fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
             args.project = args.legacy_project.take().or(args.project);
             suggest(args, format)
         }
-        SourceCommand::Mock(command) => crate::source_mock::run(command),
+        SourceCommand::Mock(command) => crate::source_mock::run(command, format),
     }
 }
 

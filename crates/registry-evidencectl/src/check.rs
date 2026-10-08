@@ -25,7 +25,11 @@ use std::{
 use anyhow::{Context as _, Result};
 use jsonschema::{Draft, JSONSchema};
 use registry_evidence_authoring::{
-    formats::{check_access_policy, check_question, scan_authored, QUESTION_KIND},
+    formats::{
+        check_access_policy, check_question, decode_authored, scan_authored, ACCESS_CLIENT_KIND,
+        ACCESS_POLICY_KIND, AUTHORING_PROJECT_KIND, MOCK_PLAN_KIND, QUESTION_KIND,
+        TARGET_GOVERNANCE, TARGET_GOVERNANCE_KIND, TARGET_SETTINGS, TARGET_SETTINGS_KIND,
+    },
     layout::{
         ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
         MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE,
@@ -33,16 +37,25 @@ use registry_evidence_authoring::{
     },
     parse_project_marker, PROJECT_MARKER_FILE,
 };
-use registry_platform_yaml::{Diagnostic, Document, Report, Severity, MAXIMUM_DOCUMENT_BYTES};
+use registry_platform_yaml::{
+    Diagnostic, Document, Node, NodeValue, Reader, Report, Severity, MAXIMUM_DOCUMENT_BYTES,
+};
 use serde_json::{json, Value};
 
 use crate::{
     authored::{self, Gathered},
-    authoring, build, evidence_binary,
+    authoring, build,
+    evidence_binary::{self, EVIDENCE_RUNTIME_KIND},
+    source_mock, target,
 };
 
 const RUNTIME_SCHEMA: &str =
     include_str!("../../../products/evidence/contracts/runtime.schema.yaml");
+
+/// The project directory holding deployment targets and their settings.
+const TARGETS_DIRECTORY: &str = "targets";
+/// The project directory holding materialized source mock plans.
+const MOCKS_DIRECTORY: &str = "mocks";
 
 /// A check or explain that reached its verdict: the report it writes, and
 /// the diagnostics that report carries, for the human renderer.
@@ -99,8 +112,10 @@ fn check_and_capture_target(
     let mut gathered = Gathered::default();
     read_project_marker(captured_project, &mut gathered)?;
     let inventory = inspect_project(captured_project, &mut gathered)?;
+    let aside = inspect_project_files(captured_project, &mut gathered)?;
     let mut found = gathered.report();
     if found.has_errors() {
+        found.extend(aside);
         found.set_files_checked(project_snapshot.files);
         return Err(in_project(found, captured_project, project).into());
     }
@@ -150,7 +165,7 @@ fn check_and_capture_target(
             .get("assuranceProfile")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        validate_runtime_structure(&documents.runtime)
+        validate_runtime_structure("runtime.yaml", &documents.runtime)
             .map_err(|error| target_refusal(error, target))?;
         if production && assurance_profile.as_deref() == Some("local") {
             found.extend(in_target(
@@ -201,6 +216,7 @@ fn check_and_capture_target(
         }
     }
 
+    found.extend(in_project(aside, captured_project, project));
     found.set_files_checked(project_snapshot.files + target.map_or(0, |_| TARGET_DOCUMENTS));
     if found.has_errors() || ((production || deny_warnings) && found.warning_count() > 0) {
         return Err(found.into());
@@ -728,8 +744,8 @@ fn is_operational(error: &anyhow::Error) -> bool {
 /// Hold a target's runtime document to the published runtime contract. The
 /// document is read through the shared YAML subset; its own reader decides
 /// everything else about it when the runtime starts.
-fn validate_runtime_structure(bytes: &[u8]) -> Result<()> {
-    let runtime = registry_platform_yaml::Reader::new("runtime.yaml")
+fn validate_runtime_structure(file: &str, bytes: &[u8]) -> Result<()> {
+    let runtime = Reader::new(file)
         .scan(bytes)
         .map_err(anyhow::Error::from)?
         .map_or(Value::Null, |node| node.to_json_value());
@@ -897,6 +913,15 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
         )?;
     }
     capture_access(&project_descriptor, &mut capture)?;
+    for directory in [TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
+        capture_yaml_tree_at(
+            &project_descriptor,
+            &mut capture,
+            OsStr::new(directory),
+            Path::new(directory),
+        )?;
+    }
+    capture_root_yaml(&project_descriptor, &mut capture)?;
 
     let Capture {
         root,
@@ -961,6 +986,15 @@ fn capture_directory_contents(
     relative: &Path,
     bound: Bound,
 ) -> Result<()> {
+    for name in directory_entries(directory)? {
+        let entry_relative = relative.join(&name);
+        capture_snapshot_entry_at(directory, capture, &name, &entry_relative, bound)?;
+    }
+    Ok(())
+}
+
+/// The names `directory` holds, sorted, without `.` and `..`.
+fn directory_entries(directory: &rustix::fd::OwnedFd) -> Result<Vec<OsString>> {
     let mut entries = rustix::fs::Dir::read_from(directory)
         .map_err(io::Error::from)?
         .map(|entry| {
@@ -971,9 +1005,86 @@ fn capture_directory_contents(
         .collect::<std::result::Result<Vec<_>, _>>()?;
     entries.retain(|name| name != "." && name != "..");
     entries.sort();
-    for name in entries {
-        let entry_relative = relative.join(&name);
-        capture_snapshot_entry_at(directory, capture, &name, &entry_relative, bound)?;
+    Ok(entries)
+}
+
+/// Whether a file name is a YAML file's, by its extension.
+fn is_yaml_name(name: &OsStr) -> bool {
+    matches!(
+        Path::new(name).extension().and_then(OsStr::to_str),
+        Some("yaml" | "yml")
+    )
+}
+
+/// Capture the YAML files of `targets/` or `mocks/`, at any depth, with every
+/// link there, so the check reads each YAML file by its envelope and refuses
+/// each link. Other files, such as public keys and mock response bodies, are
+/// read by the commands that use them and are not copied.
+fn capture_yaml_tree_at(
+    parent: &rustix::fd::OwnedFd,
+    capture: &mut Capture,
+    name: &OsStr,
+    relative: &Path,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, FileType};
+
+    let Some(directory) = open_snapshot_directory(parent, name, relative)? else {
+        return Ok(());
+    };
+    let destination = capture.root.join(relative);
+    fs::DirBuilder::new().mode(0o700).create(&destination)?;
+    capture.directories.push(destination);
+    for entry in directory_entries(&directory)? {
+        let entry_relative = relative.join(&entry);
+        let metadata = match rustix::fs::statat(&directory, &entry, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(rustix::io::Errno::NOENT) => continue,
+            Err(error) => {
+                return Err(io::Error::from(error)).context("inspecting project snapshot input")
+            }
+        };
+        let file_type = FileType::from_raw_mode(metadata.st_mode);
+        if file_type.is_dir() {
+            capture_yaml_tree_at(&directory, capture, &entry, &entry_relative)?;
+        } else if file_type.is_symlink() || is_yaml_name(&entry) {
+            capture_snapshot_entry_at(
+                &directory,
+                capture,
+                &entry,
+                &entry_relative,
+                Bound::ForReader,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Capture the YAML files at the project root other than the marker and the
+/// OpenAPI description, so the check can identify each by its envelope.
+fn capture_root_yaml(project: &rustix::fd::OwnedFd, capture: &mut Capture) -> Result<()> {
+    use rustix::fs::{AtFlags, FileType};
+
+    for entry in directory_entries(project)? {
+        if entry == PROJECT_MARKER_FILE || entry == OPENAPI_FILE || !is_yaml_name(&entry) {
+            continue;
+        }
+        let metadata = match rustix::fs::statat(project, &entry, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(rustix::io::Errno::NOENT) => continue,
+            Err(error) => {
+                return Err(io::Error::from(error)).context("inspecting project snapshot input")
+            }
+        };
+        if FileType::from_raw_mode(metadata.st_mode).is_dir() {
+            continue;
+        }
+        capture_snapshot_entry_at(
+            project,
+            capture,
+            &entry,
+            Path::new(&entry),
+            Bound::ForReader,
+        )?;
     }
     Ok(())
 }
@@ -1521,6 +1632,355 @@ fn inspect_project(project: &Path, gathered: &mut Gathered) -> Result<ProjectInv
         question_documents,
         source_documents,
     })
+}
+
+/// Read every YAML file under `targets/` and `mocks/`, and every YAML file
+/// at the project root other than the marker and the OpenAPI description,
+/// each identified by its envelope (CFG-CHECK-2). Problems are reported to
+/// `gathered`, except that a root file holding no format the project reads
+/// is returned as a warning, kept aside so it does not hold back the compile
+/// the check runs once nothing else is found.
+fn inspect_project_files(project: &Path, gathered: &mut Gathered) -> Result<Report> {
+    for directory in [TARGETS_DIRECTORY, MOCKS_DIRECTORY] {
+        for file in yaml_files_under(project, Path::new(directory), gathered)? {
+            let bytes = authored::read_authored_file(&project.join(&file), "project file")?;
+            gathered.read_one();
+            gathered.extend(if directory == TARGETS_DIRECTORY {
+                check_target_file(project, &file, &bytes)
+            } else {
+                check_mock_file(&file, &bytes)
+            });
+        }
+    }
+    let mut aside = Report::default();
+    for file in root_yaml_files(project)? {
+        let bytes = authored::read_authored_file(&project.join(&file), "project file")?;
+        gathered.read_one();
+        let scanned = Reader::new(&file).scan(&bytes);
+        let root = scanned.as_ref().ok().and_then(Option::as_ref);
+        if let Some((kind, action)) = root.and_then(kind_of).and_then(home_of) {
+            gathered.push(misplaced(&file, kind, "at the project root", action));
+        } else if root.and_then(|root| root.get("openapi")).is_none() {
+            aside.push(unidentified(&file, Severity::Warning));
+        }
+    }
+    Ok(aside)
+}
+
+/// The YAML files and links under `directory` of the captured project, by
+/// their names inside the project, at any depth. A link is reported to
+/// `gathered`; other files were never captured.
+fn yaml_files_under(
+    project: &Path,
+    directory: &Path,
+    gathered: &mut Gathered,
+) -> Result<Vec<String>> {
+    let path = project.join(directory);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+    };
+    if !metadata.is_dir() {
+        gathered.push(InspectionDiagnostic::at(directory, Inspection::NotPlain).diagnostic());
+        return Ok(Vec::new());
+    }
+    let mut names = fs::read_dir(&path)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<Vec<_>>>()?;
+    names.sort();
+    let mut files = Vec::new();
+    for name in names {
+        let relative = directory.join(&name);
+        let metadata = fs::symlink_metadata(project.join(&relative))?;
+        if metadata.is_dir() {
+            files.extend(yaml_files_under(project, &relative, gathered)?);
+        } else if metadata.file_type().is_symlink() || !metadata.is_file() {
+            gathered.push(InspectionDiagnostic::at(&relative, Inspection::NotPlain).diagnostic());
+        } else {
+            files.push(relative.to_string_lossy().into_owned());
+        }
+    }
+    Ok(files)
+}
+
+/// The YAML files captured at the project root, other than the marker and
+/// the OpenAPI description, by name.
+fn root_yaml_files(project: &Path) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(project)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == PROJECT_MARKER_FILE
+            || name == OPENAPI_FILE
+            || !is_yaml_name(&name)
+            || entry.file_type()?.is_dir()
+        {
+            continue;
+        }
+        files.push(name.to_string_lossy().into_owned());
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// The `kind` a scanned document declares, when it declares one as text.
+fn kind_of(root: &Node) -> Option<&str> {
+    match &root.get("kind")?.value.value {
+        NodeValue::String(text) => Some(text.text.as_str()),
+        _ => None,
+    }
+}
+
+/// An Evidence format by its kind, with the change that puts a file of it
+/// where the project reads it.
+fn home_of(kind: &str) -> Option<(&'static str, &'static str)> {
+    [
+        (
+            AUTHORING_PROJECT_KIND,
+            "Keep one evidence-project.yaml, at the project root, and remove this copy.",
+        ),
+        (
+            QUESTION_KIND,
+            "Move the file into questions/, named by the question id.",
+        ),
+        (
+            ACCESS_POLICY_KIND,
+            "Move the file into access/policies/, named by the policy id.",
+        ),
+        (ACCESS_CLIENT_KIND, "Move the file into access/clients/."),
+        (
+            TARGET_GOVERNANCE_KIND,
+            "Move the file into a target directory under targets/, named governance.yaml.",
+        ),
+        (
+            TARGET_SETTINGS_KIND,
+            "Move the file into a target directory under targets/, named settings.yaml.",
+        ),
+        (
+            EVIDENCE_RUNTIME_KIND,
+            "Move the file into a target directory under targets/, named runtime.yaml.",
+        ),
+        (MOCK_PLAN_KIND, "Move the file into mocks/."),
+    ]
+    .into_iter()
+    .find(|(known, _)| *known == kind)
+}
+
+/// A file holding an Evidence format somewhere the project does not read it.
+fn misplaced(file: &str, kind: &str, place: &str, action: &str) -> Diagnostic {
+    authored::file_diagnostic(
+        Severity::Error,
+        "evidence.project.misplaced-file",
+        None,
+        file,
+        "/kind",
+        &format!("an {kind} document does not belong {place}"),
+        action,
+    )
+}
+
+/// A YAML file in the project that declares no format the project reads.
+fn unidentified(file: &str, severity: Severity) -> Diagnostic {
+    authored::file_diagnostic(
+        severity,
+        "evidence.project.unidentified-file",
+        None,
+        file,
+        "",
+        "the file has no apiVersion and kind of a format the Evidence project reads",
+        "Add the apiVersion and kind lines of the format the file holds, or move the file out of the project.",
+    )
+}
+
+/// Check one YAML file under `targets/`: target settings, governance, or a
+/// runtime document, by its kind, or by its name when it declares none.
+fn check_target_file(project: &Path, file: &str, bytes: &[u8]) -> Report {
+    let scanned = Reader::new(file).scan(bytes);
+    let kind = scanned
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .and_then(kind_of);
+    let name = Path::new(file)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default();
+    match kind {
+        Some(TARGET_SETTINGS_KIND) => return check_settings_file(project, file, bytes),
+        Some(TARGET_GOVERNANCE_KIND) => return check_governance_file(file, bytes),
+        Some(EVIDENCE_RUNTIME_KIND) => return check_runtime_file(file, bytes),
+        _ => {}
+    }
+    if let Some((kind, action)) = kind.and_then(home_of) {
+        return Report::new(vec![misplaced(file, kind, "under targets/", action)]);
+    }
+    match (name, scanned) {
+        ("settings.yaml", _) => check_settings_file(project, file, bytes),
+        ("governance.yaml", _) => check_governance_file(file, bytes),
+        ("runtime.yaml", _) => check_runtime_file(file, bytes),
+        (_, Err(report)) => report,
+        (_, Ok(_)) => Report::new(vec![unidentified(file, Severity::Error)]),
+    }
+}
+
+/// Check one YAML file under `mocks/` as a mock plan. Its references to the
+/// OpenAPI description and response bodies are checked by
+/// `evidencectl source mock check`.
+fn check_mock_file(file: &str, bytes: &[u8]) -> Report {
+    let kind = Reader::new(file)
+        .scan(bytes)
+        .ok()
+        .flatten()
+        .and_then(|root| kind_of(&root).and_then(home_of));
+    match kind {
+        Some((kind, action)) if kind != MOCK_PLAN_KIND => {
+            Report::new(vec![misplaced(file, kind, "under mocks/", action)])
+        }
+        _ => source_mock::check_plan_document(file, bytes),
+    }
+}
+
+/// Check target settings as `target new` reads them, each problem placed at
+/// the member it names.
+fn check_settings_file(project: &Path, file: &str, bytes: &[u8]) -> Report {
+    const ACTION: &str = "Correct the named member of the target settings so it holds the closed deployment governance and runtime shapes, then check again.";
+    let decoded = match decode_authored::<target::TargetSettings>(file, bytes, &TARGET_SETTINGS) {
+        Ok(decoded) => decoded,
+        Err(report) => return report,
+    };
+    let document = &decoded.document;
+    let mut found = document.warnings();
+    let local = decoded
+        .value
+        .governance
+        .get("assuranceProfile")
+        .and_then(Value::as_str)
+        == Some("local");
+    let mut refused = Vec::new();
+    if let Err(report) = document.decode_at::<build::TargetGovernance>("/governance") {
+        refused.extend(report.into_diagnostics());
+    }
+    if let Err(report) = document.decode_at::<target::TargetRuntime>("/runtime") {
+        refused.extend(report.into_diagnostics());
+    }
+    // The decodes repeat the document's warnings, already reported above.
+    // A local target's runtime may leave out the paths `target new --local`
+    // fills; whether anything is still missing is judged once they are.
+    refused.retain(|diagnostic| {
+        diagnostic.severity == Severity::Error
+            && !(local && diagnostic.code == "config.missing-key")
+    });
+    if !refused.is_empty() {
+        found.extend(Report::new(refused));
+        return found;
+    }
+    let Err(error) = target::validate_project_settings(
+        project,
+        &decoded.value.governance,
+        &decoded.value.runtime,
+    ) else {
+        return found;
+    };
+    let diagnostic =
+        if let Some(diagnostic) = governance_diagnostic(document, "/governance", &error) {
+            diagnostic
+        } else if let Some(settings) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<target::SettingsDiagnostic>())
+        {
+            document.diagnostic_at_value(
+                Severity::Error,
+                "evidence.target-settings.invalid",
+                &settings.pointer,
+                &settings.message,
+                ACTION,
+            )
+        } else {
+            document.diagnostic_at_value(
+            Severity::Error,
+            "evidence.target-settings.invalid",
+            "",
+            "the target settings do not hold the closed deployment governance and runtime shapes",
+            ACTION,
+        )
+        };
+    found.push(diagnostic);
+    found
+}
+
+/// Check target governance as `--target` reads it.
+fn check_governance_file(file: &str, bytes: &[u8]) -> Report {
+    let decoded = match decode_authored::<build::TargetGovernance>(file, bytes, &TARGET_GOVERNANCE)
+    {
+        Ok(decoded) => decoded,
+        Err(report) => return report,
+    };
+    let mut found = decoded.document.warnings();
+    let document = decoded.document;
+    if let Err(error) = decoded.value.into_bundle() {
+        found.push(
+            governance_diagnostic(&document, "", &error).unwrap_or_else(|| {
+                document.diagnostic_at_value(
+                    Severity::Error,
+                    "evidence.target.incomplete",
+                    "",
+                    "the deployment governance does not match the closed offline validation contract",
+                    target_action(""),
+                )
+            }),
+        );
+    }
+    found
+}
+
+/// The governance refusal in `error`, placed in `document` below `base`,
+/// the pointer of the governance mapping.
+fn governance_diagnostic(
+    document: &Document,
+    base: &str,
+    error: &anyhow::Error,
+) -> Option<Diagnostic> {
+    let refused = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<build::TargetDocumentDiagnostic>())?;
+    let pointer = refused
+        .path
+        .split_once(':')
+        .map_or("", |(_, pointer)| pointer);
+    Some(document.diagnostic_at_value(
+        Severity::Error,
+        refused.code,
+        &format!("{base}{pointer}"),
+        &refused.message,
+        target_action(refused.code),
+    ))
+}
+
+/// Check a deployment runtime document against the published runtime
+/// contract, as `--target` does, without resolving any reference in it.
+fn check_runtime_file(file: &str, bytes: &[u8]) -> Report {
+    match validate_runtime_structure(file, bytes) {
+        Ok(()) => Report::default(),
+        Err(error) => {
+            if let Some(report) = authored::report_in(&error) {
+                return report.clone();
+            }
+            let pointer = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<RuntimeStructureDiagnostic>())
+                .map_or_else(String::new, |runtime| runtime.pointer.clone());
+            Report::new(vec![authored::file_diagnostic(
+                Severity::Error,
+                "evidence.target.runtime-structure",
+                None,
+                file,
+                &pointer,
+                &error.to_string(),
+                target_action(""),
+            )])
+        }
+    }
 }
 
 /// A read of one authored file: the document as a value and the warnings
@@ -2363,6 +2823,191 @@ factSchema: schemas/record-status-facts.schema.yaml
         }
     }
 
+    /// A project with a marker, an empty questions directory, and `files`.
+    fn project_with(files: &[(&str, &[u8])]) -> tempfile::TempDir {
+        let temporary = temporary();
+        put_marker(temporary.path());
+        fs::create_dir(temporary.path().join("questions")).unwrap();
+        for (file, bytes) in files {
+            let path = temporary.path().join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        temporary
+    }
+
+    fn starter_settings() -> String {
+        fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/breg/evidence/starter/targets/local/settings.yaml"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn target_settings_in_the_project_are_read_by_their_envelope() {
+        const SETTINGS: &str = "targets/local/settings.yaml";
+        let clean = project_with(&[(SETTINGS, starter_settings().as_bytes())]);
+        let checked = check(clean.path(), None, false, false).unwrap();
+        assert_eq!(
+            sites(&checked.diagnostics, clean.path()),
+            [(
+                "evidence.question.missing".to_owned(),
+                "questions".to_owned(),
+                String::new()
+            )]
+        );
+
+        for (edit, code, path) in [
+            (
+                starter_settings() + "formatVersion: 1\n",
+                "config.removed-key",
+                "/formatVersion",
+            ),
+            (
+                starter_settings().replace("assuranceProfile: local", "assuranceProfile: staging"),
+                "evidence.target.assurance-profile",
+                "/governance/assuranceProfile",
+            ),
+            (
+                starter_settings().replace("kind: EvidenceRuntimeConfig", "kind: Elsewhere"),
+                "evidence.target-settings.invalid",
+                "/runtime/kind",
+            ),
+        ] {
+            let project = project_with(&[(SETTINGS, edit.as_bytes())]);
+            let report = refused(check(project.path(), None, false, false).unwrap_err());
+            assert!(
+                reports(&report, project.path(), code, SETTINGS, path),
+                "{:?}",
+                sites(&report, project.path())
+            );
+            let placed = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap();
+            assert!(placed.source.as_ref().unwrap().line.is_some());
+        }
+    }
+
+    #[test]
+    fn a_local_settings_document_may_leave_out_the_paths_target_new_fills() {
+        let settings = starter_settings()
+            .replace("  package:\n    root: /absolute/path/to/package\n", "")
+            .replace(
+                "  audit:\n    path: /absolute/path/to/evidence/audit/evidence.jsonl\n",
+                "",
+            );
+        assert!(!settings.contains("/absolute/path/to/package"));
+        let project = project_with(&[("targets/local/settings.yaml", settings.as_bytes())]);
+        let checked = check(project.path(), None, false, false).unwrap();
+        assert_eq!(checked.diagnostics.error_count(), 0);
+    }
+
+    #[test]
+    fn deployment_target_files_in_the_project_are_read_and_links_refused() {
+        let temporary = project_with(&[]);
+        let project = temporary.path();
+        let mut bom = b"\xEF\xBB\xBF".to_vec();
+        reference_target(&project.join("targets/production"), |governance| {
+            bom.extend_from_slice(governance.as_bytes());
+            governance
+        });
+        fs::write(project.join("targets/production/governance.yaml"), &bom).unwrap();
+        fs::write(
+            project.join("targets/production/public-keys/unread.jwk.json"),
+            "not a key",
+        )
+        .unwrap();
+        let checked = check(project, None, false, false).unwrap();
+        assert_eq!(checked.diagnostics.error_count(), 0);
+
+        symlink(
+            project.join("targets/production/runtime.yaml"),
+            project.join("targets/linked.yaml"),
+        )
+        .unwrap();
+        let report = refused(check(project, None, false, false).unwrap_err());
+        assert!(reports(
+            &report,
+            project,
+            "evidence.project.not-plain-file",
+            "targets/linked.yaml",
+            ""
+        ));
+    }
+
+    #[test]
+    fn a_file_the_project_does_not_read_where_it_is_is_named() {
+        let question = question("id: misplaced\n");
+        let project = project_with(&[
+            ("targets/local/question.yaml", question.as_bytes()),
+            ("targets/local/notes.yml", b"note: kept by hand\n"),
+            ("mocks/source.yaml", b"openapi: ../source.openapi.yaml\n"),
+        ]);
+        let report = refused(check(project.path(), None, false, false).unwrap_err());
+        let sites = sites(&report, project.path());
+        for (code, file, path) in [
+            (
+                "evidence.project.misplaced-file",
+                "targets/local/question.yaml",
+                "/kind",
+            ),
+            (
+                "evidence.project.unidentified-file",
+                "targets/local/notes.yml",
+                "",
+            ),
+            ("config.missing-envelope", "mocks/source.yaml", ""),
+        ] {
+            assert!(
+                sites
+                    .iter()
+                    .any(|site| site.0 == code && site.1 == file && site.2 == path),
+                "{code} {file}: {sites:?}"
+            );
+        }
+        let misplaced = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.project.misplaced-file")
+            .unwrap();
+        assert_eq!(misplaced.source.as_ref().unwrap().line, Some(2));
+    }
+
+    #[test]
+    fn a_foreign_yaml_file_at_the_root_is_a_warning_and_the_check_goes_on() {
+        let project = project_with(&[
+            ("notes.yaml", b"owner: team\n"),
+            (
+                "openapi-copy.yaml",
+                b"openapi: 3.1.0\ninfo: {title: t, version: '1'}\npaths: {}\n",
+            ),
+        ]);
+        let checked = check(project.path(), None, false, false).unwrap();
+        let sites = sites(&checked.diagnostics, project.path());
+        assert!(sites.contains(&(
+            "evidence.project.unidentified-file".to_owned(),
+            "notes.yaml".to_owned(),
+            String::new()
+        )));
+        assert!(!sites.iter().any(|site| site.1 == "openapi-copy.yaml"));
+        assert_eq!(checked.diagnostics.error_count(), 0);
+        assert!(check(project.path(), None, false, true).is_err());
+
+        let marker = registry_evidence_authoring::default_project_marker_document();
+        let copied = project_with(&[("evidence-project.yml", marker.as_bytes())]);
+        let report = refused(check(copied.path(), None, false, false).unwrap_err());
+        assert!(reports(
+            &report,
+            copied.path(),
+            "evidence.project.misplaced-file",
+            "evidence-project.yml",
+            "/kind"
+        ));
+    }
+
     #[test]
     fn missing_declared_asset_is_a_warning_until_warnings_are_denied() {
         let temporary = temporary();
@@ -2669,7 +3314,7 @@ factSchema: schemas/record-status-facts.schema.yaml
         let runtime = include_bytes!(
             "../../../products/evidence/reference/deployment-targets/environments/production/evidence/runtime.yaml"
         );
-        validate_runtime_structure(runtime).unwrap();
+        validate_runtime_structure("runtime.yaml", runtime).unwrap();
     }
 
     #[test]
@@ -2681,7 +3326,7 @@ factSchema: schemas/record-status-facts.schema.yaml
             "kind: EvidenceRuntimeConfig\n",
             "kind: EvidenceRuntimeConfig\nunknown: true\n",
         );
-        let error = validate_runtime_structure(runtime.as_bytes()).unwrap_err();
+        let error = validate_runtime_structure("runtime.yaml", runtime.as_bytes()).unwrap_err();
         assert!(format!("{error:#}").contains("published runtime contract"));
     }
 }

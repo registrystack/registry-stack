@@ -265,7 +265,6 @@ const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
     &["client", "contracts", "fetch"],
     &["source", "mock", "serve"],
     &["source", "mock", "generate"],
-    &["source", "mock", "check"],
     &["source", "detach"],
     &["target", "new"],
     &["request", "prepare"],
@@ -1351,6 +1350,7 @@ mod tests {
         "source diff",
         "source import",
         "source update",
+        "source mock check",
         "target explain",
         "tooling editor",
     ];

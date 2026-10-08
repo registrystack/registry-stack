@@ -84,7 +84,7 @@ pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCo
     match command {
         SourceCommand::Add(args) => source_add::run(args, format),
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args), format),
-        SourceCommand::Mock(command) => source_mock::run(command),
+        SourceCommand::Mock(command) => source_mock::run(command, format),
         SourceCommand::Diff(args) => diff(args, format),
         SourceCommand::Import(args) => apply(args, "source import", format),
         SourceCommand::Update(args) => apply(args, "source update", format),

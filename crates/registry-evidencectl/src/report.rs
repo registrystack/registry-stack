@@ -13,7 +13,7 @@ use std::io::Write as _;
 use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::{Map, Value};
 
-/// The operation completed. A report may still carry findings or an
+/// The operation completed. A report may still carry warnings or an
 /// incomplete status; the exit class says the command did what was asked.
 pub(crate) const SUCCESS_EXIT: u8 = 0;
 /// The command refused authored, configuration, or selected input, or its
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "carries diagnostics")]
     fn a_refused_report_without_diagnostics_is_a_programming_error() {
-        let _ = refused("check", "refused", json!({"findings": []}));
+        let _ = refused("check", "refused", json!({"diagnostics": []}));
     }
 
     #[test]

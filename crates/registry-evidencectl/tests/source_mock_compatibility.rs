@@ -669,6 +669,53 @@ fn edited_materialized_bytes_are_authoritative_and_snapshotted_once() {
 }
 
 #[test]
+fn source_mock_check_reports_json_diagnostics() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    copy_fixture_tree(temporary.path());
+    assert!(run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--openapi",
+            "awkward.openapi.yaml",
+            "--output",
+            "mocks/source.yaml",
+        ],
+    )
+    .status
+    .success());
+    let checked = run(
+        temporary.path(),
+        &["--format", "json", "source", "mock", "check"],
+    );
+    assert_eq!(checked.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout).expect("json report");
+    assert_eq!(report["diagnostics"], serde_json::json!([]));
+    assert!(report.get("findings").is_none());
+
+    let plan = temporary.path().join("mocks/source.yaml");
+    let written = fs::read_to_string(&plan).expect("plan");
+    fs::write(&plan, format!("{written}version: 1\n")).expect("plan edit");
+    let refused = run(
+        temporary.path(),
+        &["--format", "json", "source", "mock", "check"],
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&refused.stdout).expect("json report");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "config.removed-key"
+                && diagnostic["path"] == "/version"
+                && diagnostic["source"]["file"] == "mocks/source.yaml"
+        }),
+        "{report}"
+    );
+}
+
+#[test]
 fn invalid_manual_edits_report_no_authored_value() {
     let temporary = tempfile::tempdir().expect("tempdir");
     copy_fixture_tree(temporary.path());

@@ -32,7 +32,6 @@ fn assert_json_format_refusal(arguments: &[&str], expected_command: &str) {
 const HUMAN_ONLY_COMMANDS: &[(&str, &[&str])] = &[
     ("target new", &["target", "new", "target", "--local"]),
     ("source mock generate", &["source", "mock", "generate"]),
-    ("source mock check", &["source", "mock", "check"]),
     ("source mock serve", &["source", "mock", "serve"]),
     ("source detach", &["source", "detach", "records"]),
     (

@@ -24,9 +24,15 @@ use std::{
 use anyhow::{anyhow, bail, Context as _, Result};
 use chrono::NaiveDate;
 use clap::{Args, Subcommand};
-use registry_evidence_authoring::openapi::types::OperationKey;
+use registry_evidence_authoring::{
+    formats::{decode_authored, MOCK_PLAN},
+    openapi::types::OperationKey,
+};
 use registry_platform_crypto::parse_json_strict;
-use serde_json::Value;
+use registry_platform_yaml::{Report, Severity};
+use serde_json::{json, Value};
+
+use crate::{authored, report, OutputFormat};
 
 use self::{
     files::PublicationFile,
@@ -169,7 +175,7 @@ pub struct CheckArgs {
     legacy_project: Option<PathBuf>,
 }
 
-pub fn run(command: MockCommand) -> Result<ExitCode> {
+pub fn run(command: MockCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
         MockCommand::Serve(mut args) => {
             args.project = args.legacy_project.take().or(args.project);
@@ -181,7 +187,7 @@ pub fn run(command: MockCommand) -> Result<ExitCode> {
         }
         MockCommand::Check(mut args) => {
             args.project = args.legacy_project.take().or(args.project);
-            check(args)
+            check(args, format)
         }
     }
 }
@@ -716,7 +722,10 @@ fn restore_generation_inputs(
     Ok(generation)
 }
 
-fn check(args: CheckArgs) -> Result<ExitCode> {
+/// What corrects a mock plan that is refused.
+const PLAN_ACTION: &str = "Correct the mock plan, the OpenAPI description it names, or its response bodies as the message says, then rerun evidencectl source mock check.";
+
+fn check(args: CheckArgs, format: OutputFormat) -> Result<ExitCode> {
     let root = project_root(args.project.as_deref())?;
     let config = normal_relative(
         args.config
@@ -724,13 +733,76 @@ fn check(args: CheckArgs) -> Result<ExitCode> {
             .unwrap_or_else(|| Path::new(DEFAULT_CONFIG)),
         "--config",
     )?;
-    let checked = load_checked_plan(&root, &config, false)?;
-    println!(
-        "Mock plan valid: operations={} cases={}",
-        checked.plan.operations.len(),
-        checked.routes.len()
-    );
+    let base = args.project.as_deref().unwrap_or_else(|| Path::new(""));
+    let checked = load_checked_plan(&root, &config, false)
+        .map_err(|error| plan_refusal(error, &config, base))?;
+    match format {
+        OutputFormat::Human => println!(
+            "Mock plan valid: operations={} cases={}",
+            checked.plan.operations.len(),
+            checked.routes.len()
+        ),
+        OutputFormat::Json => report::print(&report::success(
+            "source mock check",
+            "valid",
+            json!({
+                "config": base.join(&config),
+                "operations": checked.plan.operations.len(),
+                "cases": checked.routes.len(),
+                "diagnostics": [],
+            }),
+        ))?,
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The refusal a mock plan check raised, as the report of every problem it
+/// found, each file named from `base`, the project path as given. The
+/// reader's own report is kept; any other refusal is one diagnostic naming
+/// the plan. An operational failure is returned unchanged.
+fn plan_refusal(error: anyhow::Error, config: &Path, base: &Path) -> anyhow::Error {
+    let found = if let Some(found) = authored::report_in(&error) {
+        found.clone()
+    } else if error
+        .chain()
+        .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+    {
+        return error;
+    } else {
+        let mut found = Report::new(vec![authored::file_diagnostic(
+            Severity::Error,
+            "evidence.mock-plan.invalid",
+            None,
+            &config.to_string_lossy(),
+            "",
+            &error.to_string(),
+            PLAN_ACTION,
+        )]);
+        found.set_files_checked(1);
+        found
+    };
+    authored::rebase(found, base).into()
+}
+
+/// Check one mock plan read from a project: the reader's diagnostics, then
+/// the plan's own structure. The OpenAPI description and the response bodies
+/// the plan names are read by `source mock check`, not here.
+pub(crate) fn check_plan_document(file: &str, bytes: &[u8]) -> Report {
+    let decoded = match decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN) {
+        Ok(decoded) => decoded,
+        Err(found) => return found,
+    };
+    let mut found = decoded.document.warnings();
+    if let Err(error) = plan::validate_plan(&decoded.value) {
+        found.push(decoded.document.diagnostic_at_value(
+            Severity::Error,
+            "evidence.mock-plan.invalid",
+            "",
+            &error.to_string(),
+            PLAN_ACTION,
+        ));
+    }
+    found
 }
 
 struct CheckedPlan {

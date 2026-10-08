@@ -17,7 +17,7 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use registry_evidence_authoring::{
-    formats::{finding_action, finding_code, scan_authored},
+    formats::{finding_action, finding_code},
     Finding,
 };
 use registry_platform_yaml::{
@@ -162,11 +162,16 @@ fn placed(mut diagnostic: Diagnostic, root: &Node) -> Diagnostic {
 /// A file that cannot be read or scanned now yields no positions; the
 /// diagnostics that name it are reported unplaced, as they were raised.
 fn scanned(root: &Path, file: &str) -> Option<Node> {
-    if !file.ends_with(".yaml") {
+    if !(file.ends_with(".yaml") || file.ends_with(".yml")) {
         return None;
     }
     let bytes = read_authored_file(&root.join(file), "authored file").ok()?;
-    scan_authored(file, &bytes).ok().flatten()
+    // Positions only: the reader without a substitution hook, so a runtime
+    // document's references stay plain text and the file still scans.
+    registry_platform_yaml::Reader::new(file)
+        .scan(&bytes)
+        .ok()
+        .flatten()
 }
 
 /// The report with every unplaced diagnostic about a YAML file inside `root`

@@ -106,9 +106,9 @@ pub(crate) struct ExplainArgs {
 /// document's `apiVersion`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct TargetSettings {
-    governance: Value,
-    runtime: Value,
+pub(crate) struct TargetSettings {
+    pub(crate) governance: Value,
+    pub(crate) runtime: Value,
     #[serde(default)]
     public_keys: BTreeMap<String, PathBuf>,
 }
@@ -129,7 +129,7 @@ struct TargetSettings {
 // The fields state which keys the document may carry and which it must carry;
 // deserializing is the whole check, so nothing reads them afterwards.
 #[allow(dead_code)]
-struct TargetRuntime {
+pub(crate) struct TargetRuntime {
     api_version: String,
     kind: String,
     package: Value,
@@ -456,6 +456,12 @@ fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> 
         bail!("--local requires governance assuranceProfile local; production paths are never inferred");
     }
     let project = local_project_root(project)?;
+    fill_local_paths_under(&project, runtime)
+}
+
+/// Fill the runtime paths a local target takes from its project, under
+/// `project`, wherever the settings leave them out.
+fn fill_local_paths_under(project: &Path, runtime: &mut Value) -> Result<()> {
     let secrets = project.join(crate::authoring::SECRETS_DIRECTORY);
     let local = project.join(".evidence/dev");
     for (components, path) in [
@@ -464,19 +470,44 @@ fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> 
         (vec!["audit", "path"], local.join("audit/evidence.jsonl")),
     ] {
         let mut node = &mut *runtime;
+        let mut pointer = String::from("/runtime");
         for component in &components[..components.len() - 1] {
             node = node
                 .as_object_mut()
-                .context("local runtime path sections must be mappings")?
+                .ok_or_else(|| local_path_section(&pointer))?
                 .entry((*component).to_owned())
                 .or_insert_with(|| serde_json::json!({}));
+            pointer = format!("{pointer}/{component}");
         }
         node.as_object_mut()
-            .context("local runtime path sections must be mappings")?
+            .ok_or_else(|| local_path_section(&pointer))?
             .entry(components[components.len() - 1].to_owned())
             .or_insert_with(|| Value::String(path.to_string_lossy().into_owned()));
     }
     Ok(())
+}
+
+fn local_path_section(pointer: &str) -> SettingsDiagnostic {
+    SettingsDiagnostic::at(
+        pointer,
+        "a local target settings runtime section holding a filled path must be a mapping",
+    )
+}
+
+/// Hold a settings document found in a project to what `target new` accepts
+/// from it. A local settings document may leave out the runtime paths
+/// `target new --local` fills, so they are filled under the project before
+/// the check, as that command fills them.
+pub(crate) fn validate_project_settings(
+    project: &Path,
+    governance: &Value,
+    runtime: &Value,
+) -> Result<()> {
+    let mut runtime = runtime.clone();
+    if governance.get("assuranceProfile").and_then(Value::as_str) == Some("local") {
+        fill_local_paths_under(project, &mut runtime)?;
+    }
+    validate_settings_documents(governance, &runtime)
 }
 
 /// Resolve the editable project a local target draws its paths and keys from.
@@ -493,26 +524,71 @@ fn local_project_root(project: &Path) -> Result<PathBuf> {
     Ok(project)
 }
 
-fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()> {
-    let governance = governance
-        .as_object()
-        .ok_or_else(|| anyhow!("target settings governance must be a mapping"))?;
-    let runtime = runtime
-        .as_object()
-        .ok_or_else(|| anyhow!("target settings runtime must be a mapping"))?;
+/// A target settings member that does not hold what a deployment target
+/// needs, by its JSON pointer in the settings document. The message names the
+/// member and never repeats its value.
+#[derive(Debug)]
+pub(crate) struct SettingsDiagnostic {
+    pub(crate) pointer: String,
+    pub(crate) message: String,
+}
+
+impl SettingsDiagnostic {
+    fn at(pointer: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            pointer: pointer.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for SettingsDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SettingsDiagnostic {}
+
+/// Hold settings governance and runtime to the closed shapes a deployment
+/// target needs. A refusal is, or carries as its outermost context, the
+/// [`SettingsDiagnostic`] naming the member at fault.
+pub(crate) fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()> {
+    const GOVERNANCE_SHAPE: &str =
+        "target settings governance is not the closed deployment governance shape";
+    let governance = governance.as_object().ok_or_else(|| {
+        SettingsDiagnostic::at(
+            "/governance",
+            "target settings governance must be a mapping",
+        )
+    })?;
+    let runtime = runtime.as_object().ok_or_else(|| {
+        SettingsDiagnostic::at("/runtime", "target settings runtime must be a mapping")
+    })?;
     // Validate governance through the same closed type the consumers deserialize
     // it with (build::TargetGovernance), so `target new` refuses exactly what
     // `target explain`, `build --target`, and `fixtures run --target` refuse and
     // never leaves behind a create-only directory those commands cannot open.
     serde_json::from_value::<build::TargetGovernance>(Value::Object(governance.clone()))
-        .context("target settings governance is not the closed deployment governance shape")?
+        .map_err(|error| {
+            anyhow::Error::new(error)
+                .context(SettingsDiagnostic::at("/governance", GOVERNANCE_SHAPE))
+        })?
         .into_bundle()
-        .context("target settings governance is not the closed deployment governance shape")?;
+        .context(SettingsDiagnostic::at("/governance", GOVERNANCE_SHAPE))?;
     if runtime.get("apiVersion").and_then(Value::as_str) != Some(EVIDENCE_RUNTIME_API_VERSION) {
-        bail!("target settings runtime.apiVersion must be {EVIDENCE_RUNTIME_API_VERSION}");
+        return Err(SettingsDiagnostic::at(
+            "/runtime/apiVersion",
+            format!("target settings runtime.apiVersion must be {EVIDENCE_RUNTIME_API_VERSION}"),
+        )
+        .into());
     }
     if runtime.get("kind").and_then(Value::as_str) != Some(EVIDENCE_RUNTIME_KIND) {
-        bail!("target settings runtime.kind must be {EVIDENCE_RUNTIME_KIND}");
+        return Err(SettingsDiagnostic::at(
+            "/runtime/kind",
+            format!("target settings runtime.kind must be {EVIDENCE_RUNTIME_KIND}"),
+        )
+        .into());
     }
     for section in [
         "service",
@@ -524,7 +600,7 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
         "signing",
         "authorityProfiles",
     ] {
-        require_nonempty_mapping(governance, section, "target settings governance")?;
+        require_nonempty_mapping(governance, section, "governance")?;
     }
     if runtime
         .get("package")
@@ -532,7 +608,11 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
         .and_then(Value::as_str)
         .is_none_or(str::is_empty)
     {
-        bail!("target settings runtime.package.root must be a string");
+        return Err(SettingsDiagnostic::at(
+            "/runtime/package/root",
+            "target settings runtime.package.root must be a string",
+        )
+        .into());
     }
     for section in [
         "listener",
@@ -541,23 +621,37 @@ fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()
         "audit",
         "outboundTls",
     ] {
-        require_nonempty_mapping(runtime, section, "target settings runtime")?;
+        require_nonempty_mapping(runtime, section, "runtime")?;
     }
     // Validate the runtime document through the closed mirror of the shape the
     // runtime loads, so `target new` refuses an unknown or misspelled key here
     // rather than writing a runtime.yaml the deployment refuses at startup.
-    serde_json::from_value::<TargetRuntime>(Value::Object(runtime.clone()))
-        .context("target settings runtime is not the closed Version 1 runtime shape")?;
+    serde_json::from_value::<TargetRuntime>(Value::Object(runtime.clone())).map_err(|error| {
+        anyhow::Error::new(error).context(SettingsDiagnostic::at(
+            "/runtime",
+            "target settings runtime is not the closed Version 1 runtime shape",
+        ))
+    })?;
     let mut secret_references = BTreeSet::new();
-    collect_secret_references(&Value::Object(governance.clone()), &mut secret_references)?;
-    collect_secret_references(&Value::Object(runtime.clone()), &mut secret_references)?;
+    collect_secret_references_at(
+        &Value::Object(governance.clone()),
+        "/governance",
+        &mut secret_references,
+    )?;
+    collect_secret_references_at(
+        &Value::Object(runtime.clone()),
+        "/runtime",
+        &mut secret_references,
+    )?;
     Ok(())
 }
 
+/// Refuse a settings `document` (`governance` or `runtime`) whose `section`
+/// is absent, empty, or not a mapping.
 fn require_nonempty_mapping(
     object: &serde_json::Map<String, Value>,
     section: &str,
-    label: &str,
+    document: &str,
 ) -> Result<()> {
     if object
         .get(section)
@@ -566,7 +660,11 @@ fn require_nonempty_mapping(
     {
         return Ok(());
     }
-    bail!("{label}.{section} must be a mapping");
+    Err(SettingsDiagnostic::at(
+        format!("/{document}/{section}"),
+        format!("target settings {document}.{section} must be a mapping"),
+    )
+    .into())
 }
 
 fn explain(args: ExplainArgs) -> Result<ExitCode> {
@@ -778,23 +876,38 @@ fn public_key_path(value: &str) -> Result<String> {
 }
 
 fn collect_secret_references(value: &Value, references: &mut BTreeSet<String>) -> Result<()> {
+    collect_secret_references_at(value, "", references)
+}
+
+/// Collect the logical secret names `value` references, refusing the first
+/// malformed reference by its JSON pointer below `pointer`.
+fn collect_secret_references_at(
+    value: &Value,
+    pointer: &str,
+    references: &mut BTreeSet<String>,
+) -> Result<()> {
     match value {
         Value::String(value) => {
             if let Some(reference) = value.strip_prefix(SECRET_PREFIX) {
                 if !valid_secret_name(reference) {
-                    bail!("target secret reference has invalid syntax");
+                    return Err(SettingsDiagnostic::at(
+                        pointer,
+                        "target secret reference has invalid syntax",
+                    )
+                    .into());
                 }
                 references.insert(reference.to_owned());
             }
         }
         Value::Array(values) => {
-            for value in values {
-                collect_secret_references(value, references)?;
+            for (index, value) in values.iter().enumerate() {
+                collect_secret_references_at(value, &format!("{pointer}/{index}"), references)?;
             }
         }
         Value::Object(values) => {
-            for value in values.values() {
-                collect_secret_references(value, references)?;
+            for (key, value) in values {
+                let escaped = key.replace('~', "~0").replace('/', "~1");
+                collect_secret_references_at(value, &format!("{pointer}/{escaped}"), references)?;
             }
         }
         _ => {}
