@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- BREAKING: the authored files follow the Registry Stack configuration
+  conventions and are read by the shared configuration reader, which reports
+  every problem at its line and column with a JSON Pointer and a next step.
+  `scheduling.yaml` is `kind: SchedulingProject` at
+  `id.registrystack.org/formats/scheduling/project/v1alpha1`, names itself
+  under `project` with a text `version`, and requires `channels`;
+  `maxRecipients`, `minutesBefore`, and `maxPerCaller` are `maximumRecipients`,
+  `offsetMinutes`, and `maximumPerCaller`. `records.yaml` carries a
+  `SchedulingRecords` envelope, fixtures move to
+  `id.registrystack.org/formats/scheduling/fixture/v1alpha1`, a units policy
+  and a fixture expectation are tagged by `type` with kebab-case values, and
+  an empty restricting list is refused. Each old spelling is refused with
+  its replacement. The HTTP contract and the clients are unchanged.
+  Migration steps are in `release/notes/config-conventions/scheduling.md`.
+- BREAKING: the runtime file's `apiVersion` is
+  `id.registrystack.org/formats/scheduling/runtime/v1alpha1`, the retention
+  periods are `attemptReceiptRetentionDays` and `hookPayloadRetentionDays`,
+  and `audit.retainDays` is `audit.retentionDays`. `scheduling serve` and
+  `schedulingctl` report every rule the file breaks at its line and column
+  with its own `scheduling.runtime.<condition>` or shared `config.*` code,
+  where `schedulingctl` reported `schedulingctl.runtime-configuration.invalid`
+  at `runtime.yaml`. `RuntimeConfigError::path` is replaced by
+  `RuntimeConfigError::pointer` and `RuntimeConfigError::code`. Migration
+  steps and the old-to-new code table are in
+  `release/notes/config-conventions/scheduling.md`.
+- BREAKING: `schedulingctl check` exits 1 on any finding, reports
+  `diagnostics` and `filesChecked` in place of `findings`, takes
+  `--deny-warnings` in place of `--deny-findings`, and checks a runtime file
+  offline with `--runtime-config FILE` and `--environment`. Every JSON
+  report names its format as `SchedulingCtlReport` at
+  `id.registrystack.org/formats/scheduling/ctl-report/v1alpha1`, and `test`
+  with no fixture exits 1. A database an earlier release wrote is not read;
+  start from a new one. Migration steps are in
+  `release/notes/config-conventions/scheduling.md`.
 - A hold or an appointment is owned by the verified token issuer and subject
   that booked it, stored on the claim, rather than by the audit-keyed
   pseudonym of that pair. Listing by external reference, reading,

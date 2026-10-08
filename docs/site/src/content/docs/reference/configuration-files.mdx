@@ -317,9 +317,9 @@ With `logLevel: Info`, `next:` reads ``Use `info`; letter case matters.`` instea
 lists the accepted values. A value filled from the environment gets the list and no proposal, since
 a proposal would reveal part of the value.
 
-A few blocks are exceptions, such as `audit` in the Casework and Scheduling runtime files. These
-blocks are decoded outside the reader's key checks, so a check stops at the first unknown key in
-them, and `next:` asks you to remove it without proposing or listing accepted keys.
+A few blocks are exceptions, such as `audit` in the Casework runtime file. These blocks are decoded
+outside the reader's key checks, so a check stops at the first unknown key in them, and `next:` asks
+you to remove it without proposing or listing accepted keys.
 
 The code names the problem. The message wording is human-readable output, which
 [API stability](../api-stability/#exempt-surfaces) exempts from its promise.
@@ -328,7 +328,6 @@ The code names the problem. The message wording is human-readable output, which
     suggest(), unknown_variant(), too_many_problems(), and deprecated_api_version();
     crates/registry-platform-yaml/src/de.rs, serde_unknown_field();
     crates/registry-casework/src/config.rs, AuditConfig;
-    crates/registry-scheduling/src/config.rs, AuditConfig;
     crates/registry-platform-config/src/loader.rs, RuntimeConfigErrorKind. */}
 
 ### How a product prints them

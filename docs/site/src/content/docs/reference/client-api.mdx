@@ -214,7 +214,7 @@ effect, so the client returns the earlier unknown-outcome error instead of that 
 The receipt horizon is how long a service holds a key's first answer: BReg's
 `idempotency.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
 Messaging's `retention.submissionReceiptDays`,</DocsetProduct> and Scheduling's
-`retention.attemptReceiptDays`. Every service answers a spent key by one rule: a different request
+`retention.attemptReceiptRetentionDays`. Every service answers a spent key by one rule: a different request
 under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
 `409 idempotency.key-reused` in the others, whatever the key's age. Past the horizon the same
 request is refused with `410 idempotency.expired` and the key stays spent. In BReg that `410` means
