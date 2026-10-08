@@ -1,0 +1,13 @@
+{
+  "apiVersion": "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1",
+  "kind": "BRegMigrationRehearsalReceipt",
+  "priorPackageDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "priorSchemaFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "planDigest": "sha256:05a452add1204ad3fc7aa571529ed1ff7329fd9e3639fe63e680ba4698f584aa",
+  "sqlDigests": [],
+  "assertionDigests": [],
+  "fixtureInventory": [],
+  "postgresMajor": 17,
+  "rowAssertions": [],
+  "finalSchemaFingerprint": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+}

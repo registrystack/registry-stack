@@ -43,6 +43,7 @@ use crate::event_destination::EventDestinationActivationError;
 use crate::import_authority::{
     ImportAuthorityCloseRequest, ImportAuthorityOpenRequest, ImportAuthorityOperatorService,
 };
+use crate::literal_text::{LiteralText, WRITE_THE_VALUE};
 use crate::model::CompiledRoute;
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionPermission, CompiledActionRoute,
@@ -1026,6 +1027,9 @@ struct CaptureSource {
 /// this format, reads their members.
 fn read_journey_document(bytes: &[u8]) -> Result<JourneyDocument, FixtureError> {
     let decoded = registry_platform_yaml::Reader::new(FIXTURE_JOURNEYS_PATH)
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE,
+        })
         .decode::<JourneyDocument>(bytes, &Expect::one(&JOURNEYS_FORMAT))
         .map_err(FixtureError::JourneyDocument)?;
     let root = decoded.document.root();
@@ -1046,6 +1050,14 @@ fn read_journey_document(bytes: &[u8]) -> Result<JourneyDocument, FixtureError> 
         }
     }
     Ok(document)
+}
+
+/// Decode a journeys document a caller already read through the shared
+/// reader: every unknown key and each member's grammar, reported under the
+/// name the caller read it by. The references are resolved by
+/// [`validate_fixture_journeys`].
+pub fn check_journeys_document(document: &registry_platform_yaml::Document) -> Result<(), Report> {
+    document.decode::<JourneyDocument>().map(|_| ())
 }
 
 /// One journey step's identity, the access profile it runs under, and the
@@ -1071,6 +1083,9 @@ pub fn journey_step_profiles(bytes: &[u8]) -> Result<Vec<JourneyStepProfile>, Fi
         return Err(FixtureError::JourneyTooLarge);
     }
     let decoded = registry_platform_yaml::Reader::new(FIXTURE_JOURNEYS_PATH)
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE,
+        })
         .decode::<JourneyDocument>(bytes, &Expect::one(&JOURNEYS_FORMAT))
         .map_err(FixtureError::JourneyDocument)?;
     let root = decoded.document.root();

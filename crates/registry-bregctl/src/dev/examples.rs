@@ -3,6 +3,7 @@
 use super::{config, private, Clients, State, Status, MAX_BYTES};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_breg_client::*;
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified, LocalId,
@@ -79,7 +80,7 @@ const CATALOGUE_FILE: &str = "examples/scenarios.json";
 
 /// The example scenarios catalogue `bregctl examples` reads from a project's
 /// `examples/scenarios.json`.
-const EXAMPLE_SCENARIOS_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const EXAMPLE_SCENARIOS_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(API_VERSION)],
@@ -254,6 +255,9 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
     let path = project.join(CATALOGUE_FILE);
     let bytes = read_source(&path)?;
     let decoded = Reader::new(path.display().to_string())
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE,
+        })
         .decode::<Catalogue>(&bytes, &Expect::one(&EXAMPLE_SCENARIOS_FORMAT))
         .map_err(CatalogueRefused)?;
     let problems = catalogue_problems(&decoded.value, &decoded.document);
@@ -263,6 +267,13 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
         return Err(CatalogueRefused(report).into());
     }
     Ok((decoded.value, bytes))
+}
+
+/// Check an example scenarios document `bregctl check --file` read: the
+/// checks `bregctl examples` applies before it runs a scenario.
+pub(crate) fn check(document: &Document) -> std::result::Result<Vec<Diagnostic>, Report> {
+    let catalogue = document.decode::<Catalogue>()?;
+    Ok(catalogue_problems(&catalogue, document))
 }
 
 /// The checks the reader's types cannot express, each reported at the

@@ -97,6 +97,7 @@ mod ingestion_store;
 #[cfg(feature = "runtime")]
 pub mod instance_claim;
 pub mod lifecycle;
+pub mod literal_text;
 pub mod logical_names;
 pub mod manifest_adapter;
 pub(crate) mod membership;

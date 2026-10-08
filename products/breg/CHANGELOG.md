@@ -119,6 +119,17 @@
   generate it again. Every change and its migration step is in the "BReg
   tool and output formats" section of
   `release/notes/config-conventions/breg.md`.
+- BREAKING: a `${...}` substitution expression in a file `bregctl` reads as
+  written (fixture journeys, schema-test credentials, model selection,
+  development clients, example scenarios, migration descriptors, backup
+  bindings) is refused with `config.substitution-not-allowed`; an earlier
+  release kept it as literal text. Write the value, or in the credentials
+  and development clients a secret reference, in its place. The same
+  fragment section has the details.
+- `bregctl check --file <FILE>` checks one BReg tool file offline, chosen by
+  its `kind`, without reading a secret, database, or network. It exits 1 on
+  a refusal, or on a warning under `--deny-warnings`, 2 on a usage error, and
+  3 when the file cannot be read.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
   row, and journaling a `GET` the caller did not send. A `HEAD` now receives

@@ -10,6 +10,7 @@
 
 use std::fmt;
 
+use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_platform_yaml::{
     ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report, RetiredApiVersion,
 };
@@ -144,6 +145,9 @@ impl Selection {
     /// other document kind. `source` names the document in the diagnostics.
     pub(crate) fn parse(source: &str, bytes: &[u8]) -> Result<Self, Report> {
         Reader::new(source)
+            .with_hook(&mut LiteralText {
+                remedy: WRITE_THE_VALUE,
+            })
             .decode::<Self>(bytes, &Expect::one(&SELECTION_FORMAT))
             .map(|decoded| decoded.value)
     }

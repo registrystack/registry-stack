@@ -11,6 +11,7 @@ use registry_breg::fixtures::{
     execute_schema_test, validate_fixture_journeys, FixtureError, SchemaTestCredentialBinding,
     SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
 };
+use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE};
 use registry_breg::postgres::{
     BaselineFingerprintDrift, MigrationRehearsalError, SuccessorMigrationRehearsal,
 };
@@ -18,8 +19,8 @@ use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeC
 use registry_breg::startup;
 use registry_platform_config::SecretReference;
 use registry_platform_yaml::{
-    tagged_union, ApiVersion, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec, LocalId,
-    Reader, Report, RetiredApiVersion, Severity,
+    tagged_union, ApiVersion, Decoded, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec,
+    LocalId, Reader, Report, RetiredApiVersion, Severity,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -339,13 +340,7 @@ fn load_credentials(
             continue;
         }
         if !bound_steps.insert((journey_id.clone(), step_id.clone())) {
-            problems.push(document.diagnostic_at_value(
-                Severity::Error,
-                "breg.credentials.duplicate-binding",
-                &format!("/bindings/{index}"),
-                "an earlier binding already gives this journey step a credential",
-                "Remove this binding; bind every step exactly once.",
-            ));
+            problems.push(duplicate_binding(document, index));
             continue;
         }
         match binding.credential {
@@ -398,7 +393,39 @@ pub(crate) fn read_credentials_document(
     file: &str,
     bytes: &[u8],
 ) -> Result<Decoded<CredentialDocument>, Report> {
-    Reader::new(file).decode::<CredentialDocument>(bytes, &Expect::one(&CREDENTIALS_FORMAT))
+    Reader::new(file)
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
+        })
+        .decode::<CredentialDocument>(bytes, &Expect::one(&CREDENTIALS_FORMAT))
+}
+
+/// Check a credentials document `bregctl check --file` read: every binding
+/// names its journey step once. Whether each journey exists, and each
+/// secret reference resolves, is checked when `bregctl test` reads the file
+/// beside its package and runtime configuration.
+pub(crate) fn check_credentials(document: &Document) -> Result<Vec<Diagnostic>, Report> {
+    let credentials = document.decode::<CredentialDocument>()?;
+    let mut bound_steps = std::collections::BTreeSet::new();
+    Ok(credentials
+        .bindings
+        .iter()
+        .enumerate()
+        .filter(|(_, binding)| {
+            !bound_steps.insert((binding.journey_id.as_str(), binding.step_id.as_str()))
+        })
+        .map(|(index, _)| duplicate_binding(document, index))
+        .collect())
+}
+
+fn duplicate_binding(document: &Document, index: usize) -> Diagnostic {
+    document.diagnostic_at_value(
+        Severity::Error,
+        "breg.credentials.duplicate-binding",
+        &format!("/bindings/{index}"),
+        "an earlier binding already gives this journey step a credential",
+        "Remove this binding; bind every step exactly once.",
+    )
 }
 
 fn credentials_document_refusal(diagnostics: Vec<Diagnostic>) -> TestLifecycleError {

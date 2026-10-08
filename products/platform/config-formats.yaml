@@ -342,7 +342,7 @@ formats:
       file: crates/registry-breg/src/fixtures.rs
       function: validate_fixture_journeys
       type: JourneyDocument
-    check: none
+    check: bregctl check {project} --file {file}
     example: products/breg/acceptance/asset-site-placement/tests/journeys.yaml
     conformance:
       requiredText: /journeys/0/id
@@ -373,7 +373,7 @@ formats:
       file: crates/registry-breg/src/fixtures.rs
       function: read_schema_test_receipt
       type: SchemaTestReceipt
-    check: none
+    check: bregctl check --file {file}
     example: products/breg/examples/formats/schema-test-receipt.json
     conformance:
       requiredText: /registryRevision
@@ -404,7 +404,7 @@ formats:
       file: crates/registry-bregctl/src/test_lifecycle.rs
       function: read_credentials_document
       type: CredentialDocument
-    check: none
+    check: bregctl check --file {file}
     example: products/breg/examples/formats/credentials.yaml
     conformance:
       requiredText: /bindings/0/journeyId
@@ -435,7 +435,7 @@ formats:
       file: crates/registry-breg/src/data.rs
       function: read
       type: DataImportCheckpoint
-    check: none
+    check: bregctl check --file {file}
     example: products/breg/examples/formats/import.checkpoint.json
     conformance:
       requiredText: /entityId
@@ -466,7 +466,7 @@ formats:
       file: crates/registry-breg/src/data.rs
       function: read
       type: DataExportCheckpoint
-    check: none
+    check: bregctl check --file {file}
     example: products/breg/examples/formats/export.checkpoint.json
     conformance:
       requiredText: /entityId
@@ -497,7 +497,7 @@ formats:
       file: crates/registry-bregctl/src/data_lifecycle.rs
       function: read_import_state
       type: ImportState
-    check: none
+    check: bregctl check --file {file}
     example: products/breg/examples/formats/import.checkpoint.json.state
     conformance:
       requiredText: /runId
@@ -528,10 +528,10 @@ formats:
       file: crates/registry-bregctl/src/init_from_model/selection.rs
       function: parse
       type: Selection
-    check: none
+    check: bregctl check --file {file}
     example: crates/registry-linkml/publicschema/starters/household.yaml
     conformance:
-      requiredText: /model
+      requiredText: /registry/title
       optionalText: none
       integer: none
       boolean: none
@@ -559,7 +559,7 @@ formats:
       file: crates/registry-bregctl/src/dev/config.rs
       function: clients
       type: Clients
-    check: none
+    check: bregctl check --file {file}
     example: products/breg/acceptance/facility/dev-clients.yaml
     conformance:
       requiredText: /clients/0/id
@@ -590,7 +590,7 @@ formats:
       file: crates/registry-bregctl/src/dev/examples.rs
       function: catalogue
       type: Catalogue
-    check: none
+    check: bregctl check --file {file}
     example: products/breg/starters/seed-lots/core/examples/scenarios.json
     conformance:
       requiredText: /scenarios/0/id
@@ -621,12 +621,12 @@ formats:
       file: crates/registry-breg/src/migration_plan.rs
       function: read_migration_descriptor
       type: ReviewedMigrationDescriptor
-    check: none
-    example: none
+    check: bregctl check --file {file}
+    example: products/breg/examples/formats/reviewed-migrations/modules/asset-site-placement-core/migrations/read-maintenance-note/descriptor.json
     conformance:
-      requiredText: none
+      requiredText: /id
       optionalText: none
-      integer: none
+      integer: /lockTimeoutMilliseconds
       boolean: none
     securityMembers: []
     restrictingMembers: []
@@ -652,12 +652,12 @@ formats:
       file: crates/registry-breg/src/migration_plan.rs
       function: read_rehearsal_receipt
       type: MigrationRehearsalReceipt
-    check: none
-    example: none
+    check: bregctl check --file {file}
+    example: products/breg/examples/formats/reviewed-migrations/modules/asset-site-placement-core/migrations/read-maintenance-note/rehearsal.json
     conformance:
-      requiredText: none
+      requiredText: /planDigest
       optionalText: none
-      integer: none
+      integer: /postgresMajor
       boolean: none
     securityMembers: []
     restrictingMembers: []
@@ -683,12 +683,12 @@ formats:
       file: crates/registry-breg/src/migration_plan.rs
       function: read_backup_binding_document
       type: ExternalBackupBinding
-    check: none
-    example: none
+    check: bregctl check --file {file}
+    example: products/breg/examples/formats/retire-legacy-field-binding.json
     conformance:
-      requiredText: none
+      requiredText: /database
       optionalText: none
-      integer: none
+      integer: /maximumAgeSeconds
       boolean: none
     securityMembers: []
     restrictingMembers: []
@@ -714,13 +714,13 @@ formats:
       file: crates/registry-bregctl/src/dev/mod.rs
       function: read_state
       type: State
-    check: none
-    example: none
+    check: bregctl check --file {file}
+    example: products/breg/examples/formats/dev-session/.breg/dev/state.json
     conformance:
-      requiredText: none
+      requiredText: /project
       optionalText: none
-      integer: none
-      boolean: none
+      integer: /bregPort
+      boolean: /activated
     securityMembers: []
     restrictingMembers: []
   - id: breg/dev-prepared-source
@@ -745,10 +745,10 @@ formats:
       file: crates/registry-bregctl/src/dev/prepare_source.rs
       function: read_prepared
       type: PreparedSource
-    check: none
-    example: none
+    check: bregctl check --file {file}
+    example: products/breg/examples/formats/dev-session/.breg/dev/source-prepared-source.json
     conformance:
-      requiredText: none
+      requiredText: /requestDigest
       optionalText: none
       integer: none
       boolean: none
@@ -776,12 +776,12 @@ formats:
       file: crates/registry-bregctl/src/dev/prepare_source.rs
       function: read_transition
       type: Transition
-    check: none
-    example: none
+    check: bregctl check --file {file}
+    example: products/breg/examples/formats/dev-session/.breg/dev/source-transition.json
     conformance:
-      requiredText: none
+      requiredText: /priorDigest
       optionalText: none
-      integer: none
+      integer: /sequence
       boolean: none
     securityMembers: []
     restrictingMembers: []

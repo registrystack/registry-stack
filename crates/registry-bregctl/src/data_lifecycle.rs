@@ -33,7 +33,8 @@ use registry_platform_httputil::client::{
 };
 use registry_platform_httputil::{read_bounded, validate_response_headers};
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, Report, RetiredApiVersion,
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, Report,
+    RetiredApiVersion,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, Url};
@@ -1292,6 +1293,14 @@ fn read_import_state(
         return Err(DataLifecycleError::Checkpoint);
     }
     Ok(state)
+}
+
+/// Check an import state document `bregctl check --file` read. The state has
+/// no rule beyond its shape; whether it belongs to an import is decided when
+/// `bregctl data import` resumes from it.
+pub(crate) fn check_import_state(document: &Document) -> Result<Vec<Diagnostic>, Report> {
+    document.decode::<ImportState>()?;
+    Ok(Vec::new())
 }
 
 fn import_state_api_version() -> String {

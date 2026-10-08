@@ -58,7 +58,7 @@ pub(super) const PREPARED_KIND: &str = "BRegDevPreparedSource";
 
 /// The journal an applied preparation writes as `.breg/dev/source-transition.json`
 /// and removes once the transition finishes. Only this bregctl writes it.
-const SOURCE_TRANSITION_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const SOURCE_TRANSITION_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: TRANSITION_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(TRANSITION_API_VERSION)],
@@ -70,7 +70,7 @@ const SOURCE_TRANSITION_FORMAT: FormatSpec<'static> = FormatSpec {
 /// The record a finished preparation keeps as
 /// `.breg/dev/source-prepared-<client>.json`, so an identical request repeats
 /// its report. Only this bregctl writes it.
-const PREPARED_SOURCE_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const PREPARED_SOURCE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: PREPARED_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(PREPARED_API_VERSION)],
@@ -288,6 +288,26 @@ fn read_prepared(
         .map(|decoded| decoded.value)
 }
 
+/// Check a preparation record `bregctl check --file` read. The record has no
+/// rule beyond its shape; whether it matches a request is decided when a
+/// session reads it.
+pub(crate) fn check_prepared(
+    document: &Document,
+) -> std::result::Result<Vec<Diagnostic>, registry_platform_yaml::Report> {
+    document.decode::<PreparedSource>()?;
+    Ok(Vec::new())
+}
+
+/// Check a transition journal `bregctl check --file` read. The journal has no
+/// rule beyond its shape; whether it belongs to the session is decided when
+/// the session reads it.
+pub(crate) fn check_transition(
+    document: &Document,
+) -> std::result::Result<Vec<Diagnostic>, registry_platform_yaml::Report> {
+    document.decode::<Transition>()?;
+    Ok(Vec::new())
+}
+
 fn read_transition(
     file: &str,
     bytes: &[u8],
@@ -347,11 +367,25 @@ fn identifier(entity: &Value, field: &Value) -> bool {
                 .any(|c| c["kind"] == "unique" && c["fields"] == json!([field["id"]]))
         })
 }
+/// The captured registry and module documents as JSON trees, read through the
+/// shared reader's YAML subset. The capture already compiled them, so only
+/// their trees are needed here.
 fn documents(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, Value>> {
     files
         .iter()
         .filter(|(path, _)| *path == "registry.yaml" || path.ends_with("/module.yaml"))
-        .map(|(path, bytes)| Ok((path.clone(), serde_norway::from_slice(bytes)?)))
+        .map(
+            |(path, bytes)| match Reader::new(path.as_str()).scan(bytes) {
+                Ok(node) => Ok((
+                    path.clone(),
+                    node.map_or(Value::Null, |node| node.to_json_value()),
+                )),
+                Err(report) => bail!(
+                    "{path} is outside the YAML subset; correct it as the diagnostics say:\n{}",
+                    report.render_human()
+                ),
+            },
+        )
         .collect()
 }
 fn inventory(docs: &BTreeMap<String, Value>, compiled: &registry_breg::CompiledRegistry) -> Value {
@@ -1630,5 +1664,152 @@ mod tests {
         };
         let refusal = serde_json::to_vec(&transition).unwrap_err().to_string();
         assert!(refusal.contains("not UTF-8"), "{refusal}");
+    }
+
+    /// The registered examples of the three retained session files are what
+    /// the session writers write for one synthetic session, so the format
+    /// registry and `bregctl check --file` read the shape bregctl writes.
+    /// Each file ends with a newline the writer does not add.
+    /// `BREG_WRITE_DEV_EXAMPLES=1` rewrites them.
+    #[test]
+    fn the_retained_session_examples_are_what_the_writers_write() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/examples/formats/dev-session/.breg/dev");
+        let project = PathBuf::from("/home/operator/my-registry");
+        let clients = config::decode(
+            "dev-clients.yaml",
+            br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+  - id: source
+    accessProfiles: [evidence-source]
+    scopes: [registry:evidence:lookup]
+    claims:
+      registry_principal: evidence-source
+      registry_purpose: evidence-source-read
+"#,
+        )
+        .expect("the synthetic clients decode");
+        let state = State {
+            api_version: state_api_version(),
+            kind: state_kind(),
+            project: project.clone(),
+            owner: "6f1c2a7e-3b4d-4c5e-8f90-a1b2c3d4e5f6".into(),
+            status: Status::Ready,
+            breg_port: 8094,
+            issuer_port: 8095,
+            issuer_project: None,
+            issuer_owner: None,
+            issuer_image: None,
+            purpose_port: None,
+            database_port: 55448,
+            requires_postgis: false,
+            webhook_port: None,
+            clients_file: project.join("dev-clients.yaml"),
+            source_digest: "5".repeat(64),
+            sequence: 1,
+            baseline_runtime: None,
+            instance_id: "my-registry".into(),
+            source_revision: "local".into(),
+            container_id: Some("6".repeat(64)),
+            tls_files_copied: true,
+            database_ready: true,
+            package_digest: Some(format!("sha256:{}", "7".repeat(64))),
+            activated: true,
+            seeded: UniqueList::new(vec!["operator-records".to_owned()]).unwrap(),
+            seed_import_authorities: BTreeMap::new(),
+            seed_import_intents: BTreeMap::new(),
+            binaries: BTreeMap::from([
+                (
+                    "breg".into(),
+                    Binary {
+                        path: "/usr/local/bin/breg".into(),
+                        version: "breg 0.40.0".into(),
+                    },
+                ),
+                (
+                    "docker".into(),
+                    Binary {
+                        path: "/usr/local/bin/docker".into(),
+                        version: "Docker version 28.0.0".into(),
+                    },
+                ),
+            ]),
+            failure: None,
+        };
+        let report = json!({"ok":true,"command":"dev prepare-source","project":project,
+            "status":"prepared","entity":"record","client":"source","requiresRestart":true});
+        let registry = project.join("registry.yaml");
+        let transition = Transition {
+            api_version: transition_api_version(),
+            kind: transition_kind(),
+            prior_digest: "5".repeat(64),
+            target_digest: "9".repeat(64),
+            sequence: 2,
+            originals: BTreeMap::from([(
+                registry.clone(),
+                b"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\n".to_vec(),
+            )]),
+            replacements: BTreeMap::from([(
+                registry,
+                b"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\n".to_vec(),
+            )]),
+            client: clients.clients[1].clone(),
+            clients,
+            prepared: PreparedSource::new("8".repeat(64), report),
+        };
+        // What `State::save`, `finish` and an applied preparation write.
+        let written = [
+            ("state.json", serde_json::to_vec_pretty(&state).unwrap()),
+            (
+                "source-prepared-source.json",
+                serde_json::to_vec(&transition.prepared).unwrap(),
+            ),
+            (
+                "source-transition.json",
+                serde_json::to_vec(&transition).unwrap(),
+            ),
+        ];
+        for (name, mut bytes) in written {
+            bytes.push(b'\n');
+            let path = examples.join(name);
+            if std::env::var_os("BREG_WRITE_DEV_EXAMPLES").is_some() {
+                fs::create_dir_all(&examples).unwrap();
+                fs::write(&path, &bytes).unwrap();
+            }
+            assert_eq!(
+                fs::read(&path).unwrap_or_default(),
+                bytes,
+                "{name} differs from what the writer writes; run this test with BREG_WRITE_DEV_EXAMPLES=1"
+            );
+        }
+        let read = |name: &str, format: &FormatSpec<'_>| {
+            Reader::new(name)
+                .read(
+                    &fs::read(examples.join(name)).unwrap(),
+                    &Expect::one(format),
+                )
+                .unwrap()
+        };
+        assert!(check_state(&read("state.json", &DEV_STATE_FORMAT))
+            .unwrap()
+            .is_empty());
+        assert!(check_prepared(&read(
+            "source-prepared-source.json",
+            &PREPARED_SOURCE_FORMAT
+        ))
+        .unwrap()
+        .is_empty());
+        assert!(
+            check_transition(&read("source-transition.json", &SOURCE_TRANSITION_FORMAT))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

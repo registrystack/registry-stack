@@ -319,18 +319,20 @@ pub(crate) struct PlannedCode {
 
 /// Resolves `selection` against `model`.
 ///
-/// Every refusal names the selection path it concerns, so a reader editing a
-/// selection file finds the line, and the wizard can turn the same sentence
-/// into a prompt.
+/// Every refusal names the JSON pointer into the selection file it concerns,
+/// so a reader editing the file finds the line, and the wizard can turn the
+/// same sentence into a prompt. No refusal repeats a value the selection
+/// wrote unless it is an identifier the grammar already accepted; names the
+/// embedded model defines may appear.
 pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diagnostic> {
     let facts = model_facts(model)?;
     if let Some(version) = &selection.model_version {
         if version != &facts.version {
             return Err(diagnostic(
                 "init.selection.model_version",
-                "selection.modelVersion",
+                "/modelVersion",
                 &format!(
-                    "the selection was written against {} {version}, and this bregctl embeds {} {}",
+                    "the selection was written against another {} version, and this bregctl embeds {} {}",
                     facts.display_name, facts.display_name, facts.version
                 ),
             ));
@@ -340,9 +342,9 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         if revision != &facts.revision {
             return Err(diagnostic(
                 "init.selection.model_revision",
-                "selection.modelRevision",
+                "/modelRevision",
                 &format!(
-                    "the selection was written against {} revision {revision}, and this bregctl embeds revision {}",
+                    "the selection was written against another {} revision, and this bregctl embeds revision {}",
                     facts.display_name, facts.revision
                 ),
             ));
@@ -351,21 +353,21 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     if let Some(message) = registry_identifier_refusal(&selection.registry.id) {
         return Err(diagnostic(
             "init.selection.identifier",
-            "selection.registry.id",
+            "/registry/id",
             &message,
         ));
     }
     if selection.registry.title.trim().is_empty() {
         return Err(diagnostic(
             "init.selection.registry_title",
-            "selection.registry.title",
+            "/registry/title",
             "the registry title must not be empty",
         ));
     }
     if selection.entities.is_empty() {
         return Err(diagnostic(
             "init.selection.entities",
-            "selection.entities",
+            "/entities",
             "a selection names at least one concept",
         ));
     }
@@ -373,15 +375,15 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     let mut index = Vec::new();
     let mut ids = BTreeSet::new();
     let mut routes = BTreeSet::new();
-    for entity in &selection.entities {
-        let path = format!("selection.entities[{}]", entity.concept);
+    for (position, entity) in selection.entities.iter().enumerate() {
+        let path = entity_pointer(position);
         let class = model.classes.get(&entity.concept).ok_or_else(|| {
             diagnostic(
                 "init.selection.concept_unknown",
-                &path,
+                &format!("{path}/concept"),
                 &format!(
-                    "`{}` is not a concept of {} {}",
-                    entity.concept, facts.display_name, facts.version
+                    "the concept is not one of {} {}; name a concept the model defines",
+                    facts.display_name, facts.version
                 ),
             )
         })?;
@@ -391,30 +393,33 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
                 .map_err(|error| model_error(&path, &error))?;
             return Err(diagnostic(
                 "init.selection.concept_abstract",
-                &path,
+                &format!("{path}/concept"),
                 &format!(
-                    "`{}` is abstract; select one of its concrete concepts instead: {}",
-                    class.name,
+                    "the concept is abstract; select one of its concrete concepts instead: {}",
                     names(concrete.iter().map(|class| class.name.as_str()))
                 ),
             ));
         }
         let id = entity.id.clone().unwrap_or_else(|| kebab_case(&class.name));
-        validate_identifier(&id, &format!("{path}.id"), "an entity identifier")?;
+        validate_identifier(&id, &format!("{path}/id"), "an entity identifier")?;
         if !ids.insert(id.clone()) {
             return Err(diagnostic(
                 "init.selection.entity_duplicate",
-                &format!("{path}.id"),
-                &format!("entity identifier `{id}` is selected twice"),
+                &format!("{path}/id"),
+                &format!(
+                    "an earlier entity already has the identifier `{id}`; set `id` to tell them apart"
+                ),
             ));
         }
         let route = entity.route.clone().unwrap_or_else(|| pluralize(&id));
-        validate_identifier(&route, &format!("{path}.route"), "a route")?;
+        validate_identifier(&route, &format!("{path}/route"), "a route")?;
         if !routes.insert(route.clone()) {
             return Err(diagnostic(
                 "init.selection.route_duplicate",
-                &format!("{path}.route"),
-                &format!("route `{route}` is used by two entities"),
+                &format!("{path}/route"),
+                &format!(
+                    "an earlier entity already has the route `{route}`; set `route` to tell them apart"
+                ),
             ));
         }
         index.push(EntityIndex {
@@ -425,15 +430,16 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
     }
 
     let mut vocabulary_modes = BTreeMap::new();
-    for vocabulary in &selection.vocabularies {
-        let path = format!("selection.vocabularies[{}]", vocabulary.r#enum);
+    let mut vocabulary_pointers = BTreeMap::new();
+    for (position, vocabulary) in selection.vocabularies.iter().enumerate() {
+        let path = format!("/vocabularies/{position}");
         if !model.enums.contains_key(&vocabulary.r#enum) {
             return Err(diagnostic(
                 "init.selection.vocabulary_unknown",
-                &path,
+                &format!("{path}/enum"),
                 &format!(
-                    "`{}` is not an enumeration of {} {}",
-                    vocabulary.r#enum, facts.display_name, facts.version
+                    "the enumeration is not one of {} {}; name an enumeration the model defines",
+                    facts.display_name, facts.version
                 ),
             ));
         }
@@ -443,16 +449,18 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         {
             return Err(diagnostic(
                 "init.selection.vocabulary_duplicate",
-                &path,
-                &format!("enumeration `{}` is listed twice", vocabulary.r#enum),
+                &format!("{path}/enum"),
+                "an earlier entry already lists this enumeration; remove one of them",
             ));
         }
+        vocabulary_pointers.insert(vocabulary.r#enum.clone(), path);
     }
 
     let mut entities = Vec::new();
     let mut enums = EnumUse::default();
-    for (entity, entry) in selection.entities.iter().zip(&index) {
+    for (position, (entity, entry)) in selection.entities.iter().zip(&index).enumerate() {
         entities.push(resolve_entity(
+            &entity_pointer(position),
             entity,
             entry,
             model,
@@ -462,20 +470,21 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         )?);
     }
     for (name, mode) in &vocabulary_modes {
+        let path = &vocabulary_pointers[name];
         if !enums.drawn.contains(name) {
             return Err(diagnostic(
                 "init.selection.vocabulary_unused",
-                &format!("selection.vocabularies[{name}]"),
-                &format!("no selected property draws from enumeration `{name}`"),
+                path,
+                "no selected property draws from this enumeration; remove the entry",
             ));
         }
         let values = model.enums[name].values.len();
         if *mode == VocabularyMode::Inline && values > MAX_CODELIST_CONCEPTS {
             return Err(diagnostic(
                 "init.selection.vocabulary_size",
-                &format!("selection.vocabularies[{name}]"),
+                path,
                 &format!(
-                    "enumeration `{name}` has {values} values, and a project carries at most \
+                    "the enumeration has {values} values, and a project carries at most \
                      {MAX_CODELIST_CONCEPTS} of them; drop the `inline` override to carry the \
                      code without listing the values"
                 ),
@@ -485,7 +494,10 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
 
     let mut vocabularies = Vec::new();
     for name in &enums.inline {
-        vocabularies.push(resolve_vocabulary(&model.enums[name])?);
+        let path = vocabulary_pointers
+            .get(name)
+            .map_or("/entities", String::as_str);
+        vocabularies.push(resolve_vocabulary(path, &model.enums[name])?);
     }
     vocabularies.sort_by(|left, right| left.id.cmp(&right.id));
     let mut seen = BTreeSet::new();
@@ -493,7 +505,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
         if !seen.insert(vocabulary.id.as_str()) {
             return Err(diagnostic(
                 "init.selection.vocabulary_collision",
-                "selection.entities",
+                "/entities",
                 &format!(
                     "two enumerations derive the same vocabulary identifier `{}`",
                     vocabulary.id
@@ -546,7 +558,13 @@ struct EntityIndex {
     class: String,
 }
 
+/// The JSON pointer to the selected entity at `position`.
+fn entity_pointer(position: usize) -> String {
+    format!("/entities/{position}")
+}
+
 fn resolve_entity(
+    path: &str,
     entity: &EntitySelection,
     entry: &EntityIndex,
     model: &Model,
@@ -554,15 +572,14 @@ fn resolve_entity(
     vocabulary_modes: &BTreeMap<String, VocabularyMode>,
     enums: &mut EnumUse,
 ) -> Result<PlannedEntity, Diagnostic> {
-    let path = format!("selection.entities[{}]", entity.concept);
     let class = &model.classes[&entry.class];
     let classification = match &entity.classification {
         None => Classification::Internal,
         Some(value) => Classification::parse(value).ok_or_else(|| {
             diagnostic(
                 "init.selection.classification",
-                &format!("{path}.classification"),
-                &format!("`{value}` is not one of public, internal, restricted"),
+                &format!("{path}/classification"),
+                "the classification is not one of public, internal, restricted",
             )
         })?,
     };
@@ -572,13 +589,13 @@ fn resolve_entity(
         .unwrap_or_else(|| format!("{}-code", entry.id));
     validate_identifier(
         &identifier_id,
-        &format!("{path}.identifierField"),
+        &format!("{path}/identifierField"),
         "a field identifier",
     )?;
     if reserved_field_id(&identifier_id) {
         return Err(diagnostic(
             "init.selection.field_reserved",
-            &format!("{path}.identifierField"),
+            &format!("{path}/identifierField"),
             &format!(
                 "`{identifier_id}` is a name the compiler keeps for a system column of every \
                  record; name the identifying field something else"
@@ -604,19 +621,19 @@ fn resolve_entity(
 
     let offered = model
         .induced_slots(&class.name)
-        .map_err(|error| model_error(&path, &error))?;
+        .map_err(|error| model_error(path, &error))?;
     let mut fields = Vec::new();
     let mut field_ids = BTreeSet::from([identifier_id.clone()]);
     let mut api_names = BTreeSet::from([default_api_name(&identifier_id)]);
     let mut sql_names = BTreeSet::from([default_sql_name(&identifier_id)]);
     let mut properties = BTreeSet::new();
-    for property in &entity.properties {
-        let property_path = format!("{path}.properties[{}]", property.name);
+    for (position, property) in entity.properties.iter().enumerate() {
+        let property_path = format!("{path}/properties/{position}");
         if !properties.insert(property.name.as_str()) {
             return Err(diagnostic(
                 "init.selection.property_duplicate",
                 &property_path,
-                &format!("property `{}` is selected twice", property.name),
+                "an earlier entry already selects this property; remove one of them",
             ));
         }
         let slot = offered
@@ -628,8 +645,7 @@ fn resolve_entity(
                     "init.selection.property_unknown",
                     &property_path,
                     &format!(
-                        "`{}` is not a property of `{}`; it carries: {}",
-                        property.name,
+                        "the property is not one `{}` carries; it carries: {}",
                         class.name,
                         names(offered.iter().map(|slot| slot.name.as_str()))
                     ),
@@ -639,11 +655,8 @@ fn resolve_entity(
             return Err(diagnostic(
                 "init.selection.property_target",
                 &property_path,
-                &format!(
-                    "`target` names the selected entity a reference points at, and `{}` does not \
-                     hold records of a concept",
-                    slot.name
-                ),
+                "`target` names the selected entity a reference points at, and this property does \
+                 not hold records of a concept; remove `target`",
             ));
         }
         let ResolvedKind {
@@ -653,7 +666,7 @@ fn resolve_entity(
             diagnostic(
                 "init.selection.property_unsupported",
                 &property_path,
-                &format!("`{}` cannot become a field: {reason}", slot.name),
+                &format!("the property cannot become a field: {reason}"),
             )
         })?;
         if let Range::Enum(name) = &slot.range {
@@ -779,9 +792,16 @@ fn field_kind(
                         })
                     })
                     .ok_or_else(|| {
-                        format!(
-                            "target `{target}` is not a selected entity whose concept is `{name}` or one of its kinds"
-                        )
+                        if candidates.is_empty() {
+                            format!(
+                                "`target` does not name a selected entity whose concept is `{name}` or one of its kinds; select one first"
+                            )
+                        } else {
+                            format!(
+                                "`target` does not name a selected entity whose concept is `{name}` or one of its kinds; name one of: {}",
+                                names(candidates.iter().map(|entry| entry.id.as_str()))
+                            )
+                        }
                     });
             }
             match candidates.as_slice() {
@@ -1090,8 +1110,7 @@ fn geometry_schema() -> Value {
     })
 }
 
-fn resolve_vocabulary(definition: &EnumDef) -> Result<PlannedVocabulary, Diagnostic> {
-    let path = format!("selection.vocabularies[{}]", definition.name);
+fn resolve_vocabulary(path: &str, definition: &EnumDef) -> Result<PlannedVocabulary, Diagnostic> {
     let mut values = Vec::new();
     for value in &definition.values {
         if value.text.is_empty()
@@ -1100,7 +1119,7 @@ fn resolve_vocabulary(definition: &EnumDef) -> Result<PlannedVocabulary, Diagnos
         {
             return Err(diagnostic(
                 "init.selection.vocabulary_value",
-                &path,
+                path,
                 &format!(
                     "value `{}` of enumeration `{}` is not a code the compiler accepts",
                     value.text.escape_default(),
@@ -1277,15 +1296,21 @@ pub(crate) fn registry_identifier_refusal(value: &str) -> Option<String> {
         return Some(message);
     }
     DERIVED_REGISTRY_SUFFIXES.iter().find_map(|(suffix, what)| {
-        identifier_refusal(&format!("{value}{suffix}"), what).map(|message| {
-            format!("{message}; the project derives it from the registry identifier")
+        identifier_refusal(&format!("{value}{suffix}"), what).map(|_| {
+            format!(
+                "the project derives {what} by appending `{suffix}` to the registry identifier, \
+                 and the result is longer than 64 characters; use at most {} characters for the \
+                 registry identifier",
+                64 - suffix.len()
+            )
         })
     })
 }
 
 /// The sentence refusing `value` as an identifier, or `None` when the grammar
 /// accepts it. The wizard shows the same sentence inline, so a typed answer
-/// is corrected at the prompt rather than after the project is derived.
+/// is corrected at the prompt rather than after the project is derived. The
+/// sentence never repeats the refused value.
 pub(crate) fn identifier_refusal(value: &str, what: &str) -> Option<String> {
     let valid = !value.is_empty()
         && value.len() <= 64
@@ -1300,7 +1325,7 @@ pub(crate) fn identifier_refusal(value: &str, what: &str) -> Option<String> {
         None
     } else {
         Some(format!(
-            "`{value}` is not valid as {what}: use 1 to 64 characters, starting with a lowercase letter, from a-z, 0-9, `-`, and `_`"
+            "this is not valid as {what}: use 1 to 64 characters, starting with a lowercase letter, from a-z, 0-9, `-`, and `_`"
         ))
     }
 }
@@ -1477,7 +1502,7 @@ mod tests {
              vocabularies:\n  - enum: Language\n    mode: inline\n",
         );
         assert_eq!(error.code, "init.selection.vocabulary_size");
-        assert_eq!(error.path, "selection.vocabularies[Language]");
+        assert_eq!(error.path, "/vocabularies/0");
         assert!(
             error.message.contains(&MAX_CODELIST_CONCEPTS.to_string()),
             "{}",
@@ -1658,7 +1683,7 @@ mod tests {
         selection.registry.id = "a".repeat(55);
         let error = resolve(&selection, model()).expect_err("refused");
         assert_eq!(error.code, "init.selection.identifier");
-        assert_eq!(error.path, "selection.registry.id");
+        assert_eq!(error.path, "/registry/id");
         assert!(error.message.contains("-authority"), "{}", error.message);
         selection.registry.id = "a".repeat(54);
         assert!(resolve(&selection, model()).is_ok());
@@ -1841,6 +1866,63 @@ mod tests {
     }
 
     #[test]
+    fn refusals_never_repeat_what_the_selection_wrote() {
+        const MARKER: &str = "Q7ZK2W-Planted";
+        let person = "entities:\n  - concept: Person\n";
+        for (body, code, path) in [
+            (
+                format!("modelVersion: {MARKER}\n{person}"),
+                "init.selection.model_version",
+                "/modelVersion",
+            ),
+            (
+                format!("modelRevision: {MARKER}\n{person}"),
+                "init.selection.model_revision",
+                "/modelRevision",
+            ),
+            (
+                format!("entities:\n  - concept: {MARKER}\n"),
+                "init.selection.concept_unknown",
+                "/entities/0/concept",
+            ),
+            (
+                format!("entities:\n  - concept: Person\n    id: {MARKER}\n"),
+                "init.selection.identifier",
+                "/entities/0/id",
+            ),
+            (
+                format!("entities:\n  - concept: Person\n    classification: {MARKER}\n"),
+                "init.selection.classification",
+                "/entities/0/classification",
+            ),
+            (
+                format!("{person}    properties:\n      - name: {MARKER}\n"),
+                "init.selection.property_unknown",
+                "/entities/0/properties/0",
+            ),
+            (
+                format!("{person}vocabularies:\n  - enum: {MARKER}\n    mode: inline\n"),
+                "init.selection.vocabulary_unknown",
+                "/vocabularies/0/enum",
+            ),
+            (
+                format!(
+                    "entities:\n  - concept: Household\n    properties:\n      - name: name\n  \
+                     - concept: GroupMembership\n    properties:\n      - name: group\n        \
+                     target: {MARKER}\n"
+                ),
+                "init.selection.property_unsupported",
+                "/entities/1/properties/0",
+            ),
+        ] {
+            let error = refused(&body);
+            assert_eq!(error.code, code, "{body}");
+            assert_eq!(error.path, path, "{body}");
+            assert!(!error.message.contains("Q7ZK2W"), "{}", error.message);
+        }
+    }
+
+    #[test]
     fn identifiers_and_routes_are_validated_and_unique() {
         assert_eq!(
             refused("entities:\n  - concept: Person\n    id: Person\n").code,
@@ -1874,7 +1956,7 @@ mod tests {
                 "entities:\n  - concept: Person\n    identifierField: {name}\n"
             ));
             assert_eq!(error.code, "init.selection.field_reserved", "{name}");
-            assert_eq!(error.path, "selection.entities[Person].identifierField");
+            assert_eq!(error.path, "/entities/0/identifierField");
         }
         let plan = resolved("entities:\n  - concept: Person\n    identifierField: person-number\n");
         assert_eq!(plan.entities[0].identifier.id, "person-number");
@@ -1886,10 +1968,7 @@ mod tests {
             "entities:\n  - concept: Person\n    identifierField: given_name\n    properties:\n      - name: given_name\n",
         );
         assert_eq!(error.code, "init.selection.field_name_collision");
-        assert_eq!(
-            error.path,
-            "selection.entities[Person].properties[given_name]"
-        );
+        assert_eq!(error.path, "/entities/0/properties/0");
         assert!(error.message.contains("givenName"), "{}", error.message);
         assert!(resolve(
             &selection(
@@ -1908,10 +1987,7 @@ mod tests {
                 "entities:\n  - concept: Person\n    properties:\n      - name: {property}\n        target: household\n{others}"
             ));
             assert_eq!(error.code, "init.selection.property_target", "{property}");
-            assert_eq!(
-                error.path,
-                format!("selection.entities[Person].properties[{property}]")
-            );
+            assert_eq!(error.path, "/entities/0/properties/0");
         }
     }
 

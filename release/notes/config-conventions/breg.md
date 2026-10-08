@@ -1466,3 +1466,31 @@ The source-import baseline (`.evidence/source-imports/state.json`) records
 each accepted manifest in its own unchanged shape, so a project that already
 imported an export keeps its baseline; only the next import, diff, or update
 needs a regenerated export.
+
+### BREAKING: a substitution expression is refused in a file `bregctl` reads as written
+
+Substitution (`${NAME}`, `${NAME:-fallback}`, `${NAME:?message}`) applies to
+the runtime configuration only. The fixture journeys, the schema-test
+credentials, the model selection, the development clients, the example
+scenarios, the migration descriptor, and the backup binding are read as
+written: a `${...}` expression in any key or string value of them is refused
+with `config.substitution-not-allowed` at its position, where an earlier
+`bregctl` kept it as literal text. Text that is not an expression, such as a
+lone `${`, is still accepted. Migrate a file by writing the value itself in
+place of the expression; in the schema-test credentials and the development
+clients, name a secret with a secret reference (`secret:file/<name>` or
+`secret:env/<NAME>`) instead. The diagnostic names the key, never the
+expression or a variable's value.
+
+### `bregctl check --file`: an offline check for each tool file
+
+`bregctl check --file <FILE>` checks one tool file on its own, choosing the
+format by the file's `kind`: the fixture journeys (with `PROJECT`, against
+that project's routes), the schema-test credentials or receipt, a data
+checkpoint or import state, a migration descriptor, rehearsal receipt, or
+backup binding, a model selection, or a development clients, example
+scenarios, session state, or source preparation file. It reads no secret,
+database, or network. It prints the diagnostics in the human form, or with
+`--format json` the report's `diagnostics` list, and exits 0 when the file
+passes, 1 when it is refused or, with `--deny-warnings`, when it carries a
+warning, 2 for a usage error, and 3 when the file cannot be read.

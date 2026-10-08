@@ -15,13 +15,19 @@ mod purpose;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use config::{check as check_clients, DEV_CLIENTS_FORMAT};
+pub(crate) use prepare_source::{
+    check_prepared, check_transition, PREPARED_SOURCE_FORMAT, SOURCE_TRANSITION_FORMAT,
+};
+
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
 pub(crate) use config::ClientsRefused;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, UniqueList,
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+    Severity, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -77,7 +83,7 @@ pub(super) const STATE_API_VERSION: &str = "id.registrystack.org/formats/breg/de
 pub(super) const STATE_KIND: &str = "BRegDevState";
 /// The session state `bregctl dev` retains in `.breg/dev/state.json`. Only
 /// this bregctl writes it; a refusal names no member value.
-const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const DEV_STATE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: STATE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(STATE_API_VERSION)],
@@ -583,6 +589,34 @@ fn read_state(root: &Path) -> Result<State> {
                     .join("runtime.yaml")
             })
         || state.root() != root
+    {
+        bail!("retained dev state ownership is invalid; no resources were changed");
+    }
+    state_rules(&state)?;
+    Ok(state)
+}
+
+/// Check a session state document `bregctl check --file` read against the
+/// rules that hold wherever the state is kept. The rules bound to the
+/// session directory, its baseline and its root, are checked when a session
+/// reads its own state. A refusal is one diagnostic at the document root.
+pub(crate) fn check_state(document: &Document) -> Result<Vec<Diagnostic>, Report> {
+    let state = document.decode::<State>()?;
+    Ok(match state_rules(&state) {
+        Ok(()) => Vec::new(),
+        Err(error) => vec![document.diagnostic_at_value(
+            Severity::Error,
+            "breg.dev-state.refused",
+            "",
+            &error.to_string(),
+            "Write the session state again with `bregctl dev start`; only bregctl writes it.",
+        )],
+    })
+}
+
+/// The rules a session state satisfies wherever it is read.
+fn state_rules(state: &State) -> Result<()> {
+    if state.sequence == 0
         || uuid::Uuid::parse_str(&state.owner).is_err()
         || state.issuer_project.is_some() != state.issuer_owner.is_some()
         || state
@@ -612,7 +646,7 @@ fn read_state(root: &Path) -> Result<State> {
     }) {
         bail!("retained purpose authority needs a distinct nonzero loopback port");
     }
-    Ok(state)
+    Ok(())
 }
 
 /// Verify the live registration owner before borrowing its issuer or private
@@ -904,8 +938,12 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     // pinned by their canonical JSON form.
     let package = canonicalize_json(&serde_json::to_value(identity)?)
         .map_err(|_| anyhow::anyhow!("package identity must canonicalize"))?;
-    let journeys = canonical_yaml(&files["tests/journeys.yaml"], "tests/journeys.yaml")?;
-    let clients = canonical_yaml(client_bytes, "clients file")?;
+    let journeys = canonical_yaml(
+        &files["tests/journeys.yaml"],
+        "tests/journeys.yaml",
+        &registry_breg::fixtures::JOURNEYS_FORMAT,
+    )?;
+    let clients = canonical_yaml(client_bytes, "clients file", &DEV_CLIENTS_FORMAT)?;
     let mut hasher = Sha256::new();
     hasher.update(b"breg-dev-source/v2\0");
     for part in [
@@ -929,12 +967,19 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
     })
 }
 
-/// The canonical JSON form of one authored YAML document, so comments, layout
-/// and key order do not distinguish two spellings of the same content.
-fn canonical_yaml(bytes: &[u8], name: &str) -> Result<Vec<u8>> {
-    let value: Value =
-        serde_norway::from_slice(bytes).with_context(|| format!("{name} must parse as YAML"))?;
-    canonicalize_json(&value).map_err(|_| {
+/// The canonical JSON form of one authored YAML document, read through the
+/// shared reader as its format, so comments, layout and key order do not
+/// distinguish two spellings of the same content.
+fn canonical_yaml(bytes: &[u8], name: &str, format: &FormatSpec<'_>) -> Result<Vec<u8>> {
+    let document = Reader::new(name)
+        .read(bytes, &Expect::one(format))
+        .map_err(|report| {
+            anyhow::anyhow!(
+                "{name} must be read before local development starts; correct it as the diagnostics say:\n{}",
+                report.render_human()
+            )
+        })?;
+    canonicalize_json(&document.to_json_value()).map_err(|_| {
         anyhow::anyhow!("{name} must hold only values with an exact canonical JSON form")
     })
 }

@@ -5,9 +5,11 @@ use super::{private, State, DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
+use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE};
 use registry_platform_config::{SecretProvidersConfig, SecretReference};
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+    Severity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -24,7 +26,7 @@ pub(super) const KIND: &str = "BRegDevClients";
 
 /// The development clients file `bregctl dev start` reads, and the copy a
 /// session retains as `.breg/dev/clients.json`.
-pub(super) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(API_VERSION)],
@@ -517,6 +519,9 @@ impl std::error::Error for ClientsRefused {}
 /// the semantic checks or secret resolution `clients` adds.
 pub(super) fn decode(file: &str, bytes: &[u8]) -> Result<Clients, Report> {
     Reader::new(file)
+        .with_hook(&mut LiteralText {
+            remedy: WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
+        })
         .decode::<Clients>(bytes, &Expect::one(&DEV_CLIENTS_FORMAT))
         .map(|decoded| decoded.value)
 }
@@ -572,8 +577,67 @@ fn resolve_secret(
     Ok(Zeroizing::new(secret.expose_secret().to_vec()))
 }
 
+/// How a clients check treats the secrets the file references.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Secrets {
+    /// Resolve every secret and check its value, as a session start does.
+    Resolve,
+    /// Check that every reference names an enabled provider, reading no
+    /// secret (CFG-CHECK-1).
+    Declared,
+}
+
+/// One secret the clients file references: its value when `secrets`
+/// resolves, nothing when it only checks the declaration.
+fn secret(
+    clients: &Clients,
+    secrets: Secrets,
+    member: &str,
+    reference: &SecretReference,
+    maximum: usize,
+) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    match secrets {
+        Secrets::Resolve => resolve_secret(clients, member, reference, maximum).map(Some),
+        Secrets::Declared => {
+            let Some(providers) = &clients.secret_providers else {
+                bail!(
+                    "{member} names a secret, but the clients file declares no secretProviders; \
+                     declare secretProviders.file with an absolute root, secretProviders.environment, or both"
+                );
+            };
+            providers
+                .check_reference(member, reference.as_str())
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            Ok(None)
+        }
+    }
+}
+
+/// Read a development clients file, check it, and resolve every secret it
+/// references.
 pub(super) fn clients(file: &str, bytes: &[u8]) -> Result<Clients> {
     let clients = decode(file, bytes).map_err(ClientsRefused)?;
+    validate(clients, Secrets::Resolve)
+}
+
+/// Check a development clients document `bregctl check --file` read,
+/// without resolving a secret: a reference only has to name an enabled
+/// provider. A refusal is one diagnostic at the document root.
+pub(crate) fn check(document: &Document) -> Result<Vec<Diagnostic>, Report> {
+    let clients = document.decode::<Clients>()?;
+    Ok(match validate(clients, Secrets::Declared) {
+        Ok(_) => Vec::new(),
+        Err(error) => vec![document.diagnostic_at_value(
+            Severity::Error,
+            "breg.dev-clients.refused",
+            "",
+            &error.to_string(),
+            "Correct the clients file as the message says, then check it again.",
+        )],
+    })
+}
+
+fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
     if let Some(providers) = &clients.secret_providers {
         providers.check().map_err(|error| {
             anyhow::anyhow!("{error}; declare secretProviders.file with an absolute root, secretProviders.environment, or both")
@@ -633,8 +697,9 @@ pub(super) fn clients(file: &str, bytes: &[u8]) -> Result<Clients> {
         }
         client_purposes(client)?;
         if let Some(reference) = &client.assertion_key_ref {
-            resolve_secret(
+            secret(
                 &clients,
+                secrets,
                 &format!("clients.{}.assertionKeyRef", client.id),
                 reference,
                 ASSERTION_KEY_BYTES,
@@ -727,13 +792,14 @@ pub(super) fn clients(file: &str, bytes: &[u8]) -> Result<Clients> {
                     && recipient.len() <= 128
                     && !recipient.chars().any(char::is_control) =>
             {
-                let token = resolve_secret(
+                let token = secret(
                     &clients,
+                    secrets,
                     &format!("reviewAuthorities.{id}.completionTokenRef"),
                     reference,
                     COMPLETION_TOKEN_BYTES,
                 )?;
-                if !token.iter().all(|byte| byte.is_ascii_graphic()) {
+                if token.is_some_and(|token| !token.iter().all(|byte| byte.is_ascii_graphic())) {
                     bail!("local review completion tokens must be bounded visible ASCII");
                 }
             }
@@ -791,8 +857,14 @@ pub(super) fn clients(file: &str, bytes: &[u8]) -> Result<Clients> {
         if provider.token_ref.is_some() == provider.private_key_jwt.is_some() {
             bail!("local Evidence providers require exactly one tokenRef or privateKeyJwt");
         }
-        for secret in evidence_secrets(id, provider) {
-            resolve_secret(&clients, &secret.member, secret.reference, secret.maximum)?;
+        for declared in evidence_secrets(id, provider) {
+            secret(
+                &clients,
+                secrets,
+                &declared.member,
+                declared.reference,
+                declared.maximum,
+            )?;
         }
         if let Some(credentials) = &provider.private_key_jwt {
             let endpoint = reqwest::Url::parse(&credentials.token_endpoint)
@@ -951,8 +1023,9 @@ pub(super) fn clients(file: &str, bytes: &[u8]) -> Result<Clients> {
         {
             bail!("browser applications need distinct IDs and exact declared resource permissions");
         }
-        resolve_secret(
+        secret(
             &clients,
+            secrets,
             &format!("issuer.interactiveApplications.{}.clientSecretRef", app.id),
             &app.client_secret_ref,
             CLIENT_SECRET_BYTES,
@@ -971,21 +1044,23 @@ pub(super) fn clients(file: &str, bytes: &[u8]) -> Result<Clients> {
         if !valid_grants(&clients, &user.grants) {
             bail!("synthetic user grants need distinct declared resources and exact permissions");
         }
-        resolve_secret(
+        secret(
             &clients,
+            secrets,
             &format!("issuer.syntheticUsers.{}.passwordRef", user.username),
             &user.password_ref,
             PASSWORD_BYTES,
         )?;
     }
     for (id, destination) in &clients.event_destinations {
-        let key = resolve_secret(
+        let key = secret(
             &clients,
+            secrets,
             &format!("eventDestinations.{id}.hmacSha256KeyRef"),
             &destination.hmac_sha256_key_ref,
             HMAC_KEY_BYTES,
         )?;
-        if key.len() < 32 {
+        if key.is_some_and(|key| key.len() < 32) {
             bail!("local event destination {id} needs at least 32 HMAC key bytes");
         }
     }

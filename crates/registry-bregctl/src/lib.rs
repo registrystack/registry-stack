@@ -49,6 +49,7 @@ mod dev;
 mod doctor;
 mod field_encryption;
 mod field_encryption_lifecycle;
+mod file_check;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
 mod import_authority_lifecycle;
@@ -356,8 +357,8 @@ struct InitArgs {
 #[command(group(
     ArgGroup::new("checked")
         .required(true)
-        .multiple(false)
-        .args(["project", "package"])
+        .multiple(true)
+        .args(["project", "package", "file"])
 ))]
 struct CheckArgs {
     /// Base Registry Engine project directory.
@@ -365,8 +366,20 @@ struct CheckArgs {
     project: Option<PathBuf>,
 
     /// Closed package to verify against its sums, reporting the registry revision it rederives.
-    #[arg(long, value_name = "DIRECTORY", conflicts_with_all = ["production", "runtime_config"])]
+    #[arg(
+        long,
+        value_name = "DIRECTORY",
+        conflicts_with_all = ["project", "file", "production", "runtime_config"]
+    )]
     package: Option<PathBuf>,
+
+    /// One BReg tool file to check on its own, read by its kind: journeys, schema-test
+    /// credentials or receipt, a data checkpoint or import state, a migration descriptor,
+    /// rehearsal receipt or backup binding, a model selection, or a development clients,
+    /// example scenarios, session state or source preparation file. No secret, database,
+    /// or network is read. With PROJECT, journeys are checked against that project.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["production", "runtime_config"])]
+    file: Option<PathBuf>,
 
     /// Enforce production-only package closure requirements.
     #[arg(long)]
@@ -2357,6 +2370,23 @@ where
             }
             (Some(_), Some(_)) => unreachable!("clap refuses --from together with --template"),
         },
+        Command::Check(CheckArgs {
+            file: Some(file),
+            project,
+            deny_warnings,
+            ..
+        }) => {
+            return file_check::run(
+                &file_check::Request {
+                    file: &file,
+                    project: project.as_deref(),
+                    deny_warnings,
+                },
+                format,
+                stdout,
+                stderr,
+            );
+        }
         Command::Check(args) => {
             let request = check::Request {
                 project: args.project.as_deref(),

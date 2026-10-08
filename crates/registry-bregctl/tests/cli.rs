@@ -39,6 +39,9 @@ mod reviewed_migration_tests;
 #[path = "cli/module_consent.rs"]
 mod module_consent_tests;
 
+#[path = "cli/file_check.rs"]
+mod file_check_tests;
+
 #[test]
 fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
     let source = String::from_utf8(authoring_fixture().to_vec())
@@ -6339,7 +6342,7 @@ fn human_usage_errors_name_the_offending_argument() {
     assert!(missing_argument.stdout.is_empty());
     let rendered = String::from_utf8_lossy(&missing_argument.stderr).into_owned();
     assert!(
-        rendered.contains("<PROJECT|--package <DIRECTORY>>"),
+        rendered.contains("<PROJECT|--package <DIRECTORY>|--file <FILE>>"),
         "{rendered}"
     );
 }

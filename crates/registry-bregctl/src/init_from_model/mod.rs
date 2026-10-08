@@ -31,7 +31,35 @@ use crate::{
     SuggestedAction,
 };
 
-pub(crate) use selection::ModelName;
+pub(crate) use selection::{ModelName, SELECTION_FORMAT};
+
+/// Check a selection document `bregctl check --file` read: it resolves
+/// against the embedded model it names, as `init --from --selection` would
+/// resolve it. Each refusal is reported at the member it concerns.
+pub(crate) fn check_selection(
+    document: &registry_platform_yaml::Document,
+) -> Result<Vec<registry_platform_yaml::Diagnostic>, crate::file_check::Failure> {
+    let selection = document.decode::<selection::Selection>()?;
+    let model = match selection.model {
+        ModelName::Publicschema => publicschema::model().map_err(|_| {
+            crate::file_check::Failure::unavailable(
+                "breg.check.model-unreadable",
+                "the reference model embedded in this bregctl does not read",
+                "Install a bregctl release; its reference model is part of the binary.",
+            )
+        })?,
+    };
+    Ok(match resolve::resolve(&selection, &model) {
+        Ok(_) => Vec::new(),
+        Err(refusal) => vec![crate::file_check::diagnostic_near(
+            document,
+            &refusal.code,
+            &refusal.path,
+            &refusal.message,
+            "Correct the selection as the message says, then check it again.",
+        )],
+    })
+}
 
 /// The largest selection file the command reads.
 const MAX_SELECTION_FILE_BYTES: u64 = 256 * 1024;

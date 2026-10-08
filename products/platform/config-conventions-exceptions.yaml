@@ -492,20 +492,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-CHECK-1
-  format: breg/backup-binding
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-SCHEMA-1
-  format: breg/backup-binding
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: breg/backup-binding
   location: products/platform/config-formats.yaml#/schema
@@ -775,34 +761,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-CHECK-1
-  format: breg/data-export-checkpoint
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-CHECK-1
-  format: breg/data-import-checkpoint
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-CHECK-1
-  format: breg/data-import-state
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-CHECK-1
-  format: breg/dev-clients
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-2
   format: breg/dev-clients
   location: products/platform/config-formats.yaml#/schema
@@ -817,48 +775,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-CHECK-1
-  format: breg/dev-prepared-source
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-SCHEMA-1
-  format: breg/dev-prepared-source
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-CHECK-1
-  format: breg/dev-source-transition
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-SCHEMA-1
-  format: breg/dev-source-transition
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-CHECK-1
-  format: breg/dev-state
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-SCHEMA-1
-  format: breg/dev-state
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: breg/events-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -906,13 +822,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-CHECK-1
-  format: breg/example-scenarios
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-2
   format: breg/example-scenarios
   location: products/platform/config-formats.yaml#/schema
@@ -927,13 +836,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-CHECK-1
-  format: breg/journeys
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-2
   format: breg/journeys
   location: products/platform/config-formats.yaml#/schema
@@ -1556,20 +1458,6 @@ exceptions:
   class: protocol-constant
   reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
-- rule: CFG-CHECK-1
-  format: breg/migration-descriptor
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-SCHEMA-1
-  format: breg/migration-descriptor
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: breg/migration-descriptor
   location: products/platform/config-formats.yaml#/schema
@@ -1584,20 +1472,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-CHECK-1
-  format: breg/migration-rehearsal-receipt
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
-- rule: CFG-SCHEMA-1
-  format: breg/migration-rehearsal-receipt
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-ENV-2
   format: breg/model-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -1665,13 +1539,6 @@ exceptions:
   wp: WP6
   reason: digest is not typed as $defs/Digest
   resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-CHECK-1
-  format: breg/model-selection
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-2
   format: breg/model-selection
   location: products/platform/config-formats.yaml#/schema
@@ -3844,13 +3711,6 @@ exceptions:
   wp: WP3
   reason: grantSourceIssuer is not typed as $defs/Url
   resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-CHECK-1
-  format: breg/schema-test-credentials
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-SCHEMA-2
   format: breg/schema-test-credentials
   location: products/platform/config-formats.yaml#/schema
@@ -3865,13 +3725,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-CHECK-1
-  format: breg/schema-test-receipt
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-ENV-1
   format: casework/apply-report
   location: products/casework/contracts/cli/ApplyReport.schema.json#/properties
@@ -7055,13 +6908,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: evidence/source-import-journal
-  location: crates/registry-evidencectl/src/source_import/mod.rs#recover()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: evidence/source-import-state
   location: products/platform/config-formats.yaml#/check
@@ -7090,13 +6936,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: evidence/source-import-state
-  location: crates/registry-evidencectl/src/source_import/mod.rs#parse_state()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: evidence/source-resolution
   location: products/platform/config-formats.yaml#/check
@@ -7160,13 +6999,6 @@ exceptions:
   wp: WP3
   reason: Resolution/Keep is a unit variant of a tagged union
   resolution: Make it a struct variant (Keep {})
-- rule: CFG-YAML-1
-  format: evidence/source-resolution
-  location: crates/registry-evidencectl/src/source_import/mod.rs#read_resolutions()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: evidence/target-governance
   location: products/platform/config-formats.yaml#/current/apiVersion

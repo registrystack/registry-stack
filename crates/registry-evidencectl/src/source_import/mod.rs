@@ -13,6 +13,7 @@ use std::{
 use anyhow::{anyhow, bail, Context as _, Result};
 use clap::Args;
 use registry_evidence_authoring::validate::valid_local_identifier;
+use registry_platform_yaml::Reader;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -605,7 +606,7 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
             );
         }
         if artifact.path.ends_with(".yaml") {
-            let value: Value = serde_norway::from_str(&content.text)
+            let value = yaml_artifact(&artifact.path, &content.text)
                 .context("export artifact is not YAML or JSON")?;
             if !value.is_object() {
                 bail!("export source, selector, and schema artifacts must be objects");
@@ -741,6 +742,20 @@ fn change_kind(before: &Option<String>, after: &Option<String>) -> &'static str 
     }
 }
 
+/// One exported YAML artifact as a JSON value, read through the shared
+/// reader's YAML subset. The Evidence authoring checks own the artifact's
+/// format; this reads only its tree, to follow references.
+fn yaml_artifact(path: &str, text: &str) -> Result<Value> {
+    match Reader::new(path).scan(text.as_bytes()) {
+        Ok(Some(node)) => Ok(node.to_json_value()),
+        Ok(None) => Ok(Value::Null),
+        Err(report) => bail!(
+            "{path} is outside the YAML subset; correct it as the diagnostics say:\n{}",
+            report.render_human()
+        ),
+    }
+}
+
 fn references(value: &Value, path: &str, stem: &str) -> bool {
     match value {
         Value::String(value) => value == path || value == stem,
@@ -757,7 +772,7 @@ fn has_reference(artifacts: &BTreeMap<String, Contents>, path: &str) -> Result<b
         .unwrap_or(path);
     for (name, content) in artifacts {
         if name != path && name.ends_with(".yaml") {
-            let value: Value = serde_norway::from_str(&content.text)
+            let value = yaml_artifact(name, &content.text)
                 .with_context(|| format!("reading authored references in {name}"))?;
             if references(&value, path, stem) {
                 return Ok(true);
@@ -787,7 +802,7 @@ fn affected_questions(
         let count = changed.len();
         for (path, content) in before.iter().chain(after) {
             if path.ends_with(".yaml") && !changed.contains(path) {
-                let value: Value = serde_norway::from_str(&content.text)
+                let value = yaml_artifact(path, &content.text)
                     .with_context(|| format!("reading structural source impact in {path}"))?;
                 if changed.iter().any(|dependency| {
                     references(
