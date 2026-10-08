@@ -6,6 +6,15 @@ formats:
   breg/module:
     project: products/breg/acceptance/asset-site-placement
     init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
+  # Journeys are checked against the project whose routes they call, and a
+  # reviewed migration file at its place in the project tree.
+  breg/journeys:
+    project: products/breg/acceptance/asset-site-placement
+    init: {command: "bregctl init {directory}", file: tests/journeys.yaml}
+  breg/migration-descriptor:
+    project: products/breg/examples/formats/reviewed-migrations
+  breg/migration-rehearsal-receipt:
+    project: products/breg/examples/formats/reviewed-migrations
   # The removed keys and the retired apiVersion the citizen MCP gateway and
   # review page runtimes refuse by name; the registry does not declare them yet.
   breg/mcp-runtime:
@@ -180,8 +189,6 @@ formats:
     init: {command: "bregctl init {directory}", file: registry.yaml}
   breg/runtime:
     init: {command: "bregctl init {directory}", file: runtime.example.yaml}
-  breg/journeys:
-    init: {command: "bregctl init {directory}", file: tests/journeys.yaml}
   breg/dev-clients:
     init: {command: "bregctl init {directory}", file: dev-clients.yaml}
   casework/project:
