@@ -15,7 +15,7 @@ use registry_platform_yaml::{
     FormatSpec, Invalid, LocalId, Reader, Refusal, RemovedKey, Report, RetiredApiVersion,
     ScalarHook, ScalarSite, Severity, UniqueList,
 };
-use serde::de::{self, Deserializer};
+use serde::de::Deserializer;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -270,10 +270,11 @@ impl<'de> Deserialize<'de> for Timestamp {
         DateTime::parse_from_rfc3339(&text)
             .map(|parsed| Timestamp(parsed.with_timezone(&Utc)))
             .map_err(|_| {
-                de::Error::custom(Invalid::expected(
+                Invalid::expected(
                     "an RFC 3339 timestamp with an offset",
                     "Write the timestamp with its offset, such as 2026-09-11T17:00:00+07:00.",
-                ))
+                )
+                .into_error()
             })
     }
 }
@@ -308,10 +309,11 @@ impl<'de> Deserialize<'de> for CalendarDate {
             .flatten()
             .map(CalendarDate)
             .ok_or_else(|| {
-                de::Error::custom(Invalid::expected(
+                Invalid::expected(
                     "a calendar date written YYYY-MM-DD",
                     "Write the date as YYYY-MM-DD, such as 2026-09-07.",
-                ))
+                )
+                .into_error()
             })
     }
 }
