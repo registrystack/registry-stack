@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use oxiri::Iri;
+use registry_platform_yaml::{Identified, UniqueIdList};
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -429,6 +430,8 @@ impl<'de> Deserialize<'de> for MetadataManifest {
 /// secret-bearing keys itself, and converts it with `MetadataManifest::from`;
 /// deserializing `MetadataManifest` directly applies the same key refusals
 /// without positions.
+// Each top-level list of named items refuses a repeated id while it is
+// decoded (CFG-ID-5).
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -438,29 +441,29 @@ pub struct MetadataManifestFields {
     #[serde(default)]
     vocabularies: BTreeMap<String, String>,
     #[serde(default)]
-    profiles: Vec<ProfileClaim>,
+    profiles: UniqueIdList<ProfileClaim>,
     #[serde(default)]
-    evaluation_profiles: Vec<EvaluationProfileManifest>,
+    evaluation_profiles: UniqueIdList<EvaluationProfileManifest>,
     #[serde(default)]
     ecosystem_bindings: Vec<EcosystemBindingManifest>,
     #[serde(default)]
-    requirements: Vec<RequirementManifest>,
+    requirements: UniqueIdList<RequirementManifest>,
     #[serde(default)]
-    evidence_types: Vec<EvidenceTypeManifest>,
+    evidence_types: UniqueIdList<EvidenceTypeManifest>,
     #[serde(default)]
-    authorities: Vec<AuthorityManifest>,
+    authorities: UniqueIdList<AuthorityManifest>,
     #[serde(default)]
-    public_services: Vec<ServiceManifest>,
+    public_services: UniqueIdList<ServiceManifest>,
     #[serde(default)]
-    data_services: Vec<DataServiceManifest>,
+    data_services: UniqueIdList<DataServiceManifest>,
     #[serde(default)]
-    distributions: Vec<DistributionManifest>,
+    distributions: UniqueIdList<DistributionManifest>,
     #[serde(default)]
-    forms: Vec<FormManifest>,
+    forms: UniqueIdList<FormManifest>,
     #[serde(default)]
-    datasets: Vec<DatasetManifest>,
+    datasets: UniqueIdList<DatasetManifest>,
     #[serde(default)]
-    codelists: Vec<CodelistManifest>,
+    codelists: UniqueIdList<CodelistManifest>,
 }
 
 impl From<MetadataManifestFields> for MetadataManifest {
@@ -469,19 +472,85 @@ impl From<MetadataManifestFields> for MetadataManifest {
             schema_version: fields.schema_version,
             catalog: fields.catalog,
             vocabularies: fields.vocabularies,
-            profiles: fields.profiles,
-            evaluation_profiles: fields.evaluation_profiles,
+            profiles: fields.profiles.into_vec(),
+            evaluation_profiles: fields.evaluation_profiles.into_vec(),
             ecosystem_bindings: fields.ecosystem_bindings,
-            requirements: fields.requirements,
-            evidence_types: fields.evidence_types,
-            authorities: fields.authorities,
-            public_services: fields.public_services,
-            data_services: fields.data_services,
-            distributions: fields.distributions,
-            forms: fields.forms,
-            datasets: fields.datasets,
-            codelists: fields.codelists,
+            requirements: fields.requirements.into_vec(),
+            evidence_types: fields.evidence_types.into_vec(),
+            authorities: fields.authorities.into_vec(),
+            public_services: fields.public_services.into_vec(),
+            data_services: fields.data_services.into_vec(),
+            distributions: fields.distributions.into_vec(),
+            forms: fields.forms.into_vec(),
+            datasets: fields.datasets.into_vec(),
+            codelists: fields.codelists.into_vec(),
         }
+    }
+}
+
+impl Identified for ProfileClaim {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for EvaluationProfileManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for RequirementManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for EvidenceTypeManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for AuthorityManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for ServiceManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for DataServiceManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for DistributionManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for FormManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for DatasetManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Identified for CodelistManifest {
+    fn id(&self) -> &str {
+        &self.id
     }
 }
 

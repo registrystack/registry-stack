@@ -341,6 +341,55 @@ mod tests {
     }
 
     #[test]
+    fn cfg_id_5_a_repeated_id_in_a_named_item_list_is_refused_at_the_copy() {
+        for (list, item) in [
+            ("profiles", "{id: p, version: \"1\"}"),
+            (
+                "evaluation_profiles",
+                "{id: e, ruleset: r, claim_id: c, subject_id_type: s}",
+            ),
+            ("requirements", "{id: r, title: R}"),
+            ("evidence_types", "{id: t, title: T}"),
+            ("authorities", "{id: a, name: A}"),
+            ("public_services", "{id: s, title: S}"),
+            ("data_services", "{id: d, title: D}"),
+            ("distributions", "{id: x, dataset: people}"),
+            ("forms", "{id: f, title: F, service: s}"),
+            ("datasets", "{id: people, title: People}"),
+            (
+                "codelists",
+                "{id: c, scheme_iri: https://codelists.example.test/c}",
+            ),
+        ] {
+            let text = format!("{MINIMAL}{list}:\n  - {item}\n  - {item}\n");
+            let diagnostics = refused(&text);
+            let found = diagnostics
+                .iter()
+                .map(|diagnostic| {
+                    (
+                        diagnostic.code.as_str(),
+                        diagnostic.path.as_str(),
+                        diagnostic
+                            .related
+                            .iter()
+                            .map(|related| related.path.as_str())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                found,
+                [(
+                    "config.duplicate-id",
+                    format!("/{list}/1/id").as_str(),
+                    vec![format!("/{list}/0/id").as_str()],
+                )],
+                "{list}"
+            );
+        }
+    }
+
+    #[test]
     fn another_schema_version_is_refused_before_its_shape_is_read() {
         let text = MINIMAL.replace("registry-manifest/v1", "registry-manifest/v0")
             + "retired_member: true\n";

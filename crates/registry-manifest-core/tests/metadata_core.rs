@@ -4717,16 +4717,15 @@ codelists:
 
 #[test]
 fn validation_errors_carry_a_condition_with_a_stable_code_and_action() {
-    let manifest = manifest_with_body(
+    let mut manifest = manifest_with_body(
         r#"datasets:
   - id: register
     title: Register
     entities: []
-  - id: register
-    title: Register again
-    entities: []
 codelists: []"#,
     );
+    // Reading refuses a repeated id itself, so the copy is added after.
+    manifest.datasets.push(manifest.datasets[0].clone());
 
     let errors = validation_errors(&manifest);
     let duplicate = errors
@@ -4738,6 +4737,31 @@ codelists: []"#,
     assert!(
         !duplicate.condition.suggested_action().is_empty(),
         "every condition names its fix"
+    );
+}
+
+#[test]
+fn reading_a_manifest_refuses_a_repeated_top_level_id() {
+    let error = support::from_yaml(
+        r#"
+schema_version: registry-manifest/v1
+catalog:
+  id: validation-regression
+  base_url: https://registry.example.test
+  title: Validation Regression
+  publisher:
+    name: Publisher
+datasets:
+  - id: register
+    title: Register
+  - id: register
+    title: Register again
+"#,
+    )
+    .expect_err("a repeated dataset id is refused while reading");
+    assert_eq!(
+        error.to_string(),
+        "datasets: item 1 repeats the id of item 0"
     );
 }
 

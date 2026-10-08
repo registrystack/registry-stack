@@ -81,7 +81,11 @@ A manifest refused by `registry_manifest_core::validate_manifest` reported
 `empty-value`, `invalid-id`, `invalid-url`, `invalid-iri`,
 `invalid-vocabulary-prefix`, `invalid-digest`, `policy-hash-mismatch`,
 `policy-not-canonicalizable`, `too-many-items`, `unsupported`, and
-`invalid-value`.
+`invalid-value`. A repeated id in `profiles`, `evaluation_profiles`,
+`requirements`, `evidence_types`, `authorities`, `public_services`,
+`data_services`, `distributions`, `forms`, `datasets`, or `codelists` is
+refused while the manifest is read, with `config.duplicate-id` at the copy's
+`id` (CFG-ID-5); `duplicate-value` remains for every other repeated value.
 
 | Before | Now |
 |---|---|
