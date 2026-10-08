@@ -484,6 +484,10 @@ mod tests {
         sorted.dedup();
         assert_eq!(names, sorted, "starters are unique and in name order");
         for starter in starters {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "test reading this crate's own embedded starter for two keys; bregctl reads the ModelSelection format through its own reader"
+            )]
             let document: serde_norway::Value =
                 serde_norway::from_str(starter.contents).expect("a starter is YAML");
             assert_eq!(
