@@ -368,7 +368,7 @@ pub const SCHEMA_JSON: &str = "{\"type\": \"object\", \"additionalProperties\": 
 pub const ADAPTER: &str = "fn prepare(selectors, context) {\n    #{query: [], body: #{}}\n}\n";
 
 pub const FIXTURE: &str =
-    "fixture: registry.evidence.acceptance.editor/v1\nsynthetic_only: true\ncases: []\n";
+    "apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1\nkind: EvidenceFixture\nsynthetic_only: true\ncases: []\n";
 
 pub const ACCESS_POLICY: &str =
     "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
