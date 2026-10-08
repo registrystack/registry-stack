@@ -16,9 +16,9 @@
   ],
   "diagnostics": [],
   "filesChecked": 18,
-  "package": "products/messaging/examples/starter",
-  "packageDigest": "sha256:b819f6d18f1b32ede522cb7c4ad436056a1cc85e10523c891dcfe892623ecb5b",
-  "packageFiles": 18,
+  "project": "products/messaging/examples/starter",
+  "projectDigest": "sha256:b819f6d18f1b32ede522cb7c4ad436056a1cc85e10523c891dcfe892623ecb5b",
+  "projectFiles": 18,
   "templates": [
     {
       "channel": "email",

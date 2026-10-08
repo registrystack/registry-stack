@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: the `messagingctl --format json` reports of `check` and
+  `package` name the project the way the `--project` flag does: `project`,
+  `projectDigest`, and `projectFiles` replace `package`, `packageDigest`, and
+  `packageFiles`. Migration steps are in
+  `release/notes/config-conventions/messaging.md`.
 - BREAKING: `authentication.oidc.assertionIssuers: {}` is refused: delete the
   member to apply no assertion-issuer rule. The generated runtime schema types
   the client keys as `ExternalId` and requires at least one client.

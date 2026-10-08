@@ -722,8 +722,8 @@ fn package(args: &PackageArgs) -> Outcome {
             "output": args.output,
             "dryRun": args.dry_run,
             "revision": args.revision,
-            "packageDigest": digest,
-            "packageFiles": inputs.len(),
+            "projectDigest": digest,
+            "projectFiles": inputs.len(),
         }),
         View::Package,
     )
@@ -879,7 +879,7 @@ fn check(args: &CheckArgs) -> Outcome {
                 }
                 match package_report(&loaded) {
                     Ok(mut report) => {
-                        report["package"] = json!(root);
+                        report["project"] = json!(root);
                         report["filesChecked"] = json!(warnings.files_checked());
                         report["diagnostics"] = warnings.to_json_value();
                         Outcome::new(report, View::Check)
@@ -957,7 +957,7 @@ fn check(args: &CheckArgs) -> Outcome {
         Err(refused) => return refused,
     };
     if let Some((root, _)) = &given {
-        checked["package"] = json!(root);
+        checked["project"] = json!(root);
     }
     checked["runtimeConfig"] = json!(path);
     checked["filesChecked"] = json!(report.files_checked());
@@ -1040,8 +1040,8 @@ fn package_report(loaded: &LoadedPackage) -> Result<Value, Outcome> {
     }
     Ok(json!({
         "ok": true,
-        "packageDigest": package.digest(),
-        "packageFiles": loaded.files.len(),
+        "projectDigest": package.digest(),
+        "projectFiles": loaded.files.len(),
         "templates": templates,
         "accessProfiles": profiles,
     }))
@@ -1820,8 +1820,8 @@ fn render_package(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> 
         "created"
     };
     writeln!(stdout, "{verb}: {}", text(&report["output"]))?;
-    writeln!(stdout, "package digest: {}", text(&report["packageDigest"]))?;
-    writeln!(stdout, "package files: {}", report["packageFiles"])
+    writeln!(stdout, "package digest: {}", text(&report["projectDigest"]))?;
+    writeln!(stdout, "package files: {}", report["projectFiles"])
 }
 
 fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
@@ -1874,9 +1874,9 @@ fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
 fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     match report["runtimeConfig"].as_str() {
         Some(path) => writeln!(stdout, "ok: {path}")?,
-        None => writeln!(stdout, "ok: {}", text(&report["package"]))?,
+        None => writeln!(stdout, "ok: {}", text(&report["project"]))?,
     }
-    if let Some(digest) = report["packageDigest"].as_str() {
+    if let Some(digest) = report["projectDigest"].as_str() {
         writeln!(stdout, "package digest: {digest}")?;
     }
     if report.get("listener").is_some() {
@@ -2549,7 +2549,7 @@ audit:
             project.as_os_str(),
         ]);
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
-        report["package"] = json!(relative);
+        report["project"] = json!(relative);
         let mut written = Vec::new();
         report::write(&report, &mut written).unwrap();
         let committed =
@@ -2574,8 +2574,8 @@ audit:
             directory.as_os_str(),
         ]);
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
-        assert_eq!(report["packageDigest"], expected.package.digest());
-        assert_eq!(report["packageFiles"], expected.files.len());
+        assert_eq!(report["projectDigest"], expected.package.digest());
+        assert_eq!(report["projectFiles"], expected.files.len());
         assert_eq!(report["filesChecked"], expected.files.len());
         assert_eq!(report["diagnostics"], json!([]));
         let templates = report["templates"].as_array().unwrap();
@@ -2718,7 +2718,7 @@ audit:
             output.as_os_str(),
         ]);
         assert_eq!(exit, ExitCode::SUCCESS, "{checked}");
-        assert_eq!(checked["packageDigest"], report["packageDigest"]);
+        assert_eq!(checked["projectDigest"], report["projectDigest"]);
 
         let dry_output = root.path().join("dry-output");
         let (exit, dry) = json_run(&[
@@ -2731,7 +2731,7 @@ audit:
             OsStr::new("--dry-run"),
         ]);
         assert_eq!(exit, ExitCode::SUCCESS, "{dry}");
-        assert_eq!(dry["packageDigest"], report["packageDigest"]);
+        assert_eq!(dry["projectDigest"], report["projectDigest"]);
         assert!(!dry_output.exists());
     }
 
@@ -2774,7 +2774,7 @@ audit:
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
         assert_eq!(report["runtimeConfig"], json!(runtime_config));
         assert_eq!(report["diagnostics"], json!([]));
-        assert!(report["packageDigest"].is_string());
+        assert!(report["projectDigest"].is_string());
         // The runtime file and every project file the check read.
         assert_eq!(
             report["filesChecked"],

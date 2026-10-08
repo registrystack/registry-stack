@@ -268,6 +268,19 @@ meant.
   script that compared the whole report, or its leading members, accepts the
   two new members; a script that reads members by name needs no change.
 
+## BREAKING: the `check` and `package` reports name the project like the flag
+
+| Old member | New member | Migration |
+|---|---|---|
+| `package` (the directory `check` read) | `project` | Read `project`. |
+| `packageDigest` (`check`, `package`) | `projectDigest` | Read `projectDigest`; the value is unchanged. |
+| `packageFiles` (`check`, `package`) | `projectFiles` | Read `projectFiles`; the value is unchanged. |
+
+The `plan`, `apply`, `status`, and `preview` reports keep `packageDigest`: it
+names the package a runtime activated, as the HTTP contract does.
+`products/messaging/examples/formats/ctl-report.json` shows the new members.
+Human output is unchanged.
+
 ## BREAKING: `authentication.oidc.assertionIssuers: {}` is refused
 
 | Before | Now | Migration |

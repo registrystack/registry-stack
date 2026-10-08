@@ -93,9 +93,9 @@ assert [(t["id"], t["version"]) for t in report["templates"]] == [
     ("appointment-reminder", "1"),
     ("appointment-reminder-sms", "1"),
 ], report
-assert report["packageDigest"].startswith("sha256:"), report
+assert report["projectDigest"].startswith("sha256:"), report
 PY
-starter_digest=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["packageDigest"])' "$report")
+starter_digest=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["projectDigest"])' "$report")
 
 # init writes exactly the published starter, and its package has the same
 # digest the runtime configuration above reported.
@@ -110,7 +110,7 @@ import sys
 
 report, digest = json.loads(sys.argv[1]), sys.argv[2]
 assert report["ok"] is True, report
-assert report["packageDigest"] == digest, report
+assert report["projectDigest"] == digest, report
 PY
 
 # Pinning the digest the check reported is accepted.
