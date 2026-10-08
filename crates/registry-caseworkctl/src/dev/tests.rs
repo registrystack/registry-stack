@@ -3579,6 +3579,48 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     assert!(wrong.validate(&clients, &policy).is_err());
 }
 
+/// The committed example `bregctl check` reads stands for the state a
+/// current `bregctl dev` retains; a borrowed issuer owner it describes is
+/// accepted, and the headerless state an earlier bregctl wrote is not.
+#[test]
+fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
+    let project_temp = crate::canonical_tempdir();
+    let project = fs::canonicalize(project_temp.path()).unwrap();
+    let owner_temp = crate::canonical_tempdir();
+    let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
+    fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_root = owner_project.join(".breg/dev");
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_root).unwrap();
+    let mut owner: Value = serde_json::from_str(include_str!(
+        "../../../../products/breg/examples/formats/dev-session/.breg/dev/state.json"
+    ))
+    .unwrap();
+    owner["project"] = json!(owner_project);
+    let owner_id = owner["owner"].as_str().unwrap().to_owned();
+    let mut state = session(&project);
+    state.issuer_project = Some(owner_project.clone());
+    state.issuer_owner = Some(owner_id);
+    state.issuer_port = u16::try_from(owner["issuerPort"].as_u64().unwrap()).unwrap();
+    private::create(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&owner).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(borrowed_issuer(&state).unwrap(), Some(owner_root.clone()));
+
+    let fields = owner.as_object_mut().unwrap();
+    fields.remove("apiVersion").unwrap();
+    fields.remove("kind").unwrap();
+    fields.insert("version".to_owned(), json!(2));
+    private::replace(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&owner).unwrap(),
+    )
+    .unwrap();
+    assert!(borrowed_issuer(&state).is_err());
+}
+
 #[test]
 fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
     let project_temp = crate::canonical_tempdir();
@@ -3595,7 +3637,8 @@ fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),
@@ -3661,7 +3704,8 @@ fn a_borrowed_client_the_owner_registered_for_exchange_must_declare_it() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),
@@ -3760,7 +3804,8 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null,
             "instanceId":owner_instance
         }))
@@ -3834,7 +3879,8 @@ fn borrowed_browser_admission_requires_exact_owner_resource() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),
@@ -3902,7 +3948,8 @@ fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
     private::create(
         &owner_root.join("state.json"),
         &serde_json::to_vec(&json!({
-            "version":2,"project":owner_project,"owner":owner_id,
+            "apiVersion":"id.registrystack.org/formats/breg/dev-state/v1alpha1",
+            "kind":"BRegDevState","project":owner_project,"owner":owner_id,
             "status":"ready","issuerPort":8093,"issuerProject":null
         }))
         .unwrap(),

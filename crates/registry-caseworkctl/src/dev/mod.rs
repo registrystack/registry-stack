@@ -87,6 +87,11 @@ const INVALID_STATE: &str = "retained dev state is invalid; preserve it for insp
 /// Refusal for retained state whose ownership members break the rules every
 /// state caseworkctl writes satisfies.
 const STATE_OWNERSHIP: &str = "retained dev state ownership is invalid; no resources were changed";
+/// The header `bregctl dev` writes on the session state it retains in
+/// `.breg/dev/state.json`. A borrowed issuer owner is read only from state
+/// carrying it; state an earlier bregctl wrote names no ready owner.
+const BREG_DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/breg/dev-state/v1alpha1";
+const BREG_DEV_STATE_KIND: &str = "BRegDevState";
 /// Longest one supervised prerequisite command may run before the supervisor
 /// stops it and fails the start.
 const CHILD_DEADLINE: Duration = Duration::from_secs(120);
@@ -636,6 +641,12 @@ fn state_rules(state: &State) -> bool {
         && ports(state.casework_port, state.issuer_port, state.database_port).is_ok()
 }
 
+/// Whether retained BREG state carries the header the current `bregctl dev`
+/// writes.
+fn breg_dev_state(owner: &Value) -> bool {
+    owner["apiVersion"] == BREG_DEV_STATE_API_VERSION && owner["kind"] == BREG_DEV_STATE_KIND
+}
+
 /// Read the exact retained BREG owner; a borrowed Casework session never
 /// manages that issuer's container or changes its client registrations.
 fn borrowed_issuer(state: &State) -> Result<Option<PathBuf>> {
@@ -650,7 +661,7 @@ fn borrowed_issuer(state: &State) -> Result<Option<PathBuf>> {
     private::check(&root, true)?;
     let owner: Value =
         serde_json::from_slice(&private::read(&root.join("state.json"), MAX_BYTES)?)?;
-    if owner["version"] != 2
+    if !breg_dev_state(&owner)
         || owner["project"] != canonical.to_string_lossy().as_ref()
         || owner["status"] != "ready"
         || !owner["issuerProject"].is_null()
@@ -1406,7 +1417,7 @@ fn start(args: StartArgs) -> Result<Value> {
             private::check(&owner_root, true)?;
             let owner: Value =
                 serde_json::from_slice(&private::read(&owner_root.join("state.json"), MAX_BYTES)?)?;
-            if owner["version"] != 2
+            if !breg_dev_state(&owner)
                 || owner["status"] != "ready"
                 || !owner["issuerProject"].is_null()
                 || owner["project"] != owner_project.to_string_lossy().as_ref()
