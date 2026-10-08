@@ -62,6 +62,11 @@ pub(crate) const RETAINED_STOPPED_SESSION: &str = "dev-stopped-before-restart";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
+/// The header `bregctl dev` writes on the session state it retains in
+/// `.breg/dev/state.json`. A borrowed issuer owner is read only from state
+/// carrying it; state an earlier bregctl wrote names no ready owner.
+const BREG_DEV_STATE_API_VERSION: &str = "id.registrystack.org/formats/breg/dev-state/v1alpha1";
+const BREG_DEV_STATE_KIND: &str = "BRegDevState";
 /// The bundle's own bound on `authentication.allowedClients`, named here so a
 /// session borrowing a shared issuer is refused where the operator can act
 /// rather than by the Evidence binary checking the compiled result.
@@ -699,7 +704,8 @@ fn load_breg_issuer(project: &Path) -> Result<BorrowedIssuer> {
         .as_u64()
         .filter(|port| *port > 0 && *port <= u16::MAX as u64)
         .context("BREG issuer owner has no valid port")? as u16;
-    if state["version"] != 2
+    if state["apiVersion"] != BREG_DEV_STATE_API_VERSION
+        || state["kind"] != BREG_DEV_STATE_KIND
         || state["status"] != "ready"
         || state["project"] != project.to_string_lossy().as_ref()
         || !state["issuerProject"].is_null()
@@ -4790,5 +4796,43 @@ requirements:
                     .to_string();
             assert_eq!(error, refusal, "{case}");
         }
+    }
+
+    /// The committed example `bregctl check` reads stands for the state a
+    /// current `bregctl dev` retains; the issuer owner it describes is
+    /// accepted, and the headerless state an earlier bregctl wrote is not.
+    #[test]
+    fn a_current_bregctl_dev_state_names_the_borrowed_issuer_owner() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let project = fs::canonicalize(root.path()).expect("canonical project");
+        let dev = project.join(".breg/dev");
+        for directory in [project.join(".breg"), dev.clone()] {
+            fs::create_dir(&directory).expect("private directory");
+            fs::set_permissions(&directory, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
+                .expect("private directory mode");
+        }
+        let mut state: Value = serde_json::from_str(include_str!(
+            "../../../products/breg/examples/formats/dev-session/.breg/dev/state.json"
+        ))
+        .expect("example state");
+        state["project"] = json!(project);
+        let write = |state: &Value| {
+            let path = dev.join("state.json");
+            fs::write(&path, serde_json::to_vec(state).expect("state bytes")).expect("state");
+            fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
+                .expect("state mode");
+        };
+        write(&state);
+        let owner = load_breg_issuer(&project).expect("current owner state");
+        assert_eq!(owner.project, project);
+        assert_eq!(owner.owner, state["owner"].as_str().unwrap());
+        assert_eq!(u64::from(owner.port), state["issuerPort"].as_u64().unwrap());
+
+        let fields = state.as_object_mut().unwrap();
+        fields.remove("apiVersion").unwrap();
+        fields.remove("kind").unwrap();
+        fields.insert("version".to_owned(), json!(2));
+        write(&state);
+        assert!(load_breg_issuer(&project).is_err());
     }
 }
