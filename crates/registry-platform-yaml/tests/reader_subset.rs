@@ -7,8 +7,8 @@ mod common;
 
 use common::*;
 use registry_platform_yaml::{
-    NodeValue, Reader, Severity, MAXIMUM_DEPTH, MAXIMUM_DIAGNOSTICS_PER_FILE,
-    MAXIMUM_DOCUMENT_BYTES,
+    NodeValue, Reader, Refusal, ScalarHook, ScalarSite, Severity, MAXIMUM_DEPTH,
+    MAXIMUM_DIAGNOSTICS_PER_FILE, MAXIMUM_DOCUMENT_BYTES,
 };
 
 fn scan_ok(text: &str) -> NodeValue {
@@ -682,6 +682,65 @@ fn cfg_val_1_integer_literals_outside_the_representable_range_are_refused() {
         ]
     );
     assert_no_marker(&report);
+}
+
+#[test]
+fn cfg_val_1_a_control_character_in_a_text_value_is_refused() {
+    let report = scan_refusal(
+        "a: \"x\\0y\"\nb: \"x\\ay\"\nc: \"x\\x01y\"\nd: x\u{1}y\ne: |\n  x\u{1b}y\nf: [\"\\u001f\"]\n",
+    );
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .collect();
+    let code = "yaml.control-character";
+    assert_eq!(
+        found,
+        [
+            (code, "/a"),
+            (code, "/b"),
+            (code, "/c"),
+            (code, "/d"),
+            (code, "/e"),
+            (code, "/f/0"),
+        ]
+    );
+    assert_diagnostic(
+        &report.diagnostics()[0],
+        code,
+        "/a",
+        (1, 4),
+        "the text holds a control character other than tab, line feed, or carriage return",
+        "Remove the character; in a double-quoted value, look for an escape such as `\\0`, `\\a`, `\\e`, or `\\x01`.",
+    );
+}
+
+#[test]
+fn cfg_val_1_tab_line_feed_and_carriage_return_are_text() {
+    let NodeValue::Mapping(entries) = scan_ok("a: \"x\\ty\\nz\\r\"\nb: \"x\ty\"\nc: |\n  x\n  y\n")
+    else {
+        panic!("a mapping");
+    };
+    assert_eq!(entries.len(), 3);
+}
+
+#[test]
+fn cfg_val_1_a_text_value_refused_for_a_control_character_is_not_offered_to_the_hook() {
+    struct Record(Vec<String>);
+    impl ScalarHook for Record {
+        fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
+            self.0.push(site.pointer.to_string());
+            Ok(None)
+        }
+    }
+    let mut hook = Record(Vec::new());
+    let report = Reader::new(FILE)
+        .with_hook(&mut hook)
+        .scan(b"a: \"${A}\\0\"\nb: ok\n")
+        .unwrap_err();
+    assert_eq!(codes(&report), ["yaml.control-character"]);
+    assert_eq!(hook.0, ["/b"]);
 }
 
 // ----- CFG-DIAG-5 -----

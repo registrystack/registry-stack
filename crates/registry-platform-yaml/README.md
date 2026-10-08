@@ -150,6 +150,7 @@ Reader codes have two segments; product codes have three.
 | `yaml.non-string-key` | a mapping key is not a string |
 | `yaml.multiple-documents` | the file holds more than one document |
 | `yaml.ambiguous-number` | an unquoted value looks like a number but is not a plain decimal |
+| `yaml.control-character` | a text value holds a control character other than tab, line feed, or carriage return |
 | `yaml.too-deep` | the document nests deeper than 128 levels |
 | `config.missing-envelope` | the document is empty, or its top-level mapping lacks apiVersion or kind |
 | `config.wrong-kind` | kind is not one the reader accepts |
@@ -205,6 +206,12 @@ Plain scalars resolve through one table (CFG-VAL-1), documented in
   (`0x1F`, `0o17`, `0b101`), and `.inf` or `.nan` are refused as
   `yaml.ambiguous-number`;
 - everything else, including `1_000` and `09:00`, is text.
+
+Text holds no C0 control character other than tab, line feed, and carriage
+return, whether written raw or as an escape such as `"\0"` or `"\x01"`:
+such a value is refused as `yaml.control-character` before a hook sees it,
+since no configuration value needs one and a NUL or an escape sequence
+read back into a log, a terminal, or a C library changes what it means.
 
 Quoted and block scalars are always text. Text in an integer, number, or
 boolean position is refused, and the message says why (CFG-DIAG-6): a

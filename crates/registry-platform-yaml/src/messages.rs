@@ -36,6 +36,7 @@ pub const CODES: &[CodeInfo] = &[
     CodeInfo { code: "yaml.non-string-key", meaning: "a mapping key is not a string" },
     CodeInfo { code: "yaml.multiple-documents", meaning: "the file holds more than one document" },
     CodeInfo { code: "yaml.ambiguous-number", meaning: "an unquoted value looks like a number but is not a plain decimal" },
+    CodeInfo { code: "yaml.control-character", meaning: "a text value holds a control character other than tab, line feed, or carriage return" },
     CodeInfo { code: "yaml.too-deep", meaning: "the document nests deeper than 128 levels" },
     CodeInfo { code: "config.missing-envelope", meaning: "the document is empty, or its top-level mapping lacks apiVersion or kind" },
     CodeInfo { code: "config.wrong-kind", meaning: "kind is not one the reader accepts" },
@@ -352,6 +353,13 @@ pub(crate) fn ambiguous_number() -> Text {
     text(
         "this unquoted value looks like a number but is not a plain decimal, and YAML versions read it differently",
         "Write a decimal number, or quote it as text.",
+    )
+}
+
+pub(crate) fn control_character() -> Text {
+    text(
+        "the text holds a control character other than tab, line feed, or carriage return",
+        "Remove the character; in a double-quoted value, look for an escape such as `\\0`, `\\a`, `\\e`, or `\\x01`.",
     )
 }
 

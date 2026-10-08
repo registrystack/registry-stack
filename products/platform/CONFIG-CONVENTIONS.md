@@ -244,8 +244,9 @@ each with line, column, and a fix:
 The other `yaml.` codes are the refusals of CFG-ENV-4, CFG-YAML-2 to 6, and
 CFG-VAL-1: `yaml.multiple-documents`, `yaml.duplicate-key`, `yaml.anchor`,
 `yaml.alias`, `yaml.merge-key`, `yaml.tag`, `yaml.non-string-key`,
-`yaml.too-large`, `yaml.too-deep`, and `yaml.ambiguous-number`. A `yaml.` code
-is added to this rule in the same change that first reports it.
+`yaml.too-large`, `yaml.too-deep`, `yaml.ambiguous-number`, and
+`yaml.control-character`. A `yaml.` code is added to this rule in the same
+change that first reports it.
 *Why:* the mistakes of a first hour are syntax mistakes, and a parser's own
 text names them in terms an operator cannot act on.
 
@@ -269,6 +270,9 @@ accepts both. A value outside the member's bounds, or a number no binary64
 value can hold, is refused with `config.out-of-range`, naming the bounds.
 
 Quoted and block scalars (`'...'`, `"..."`, `|`, `>`) are always strings.
+A string holds no C0 control character other than tab, line feed, and
+carriage return, whether written raw or as an escape (`"\0"`, `"\a"`,
+`"\x01"`); such a value is refused with `yaml.control-character`.
 
 **CFG-VAL-2 (MUST). A member typed as text accepts only a string.** A plain
 scalar that resolves to null, a boolean, or a number in a text position is

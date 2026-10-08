@@ -583,6 +583,19 @@ impl Builder<'_, '_> {
                     substituted: false,
                 })
             }
+            Resolved::String if holds_control_character(&value) => {
+                // Refused as written, before any hook sees it.
+                self.problem_here(
+                    "yaml.control-character",
+                    span.start,
+                    messages::control_character(),
+                );
+                NodeValue::String(Text {
+                    text: String::new(),
+                    style,
+                    substituted: false,
+                })
+            }
             Resolved::String => {
                 let pointer = self.pointer();
                 match self.call_value_hook(&pointer, &value, style, span) {
@@ -909,6 +922,13 @@ fn convert_style(style: EventStyle) -> ScalarStyle {
         EventStyle::Literal => ScalarStyle::Literal,
         EventStyle::Folded => ScalarStyle::Folded,
     }
+}
+
+/// Whether text holds a C0 control character other than tab, line feed, and
+/// carriage return, written raw or as an escape (CFG-VAL-1).
+fn holds_control_character(text: &str) -> bool {
+    text.chars()
+        .any(|c| c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r'))
 }
 
 fn refusal_problem(refusal: Refusal, pointer: String, at: Position) -> Problem {
