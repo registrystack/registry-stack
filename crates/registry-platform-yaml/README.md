@@ -68,7 +68,7 @@ The public surface:
 | `BoundedU32<MIN, MAX>`, `BoundedU64<MIN, MAX>` | Integers with both bounds in the type and the schema (CFG-QTY-4). |
 | `UniqueList<T>`, `UniqueIdList<T>` with `Identified` | A set (`config.duplicate-item`) and a list of named items (`config.duplicate-id`) (CFG-ID-5, CFG-ID-6). |
 | `tagged_union!`, `shape_union!`, `SHARED_BLOCK_PREFIX` | The serde recipes below. |
-| `MAXIMUM_DOCUMENT_BYTES`, `MAXIMUM_DEPTH`, `MAXIMUM_EXTERNAL_ID_CHARS`, `MAXIMUM_URL_CHARS` | The bounds. |
+| `MAXIMUM_DOCUMENT_BYTES`, `MAXIMUM_DEPTH`, `MAXIMUM_DIAGNOSTICS_PER_FILE`, `MAXIMUM_EXTERNAL_ID_CHARS`, `MAXIMUM_URL_CHARS` | The bounds. |
 
 The `schema` feature derives `JsonSchema` for the shared types, with the
 same bounds, patterns, and closedness the reader enforces.
@@ -160,9 +160,15 @@ Reader codes have two segments; product codes have three.
 | `config.out-of-range` | a number is outside its bounds |
 | `config.substitution` | a `${...}` expression cannot be filled: it is not well formed, its variable is unset or empty, `${NAME:?message}` refused, or the value holds a NUL byte (reported by a substitution hook) |
 | `config.substitution-not-allowed` | a `${...}` expression is written where substitution is not allowed, or an envelope member was substituted |
+| `config.too-many-problems` | the file has more problems than the reader shows; this last diagnostic counts the rest |
 
 A test fails when a code in the source is missing from this table or the
 table holds a code with other than two kebab-case segments.
+
+A report holds at most `MAXIMUM_DIAGNOSTICS_PER_FILE` (100) diagnostics for
+one file, the first ones by position, then one `config.too-many-problems`
+diagnostic counting the rest ("50 more problems in this file are not
+shown"). It is an error when any problem it counts is one.
 
 ## The subset and the scalar table
 
@@ -204,10 +210,11 @@ before the `#` that starts the comment." The sentence names no part of the
 value (CFG-SEC-3) and is not added for a value a `ScalarHook` substituted.
 
 Every struct refuses unknown keys, whatever its serde attributes say; the
-action lists the accepted keys and suggests the closest one when one is
-within two edits (one for keys of four characters or fewer). A top-level `x-`
-key is unknown, with the fix "extension fields are not supported; use a
-comment".
+action suggests the closest accepted key when one is within two edits (one
+for keys of four characters or fewer), and otherwise lists the accepted keys.
+A mapping lists them once, at its first such unknown key; a later one says
+"the accepted keys are listed at line N". A top-level `x-` key is unknown,
+with the fix "extension fields are not supported; use a comment".
 
 ## Serde recipes
 

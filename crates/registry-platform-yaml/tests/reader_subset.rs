@@ -6,7 +6,10 @@
 mod common;
 
 use common::*;
-use registry_platform_yaml::{NodeValue, Reader, Severity, MAXIMUM_DEPTH, MAXIMUM_DOCUMENT_BYTES};
+use registry_platform_yaml::{
+    NodeValue, Reader, Severity, MAXIMUM_DEPTH, MAXIMUM_DIAGNOSTICS_PER_FILE,
+    MAXIMUM_DOCUMENT_BYTES,
+};
 
 fn scan_ok(text: &str) -> NodeValue {
     Reader::new(FILE)
@@ -599,4 +602,52 @@ fn cfg_diag_5_a_syntax_error_stops_the_read_alone() {
     // Past a syntax error the parser cannot say where anything is.
     let report = read_refusal("kind: x\nname: &a b\nc: \"open\n");
     assert_eq!(codes(&report), ["yaml.anchor", "yaml.unclosed-quote"]);
+}
+
+/// `count` repeats of one key after its first definition: one duplicate
+/// problem each, on lines 2 to `count + 1`.
+fn repeated_key(count: usize) -> String {
+    "name: a\n".repeat(count + 1)
+}
+
+#[test]
+fn cfg_diag_5_a_file_reports_at_most_the_bound_then_counts_the_rest() {
+    let report = scan_refusal(&repeated_key(MAXIMUM_DIAGNOSTICS_PER_FILE + 50));
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    let shown = &diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert!(shown.iter().all(|d| d.code == "yaml.duplicate-key"));
+    // The first problems by position are the ones shown.
+    assert_eq!(at(&shown[0]), (2, 1));
+    assert_eq!(at(&shown[MAXIMUM_DIAGNOSTICS_PER_FILE - 1]), (101, 1));
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.severity, Severity::Error);
+    assert_eq!(rest.code, "config.too-many-problems");
+    assert_eq!(rest.path, "");
+    assert_eq!(rest.message, "50 more problems in this file are not shown");
+    assert_eq!(
+        rest.suggested_action,
+        "Fix the problems shown, then check the file again."
+    );
+    let source = rest.source.as_ref().expect("the count names the file");
+    assert_eq!(
+        (source.file.as_str(), source.line, source.column),
+        (FILE, None, None)
+    );
+    assert_eq!(report.summary(), "101 errors, 0 warnings in 1 file");
+}
+
+#[test]
+fn cfg_diag_5_the_count_of_problems_not_shown_is_exact() {
+    let report = scan_refusal(&repeated_key(MAXIMUM_DIAGNOSTICS_PER_FILE + 1));
+    let rest = report.diagnostics().last().expect("a diagnostic");
+    assert_eq!(rest.code, "config.too-many-problems");
+    assert_eq!(rest.message, "1 more problem in this file is not shown");
+
+    let report = scan_refusal(&repeated_key(MAXIMUM_DIAGNOSTICS_PER_FILE));
+    assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE);
+    assert!(report
+        .diagnostics()
+        .iter()
+        .all(|d| d.code == "yaml.duplicate-key"));
 }

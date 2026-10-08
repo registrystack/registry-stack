@@ -58,6 +58,7 @@ pub const CODES: &[CodeInfo] = &[
     CodeInfo { code: "config.out-of-range", meaning: "a number is outside its bounds" },
     CodeInfo { code: "config.substitution", meaning: "a `${...}` expression cannot be filled: it is not well formed, its variable is unset or empty, `${NAME:?message}` refused, or the value holds a NUL byte (reported by a substitution hook)" },
     CodeInfo { code: "config.substitution-not-allowed", meaning: "a `${...}` expression is written where substitution is not allowed, or an envelope member was substituted" },
+    CodeInfo { code: "config.too-many-problems", meaning: "the file has more problems than the reader shows; this last diagnostic counts the rest" },
 ];
 
 /// A problem found while reading, before the file name and artifact are
@@ -312,6 +313,18 @@ pub(crate) fn ambiguous_number() -> Text {
     )
 }
 
+pub(crate) fn too_many_problems(hidden: usize) -> Text {
+    let message = if hidden == 1 {
+        "1 more problem in this file is not shown".to_string()
+    } else {
+        format!("{hidden} more problems in this file are not shown")
+    };
+    text(
+        message,
+        "Fix the problems shown, then check the file again.",
+    )
+}
+
 pub(crate) fn too_deep(bound: usize) -> Text {
     text(
         format!("the document nests deeper than {bound} levels"),
@@ -436,6 +449,24 @@ pub(crate) fn removed_key(name: &str, replacement: &str) -> Text {
         format!("{} is no longer accepted", key(name)),
         replacement.to_string(),
     )
+}
+
+/// An unknown key in a mapping whose accepted keys an earlier unknown key,
+/// on `line`, already listed.
+pub(crate) fn unknown_key_listed_above(name: &str, line: usize) -> Text {
+    text(
+        format!("{} is not a member of this mapping", key(name)),
+        format!(
+            "Remove {}; the accepted keys are listed at line {line}.",
+            key(name)
+        ),
+    )
+}
+
+/// Whether [`unknown_key`] names a likely misspelling instead of listing
+/// the accepted keys.
+pub(crate) fn names_a_close_key(name: &str, accepted: &[&str]) -> bool {
+    closest(name, accepted).is_some()
 }
 
 /// `accepted` is `None` when the accepted keys are not known: a struct that

@@ -3,10 +3,23 @@
 
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, EnvelopeRule, FormatSpec, Refusal, RemovedKey, Report,
-    RetiredApiVersion, ScalarHook, ScalarSite, CODES,
+    RetiredApiVersion, ScalarHook, ScalarSite, CODES, MAXIMUM_DIAGNOSTICS_PER_FILE,
 };
 
 pub const FILE: &str = "fuzz.yaml";
+
+/// The most bytes one sentence of a diagnostic may take (its message, its
+/// fix, or a related note): keys are shortened to 64 characters, and a
+/// mapping lists its accepted keys once.
+const MAXIMUM_SENTENCE_BYTES: usize = 2048;
+
+/// What a rendering adds around a diagnostic's sentences and paths: the
+/// severity, code, position, and member names.
+const RENDERING_OVERHEAD_BYTES: usize = 256;
+
+/// A rendering writes a control character as at most six bytes (`\u{9f}`
+/// in human output, `\u001f` in JSON).
+const ESCAPE_GROWTH: usize = 6;
 
 /// What the hook substitutes. The input never contains it (a run whose
 /// input does is not checked for it), so a diagnostic that repeats it
@@ -92,14 +105,40 @@ pub fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// Every report the reader returns: known two-segment codes, 1-based
-/// positions, renderable output, and, when `forbid_marker`, no substituted
-/// value anywhere in it.
+/// positions, at most the bound of diagnostics plus the count of the rest,
+/// renderable output of bounded size, and, when `forbid_marker`, no
+/// substituted value anywhere in it.
 pub fn check_report(report: &Report, forbid_marker: bool) {
-    for diagnostic in report.diagnostics() {
+    let diagnostics = report.diagnostics();
+    assert!(
+        diagnostics.len() <= MAXIMUM_DIAGNOSTICS_PER_FILE + 1,
+        "{} diagnostics for one file",
+        diagnostics.len()
+    );
+    let mut written = 0;
+    for (index, diagnostic) in diagnostics.iter().enumerate() {
         check_diagnostic(diagnostic, forbid_marker);
+        if diagnostic.code == "config.too-many-problems" {
+            assert_eq!(index, MAXIMUM_DIAGNOSTICS_PER_FILE, "the count comes last");
+        }
+        written += RENDERING_OVERHEAD_BYTES
+            + diagnostic.artifact.as_ref().map_or(0, String::len)
+            + diagnostic.path.len()
+            + diagnostic.message.len()
+            + diagnostic.suggested_action.len();
+        for related in &diagnostic.related {
+            written += RENDERING_OVERHEAD_BYTES + related.path.len() + related.message.len();
+        }
     }
     let human = report.render_human();
     let json = report.to_json_value().to_string();
+    let bound = ESCAPE_GROWTH * written + RENDERING_OVERHEAD_BYTES;
+    assert!(
+        human.len() <= bound,
+        "{} bytes of human output",
+        human.len()
+    );
+    assert!(json.len() <= bound, "{} bytes of JSON output", json.len());
     if forbid_marker {
         assert!(!human.contains(MARKER), "human output repeats a value");
         assert!(!json.contains(MARKER), "JSON output repeats a value");
@@ -116,6 +155,16 @@ fn check_diagnostic(diagnostic: &Diagnostic, forbid_marker: bool) {
     assert!(!diagnostic.message.is_empty(), "{}", diagnostic.code);
     assert!(
         !diagnostic.suggested_action.is_empty(),
+        "{}",
+        diagnostic.code
+    );
+    assert!(
+        diagnostic.message.len() <= MAXIMUM_SENTENCE_BYTES
+            && diagnostic.suggested_action.len() <= MAXIMUM_SENTENCE_BYTES
+            && diagnostic
+                .related
+                .iter()
+                .all(|related| related.message.len() <= MAXIMUM_SENTENCE_BYTES),
         "{}",
         diagnostic.code
     );

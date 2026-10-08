@@ -118,7 +118,8 @@ mod union;
 pub use de::{Invalid, SHARED_BLOCK_PREFIX};
 pub use diagnostic::{Diagnostic, Related, Report, Severity, Source};
 pub use document::{
-    decode_document, read_document, Decoded, Document, Reader, MAXIMUM_DOCUMENT_BYTES,
+    decode_document, read_document, Decoded, Document, Reader, MAXIMUM_DIAGNOSTICS_PER_FILE,
+    MAXIMUM_DOCUMENT_BYTES,
 };
 pub use envelope::{
     ApiVersion, Envelope, EnvelopeRule, Expect, FormatSpec, RemovedKey, RetiredApiVersion,

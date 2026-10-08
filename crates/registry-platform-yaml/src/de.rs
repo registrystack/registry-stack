@@ -1379,6 +1379,9 @@ struct StructAccess<'p, 'a> {
     block_index: usize,
     index: usize,
     pending: Pending<'a>,
+    /// The line of the unknown key that listed the accepted keys, so later
+    /// unknown keys of this mapping point at it instead of repeating it.
+    listed_at: Cell<Option<usize>>,
 }
 
 impl<'p, 'a> StructAccess<'p, 'a> {
@@ -1418,6 +1421,7 @@ impl<'p, 'a> StructAccess<'p, 'a> {
             block_index: 0,
             index: 0,
             pending: Pending::None,
+            listed_at: Cell::new(None),
         }
     }
 
@@ -1461,7 +1465,12 @@ impl<'p, 'a> StructAccess<'p, 'a> {
         accepted.extend(self.fields.iter().copied());
         let text = if self.parent.site.place == Place::Root && entry.key.starts_with("x-") {
             messages::extension_key(&entry.key)
+        } else if messages::names_a_close_key(&entry.key, &accepted) || accepted.is_empty() {
+            messages::unknown_key(&entry.key, Some(&accepted))
+        } else if let Some(line) = self.listed_at.get() {
+            messages::unknown_key_listed_above(&entry.key, line)
         } else {
+            self.listed_at.set(Some(entry.key_span.start.line));
             messages::unknown_key(&entry.key, Some(&accepted))
         };
         self.parent.ctx.record(Problem::error(

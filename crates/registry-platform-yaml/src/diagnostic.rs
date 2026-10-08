@@ -237,6 +237,14 @@ impl Report {
         self.diagnostics.sort_by_key(Diagnostic::sort_key);
     }
 
+    /// Keep the first `maximum` diagnostics and return the rest.
+    pub(crate) fn split_off(&mut self, maximum: usize) -> Vec<Diagnostic> {
+        if self.diagnostics.len() <= maximum {
+            return Vec::new();
+        }
+        self.diagnostics.split_off(maximum)
+    }
+
     /// The diagnostics as a JSON array, ready for a ctl report envelope.
     pub fn to_json_value(&self) -> serde_json::Value {
         serde_json::Value::Array(

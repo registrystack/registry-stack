@@ -11,7 +11,7 @@ use registry_platform_yaml::{
     shape_union, tagged_union, ApiVersion, BoundedU32, BoundedU64, DataLiteral, Digest,
     EnvelopeRule, Expect, ExternalId, FormatSpec, Identified, Invalid, LocalId, ProjectIdentity,
     Reader, Refusal, Report, ScalarHook, ScalarSite, Severity, UniqueIdList, UniqueList, Url,
-    CODES,
+    CODES, MAXIMUM_DIAGNOSTICS_PER_FILE,
 };
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -1235,6 +1235,68 @@ fn cfg_diag_5_unknown_keys_are_recorded_until_decoding_stops_at_the_first_type_e
 }
 
 #[test]
+fn cfg_diag_5_a_close_misspelling_is_named_and_the_list_goes_to_the_next_key() {
+    let report = refusal::<Settings>("nmae: a\nzzz: 1\nqqq: 2\nwww: 3\n");
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.path.as_str(), d.suggested_action.as_str()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("/nmae", "Rename `nmae` to `name`, or remove it."),
+            (
+                "/zzz",
+                "Remove `zzz`; the accepted keys are `name`, `port`, `enabled`, `ratio`, \
+                 `retentionDays`, `timeoutSeconds`, `maxBytes`, `tags`, `listener`."
+            ),
+            (
+                "/qqq",
+                "Remove `qqq`; the accepted keys are listed at line 4."
+            ),
+            (
+                "/www",
+                "Remove `www`; the accepted keys are listed at line 4."
+            ),
+        ]
+    );
+}
+
+#[test]
+fn cfg_diag_5_each_mapping_lists_its_own_accepted_keys() {
+    let report = refusal::<Settings>("zzz: 1\nlistener:\n  bind: a\n  qqq: 2\n");
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|d| (d.path.as_str(), d.suggested_action.as_str()))
+        .collect();
+    assert_eq!(
+        found[1],
+        (
+            "/listener/qqq",
+            "Remove `qqq`; the accepted keys are `bind`, `port`."
+        )
+    );
+}
+
+#[test]
+fn cfg_diag_5_unknown_keys_past_the_bound_are_counted() {
+    let body: String = (0..MAXIMUM_DIAGNOSTICS_PER_FILE + 20)
+        .map(|index| format!("unknown{index}: 1\n"))
+        .collect();
+    let report = refusal::<Listener>(&format!("bind: a\n{body}"));
+    let diagnostics = report.diagnostics();
+    assert_eq!(diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    assert!(diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
+        .iter()
+        .all(|d| d.code == "config.unknown-key"));
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.code, "config.too-many-problems");
+    assert_eq!(rest.message, "20 more problems in this file are not shown");
+}
+
+#[test]
 fn cfg_diag_5_structural_problems_stop_before_decoding() {
     let report = refusal::<Settings>("nmae: a\nport: &p 1\nport: 2\n");
     assert_eq!(codes(&report), ["yaml.anchor", "yaml.duplicate-key"]);
@@ -1602,9 +1664,10 @@ fn cfg_schema_8_an_unknown_key_beside_a_shared_block_names_every_accepted_key() 
                 "/zzz",
                 "Remove `zzz`; the accepted keys are `id`, `version`, `title`."
             ),
+            // A mapping lists its accepted keys once.
             (
                 "/qqq",
-                "Remove `qqq`; the accepted keys are `id`, `version`, `title`."
+                "Remove `qqq`; the accepted keys are listed at line 6."
             ),
         ]
     );

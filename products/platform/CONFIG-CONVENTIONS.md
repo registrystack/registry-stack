@@ -686,7 +686,9 @@ before parsing; a syntax error, `yaml.too-deep`, and `yaml.multiple-documents`
 follow the problems found before them. While decoding, the reader records every unknown and
 removed key and continues; decoding stops at its first other error in a
 document. Semantic checks run only on documents decoded without error and
-report all their findings.
+report all their findings. The reader reports at most 100 diagnostics for one
+file, the first by position, then one `config.too-many-problems` diagnostic
+counting the rest, so a damaged file cannot flood a terminal or a log.
 
 **CFG-DIAG-6 (MUST). Every refusal names its fix** in `suggestedAction`, as a
 sentence an operator can act on without reading the source. The shared reader

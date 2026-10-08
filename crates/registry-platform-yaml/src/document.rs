@@ -25,6 +25,11 @@ use crate::structure::{self, ScalarHook};
 /// check (CFG-YAML-6).
 pub const MAXIMUM_DOCUMENT_BYTES: usize = 1024 * 1024;
 
+/// The most diagnostics the reader reports for one file. Past it, the first
+/// ones by position are kept and one `config.too-many-problems` diagnostic
+/// counts the rest, so a damaged file cannot flood a terminal or a log.
+pub const MAXIMUM_DIAGNOSTICS_PER_FILE: usize = 100;
+
 const BYTE_ORDER_MARK: char = '\u{feff}';
 
 /// Reads one file.
@@ -405,6 +410,22 @@ fn report(
     diagnostics.extend(warnings);
     let mut report = Report::new(diagnostics);
     report.sort_by_position();
+    let hidden = report.split_off(MAXIMUM_DIAGNOSTICS_PER_FILE);
+    if !hidden.is_empty() {
+        let mut problem = Problem::error(
+            "config.too-many-problems",
+            "",
+            None,
+            messages::too_many_problems(hidden.len()),
+        );
+        if hidden
+            .iter()
+            .all(|diagnostic| diagnostic.severity == Severity::Warning)
+        {
+            problem.severity = Severity::Warning;
+        }
+        report.push(problem.into_diagnostic(file, artifact));
+    }
     report.set_files_checked(1);
     report
 }
