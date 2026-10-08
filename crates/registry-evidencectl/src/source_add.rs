@@ -1257,8 +1257,9 @@ mod tests {
         fs::write(
             root.join("source-export.json"),
             serde_json::to_vec(&json!({
-                "formatVersion":1,"sourceId":id,"provenance":{"producer":"source-add-test","revision":"one"},
-                "artifacts":artifacts.iter().map(|(path,text)|json!({"path":path,"sha256":hex::encode(Sha256::digest(text.as_bytes()))})).collect::<Vec<_>>()
+                "apiVersion":source_import::EXPORT_API_VERSION,"kind":source_import::EXPORT_KIND,
+                "sourceId":id,"provenance":{"producer":"source-add-test","revision":"one"},
+                "artifacts":artifacts.iter().map(|(path,text)|json!({"path":path,"digest":format!("sha256:{}",hex::encode(Sha256::digest(text.as_bytes())))})).collect::<Vec<_>>()
             }))?,
         )?;
         Ok(())

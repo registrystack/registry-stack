@@ -1434,3 +1434,35 @@ above, then run `bregctl test` and `bregctl package` with
 `--reviewed-migrations` again to rebuild the package before upgrading the
 runtime. The activation ledger keeps
 its own record of each backup it accepted and is unchanged.
+
+### BREAKING: Evidence source export manifest header (`source-export.json`)
+
+`bregctl generate evidence-source` writes `source-export.json` with an
+`apiVersion` and `kind` header first and a `digest` for each artifact, and
+`evidencectl source import`, `source diff`, `source update`, and `source add`
+read it through the shared configuration reader. An export written by an
+earlier `bregctl` is refused; generate it again with this release's `bregctl
+generate evidence-source`. A producer that writes its own export migrates its
+manifest:
+
+| Old | New |
+|---|---|
+| `"formatVersion": 1` | `"apiVersion": "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1"` and `"kind": "BRegEvidenceSourceExport"` |
+| `artifacts[].sha256`, 64 lowercase hex digits | `artifacts[].digest`, written `sha256:` followed by the same 64 digits |
+
+`sourceId`, `provenance`, and `artifacts[].path` keep their spelling and
+bounds. A manifest without its header is refused with
+`config.missing-envelope`, whose fix names the header; with the header, a
+remaining `formatVersion` or `sha256` is refused with `config.removed-key` at
+its position, naming its replacement. `evidencectl` prints one sentence
+(`evidencectl source import refused the Evidence source export manifest.`)
+followed by every diagnostic with its file, line, column, and key; with
+`--format json` the refusal report's `diagnostics` carry the reader's shape
+unchanged and the command exits 1. The checks that follow decoding, such as
+the artifact digests, bounds, and the single `sources/<sourceId>.yaml`, keep
+their messages.
+
+The source-import baseline (`.evidence/source-imports/state.json`) records
+each accepted manifest in its own unchanged shape, so a project that already
+imported an export keeps its baseline; only the next import, diff, or update
+needs a regenerated export.

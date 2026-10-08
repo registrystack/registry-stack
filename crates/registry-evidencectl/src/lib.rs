@@ -579,6 +579,10 @@ fn run_entry() -> ExitCode {
                 write_bregctl_version_mismatch(mismatch, format);
                 return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
             }
+            if let Some(refused) = error.downcast_ref::<source_import::ExportRefused>() {
+                write_export_refusal(refused, &command_path, format);
+                return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
+            }
             let operational = operational_cause(&error);
             let (code, exit) = if operational {
                 (
@@ -1046,6 +1050,30 @@ fn write_bregctl_version_mismatch(
                 "requiredVersion": mismatch.required,
             })],
         )),
+    }
+}
+
+/// A refused `source-export.json`: the shared reader's diagnostics, unchanged.
+fn write_export_refusal(
+    refused: &source_import::ExportRefused,
+    command: &str,
+    format: OutputFormat,
+) {
+    match format {
+        OutputFormat::Human => eprint!(
+            "evidencectl {command} refused the Evidence source export manifest.\n{}",
+            refused.report.render_human()
+        ),
+        OutputFormat::Json => {
+            let serde_json::Value::Array(diagnostics) = refused.report.to_json_value() else {
+                unreachable!("the reader's diagnostics are a JSON array");
+            };
+            print_report(&report::failure(
+                command,
+                report::DOMAIN_REFUSAL_EXIT,
+                diagnostics,
+            ));
+        }
     }
 }
 

@@ -41,13 +41,29 @@ impl Fixture {
             ]),
             artifacts: entries,
         };
-        put(
-            &root,
-            MANIFEST_FILE,
-            &serde_json::to_string(&manifest).unwrap(),
-        );
+        fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
         root
     }
+}
+
+/// `manifest` as an export writes it: the header, then a `digest` for each
+/// artifact.
+fn export_document(manifest: &ExportManifest) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "apiVersion": EXPORT_API_VERSION,
+        "kind": EXPORT_KIND,
+        "sourceId": manifest.source_id,
+        "provenance": manifest.provenance,
+        "artifacts": manifest
+            .artifacts
+            .iter()
+            .map(|artifact| serde_json::json!({
+                "path": artifact.path,
+                "digest": format!("sha256:{}", artifact.sha256),
+            }))
+            .collect::<Vec<_>>(),
+    }))
+    .unwrap()
 }
 
 fn put(root: &Path, path: &str, text: &str) {
@@ -96,9 +112,9 @@ fn moved_exports_and_reordered_inventory_are_true_no_ops() {
     let state = fs::read(fixture.project.join(STATE_PATH)).unwrap();
     let moved = fixture.root.path().join("moved-export");
     fs::rename(export, &moved).unwrap();
-    let mut manifest: ExportManifest =
+    let mut manifest: Value =
         serde_json::from_slice(&fs::read(moved.join(MANIFEST_FILE)).unwrap()).unwrap();
-    manifest.artifacts.reverse();
+    manifest["artifacts"].as_array_mut().unwrap().reverse();
     fs::write(
         moved.join(MANIFEST_FILE),
         serde_json::to_vec(&manifest).unwrap(),
@@ -646,8 +662,9 @@ fn import_refuses_checksum_path_symlink_and_duplicate_identity_failures() {
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     assert!(prepare(&lock, &[export.clone(), export.clone()], &BTreeMap::new()).is_err());
     let manifest_bytes = fs::read(export.join(MANIFEST_FILE)).unwrap();
-    let mut duplicate: ExportManifest = serde_json::from_slice(&manifest_bytes).unwrap();
-    duplicate.artifacts.push(duplicate.artifacts[0].clone());
+    let mut duplicate: Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    let first = duplicate["artifacts"][0].clone();
+    duplicate["artifacts"].as_array_mut().unwrap().push(first);
     fs::write(
         export.join(MANIFEST_FILE),
         serde_json::to_vec(&duplicate).unwrap(),
@@ -843,11 +860,7 @@ fn import_refuses_more_than_256_artifacts() {
             })
             .collect(),
     };
-    fs::write(
-        root.join(MANIFEST_FILE),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[root], &BTreeMap::new())
         .err()
@@ -877,11 +890,7 @@ fn import_refuses_artifact_over_one_mebibyte() {
             sha256: "0".repeat(64),
         }],
     };
-    fs::write(
-        root.join(MANIFEST_FILE),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[root], &BTreeMap::new())
         .err()
@@ -921,11 +930,7 @@ fn import_refuses_export_over_sixteen_mebibytes_aggregate() {
         provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
         artifacts,
     };
-    fs::write(
-        root.join(MANIFEST_FILE),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[root], &BTreeMap::new())
         .err()
@@ -947,11 +952,7 @@ fn import_refuses_provenance_outside_its_bounds() {
         provenance: BTreeMap::new(),
         artifacts: Vec::new(),
     };
-    fs::write(
-        root.join(MANIFEST_FILE),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[root], &BTreeMap::new())
         .err()
@@ -978,11 +979,7 @@ fn import_refuses_yaml_artifact_that_is_not_a_mapping() {
             sha256: digest(content.as_bytes()),
         }],
     };
-    fs::write(
-        root.join(MANIFEST_FILE),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[root], &BTreeMap::new())
         .err()
@@ -1017,11 +1014,7 @@ fn import_refuses_export_without_exactly_one_sources_artifact() {
             },
         ],
     };
-    fs::write(
-        root.join(MANIFEST_FILE),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[root], &BTreeMap::new())
         .err()
@@ -1046,11 +1039,7 @@ fn import_refuses_artifact_stem_outside_its_bounds() {
             sha256: "0".repeat(64),
         }],
     };
-    fs::write(
-        root.join(MANIFEST_FILE),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(root.join(MANIFEST_FILE), export_document(&manifest)).unwrap();
     let lock = ProjectLock::acquire(&fixture.project).unwrap();
     let error = prepare(&lock, &[root], &BTreeMap::new())
         .err()
@@ -1058,5 +1047,116 @@ fn import_refuses_artifact_stem_outside_its_bounds() {
     assert_eq!(
         error.to_string(),
         "export artifact names must be bounded lowercase authoring names"
+    );
+}
+
+/// The codes and paths the shared reader reported for `manifest`.
+fn export_refusal(fixture: &Fixture, directory: &str, manifest: &Value) -> Vec<(String, String)> {
+    let root = fixture.root.path().join(directory);
+    put(&root, "sources/lookup.yaml", "kind: lookup\n");
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(manifest).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    let error = prepare(&lock, &[root], &BTreeMap::new())
+        .err()
+        .expect("the manifest is refused");
+    let refused = error
+        .downcast_ref::<ExportRefused>()
+        .expect("the shared reader refused the manifest");
+    refused
+        .report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+        .collect()
+}
+
+fn current_manifest() -> Value {
+    serde_json::json!({
+        "apiVersion": EXPORT_API_VERSION,
+        "kind": EXPORT_KIND,
+        "sourceId": "lookup",
+        "provenance": {"producer": "source-contract-test"},
+        "artifacts": [{
+            "path": "sources/lookup.yaml",
+            "digest": format!("sha256:{}", digest(b"kind: lookup\n")),
+        }],
+    })
+}
+
+#[test]
+fn import_reads_the_current_export_manifest() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path().join("current");
+    put(&root, "sources/lookup.yaml", "kind: lookup\n");
+    fs::write(
+        root.join(MANIFEST_FILE),
+        serde_json::to_vec(&current_manifest()).unwrap(),
+    )
+    .unwrap();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    assert!(!accepted(&lock, &[root], BTreeMap::new()));
+}
+
+#[test]
+fn import_refuses_the_previous_export_manifest_at_each_key() {
+    let fixture = Fixture::new();
+    let mut headerless = current_manifest();
+    let members = headerless.as_object_mut().unwrap();
+    members.remove("apiVersion");
+    members.remove("kind");
+    members.insert("formatVersion".to_owned(), Value::from(1));
+    assert_eq!(
+        export_refusal(&fixture, "headerless", &headerless),
+        [("config.missing-envelope".to_owned(), String::new())]
+    );
+
+    let mut version = current_manifest();
+    version["formatVersion"] = Value::from(1);
+    assert_eq!(
+        export_refusal(&fixture, "format-version", &version),
+        [("config.removed-key".to_owned(), "/formatVersion".to_owned())]
+    );
+
+    let mut checksum = current_manifest();
+    let artifact = checksum["artifacts"][0].as_object_mut().unwrap();
+    let written = artifact.remove("digest").unwrap();
+    artifact.insert(
+        "sha256".to_owned(),
+        Value::String(written.as_str().unwrap()["sha256:".len()..].to_owned()),
+    );
+    assert_eq!(
+        export_refusal(&fixture, "sha256", &checksum),
+        [
+            ("config.missing-key".to_owned(), "/artifacts/0".to_owned()),
+            (
+                "config.removed-key".to_owned(),
+                "/artifacts/0/sha256".to_owned()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn import_refuses_a_bare_hex_digest_and_an_unknown_member() {
+    let fixture = Fixture::new();
+    let mut bare = current_manifest();
+    bare["artifacts"][0]["digest"] = Value::String(digest(b"kind: lookup\n"));
+    assert_eq!(
+        export_refusal(&fixture, "bare-digest", &bare),
+        [(
+            "config.invalid-value".to_owned(),
+            "/artifacts/0/digest".to_owned()
+        )]
+    );
+
+    let mut hook = current_manifest();
+    hook["install"] = Value::String("unexpected-hook".to_owned());
+    assert_eq!(
+        export_refusal(&fixture, "unknown-member", &hook),
+        [("config.unknown-key".to_owned(), "/install".to_owned())]
     );
 }

@@ -321,12 +321,13 @@ fn malformed_source_export(root: &Path) -> std::path::PathBuf {
         fs::write(path, contents).expect("source artifact");
     }
     let manifest = serde_json::json!({
-        "formatVersion": 1,
+        "apiVersion": "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1",
+        "kind": "BRegEvidenceSourceExport",
         "sourceId": "lookup",
         "provenance": {"producer": "output-format-test", "revision": "malformed"},
         "artifacts": artifacts.map(|(path, contents)| serde_json::json!({
             "path": path,
-            "sha256": hex::encode(Sha256::digest(contents.as_bytes())),
+            "digest": format!("sha256:{}", hex::encode(Sha256::digest(contents.as_bytes()))),
         })),
     });
     fs::write(

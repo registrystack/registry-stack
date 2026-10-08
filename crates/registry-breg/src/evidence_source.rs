@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -16,6 +17,30 @@ use crate::{
     model::{CompiledEntity, CompiledLogicalField, CompiledRegistry},
     GeneratedArtifact,
 };
+
+/// The `apiVersion` of an export's `source-export.json`. `evidencectl source
+/// import` reads the same value.
+pub const EVIDENCE_SOURCE_EXPORT_API_VERSION: &str =
+    "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1";
+pub const EVIDENCE_SOURCE_EXPORT_KIND: &str = "BRegEvidenceSourceExport";
+
+/// `source-export.json`, written with its header first. Every member has a
+/// fixed order, so the same inputs write the same bytes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportManifest<'a> {
+    api_version: &'static str,
+    kind: &'static str,
+    source_id: &'a str,
+    provenance: BTreeMap<&'static str, &'a str>,
+    artifacts: Vec<ExportManifestArtifact<'a>>,
+}
+
+#[derive(Serialize)]
+struct ExportManifestArtifact<'a> {
+    path: &'a str,
+    digest: &'a str,
+}
 
 /// Technical choices only. Questions, permissions, targets and credentials stay with
 /// the Evidence project and its operator.
@@ -447,11 +472,31 @@ pub fn export_evidence_source(
         "responseSchema":format!("schemas/{prefix}-response.yaml"),"extractScript":format!("adapters/{prefix}-extract.rhai"),"factSchema":format!("schemas/{prefix}-facts.yaml")
     }))?);
     artifacts.sort_by(|a, b| a.path.cmp(&b.path));
-    let manifest = json!({"formatVersion":1,"sourceId":prefix,"provenance":{"producer":"bregctl","registryId":registry.registry_id(),"registryRevision":registry.revision(),"entity":entity.id,"accessProfile":options.access_profile,"behaviorRevision":behavior_revision},"artifacts":artifacts.iter().map(|artifact|json!({"path":artifact.path,"sha256":digest(&artifact.bytes)})).collect::<Vec<_>>()});
+    let manifest = serde_json::to_vec(&ExportManifest {
+        api_version: EVIDENCE_SOURCE_EXPORT_API_VERSION,
+        kind: EVIDENCE_SOURCE_EXPORT_KIND,
+        source_id: prefix,
+        provenance: BTreeMap::from([
+            ("producer", "bregctl"),
+            ("registryId", registry.registry_id()),
+            ("registryRevision", registry.revision()),
+            ("entity", entity.id.as_str()),
+            ("accessProfile", options.access_profile.as_str()),
+            ("behaviorRevision", behavior_revision.as_str()),
+        ]),
+        artifacts: artifacts
+            .iter()
+            .map(|artifact| ExportManifestArtifact {
+                path: &artifact.path,
+                digest: &artifact.sha256,
+            })
+            .collect(),
+    })
+    .map_err(|_| refusal("export", "could not encode the export manifest"))?;
     artifacts.push(artifact(
         "source-export.json".into(),
         "application/json",
-        canonical(&manifest)?,
+        manifest,
     ));
     Ok(EvidenceSourceExport {
         artifacts,

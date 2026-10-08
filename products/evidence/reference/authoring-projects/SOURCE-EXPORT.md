@@ -11,13 +11,14 @@ the provider, runs external setup commands, creates authority, or starts a
 service. Target validation may execute reviewed bounded adapters against local
 synthetic fixtures through the ordinary Evidence evaluator.
 
-## Export manifest version 1
+## Export manifest
 
 The export directory contains `source-export.json`:
 
 ```json
 {
-  "formatVersion": 1,
+  "apiVersion": "id.registrystack.org/formats/breg/evidence-source-export/v1alpha1",
+  "kind": "BRegEvidenceSourceExport",
   "sourceId": "registry-status",
   "provenance": {
     "producer": "institution-source-exporter",
@@ -26,14 +27,18 @@ The export directory contains `source-export.json`:
   "artifacts": [
     {
       "path": "sources/registry-status.yaml",
-      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     }
   ]
 }
 ```
 
-The checksum above is illustrative. Each actual `sha256` is the lowercase
-64-character SHA-256 checksum of that file's exact UTF-8 bytes. The manifest and
+The digest above is illustrative. Each actual `digest` is `sha256:` followed by
+the lowercase 64-character SHA-256 checksum of that file's exact UTF-8 bytes.
+The manifest opens with its `apiVersion` and `kind`, and is read by the shared
+configuration reader: a refusal names its code, position, and fix. A manifest
+written with `formatVersion` or an artifact `sha256` is refused with
+`config.removed-key`, naming the member that replaces it. The manifest and
 artifact entries are closed objects; unknown fields are refused. The manifest
 is at most 1 MiB and inventories 1 to 256 artifacts, each at most 1 MiB and at
 most 16 MiB together. `provenance` is a map of 1 to 32 nonempty printable string

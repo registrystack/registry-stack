@@ -793,19 +793,20 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'formatVersion: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/evidence-source-export/v1alpha1
+      kind: BRegEvidenceSourceExport
+      checkedBy:
+        file: crates/registry-evidencectl/src/source_import/export.rs
+        symbol: EXPORT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/evidence-source-export/v1alpha1
       kind: BRegEvidenceSourceExport
     schema: none
     reader:
       crate: registry-evidencectl
-      file: crates/registry-evidencectl/src/source_import/mod.rs
-      function: load_export
-      type: ExportManifest
+      file: crates/registry-evidencectl/src/source_import/export.rs
+      function: read_export_manifest
+      type: ExportDocument
     check: none
     example: none
     conformance:

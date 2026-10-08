@@ -899,20 +899,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/evidence-source-export
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/breg/evidence-source-export/v1alpha1'
-- rule: CFG-ENV-1
-  format: breg/evidence-source-export
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegEvidenceSourceExport'
 - rule: CFG-SCHEMA-1
   format: breg/evidence-source-export
   location: products/platform/config-formats.yaml#/example
@@ -920,13 +906,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/evidence-source-export
-  location: crates/registry-evidencectl/src/source_import/mod.rs#load_export()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/example-scenarios
   location: products/platform/config-formats.yaml#/check

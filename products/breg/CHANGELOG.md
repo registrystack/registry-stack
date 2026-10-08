@@ -114,8 +114,10 @@
   other tool formats) follow the Registry Stack configuration conventions: a
   current header, kebab-case values, and the shared reader's refusals. A
   package carrying a reviewed migration that an earlier release built no
-  longer loads; migrate its documents and rebuild it. Every change and its
-  migration step is in the "BReg tool and output formats" section of
+  longer loads; migrate its documents and rebuild it. An Evidence source
+  export an earlier release generated is refused by `evidencectl source`;
+  generate it again. Every change and its migration step is in the "BReg
+  tool and output formats" section of
   `release/notes/config-conventions/breg.md`.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log

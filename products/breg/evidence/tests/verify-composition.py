@@ -115,7 +115,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     ).read_bytes(), "same compiled BReg inputs must yield the same export"
     for artifact in manifest["artifacts"]:
         content = (exported / artifact["path"]).read_bytes()
-        assert hashlib.sha256(content).hexdigest() == artifact["sha256"]
+        assert "sha256:" + hashlib.sha256(content).hexdigest() == artifact["digest"]
         assert content == (workspace / "repeated-export" / artifact["path"]).read_bytes()
     run(binaries["evidencectl"], "new", project, "--starter", INPUTS / "starter",
         "--profile", "local", environment=environment)

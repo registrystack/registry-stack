@@ -112,10 +112,20 @@ fn alternatives_keep_one_route_and_selected_identity_with_stable_inventories() {
         json!(["string", "null"])
     );
     let manifest = yaml(&export, "source-export.json");
+    assert_eq!(manifest["apiVersion"], EVIDENCE_SOURCE_EXPORT_API_VERSION);
+    assert_eq!(manifest["kind"], EVIDENCE_SOURCE_EXPORT_KIND);
+    assert!(std::str::from_utf8(file(&export, "source-export.json"))
+        .unwrap()
+        .starts_with(&format!(
+            "{{\"apiVersion\":\"{EVIDENCE_SOURCE_EXPORT_API_VERSION}\",\"kind\":\"{EVIDENCE_SOURCE_EXPORT_KIND}\","
+        )));
     for entry in manifest["artifacts"].as_array().unwrap() {
         assert_eq!(
-            entry["sha256"],
-            digest(file(&export, entry["path"].as_str().unwrap()))
+            entry["digest"],
+            format!(
+                "sha256:{}",
+                digest(file(&export, entry["path"].as_str().unwrap()))
+            )
         );
     }
     let mut reordered = options();

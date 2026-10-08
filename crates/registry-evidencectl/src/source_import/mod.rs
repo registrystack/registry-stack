@@ -1,6 +1,7 @@
 //! Optional local source exports, explicit three-way updates, and recoverable
 //! authoring mutations. Export provenance never supplies runtime authority.
 
+mod export;
 mod files;
 
 use std::{
@@ -15,6 +16,9 @@ use registry_evidence_authoring::validate::valid_local_identifier;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub(crate) use export::ExportRefused;
+#[cfg(test)]
+pub(crate) use export::{EXPORT_API_VERSION, EXPORT_KIND};
 pub(crate) use files::ProjectLock;
 use files::{
     artifact_path, authored_bound, digest, read, snapshot, write, Contents, JOURNAL_PATH,
@@ -55,6 +59,7 @@ pub(crate) struct DetachArgs {
     pub project: PathBuf,
 }
 
+/// The manifest as the source-import baseline records it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportManifest {
@@ -545,10 +550,25 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
     let root = files::plain_directory(directory)?;
     let content = read(&root, MANIFEST_FILE, MAX_FILE_BYTES)?
         .ok_or_else(|| anyhow!("local export is missing source-export.json"))?;
-    let mut manifest: ExportManifest = serde_json::from_str(&content.text)
-        .context("source export must use the closed Version 1 manifest")?;
-    if manifest.format_version != 1 || !valid_local_identifier(&manifest.source_id) {
-        bail!("source export requires formatVersion 1 and a stable lowercase sourceId");
+    let document = export::read_export_manifest(
+        &directory.join(MANIFEST_FILE).display().to_string(),
+        content.text.as_bytes(),
+    )?;
+    let mut manifest = ExportManifest {
+        format_version: 1,
+        source_id: document.source_id,
+        provenance: document.provenance,
+        artifacts: document
+            .artifacts
+            .into_iter()
+            .map(|artifact| ExportArtifact {
+                path: artifact.path,
+                sha256: artifact.digest.hex().to_owned(),
+            })
+            .collect(),
+    };
+    if !valid_local_identifier(&manifest.source_id) {
+        bail!("source export requires a stable lowercase sourceId");
     }
     if manifest.provenance.is_empty()
         || manifest.provenance.len() > 32
@@ -572,14 +592,6 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
     let mut bytes = 0;
     for artifact in &manifest.artifacts {
         artifact_path(&artifact.path)?;
-        if artifact.sha256.len() != 64
-            || !artifact
-                .sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            bail!("export checksums must be lowercase hexadecimal SHA-256");
-        }
         let content = read(&root, &artifact.path, MAX_FILE_BYTES)?
             .ok_or_else(|| anyhow!("export inventory artifact is absent: {}", artifact.path))?;
         bytes += content.text.len();
