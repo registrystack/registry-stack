@@ -100,7 +100,7 @@ struct EditorSchema {
 // other authored parts of a project (sources, selectors, derivations, answer
 // schemas, fixtures) get no mapping, because a schema written
 // by hand for one of them would drift from the checks the moment either moved.
-const EDITOR_SCHEMA_CATALOG: [EditorSchema; 4] = [
+const EDITOR_SCHEMA_CATALOG: [EditorSchema; 5] = [
     EditorSchema {
         name: "access-client",
         filename: "access-client.schema.json",
@@ -112,6 +112,12 @@ const EDITOR_SCHEMA_CATALOG: [EditorSchema; 4] = [
         filename: "access-policy.schema.json",
         file_glob: "access/policies/*.yaml",
         document: include_str!("../schemas/authoring/access-policy.schema.json"),
+    },
+    EditorSchema {
+        name: "mock-plan",
+        filename: "mock-plan.schema.json",
+        file_glob: "mocks/source.yaml",
+        document: include_str!("../schemas/authoring/mock-plan.schema.json"),
     },
     EditorSchema {
         name: "project-marker",
@@ -1184,10 +1190,11 @@ mod tests {
     use registry_evidence_authoring::default_project_marker_document;
 
     /// The complete set of files one run owns, as an author would list them.
-    const MANAGED_FILES: [&str; 8] = [
+    const MANAGED_FILES: [&str; 9] = [
         ".evidence-editor/manifest.json",
         ".evidence-editor/schemas/access-client.schema.json",
         ".evidence-editor/schemas/access-policy.schema.json",
+        ".evidence-editor/schemas/mock-plan.schema.json",
         ".evidence-editor/schemas/project-marker.schema.json",
         ".evidence-editor/schemas/question.schema.json",
         ".vscode/extensions.json",

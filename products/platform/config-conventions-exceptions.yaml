@@ -3487,20 +3487,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map products/evidence/contracts/holder-bound-verification-policy.schema.yaml in editors/configure.py
-- rule: CFG-SCHEMA-2
-  format: evidence/mock-plan
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: evidence/mock-plan
-  location: editors/configure.py#/SCHEMAS/evidence
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-NAME-2
   format: evidence/oid4vci-runtime
   location: products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256

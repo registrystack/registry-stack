@@ -207,6 +207,7 @@ fn tooling_editor_publishes_its_setup_report_in_json() {
             ".evidence-editor/manifest.json",
             ".evidence-editor/schemas/access-client.schema.json",
             ".evidence-editor/schemas/access-policy.schema.json",
+            ".evidence-editor/schemas/mock-plan.schema.json",
             ".evidence-editor/schemas/project-marker.schema.json",
             ".evidence-editor/schemas/question.schema.json",
             ".vscode/extensions.json",

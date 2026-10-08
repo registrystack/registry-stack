@@ -6,12 +6,16 @@
 use std::collections::BTreeMap;
 
 use registry_evidence_authoring::formats::{
-    ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND, ACCESS_CLIENT_SCHEMA_ID,
+    ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND, ACCESS_CLIENT_SCHEMA_ID, MOCK_PLAN_API_VERSION,
+    MOCK_PLAN_KIND, MOCK_PLAN_SCHEMA_ID,
 };
 use registry_evidence_authoring::schema::publish;
 
 /// The schema for one local access client under `access/clients/`.
 pub const ACCESS_CLIENT_SCHEMA_FILE: &str = "access-client.schema.json";
+
+/// The schema for one source mock plan, `mocks/source.yaml`.
+pub const MOCK_PLAN_SCHEMA_FILE: &str = "mock-plan.schema.json";
 
 /// Every generated schema this crate owns, keyed by the filename it is
 /// committed under.
@@ -20,20 +24,31 @@ pub const ACCESS_CLIENT_SCHEMA_FILE: &str = "access-client.schema.json";
 ///
 /// Returns the `serde_json` error if a derived schema cannot be rendered.
 pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
-    Ok(BTreeMap::from([(
-        ACCESS_CLIENT_SCHEMA_FILE,
-        publish(
-            crate::access::client_document_schema(),
-            "Evidence local access client",
-            ACCESS_CLIENT_SCHEMA_ID,
-            (ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND),
-        )?,
-    )]))
+    Ok(BTreeMap::from([
+        (
+            ACCESS_CLIENT_SCHEMA_FILE,
+            publish(
+                crate::access::client_document_schema(),
+                "Evidence local access client",
+                ACCESS_CLIENT_SCHEMA_ID,
+                (ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND),
+            )?,
+        ),
+        (
+            MOCK_PLAN_SCHEMA_FILE,
+            publish(
+                crate::source_mock::plan_schema(),
+                "Evidence source mock plan",
+                MOCK_PLAN_SCHEMA_ID,
+                (MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND),
+            )?,
+        ),
+    ]))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{documents, ACCESS_CLIENT_SCHEMA_FILE};
+    use super::{documents, ACCESS_CLIENT_SCHEMA_FILE, MOCK_PLAN_SCHEMA_FILE};
 
     fn compile(file: &str) -> jsonschema::JSONSchema {
         let value: serde_json::Value =
@@ -81,5 +96,35 @@ mod tests {
         };
         assert!(schema.is_valid(&client("https://issuer.example.test")));
         assert!(!schema.is_valid(&client("not a url")));
+    }
+
+    #[test]
+    fn a_mock_plan_the_schema_turns_away_is_turned_away_by_the_reader() {
+        let schema = compile(MOCK_PLAN_SCHEMA_FILE);
+        let plan = |seed: u64, parameter: serde_json::Value| {
+            serde_json::json!({
+                "apiVersion": "id.registrystack.org/formats/evidence/mock-plan/v1alpha1",
+                "kind": "EvidenceMockPlan",
+                "openapi": "../source.openapi.yaml",
+                "generation": {
+                    "contract": "evidencectl-source-mock-v1",
+                    "seed": seed,
+                    "asOf": "2025-01-01",
+                },
+                "operations": [{
+                    "method": "GET",
+                    "path": "/people/{person_id}",
+                    "response": {"status": 200, "mediaType": "application/json"},
+                    "cases": [{
+                        "name": "sample",
+                        "request": {"pathParameters": {"person_id": parameter}},
+                        "body": "cases/get-people/sample.json",
+                    }],
+                }],
+            })
+        };
+        assert!(schema.is_valid(&plan(0, serde_json::json!("person-123"))));
+        assert!(!schema.is_valid(&plan(1 << 60, serde_json::json!("person-123"))));
+        assert!(!schema.is_valid(&plan(0, serde_json::json!({"nested": true}))));
     }
 }

@@ -903,6 +903,7 @@ fn assert_editor_schema_mappings(project: &Path) {
         vec![
             "access-client.schema.json",
             "access-policy.schema.json",
+            "mock-plan.schema.json",
             "project-marker.schema.json",
             "question.schema.json"
         ]
@@ -923,6 +924,10 @@ fn assert_editor_schema_mappings(project: &Path) {
         (
             ".evidence-editor/schemas/access-policy.schema.json",
             include_str!("../schemas/authoring/access-policy.schema.json"),
+        ),
+        (
+            ".evidence-editor/schemas/mock-plan.schema.json",
+            include_str!("../schemas/authoring/mock-plan.schema.json"),
         ),
         (
             ".evidence-editor/schemas/question.schema.json",

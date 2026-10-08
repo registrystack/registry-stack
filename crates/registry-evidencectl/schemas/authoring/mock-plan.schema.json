@@ -1,0 +1,208 @@
+{
+  "$defs": {
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "GenerationSettings": {
+      "additionalProperties": false,
+      "description": "Settings retained solely so `generate --config` can create missing bodies.",
+      "properties": {
+        "asOf": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "datasets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Digest"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "seed": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract",
+        "seed",
+        "asOf"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PlanCase": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/PlanRequest"
+        }
+      },
+      "required": [
+        "name",
+        "request",
+        "body"
+      ],
+      "type": "object"
+    },
+    "PlanOperation": {
+      "additionalProperties": false,
+      "description": "One configured GET operation. Method plus templated path is its identity.",
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/PlanCase"
+          },
+          "type": "array"
+        },
+        "method": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "response": {
+          "$ref": "#/$defs/PlanResponse"
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "response",
+        "cases"
+      ],
+      "type": "object"
+    },
+    "PlanRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "pathParameters": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "maxProperties": 16,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "pathParameters"
+      ],
+      "type": "object"
+    },
+    "PlanResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "mediaType": {
+          "type": "string"
+        },
+        "status": {
+          "format": "uint16",
+          "maximum": 200,
+          "minimum": 200,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "mediaType"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/evidence/mock-plan/mock-plan.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One strict `mocks/source.yaml` document. Its format version is the\ndocument's `apiVersion`, which the shared reader checks.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/evidence/mock-plan/v1alpha1",
+      "type": "string"
+    },
+    "generation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GenerationSettings"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "kind": {
+      "const": "EvidenceMockPlan",
+      "type": "string"
+    },
+    "openapi": {
+      "type": "string"
+    },
+    "openapiDigest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operations": {
+      "items": {
+        "$ref": "#/$defs/PlanOperation"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "openapi",
+    "operations"
+  ],
+  "title": "Evidence source mock plan",
+  "type": "object"
+}

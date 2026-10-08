@@ -12,6 +12,12 @@ mod openapi;
 mod plan;
 mod server;
 
+/// The derived JSON Schema of one mock plan document.
+#[cfg(feature = "schema")]
+pub(crate) fn plan_schema() -> serde_json::Value {
+    plan::plan_schema()
+}
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,

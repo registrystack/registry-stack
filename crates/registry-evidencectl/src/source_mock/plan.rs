@@ -26,6 +26,9 @@ pub(super) const GENERATOR_CONTRACT: &str = "evidencectl-source-mock-v1";
 /// A plan is authoring metadata, not a bulk-data container: it is held to
 /// the document size the shared reader accepts, which reads it.
 pub(super) const MAX_PLAN_BYTES: usize = registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES;
+/// The largest seed a plan stores: the greatest integer every JSON consumer
+/// reads exactly.
+pub(super) const MAX_SEED: u64 = 9_007_199_254_740_991;
 pub(super) const MAX_OPERATIONS: usize = 256;
 pub(super) const MAX_CASES_PER_OPERATION: usize = 256;
 pub(super) const MAX_TOTAL_CASES: usize = 1024;
@@ -37,10 +40,15 @@ pub(super) const MAX_PATH_PARAMETER_BYTES: usize = 4096;
 /// One strict `mocks/source.yaml` document. Its format version is the
 /// document's `apiVersion`, which the shared reader checks.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct MockPlan {
     pub openapi: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Digest>")
+    )]
     pub openapi_digest: Option<Digest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<GenerationSettings>,
@@ -49,12 +57,23 @@ pub(super) struct MockPlan {
 
 /// Settings retained solely so `generate --config` can create missing bodies.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct GenerationSettings {
     pub contract: String,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 0, max = 9_007_199_254_740_991_u64))
+    )]
     pub seed: u64,
     pub as_of: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BTreeMap<registry_platform_yaml::LocalId, registry_platform_yaml::Digest>"
+        )
+    )]
     pub datasets: BTreeMap<String, Digest>,
 }
 
@@ -71,6 +90,7 @@ impl GenerationSettings {
 
 /// One configured GET operation. Method plus templated path is its identity.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanOperation {
     pub method: String,
@@ -82,13 +102,16 @@ pub(super) struct PlanOperation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanResponse {
+    #[cfg_attr(feature = "schema", schemars(range(min = 200, max = 200)))]
     pub status: u16,
     pub media_type: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanCase {
     pub name: String,
@@ -97,9 +120,30 @@ pub(super) struct PlanCase {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PlanRequest {
+    #[cfg_attr(feature = "schema", schemars(schema_with = "path_parameters_schema"))]
     pub path_parameters: BTreeMap<String, Value>,
+}
+
+/// The closed shape of a case's path parameter bindings: each template
+/// parameter name maps to one safe scalar.
+#[cfg(feature = "schema")]
+fn path_parameters_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let names = generator.subschema_for::<registry_platform_yaml::ExternalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": names,
+        "maxProperties": MAX_PATH_PARAMETERS,
+        "additionalProperties": {
+            "anyOf": [
+                {"type": "string", "maxLength": MAX_PATH_PARAMETER_BYTES},
+                {"type": "boolean"},
+                {"type": "number"}
+            ]
+        }
+    })
 }
 
 /// A syntactically valid lowercase SHA-256 label.
@@ -197,6 +241,9 @@ pub(super) fn validate_plan(plan: &MockPlan) -> Result<()> {
     if let Some(generation) = &plan.generation {
         if generation.contract != GENERATOR_CONTRACT {
             bail!("generation.contract is not the V1 generator contract");
+        }
+        if generation.seed > MAX_SEED {
+            bail!("generation.seed exceeds the largest exactly representable integer");
         }
         generation.as_of_date()?;
         if generation.datasets.len() > MAX_DATASETS {
@@ -517,6 +564,16 @@ mod tests {
     }
 
     #[test]
+    fn a_seed_beyond_the_exact_integer_range_is_refused() {
+        let mut at_the_bound = plan();
+        at_the_bound.generation.as_mut().expect("generation").seed = MAX_SEED;
+        assert!(validate_plan(&at_the_bound).is_ok());
+        let mut past_the_bound = plan();
+        past_the_bound.generation.as_mut().expect("generation").seed = MAX_SEED + 1;
+        assert!(validate_plan(&past_the_bound).is_err());
+    }
+
+    #[test]
     fn duplicate_operation_case_body_and_concrete_route_shapes_are_refused() {
         let mut duplicate_operation = plan();
         duplicate_operation
@@ -584,4 +641,10 @@ mod tests {
         invalid.generation.as_mut().unwrap().as_of = "1899-12-31".to_owned();
         assert!(validate_plan(&invalid).is_err());
     }
+}
+
+/// The derived JSON Schema of one mock plan document.
+#[cfg(feature = "schema")]
+pub(crate) fn plan_schema() -> Value {
+    serde_json::to_value(schemars::schema_for!(MockPlan)).expect("a derived schema is JSON")
 }
