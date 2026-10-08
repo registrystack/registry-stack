@@ -96,6 +96,46 @@ code, the position, and that the read stops at the first such member.
 The project check keeps the old codes for a project built in code, which the
 reader never sees; the table below gives the code a file now receives.
 
+## BREAKING: `runtime.yaml` members are typed by the shared reader
+
+The `casework` runtime and every `caseworkctl` command that reads
+`runtime.yaml` (`plan`, `apply`, `status`, `doctor`, and `dev`) read its
+secret references, URLs, digests, and bounded numbers through the shared
+reader. A refused member is reported at its line and column, and the
+diagnostic never repeats the value.
+
+- A member written as `null`, `~`, or an empty value is refused, where it
+  read as absent: `audit.path`, `audit.rotateBytes`, `audit.retainDays`,
+  `package.expectedDigest`, `package.acknowledgeStrandedWork`, a review
+  completion destination's `bearerTokenRef` or `auth.header`, and every other
+  optional member. Migration: remove the key to take its default.
+- A secret reference that is not `secret:env/NAME` or `secret:file/name` is
+  `config.invalid-value` at its position, where it was refused after the read
+  with the dotted path alone: `taskAuthority.signingKeyRef`, a review
+  completion destination's `bearerTokenRef` and `auth.secretRef`, and a BReg
+  binding's `clientIdRef`, `clientAssertionKeyRef`, `webhookSecretRef`, and
+  `trustedRootCertificatesRef`. Migration: none for a file that started.
+- `package.expectedDigest` and `package.acknowledgeStrandedWork` that are not
+  `sha256:` followed by 64 lowercase hexadecimal digits are
+  `config.invalid-value` at their position. Migration: none for a file that
+  started.
+- A BReg binding's `connectTimeoutMilliseconds` and
+  `requestTimeoutMilliseconds` outside 1 to 300000, and its
+  `reconciliationIntervalMilliseconds` outside 1000 to 3600000, are
+  `config.out-of-range` at their position, where they were refused after the
+  read. `audit.rotateBytes` outside 1048576 to 4294967295 and
+  `audit.retainDays` outside 1 to 36500 are `config.out-of-range` at their
+  position, where the audit writer refused them at startup. Migration: none
+  for a file that started.
+- A BReg binding's `baseUrl`, a review completion destination's `url`, and
+  `taskAuthority.issuer` must be absolute `http` or `https` URLs with a host
+  and no user information, and are otherwise `config.invalid-value`. Only
+  `taskAuthority.issuer` accepted more before: any absolute URI. Migration:
+  write `taskAuthority.issuer` as an absolute `https` URL.
+- Two unknown keys inside `audit` or `authentication.oidc` are now both
+  reported, each at its position, where the first was reported alone.
+  Migration: none.
+
 ## Diagnostic codes
 
 | Old code | New code |

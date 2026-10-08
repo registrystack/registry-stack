@@ -41,7 +41,7 @@ pub fn project_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
 /// The reader refuses `null` in every member (CFG-EMPTY-1), so an optional
 /// member is written by leaving it out: drop the `null` schemars adds to an
 /// `Option` and the `default: null` it declares for one.
-fn refuse_null(schema: &mut Value) {
+pub fn refuse_null(schema: &mut Value) {
     match schema {
         Value::Object(object) => {
             if object.get("default") == Some(&Value::Null) {

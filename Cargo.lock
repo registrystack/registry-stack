@@ -5165,6 +5165,7 @@ dependencies = [
  "registry-platform-crypto",
  "registry-platform-hooks",
  "registry-platform-httputil",
+ "registry-platform-yaml",
  "schemars",
  "serde",
  "serde_json",

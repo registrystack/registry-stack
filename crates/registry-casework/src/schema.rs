@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Generated JSON Schema for the Casework runtime configuration.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use registry_platform_config::blocks::SECRET_PROVIDER_PATTERN;
+use registry_casework_core::schema::refuse_null;
 
 use crate::{RuntimeConfig, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND};
 
 pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
 pub const RUNTIME_CONFIG_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json";
-const PACKAGE_DIGEST_SCHEMA_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
+    refuse_null_outside_shared_blocks(&mut derived)?;
     set_const(&mut derived, "apiVersion", RUNTIME_CONFIG_API_VERSION);
     set_const(&mut derived, "kind", RUNTIME_CONFIG_KIND);
     install_runtime_constraints(&mut derived);
@@ -40,11 +40,40 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
     Ok([(RUNTIME_CONFIG_SCHEMA_FILE, rendered)].into())
 }
 
+/// The reader refuses `null` in every member (CFG-EMPTY-1), so drop the
+/// `null` schemars adds to each optional Casework member. The shared blocks
+/// are embedded exactly as the platform publishes them.
+fn refuse_null_outside_shared_blocks(schema: &mut Value) -> Result<(), serde_json::Error> {
+    let shared: Value =
+        serde_json::from_str(&registry_platform_config::schema::shared_blocks_document()?)?;
+    let shared = shared
+        .get("$defs")
+        .and_then(Value::as_object)
+        .map(|definitions| definitions.keys().cloned().collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    let Some(object) = schema.as_object_mut() else {
+        return Ok(());
+    };
+    for (key, member) in object.iter_mut() {
+        if key != "$defs" {
+            refuse_null(member);
+            continue;
+        }
+        if let Some(definitions) = member.as_object_mut() {
+            for (name, definition) in definitions.iter_mut() {
+                if !shared.contains(name) {
+                    refuse_null(definition);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// State in the schema the bounds `RuntimeConfig::check` and
-/// `validate_secret_references` enforce at load beyond the shared blocks,
-/// which carry their own: operated paths are absolute, every Casework secret
-/// field is a secret reference, and a static JWKS document names an enabled
-/// provider.
+/// `validate_secret_references` enforce at load beyond the reader types and
+/// the shared blocks, which carry their own: operated paths are absolute, and
+/// a static JWKS document names an enabled provider.
 fn install_runtime_constraints(schema: &mut Value) {
     // `identity` is optional in the Rust type only so that a missing block
     // gets a diagnostic naming the key to add; the document requires it.
@@ -54,15 +83,13 @@ fn install_runtime_constraints(schema: &mut Value) {
     if let Some(identity) = schema.pointer_mut("/properties/identity") {
         *identity = serde_json::json!({"$ref": "#/$defs/IdentityConfig"});
     }
-    for (definition, property) in [("RuntimePackageConfig", "root")] {
-        set_definition_property(
-            schema,
-            definition,
-            property,
-            "pattern",
-            Value::String("^/".to_owned()),
-        );
-    }
+    set_definition_property(
+        schema,
+        "RuntimePackageConfig",
+        "root",
+        "pattern",
+        Value::String("^/".to_owned()),
+    );
     // The audit file is also refused with a `..` segment.
     set_definition_property(
         schema,
@@ -70,30 +97,6 @@ fn install_runtime_constraints(schema: &mut Value) {
         "path",
         "pattern",
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
-    );
-    for (definition, property) in [
-        ("TaskAuthorityConfig", "signingKeyRef"),
-        ("BregBinding", "clientIdRef"),
-        ("BregBinding", "clientAssertionKeyRef"),
-        ("BregBinding", "webhookSecretRef"),
-        ("BregBinding", "trustedRootCertificatesRef"),
-        ("ReviewCompletionRuntimeConfig", "bearerTokenRef"),
-        ("ReviewCompletionAuthConfig", "secretRef"),
-    ] {
-        set_definition_property(
-            schema,
-            definition,
-            property,
-            "pattern",
-            Value::String(SECRET_PROVIDER_PATTERN.to_owned()),
-        );
-    }
-    set_definition_property(
-        schema,
-        "RuntimePackageConfig",
-        "expectedDigest",
-        "pattern",
-        Value::String(PACKAGE_DIGEST_SCHEMA_PATTERN.to_owned()),
     );
     set_jwks_document_provider_requirement(schema);
     if let Some(sources) = schema
@@ -112,38 +115,8 @@ fn install_runtime_constraints(schema: &mut Value) {
 
 /// State the shape `AuditConfig::destination` requires: a `file`
 /// destination, the default, names an absolute `path`, and `stdout` takes
-/// none of the file-only settings. An explicit null reads as absent, as
-/// serde reads it at load. The rotation and retention bounds are the
-/// platform writer's.
+/// none of the file-only settings.
 fn set_audit_destination_constraints(schema: &mut Value) {
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "rotateBytes",
-        "minimum",
-        Value::from(registry_platform_audit::MIN_AUDIT_ROTATE_BYTES),
-    );
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "rotateBytes",
-        "maximum",
-        Value::from(u32::MAX),
-    );
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "retainDays",
-        "minimum",
-        Value::from(1),
-    );
-    set_definition_property(
-        schema,
-        "AuditConfig",
-        "retainDays",
-        "maximum",
-        Value::from(registry_platform_audit::MAX_AUDIT_RETAIN_DAYS),
-    );
     if let Some(audit) = schema
         .pointer_mut("/$defs/AuditConfig")
         .and_then(Value::as_object_mut)
@@ -159,27 +132,20 @@ fn set_audit_destination_constraints(schema: &mut Value) {
             "then".to_owned(),
             serde_json::json!({
                 "not": {"anyOf": [
-                    {"required": ["path"], "properties": {"path": {"not": {"type": "null"}}}},
-                    {"required": ["rotateBytes"], "properties": {"rotateBytes": {"not": {"type": "null"}}}},
-                    {"required": ["retainDays"], "properties": {"retainDays": {"not": {"type": "null"}}}}
+                    {"required": ["path"]},
+                    {"required": ["rotateBytes"]},
+                    {"required": ["retainDays"]}
                 ]}
             }),
         );
-        audit.insert(
-            "else".to_owned(),
-            serde_json::json!({
-                "required": ["path"],
-                "properties": {"path": {"type": "string"}}
-            }),
-        );
+        audit.insert("else".to_owned(), serde_json::json!({"required": ["path"]}));
     }
 }
 
 /// State the shape `RuntimeConfig::validate_secret_references` requires of a
 /// completion destination: exactly one of `bearerTokenRef` and `auth`, and a
-/// header name made of HTTP token characters. An explicit null reads as
-/// absent, as serde reads it at load. The reserved header set is enforced at
-/// load, where names compare case-insensitively.
+/// header name made of HTTP token characters. The reserved header set is
+/// enforced at load, where names compare case-insensitively.
 fn set_review_completion_auth_constraints(schema: &mut Value) {
     if let Some(destination) = schema
         .pointer_mut("/$defs/ReviewCompletionRuntimeConfig")
@@ -187,16 +153,7 @@ fn set_review_completion_auth_constraints(schema: &mut Value) {
     {
         destination.insert(
             "oneOf".to_owned(),
-            serde_json::json!([
-                {
-                    "required": ["bearerTokenRef"],
-                    "properties": {"bearerTokenRef": {"not": {"type": "null"}}}
-                },
-                {
-                    "required": ["auth"],
-                    "properties": {"auth": {"not": {"type": "null"}}}
-                }
-            ]),
+            serde_json::json!([{"required": ["bearerTokenRef"]}, {"required": ["auth"]}]),
         );
     }
     set_definition_property(
@@ -265,6 +222,16 @@ mod tests {
             .with_draft(Draft::Draft202012)
             .compile(&document)
             .expect("the runtime schema compiles as Draft 2020-12")
+    }
+
+    /// Decode an instance through the shared reader, as the runtime does
+    /// before its own checks.
+    fn read(instance: &Value) -> Result<RuntimeConfig, RuntimeConfigError> {
+        let text = serde_norway::to_string(instance).expect("the instance serializes");
+        RuntimeConfig::loader()
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .map(|loaded| loaded.config)
+            .map_err(RuntimeConfigError::Load)
     }
 
     fn runtime_instance(document_ref: &str, provider: &str) -> Value {
@@ -471,7 +438,11 @@ mod tests {
                 "url": url,
                 "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key"}
             }),
-            // An explicit null reads as absent, as it does at load.
+        ] {
+            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
+        }
+        // An explicit null is refused, by the schema and by the reader alike.
+        for nulled in [
             serde_json::json!({
                 "url": url,
                 "bearerTokenRef": null,
@@ -483,7 +454,8 @@ mod tests {
                 "auth": null
             }),
         ] {
-            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
+            assert!(!schema.is_valid(&with(nulled.clone())), "{nulled}");
+            assert!(read(&with(nulled.clone())).is_err(), "{nulled}");
         }
         for refused in [
             serde_json::json!({"url": url}),
@@ -603,8 +575,7 @@ mod tests {
             "secret:file/../jwks.json",
         ] {
             let instance = runtime_instance(reference, "both");
-            let config: RuntimeConfig =
-                serde_json::from_value(instance.clone()).expect("the runtime shape parses");
+            let config = read(&instance).expect("the runtime shape parses");
             assert!(matches!(
                 config.check(),
                 Err(RuntimeConfigError::Block(error))
@@ -621,24 +592,24 @@ mod tests {
             ("secret:env/CASEWORK_JWKS", "file", "environment"),
             ("secret:file/jwks.json", "environment", "file"),
         ] {
-            for explicit_null in [false, true] {
-                let mut instance = runtime_instance(reference, enabled_provider);
-                if explicit_null {
-                    instance["secretProviders"][disabled_provider] = Value::Null;
-                }
-                let config: RuntimeConfig =
-                    serde_json::from_value(instance.clone()).expect("the runtime shape parses");
-                assert!(matches!(
-                    config.check(),
-                    Err(RuntimeConfigError::Block(error))
-                        if error.kind() == ConfigBlockErrorKind::SecretProviderDisabled
-                            && error.field() == "authentication.oidc.jwksSource.documentRef"
-                ));
-                assert!(
-                    !schema.is_valid(&instance),
-                    "schema accepted a static JWKS reference with its provider disabled"
-                );
-            }
+            let instance = runtime_instance(reference, enabled_provider);
+            let config = read(&instance).expect("the runtime shape parses");
+            assert!(matches!(
+                config.check(),
+                Err(RuntimeConfigError::Block(error))
+                    if error.kind() == ConfigBlockErrorKind::SecretProviderDisabled
+                        && error.field() == "authentication.oidc.jwksSource.documentRef"
+            ));
+            assert!(
+                !schema.is_valid(&instance),
+                "schema accepted a static JWKS reference with its provider disabled"
+            );
+
+            // A provider written as null is refused by the reader, not read
+            // as disabled.
+            let mut nulled = instance.clone();
+            nulled["secretProviders"][disabled_provider] = Value::Null;
+            assert!(read(&nulled).is_err(), "the reader read a null provider");
         }
 
         assert!(schema.is_valid(&runtime_instance("secret:env/CASEWORK_JWKS", "environment")));
@@ -682,16 +653,21 @@ mod tests {
             serde_json::json!({"hashKeyRef": key, "destination": "file",
                 "path": "/audit.jsonl", "rotateBytes": 1_048_576, "retainDays": 1}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout"}),
-            // An explicit null reads as absent, as it does at load.
+        ] {
+            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
+        }
+        // An explicit null is refused, by the schema and by the reader alike.
+        for nulled in [
+            serde_json::json!({"hashKeyRef": key, "path": null}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": null}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout",
                 "path": null, "rotateBytes": null, "retainDays": null}),
         ] {
-            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
+            assert!(!schema.is_valid(&with(nulled.clone())), "{nulled}");
+            assert!(read(&with(nulled.clone())).is_err(), "{nulled}");
         }
         for refused in [
             serde_json::json!({"hashKeyRef": key}),
-            serde_json::json!({"hashKeyRef": key, "path": null}),
             serde_json::json!({"hashKeyRef": key, "path": "audit.jsonl"}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "path": "/audit.jsonl"}),
             serde_json::json!({"hashKeyRef": key, "destination": "stdout", "rotateBytes": 1_048_576}),

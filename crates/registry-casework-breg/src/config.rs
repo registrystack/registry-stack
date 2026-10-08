@@ -13,9 +13,9 @@ use registry_casework_core::{
     RoutingFieldDescriptor, RoutingSourceMetadata, SourceAdapterError, SourcePolicy,
     SourceRequestPolicy,
 };
-use registry_platform_config::{sha256_uri, SecretResolver};
+use registry_platform_config::{sha256_uri, SecretReference, SecretResolver};
 use registry_platform_crypto::PrivateJwk;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -51,6 +51,8 @@ type ValidatedDescription = (Vec<BregRequestConfig>, String);
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BregBinding {
+    #[serde(deserialize_with = "registry_casework_core::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub base_url: String,
     pub reader_profile: String,
     pub token_endpoint: String,
@@ -63,17 +65,45 @@ pub struct BregBinding {
     /// Explicit scopes for this source reader's service credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub client_id_ref: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub client_assertion_key_ref: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub webhook_secret_ref: String,
     pub event_source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "optional_secret_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
     pub trusted_root_certificates_ref: Option<String>,
-    #[serde(default = "default_request_timeout")]
+    #[serde(
+        default = "default_request_timeout",
+        deserialize_with = "registry_casework_core::typed::bounded_u64::<_, 1, MAXIMUM_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_TIMEOUT_MILLISECONDS))
+    )]
     pub request_timeout_milliseconds: u64,
-    #[serde(default = "default_connect_timeout")]
+    #[serde(
+        default = "default_connect_timeout",
+        deserialize_with = "registry_casework_core::typed::bounded_u64::<_, 1, MAXIMUM_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = MAXIMUM_TIMEOUT_MILLISECONDS))
+    )]
     pub connect_timeout_milliseconds: u64,
-    #[serde(default = "default_reconciliation_interval")]
+    #[serde(
+        default = "default_reconciliation_interval",
+        deserialize_with = "registry_casework_core::typed::bounded_u64::<_, MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS, MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS>"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(range(
@@ -82,6 +112,25 @@ pub struct BregBinding {
         ))
     )]
     pub reconciliation_interval_milliseconds: u64,
+}
+
+/// A secret reference, `secret:env/NAME` or `secret:file/name`, kept as
+/// written. The reader refuses any other spelling at its position without
+/// repeating it.
+fn secret_reference<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    SecretReference::deserialize(deserializer).map(|reference| reference.as_str().to_owned())
+}
+
+/// An optional member holding a secret reference; absent reads as `None`
+/// through `serde(default)`.
+fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    secret_reference(deserializer).map(Some)
 }
 
 impl fmt::Debug for BregBinding {

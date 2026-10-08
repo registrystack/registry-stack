@@ -22,7 +22,7 @@ mod source_retention;
 mod task_grant;
 mod timing;
 mod transition;
-mod typed;
+pub mod typed;
 
 pub use adapter::*;
 pub use assignment::*;

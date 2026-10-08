@@ -3157,13 +3157,6 @@ exceptions:
   class: stable-move
   reason: kind is BRegCaseworkSourceDescription
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to CaseworkBregSourceDescription'
-- rule: CFG-YAML-1
-  format: casework/breg-source-description
-  location: crates/registry-casework-breg/src/config.rs#validate_description()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: casework/check-report
   location: products/casework/contracts/cli/CheckReport.schema.json#/properties
@@ -4219,59 +4212,9 @@ exceptions:
 - rule: CFG-EMPTY-2
   format: casework/runtime
   location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty default ({})
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-EMPTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/AuditConfig/properties/path
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/AuditConfig/properties/retainDays
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/AuditConfig/properties/rotateBytes
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/ReviewCompletionAuthConfig/properties/header
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/ReviewCompletionRuntimeConfig/properties/bearerTokenRef
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/RuntimePackageConfig/properties/acknowledgeStrandedWork
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/RuntimePackageConfig/properties/expectedDigest
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
+  class: decision
+  reason: 'assertionIssuers is a member of the shared OidcClientsConfig block, which every token-exchanging runtime embeds unchanged and which documents an empty map as applying no rule; refusing a written {} changes the shared block for every product, not Casework alone'
+  resolution: 'Decision for Jeremi and the platform track raised 2026-10-08 by the Casework track: either the shared OidcClientsConfig refuses a written empty assertionIssuers (omitted applies no rule, written lists at least one client) and every product embedding it inherits the refusal, or the platform records the empty map as the explicit "no rule" spelling; Casework adopts whichever the shared block decides'
 - rule: CFG-ENV-2
   format: casework/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4326,104 +4269,6 @@ exceptions:
   class: stable-move
   reason: timeoutMilliseconds is a refused spelling of 'Time allowed for one outbound call or delivery attempt'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to attemptTimeoutMilliseconds'
-- rule: CFG-QTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/BregBinding/properties/connectTimeoutMilliseconds
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-QTY-4
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/BregBinding/properties/requestTimeoutMilliseconds
-  class: pending
-  wp: WP3
-  reason: an integer without a stated minimum and maximum (minimum 0 is the unsigned type's implicit bound)
-  resolution: Read it with BoundedU32/BoundedU64 and state both bounds
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/BregBinding/properties/clientAssertionKeyRef
-  class: pending
-  wp: WP8
-  reason: clientAssertionKeyRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/BregBinding/properties/clientIdRef
-  class: pending
-  wp: WP8
-  reason: clientIdRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/BregBinding/properties/trustedRootCertificatesRef
-  class: pending
-  wp: WP8
-  reason: trustedRootCertificatesRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/BregBinding/properties/webhookSecretRef
-  class: pending
-  wp: WP8
-  reason: webhookSecretRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/ReviewCompletionAuthConfig/properties/secretRef
-  class: pending
-  wp: WP8
-  reason: secretRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/ReviewCompletionRuntimeConfig/oneOf/0/properties/bearerTokenRef
-  class: pending
-  wp: WP8
-  reason: bearerTokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/ReviewCompletionRuntimeConfig/properties/bearerTokenRef
-  class: pending
-  wp: WP8
-  reason: bearerTokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/TaskAuthorityConfig/properties/signingKeyRef
-  class: pending
-  wp: WP8
-  reason: signingKeyRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-VAL-6
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/RuntimePackageConfig/properties/expectedDigest
-  class: pending
-  wp: WP3
-  reason: expectedDigest is not typed as $defs/Digest
-  resolution: 'Type the member with $ref: #/$defs/Digest'
-- rule: CFG-VAL-7
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/BregBinding/properties/baseUrl
-  class: pending
-  wp: WP3
-  reason: baseUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/ReviewCompletionRuntimeConfig/properties/url
-  class: pending
-  wp: WP3
-  reason: url is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: casework/runtime
-  location: products/casework/generated/runtime/runtime.schema.json#/$defs/TaskAuthorityConfig/properties/issuer
-  class: pending
-  wp: WP3
-  reason: issuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-ENV-1
   format: casework/simulation
   location: products/platform/config-formats.yaml#/current/apiVersion

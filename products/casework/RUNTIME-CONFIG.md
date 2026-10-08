@@ -8,7 +8,12 @@ path and every operated resource path are absolute, and the selected file may
 not pass through a symbolic link. Local development tooling may resolve paths
 before it writes the file. The file is read through the shared Registry Stack
 runtime configuration loader: it must be a YAML mapping of at most 1 MiB, and
-unknown keys are refused with the path of the offending field.
+unknown keys are refused with the path of the offending field. Every problem
+is reported at its line and column. A member written as `null`, `~`, or an
+empty value is refused; omit the key to take its default. A secret reference,
+URL, or digest that is not written in its form is refused at its position with
+`config.invalid-value`, and a number outside its bounds with
+`config.out-of-range`, without repeating the value.
 
 String values in `runtime.yaml` may take a deployment value from the
 environment when the runtime starts: `${VAR}` requires `VAR`, `${VAR:-default}`
@@ -130,7 +135,8 @@ client identifiers whose tokens the runtime admits, matched against the token's
 `operator-controlled-upstream` the list must name at least one client, because an
 empty list admits every client the issuer verifies; development loopback keeps
 an empty list as a local convenience. A configured `taskAuthority` requires a
-non-empty list in either mode. `scopeClaim` defaults
+non-empty list in either mode, and its `issuer` is an absolute `http` or
+`https` URL with a host and no user information. `scopeClaim` defaults
 to `registry_scopes` for compatibility with existing deployments. Stock ThunderID
 emits `scope`, so the maintained example and `caseworkctl init` set that explicit
 override. `humanIdentity` defaults to claim
@@ -145,8 +151,8 @@ that key's secret reference and must be an exact `secret:env/NAME` or
 `secret:file/name` reference. `audit.destination` is `file` (the default) or
 `stdout`. A `file` destination requires the absolute `audit.path` of the active
 file and accepts `audit.rotateBytes` (default 104857600, at least 1048576, at
-most 4294967295) and `audit.retainDays` (default 90, at most 36500); `stdout`
-refuses all three. A
+most 4294967295) and `audit.retainDays` (default 90, at least 1, at most
+36500); `stdout` refuses all three. A
 `caseworkctl` command that writes audit, such as an applied erasure or
 settlement, writes to a sibling file named for its process role beside
 `audit.path`, `audit.caseworkctl.ndjson` for `audit.ndjson`, or to standard

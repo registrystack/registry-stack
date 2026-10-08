@@ -4,11 +4,6 @@
       "additionalProperties": false,
       "description": "The audit journal: where it is written and the key its hashes use.",
       "else": {
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
         "required": [
           "path"
         ]
@@ -34,35 +29,23 @@
           "description": "Secret reference to the audit hash key."
         },
         "path": {
-          "default": null,
           "description": "The active audit file. Required for, and only allowed with, `file`.",
           "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "retainDays": {
-          "default": null,
-          "description": "Delete rotated files older than this many days (default 90).",
+          "description": "Delete rotated files older than this many days. Only allowed with\n`file`; omitted, rotated files are kept 90 days.",
           "format": "uint32",
           "maximum": 36500,
           "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "rotateBytes": {
-          "default": null,
-          "description": "Rotate the active file once it reaches this many bytes (default 100 MiB).",
+          "description": "Rotate the active file once it reaches this many bytes. Only allowed\nwith `file`; omitted, the file rotates at 100 MiB.",
           "format": "uint64",
           "maximum": 4294967295,
           "minimum": 1048576,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         }
       },
       "required": [
@@ -72,37 +55,16 @@
         "not": {
           "anyOf": [
             {
-              "properties": {
-                "path": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "path"
               ]
             },
             {
-              "properties": {
-                "rotateBytes": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "rotateBytes"
               ]
             },
             {
-              "properties": {
-                "retainDays": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "retainDays"
               ]
@@ -144,27 +106,23 @@
       "description": "Launcher-owned BReg connection material for one authored Casework source.",
       "properties": {
         "baseUrl": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "clientAssertionAudience": {
           "description": "Explicit OAuth client assertion audience; omission preserves endpoint audience.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "clientAssertionKeyRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "clientIdRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "connectTimeoutMilliseconds": {
           "default": 10000,
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 300000,
+          "minimum": 1,
           "type": "integer"
         },
         "eventSource": {
@@ -183,39 +141,29 @@
         "requestTimeoutMilliseconds": {
           "default": 30000,
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 300000,
+          "minimum": 1,
           "type": "integer"
         },
         "resource": {
           "description": "Exact resource indicator required by the configured authorization server.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "scopes": {
           "description": "Explicit scopes for this source reader's service credential.",
           "items": {
             "type": "string"
           },
-          "type": [
-            "array",
-            "null"
-          ]
+          "type": "array"
         },
         "tokenEndpoint": {
           "type": "string"
         },
         "trustedRootCertificatesRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference"
         },
         "webhookSecretRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         }
       },
       "required": [
@@ -256,6 +204,11 @@
         "migrationUrlRef"
       ],
       "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
     },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
@@ -478,18 +431,13 @@
       "description": "How a completion destination presents its secret. Without `header` the\nsecret is sent as `Authorization: Bearer`; with one, the raw secret is the\nvalue of that header and no `Authorization` header is sent.",
       "properties": {
         "header": {
-          "default": null,
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "secretRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         }
       },
       "required": [
@@ -501,25 +449,11 @@
       "additionalProperties": false,
       "oneOf": [
         {
-          "properties": {
-            "bearerTokenRef": {
-              "not": {
-                "type": "null"
-              }
-            }
-          },
           "required": [
             "bearerTokenRef"
           ]
         },
         {
-          "properties": {
-            "auth": {
-              "not": {
-                "type": "null"
-              }
-            }
-          },
           "required": [
             "auth"
           ]
@@ -527,23 +461,11 @@
       ],
       "properties": {
         "auth": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReviewCompletionAuthConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ReviewCompletionAuthConfig"
         },
         "bearerTokenRef": {
-          "default": null,
-          "description": "Shorthand for `auth` with no header: the secret is presented as\n`Authorization: Bearer`. Exactly one of this and `auth` is configured.",
-          "pattern": "^secret:(?:env|file)/",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference",
+          "description": "Shorthand for `auth` with no header: the secret is presented as\n`Authorization: Bearer`. Exactly one of this and `auth` is configured."
         },
         "maximumAttempts": {
           "default": 12,
@@ -567,7 +489,7 @@
           "type": "integer"
         },
         "url": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         }
       },
       "required": [
@@ -579,21 +501,12 @@
       "additionalProperties": false,
       "properties": {
         "acknowledgeStrandedWork": {
-          "default": null,
-          "description": "The package digest of a package the operator has accepted will strand\nin-flight work pinned under an earlier package. Startup and `doctor`\nrefuse such a package unless this names its exact digest, so an\nacknowledgement never carries over to a later package.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/Digest",
+          "description": "The package digest of a package the operator has accepted will strand\nin-flight work pinned under an earlier package. Startup and `doctor`\nrefuse such a package unless this names its exact digest, so an\nacknowledgement never carries over to a later package. Omitted, no\nstranding package is accepted."
         },
         "expectedDigest": {
-          "default": null,
-          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage, and on an authored project that has no `SHA256SUMS`.",
-          "pattern": "^sha256:[0-9a-f]{64}$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage, and on an authored project that has no `SHA256SUMS`.\nOmitted, the runtime starts on whichever package `root` holds."
         },
         "root": {
           "description": "Absolute path of the package directory.",
@@ -669,11 +582,10 @@
           "type": "string"
         },
         "issuer": {
-          "type": "string"
+          "$ref": "#/$defs/Url"
         },
         "signingKeyRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "statusClients": {
           "additionalProperties": {
@@ -831,14 +743,7 @@
       "$ref": "#/$defs/PrivateListenerConfig"
     },
     "metricsListener": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/MetricsListenerConfig"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/$defs/MetricsListenerConfig"
     },
     "package": {
       "$ref": "#/$defs/RuntimePackageConfig"
@@ -863,14 +768,7 @@
       "type": "object"
     },
     "taskAuthority": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TaskAuthorityConfig"
-        },
-        {
-          "type": "null"
-        }
-      ]
+      "$ref": "#/$defs/TaskAuthorityConfig"
     }
   },
   "required": [

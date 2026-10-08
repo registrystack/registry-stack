@@ -17,9 +17,11 @@ default = []
 postgres-test = ["dep:registry-breg", "registry-breg/postgres-test"]
 schema = [
     "dep:schemars",
+    "registry-casework-core/schema",
     "registry-casework-breg/schema",
     "registry-platform-audit/schema",
     "registry-platform-config/schema",
+    "registry-platform-yaml/schema",
 ]
 
 [lints]

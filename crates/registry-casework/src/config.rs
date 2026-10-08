@@ -5,13 +5,16 @@ use std::time::Duration;
 
 use jsonwebtoken::Algorithm;
 use registry_casework_core::{check_routing_policy, CaseworkProject, ConfigLoadError};
-use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
+use registry_platform_audit::{
+    AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
+    MIN_AUDIT_ROTATE_BYTES,
+};
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
     is_sha256_label, sha256_uri, ConfigBlockError, PackageConfig, PackageDigestMismatch,
     PackageError, PackageErrorKind, PackageLimits, RemovedKey, RuntimeConfigLoader,
-    RuntimeEnvelope, SecretResolver, VerifiedPackage, REMOVED_OIDC_JWKS_URI,
+    RuntimeEnvelope, SecretReference, SecretResolver, VerifiedPackage, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -22,7 +25,7 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
 /// The command that builds a Casework package, named in every package refusal.
@@ -58,6 +61,8 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
 /// deployment can widen it to an ordinary JWT.
 const CASEWORK_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 const MAXIMUM_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
+/// The largest `audit.rotateBytes` the shared audit writer accepts.
+const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
 pub(crate) const MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 100;
 pub(crate) const MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS: u64 = 30_000;
 pub(crate) const MINIMUM_REVIEW_COMPLETION_ATTEMPTS: u32 = 1;
@@ -273,6 +278,25 @@ pub struct IdentityConfig {
     pub database_id: String,
 }
 
+/// A secret reference, `secret:env/NAME` or `secret:file/name` (CFG-SEC-1),
+/// kept as written. The reader refuses any other spelling at its position
+/// without repeating it.
+fn secret_reference<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    SecretReference::deserialize(deserializer).map(|reference| reference.as_str().to_owned())
+}
+
+/// An optional member holding a secret reference; absent reads as `None`
+/// through `serde(default)`.
+fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    secret_reference(deserializer).map(Some)
+}
+
 fn valid_database_id(value: &str) -> bool {
     !value.trim().is_empty()
         && value.trim() == value
@@ -284,10 +308,13 @@ fn valid_database_id(value: &str) -> bool {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCompletionRuntimeConfig {
+    #[serde(deserialize_with = "registry_casework_core::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub url: String,
     /// Shorthand for `auth` with no header: the secret is presented as
     /// `Authorization: Bearer`. Exactly one of this and `auth` is configured.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
     pub bearer_token_ref: Option<String>,
     #[serde(default)]
     pub auth: Option<ReviewCompletionAuthConfig>,
@@ -333,6 +360,8 @@ pub struct ReviewCompletionAuthConfig {
         schemars(length(min = 1, max = MAXIMUM_REVIEW_COMPLETION_HEADER_NAME_BYTES))
     )]
     pub header: Option<String>,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub secret_ref: String,
 }
 
@@ -462,8 +491,12 @@ fn default_review_completion_retry_seconds() -> u64 {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskAuthorityConfig {
+    #[serde(deserialize_with = "registry_casework_core::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub issuer: String,
     pub exchange_audience: String,
+    #[serde(deserialize_with = "secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
     pub signing_key_ref: String,
     /// Service client IDs mapped to their one protected resource audience.
     pub status_clients: BTreeMap<String, String>,
@@ -478,13 +511,29 @@ pub struct RuntimePackageConfig {
     /// `sha256:` label of the package digest, the digest of the package's
     /// `SHA256SUMS` file. When set, the runtime refuses to start on any other
     /// package, and on an authored project that has no `SHA256SUMS`.
-    #[serde(default)]
+    /// Omitted, the runtime starts on whichever package `root` holds.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::optional_digest"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Digest>")
+    )]
     pub expected_digest: Option<String>,
     /// The package digest of a package the operator has accepted will strand
     /// in-flight work pinned under an earlier package. Startup and `doctor`
     /// refuse such a package unless this names its exact digest, so an
-    /// acknowledgement never carries over to a later package.
-    #[serde(default)]
+    /// acknowledgement never carries over to a later package. Omitted, no
+    /// stranding package is accepted.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::optional_digest"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Digest>")
+    )]
     pub acknowledge_stranded_work: Option<String>,
 }
 
@@ -554,13 +603,15 @@ pub struct AuthenticationConfig {
 pub struct OidcConfig {
     /// The exact issuer, the one audience every token carries, and where the
     /// issuer's signing keys come from.
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     pub provider: OidcIssuerConfig,
     /// The clients admitted and the assertion authorities each may exchange
     /// a subject token from, keyed by client identifier. An empty
     /// `assertionIssuers` map applies no rule; see
     /// [`registry_platform_oidc::TokenVerifierConfig::assertion_issuers`].
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     pub clients: OidcClientsConfig,
     #[serde(default = "default_scope_claim")]
     pub scope_claim: String,
@@ -603,7 +654,8 @@ fn default_human_identity_value() -> String {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
     /// The secret keying the audit journal's hashes, `hashKeyRef`.
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/audit-key"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     pub key: AuditKeyConfig,
     /// Where audit entries go: a rotated `file` (the default) or `stdout`.
     #[serde(default)]
@@ -611,11 +663,24 @@ pub struct AuditConfig {
     /// The active audit file. Required for, and only allowed with, `file`.
     #[serde(default)]
     pub path: Option<PathBuf>,
-    /// Rotate the active file once it reaches this many bytes (default 100 MiB).
-    #[serde(default)]
+    /// Rotate the active file once it reaches this many bytes. Only allowed
+    /// with `file`; omitted, the file rotates at 100 MiB.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::optional_bounded_u64::<_, MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = MIN_AUDIT_ROTATE_BYTES, max = MAXIMUM_AUDIT_ROTATE_BYTES))
+    )]
     pub rotate_bytes: Option<u64>,
-    /// Delete rotated files older than this many days (default 90).
-    #[serde(default)]
+    /// Delete rotated files older than this many days. Only allowed with
+    /// `file`; omitted, rotated files are kept 90 days.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::optional_bounded_u32::<_, 1, MAX_AUDIT_RETAIN_DAYS>"
+    )]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_AUDIT_RETAIN_DAYS)))]
     pub retain_days: Option<u32>,
 }
 
@@ -1612,13 +1677,24 @@ reviewProducers:
         );
     }
 
+    /// Decode a runtime document through the shared reader without the
+    /// product checks that need a package on disk.
+    fn parse_runtime(document: &serde_json::Value) -> Result<RuntimeConfig, RuntimeConfigError> {
+        let text = serde_norway::to_string(document).unwrap();
+        RuntimeConfig::loader()
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .map(|loaded| loaded.config)
+            .map_err(RuntimeConfigError::Load)
+    }
+
     #[test]
     fn human_identity_defaults_to_an_explicit_fail_closed_claim_contract() {
-        let oidc: OidcConfig = serde_json::from_value(serde_json::json!({
-            "issuer": "https://identity.example.test",
-            "audience": "urn:example:casework"
-        }))
-        .expect("OIDC configuration");
+        let root = canonical_tempdir();
+        let document = operator_value(&root.path().join("package"), "development-loopback");
+        let oidc = parse_runtime(&document)
+            .expect("runtime configuration")
+            .authentication
+            .oidc;
         assert_eq!(
             oidc.human_identity,
             HumanIdentityConfig {
@@ -1629,18 +1705,105 @@ reviewProducers:
         assert_eq!(oidc.scope_claim, "registry_scopes");
     }
 
+    /// The platform blocks are read through the shared-block recipe rather
+    /// than serde `flatten`, so every unknown key inside one is reported, each
+    /// at its own line and column, not only the first.
     #[test]
-    fn a_stdout_destination_accepts_an_explicit_null_path() {
-        let audit: AuditConfig = serde_json::from_value(serde_json::json!({
+    fn two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions() {
+        let root = canonical_tempdir();
+        let document = operator_document(&root.path().join("package"), "development-loopback");
+        let insert_after = |text: String, line: &str, added: &str| {
+            assert!(text.contains(line), "the fixture holds {line:?}");
+            text.replacen(line, &format!("{line}{added}"), 1)
+        };
+        let text = insert_after(
+            document,
+            "    issuer: https://identity.example.test\n",
+            "    issuers: canary-a\n    allowedClient: canary-b\n",
+        );
+        let text = insert_after(
+            text,
+            "  hashKeyRef: secret:file/audit\n",
+            "  hashKey: canary-c\n  paths: canary-d\n",
+        );
+        let error = RuntimeConfig::loader()
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect_err("unknown keys inside the shared blocks are refused");
+        let line_of = |key: &str| {
+            text.lines()
+                .position(|line| line.trim_start().starts_with(&format!("{key}: canary-")))
+                .map(|index| index + 1)
+                .expect("the fixture holds the key")
+        };
+        let reported: Vec<(String, String, Option<usize>, Option<usize>)> = error
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let source = diagnostic
+                    .source
+                    .as_ref()
+                    .expect("a reader diagnostic has a source");
+                (
+                    diagnostic.code.clone(),
+                    diagnostic.path.clone(),
+                    source.line,
+                    source.column,
+                )
+            })
+            .collect();
+        for (path, key, column) in [
+            ("/authentication/oidc/issuers", "issuers", 5),
+            ("/authentication/oidc/allowedClient", "allowedClient", 5),
+            ("/audit/hashKey", "hashKey", 3),
+            ("/audit/paths", "paths", 3),
+        ] {
+            let expected = (
+                "config.unknown-key".to_owned(),
+                path.to_owned(),
+                Some(line_of(key)),
+                Some(column),
+            );
+            assert!(reported.contains(&expected), "{expected:?} in {reported:?}");
+        }
+        let human = error.to_string();
+        assert!(!human.contains("canary-"), "{human}");
+    }
+
+    #[test]
+    fn an_explicit_null_is_refused_where_an_omitted_member_would_load() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["audit"] = serde_json::json!({
             "hashKeyRef": "secret:env/AUDIT_HASH_KEY",
-            "destination": "stdout",
-            "path": null
-        }))
-        .expect("an explicit null is the same absence as an omitted field");
+            "destination": "stdout"
+        });
+        let audit = parse_runtime(&document)
+            .expect("an omitted path loads")
+            .audit;
         assert_eq!(
             audit.destination().expect("stdout takes no file settings"),
             AuditDestination::Stdout
         );
+
+        let mut null_path = document.clone();
+        null_path["audit"]["path"] = serde_json::Value::Null;
+        let mut null_scope_claim = document.clone();
+        null_scope_claim["authentication"]["oidc"]["scopeClaim"] = serde_json::Value::Null;
+        for (nulled, member, pointer) in [
+            (null_path, "/audit/path", "audit.path"),
+            (
+                null_scope_claim,
+                "/authentication/oidc/scopeClaim",
+                "authentication.oidc.scopeClaim",
+            ),
+        ] {
+            let error = parse_runtime(&nulled).expect_err("an explicit null is refused");
+            let RuntimeConfigError::Load(load) = &error else {
+                panic!("{member}: {error:?}");
+            };
+            assert_eq!(load.deciding_diagnostic().path, member, "{error}");
+            assert_eq!(load.field(), pointer, "{error}");
+        }
     }
 
     /// Build a runtime configuration with a static JWKS source (so building the
@@ -2184,11 +2347,12 @@ reviewProducers:
             document["package"]["expectedDigest"] = serde_json::json!(malformed);
             let operator = write_operator(root.path(), &document);
             let error = RuntimeConfig::load(&operator).expect_err("a malformed digest is refused");
-            assert!(
-                matches!(error, RuntimeConfigError::Block(_)),
-                "{malformed}: {error:?}"
+            assert_reader_refusal(
+                &error,
+                "package.expectedDigest",
+                "config.invalid-value",
+                &[],
             );
-            assert_eq!(error.path(), "package.expectedDigest");
         }
     }
 
@@ -2232,14 +2396,12 @@ reviewProducers:
         for malformed in ["yes", "sha256:ABC"] {
             write(malformed);
             let error = RuntimeConfig::load(&operator).expect_err("a malformed digest is refused");
-            assert!(
-                matches!(
-                    error,
-                    RuntimeConfigError::InvalidStrandedWorkAcknowledgement
-                ),
-                "{malformed}: {error:?}"
+            assert_reader_refusal(
+                &error,
+                "package.acknowledgeStrandedWork",
+                "config.invalid-value",
+                &[malformed],
             );
-            assert_eq!(error.path(), "package.acknowledgeStrandedWork");
         }
     }
 
@@ -2614,6 +2776,34 @@ reviewProducers:
         }
     }
 
+    /// Assert the shared reader refused one member with `code` at its dotted
+    /// path, named its bounds or form, and repeated none of `withheld`.
+    fn assert_reader_refusal(
+        error: &RuntimeConfigError,
+        field: &str,
+        code: &str,
+        withheld: &[&str],
+    ) {
+        let RuntimeConfigError::Load(load) = error else {
+            panic!("the reader did not refuse {field}: {error:?}");
+        };
+        assert_eq!(load.kind(), RuntimeConfigErrorKind::InvalidValue, "{error}");
+        assert_eq!(load.field(), field, "{error}");
+        assert_eq!(load.deciding_diagnostic().code, code, "{error}");
+        assert_eq!(error.path(), field);
+        // The rendered refusal also names the file, whose temporary name is
+        // random, so the withheld values are looked for in the wording only.
+        for diagnostic in load.diagnostics() {
+            for value in withheld {
+                assert!(
+                    !diagnostic.message.contains(value)
+                        && !diagnostic.suggested_action.contains(value),
+                    "the refusal echoes the configured value {value:?}: {error}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn an_out_of_range_source_binding_interval_is_refused_at_load() {
         for (interval, withheld) in [(999, "999"), (3_600_001, "3600001")] {
@@ -2621,11 +2811,16 @@ reviewProducers:
                 "reconciliationIntervalMilliseconds",
                 serde_json::json!(interval),
             );
-            assert_source_binding_rule(
+            assert_reader_refusal(
                 &error,
-                "reconciliationIntervalMilliseconds",
-                &["reconciliationIntervalMilliseconds", "1000", "3600000"],
+                "sources.professional.reconciliationIntervalMilliseconds",
+                "config.out-of-range",
                 &[withheld],
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("from 1000 to 3600000"),
+                "the refusal does not name the bounds: {message}"
             );
         }
     }
@@ -2655,37 +2850,26 @@ reviewProducers:
     }
 
     #[test]
-    fn a_zero_connect_timeout_names_that_rule() {
-        let error = source_binding_refusal("connectTimeoutMilliseconds", serde_json::json!(0));
-        assert_source_binding_rule(
-            &error,
-            "connectTimeoutMilliseconds",
-            &["connectTimeoutMilliseconds", "greater than zero"],
-            &[],
-        );
-    }
-
-    #[test]
-    fn a_zero_request_timeout_names_that_rule() {
-        let error = source_binding_refusal("requestTimeoutMilliseconds", serde_json::json!(0));
-        assert_source_binding_rule(
-            &error,
-            "requestTimeoutMilliseconds",
-            &["requestTimeoutMilliseconds", "greater than zero"],
-            &[],
-        );
-    }
-
-    #[test]
-    fn a_request_timeout_above_the_maximum_names_that_rule() {
-        let error =
-            source_binding_refusal("requestTimeoutMilliseconds", serde_json::json!(300_001));
-        assert_source_binding_rule(
-            &error,
-            "requestTimeoutMilliseconds",
-            &["requestTimeoutMilliseconds", "at most 300000"],
-            &["300001"],
-        );
+    fn an_out_of_range_source_binding_timeout_names_its_bounds() {
+        for (member, value, withheld) in [
+            ("connectTimeoutMilliseconds", 0, &[][..]),
+            ("requestTimeoutMilliseconds", 0, &[][..]),
+            ("connectTimeoutMilliseconds", 300_001, &["300001"][..]),
+            ("requestTimeoutMilliseconds", 300_001, &["300001"][..]),
+        ] {
+            let error = source_binding_refusal(member, serde_json::json!(value));
+            assert_reader_refusal(
+                &error,
+                &format!("sources.professional.{member}"),
+                "config.out-of-range",
+                withheld,
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("from 1 to 300000"),
+                "{member}: the refusal does not name the bounds: {message}"
+            );
+        }
     }
 
     #[test]

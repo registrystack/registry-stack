@@ -15,6 +15,14 @@
   `config.out-of-range`, `config.duplicate-item`, and `config.invalid-value`.
   Migration steps and the code table are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: the `casework` runtime and `caseworkctl` refuse a `runtime.yaml`
+  member written as `null`, `~`, or an empty value, where it read as absent;
+  omit the key instead. A malformed secret reference, URL, or digest is
+  refused by the reader at its position with `config.invalid-value`, and an
+  out-of-range BReg binding timeout or reconciliation interval or audit
+  rotation bound with `config.out-of-range`. `taskAuthority.issuer` must be an
+  absolute `http` or `https` URL. Migration steps are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

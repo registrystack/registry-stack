@@ -3417,9 +3417,16 @@ fn start_failure(cause: Option<&str>, root: &Path) -> anyhow::Error {
 /// `operator.yaml` derives it, because the source bridge writes that file only
 /// after the start has located its prerequisites.
 fn retained_audit(state: &State) -> Result<()> {
-    let audit: registry_casework::AuditConfig =
-        serde_json::from_value(config::operator(state)["audit"].clone())
-            .context("the development operator configuration has no valid audit section")?;
+    // The audit block embeds a platform block, which only the shared reader
+    // reads, so the whole derived document goes through it.
+    let operator = serde_norway::to_string(&config::operator(state))?;
+    let audit = registry_casework::RuntimeConfig::loader()
+        .parse_str::<registry_casework::RuntimeConfig>(&operator, |_| None)
+        .context(
+            "the development operator configuration is not a valid Casework runtime configuration",
+        )?
+        .config
+        .audit;
     let service = audit.destination()?;
     let operator = service.for_process("caseworkctl")?;
     for destination in [service, operator] {
