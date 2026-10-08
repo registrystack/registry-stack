@@ -571,7 +571,8 @@ held for the stable release" lists them.
   or `verify-presentation` reads it, reports every problem with the shared
   diagnostics, and exits 0 clean, 1 refused, 2 usage, 3 the file could not
   be read. `--format json` writes the same document shape as
-  `evidence check`.
+  `evidence check`, and `--deny-warnings` exits 1 on a warning. A file over
+  the 1 MiB cap is refused as `yaml.too-large` (exit 1).
 - The code list JSON Schema is generated from the reader types and held
   byte-identical by `products/evidence/scripts/check-contracts.sh`.
 - `editors/configure.py` maps the deployment-project files (`evidence.yaml`,

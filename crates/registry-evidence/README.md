@@ -15,7 +15,7 @@ evidence check --runtime-config <path> [--format human|json] [--require-runtime-
 evidence evaluate --runtime-config <path> --fixture <bundle-relative path>
 evidence serve --runtime-config <path>
 evidence verify --jws <file> --jwks <file> --policy <file> [--at <rfc3339-utc>]
-evidence check-policy --verification-policy <file> | --holder-bound-policy <file>
+evidence check-policy --verification-policy <file> | --holder-bound-policy <file> [--format human|json] [--deny-warnings]
 ```
 
 `check` validates and compiles the complete bundle and the runtime file's

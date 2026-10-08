@@ -250,6 +250,9 @@ pub enum Command {
         /// output (`json`).
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
+        /// Exit 1 when the check reports a warning.
+        #[arg(long)]
+        deny_warnings: bool,
     },
     /// Internal local-adopter seam for bearer-free relying-procedure closure.
     #[command(hide = true)]

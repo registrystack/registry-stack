@@ -24,7 +24,7 @@ use registry_evidence_verifier::verifier::{
 use registry_evidence_verifier::AssuranceProfile;
 use registry_platform_yaml::{
     shape_union, BoundedU32, BoundedU64, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec,
-    Reader, Refusal, Report, ScalarHook, ScalarSite, Severity, UniqueList,
+    Reader, Refusal, Report, ScalarHook, ScalarSite, Severity, UniqueList, MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
@@ -114,18 +114,22 @@ pub struct PolicyCheck {
 
 /// Check one policy file offline, exactly as the verify command that reads
 /// it would read it.
-pub fn check_policy(path: &Path, kind: PolicyKind, maximum_bytes: u64) -> PolicyCheck {
+///
+/// At most one byte more than the reader's size cap is read, so an oversized
+/// file reaches the reader as oversized and is refused there with the
+/// diagnostic every format shares.
+pub fn check_policy(path: &Path, kind: PolicyKind) -> PolicyCheck {
     let file = path.display().to_string();
     let readable = std::fs::metadata(path)
         .ok()
-        .filter(|metadata| metadata.is_file() && metadata.len() <= maximum_bytes)
-        .and_then(|_| std::fs::read(path).ok());
+        .filter(std::fs::Metadata::is_file)
+        .and_then(|_| read_capped(path).ok());
     let Some(bytes) = readable else {
         let mut diagnostic = Diagnostic::error(
             "evidence.policy.unavailable",
             "",
-            format!("the policy file could not be read, or is larger than {maximum_bytes} bytes"),
-            "Pass the path of a readable regular file within that size.",
+            "the policy file could not be read",
+            "Pass the path of a readable regular file.",
         );
         diagnostic.source = Some(registry_platform_yaml::Source {
             file,
@@ -149,6 +153,17 @@ pub fn check_policy(path: &Path, kind: PolicyKind, maximum_bytes: u64) -> Policy
         report,
         unavailable: false,
     }
+}
+
+/// Read at most one byte more than the reader's size cap.
+fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAXIMUM_DOCUMENT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// The reader-side shape of one policy document: decoded closed, checked
@@ -643,7 +658,7 @@ maximumAssertionLifetimeSeconds: 3600
     #[test]
     fn a_check_of_an_unreadable_file_is_unavailable() {
         let missing = Path::new("/nonexistent/evidence/policy.yaml");
-        let check = check_policy(missing, PolicyKind::Verification, 1024);
+        let check = check_policy(missing, PolicyKind::Verification);
         assert!(check.unavailable);
         assert_eq!(
             check.report.diagnostics()[0].code,

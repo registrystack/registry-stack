@@ -3509,6 +3509,14 @@ fn check_policy_positions_what_verify_reports_only_as_malformed() {
         "a passing check reported an error: {summary}"
     );
 
+    // A policy with no warning still passes when warnings are denied.
+    let passed = check(&["--verification-policy", &policy_arg, "--deny-warnings"]);
+    assert_eq!(
+        passed.status.code(),
+        Some(0),
+        "the policy was refused with --deny-warnings"
+    );
+
     let passed = check(&[
         "--holder-bound-policy",
         &holder_bound_arg,
@@ -3603,6 +3611,24 @@ fn check_policy_positions_what_verify_reports_only_as_malformed() {
         report["diagnostics"][0]["code"],
         "evidence.policy.unavailable"
     );
+
+    // A file over the size cap was read, and the reader refuses it.
+    let oversized = root.path().join("oversized.yaml");
+    let mut padded = fixture_policy();
+    while padded.len() <= 1024 * 1024 {
+        padded.push_str("# padding\n");
+    }
+    fs::write(&oversized, padded).expect("stage the oversized policy");
+    let oversized_arg = oversized.display().to_string();
+    let too_large = check(&["--verification-policy", &oversized_arg, "--format", "json"]);
+    assert_eq!(
+        too_large.status.code(),
+        Some(1),
+        "an oversized policy was not refused"
+    );
+    let report: Value = serde_json::from_slice(&too_large.stdout).expect("one JSON document");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["diagnostics"][0]["code"], "yaml.too-large");
 
     let both = check(&[
         "--verification-policy",

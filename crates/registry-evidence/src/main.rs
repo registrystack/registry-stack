@@ -421,6 +421,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             verification_policy,
             holder_bound_policy,
             format,
+            deny_warnings,
         } => {
             let (path, kind) = match (verification_policy, holder_bound_policy) {
                 (Some(path), None) => (path, PolicyKind::Verification),
@@ -431,7 +432,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                     )))
                 }
             };
-            Ok(run_check_policy(&path, kind, format))
+            Ok(run_check_policy(&path, kind, format, deny_warnings))
         }
         Command::VerifyPresentation {
             sd_jwt_vc_presentation,
@@ -637,13 +638,19 @@ async fn run_check(request: CheckRequest) -> ExitCode {
 /// Check one verification policy offline and report every problem found.
 ///
 /// Exit 0 when the policy reads as its verify command reads it, 1 when it
-/// was refused, and 3 when the file could not be read.
-fn run_check_policy(path: &Path, kind: PolicyKind, format: OutputFormat) -> ExitCode {
-    let check = check_policy(path, kind, MAX_VERIFY_INPUT_BYTES);
+/// was refused (or, with `deny_warnings`, warned about), and 3 when the file
+/// could not be read.
+fn run_check_policy(
+    path: &Path,
+    kind: PolicyKind,
+    format: OutputFormat,
+    deny_warnings: bool,
+) -> ExitCode {
+    let check = check_policy(path, kind);
     let report = &check.report;
     let (status, exit) = if check.unavailable {
         ("operational-failure", ExitCode::from(3))
-    } else if !report.diagnostics().is_empty() {
+    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
         ("domain-refusal", ExitCode::FAILURE)
     } else {
         ("complete", ExitCode::SUCCESS)
