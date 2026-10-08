@@ -2222,9 +2222,16 @@ def ok_envelope(root: dict, objects: list[list[dict]], tags: set[str]) -> bool:
 
 
 def single_key(root: dict, node: dict) -> bool:
-    """A mapping variant with exactly one member, which it requires."""
+    """A mapping variant with exactly one member, which it requires.
+
+    A branch that declares no member and requires exactly one counts too: it
+    states "exactly one of these members" over members its parent object
+    declares, so the member's presence tells the branches apart.
+    """
 
     properties, required = object_view(root, node)
+    if not properties:
+        return len(required) == 1
     return len(properties) == 1 and set(properties) <= required
 
 

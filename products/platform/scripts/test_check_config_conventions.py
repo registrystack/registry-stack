@@ -956,6 +956,20 @@ class IdentifierTests(ConventionsTestCase):
         self.union([single("file"), single("inline")])
         self.assertNoFinding(self.repo.run(), "CFG-ID-7")
 
+    def test_cfg_id_7_accepts_exactly_one_of_two_members_written_as_required_branches(self) -> None:
+        queue = self.repo.project["$defs"]["Queue"]
+        queue["properties"]["file"] = {"type": "string"}
+        queue["properties"]["inline"] = {"type": "string"}
+        queue["oneOf"] = [{"required": ["file"]}, {"required": ["inline"]}]
+        self.assertNoFinding(self.repo.run(), "CFG-ID-7")
+
+    def test_cfg_id_7_reports_required_branches_that_each_require_two_members(self) -> None:
+        queue = self.repo.project["$defs"]["Queue"]
+        for name in ("file", "inline", "path", "text"):
+            queue["properties"][name] = {"type": "string"}
+        queue["oneOf"] = [{"required": ["file", "path"]}, {"required": ["inline", "text"]}]
+        self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue"))
+
     def test_cfg_id_7_reports_unit_variants_mixed_with_struct_variants(self) -> None:
         self.union([{"type": "string", "enum": ["none"]}, self.variant("type", "file", "path")])
         self.assertFinding(self.repo.run(), "CFG-ID-7", P, at(PROJECT_SCHEMA, "/$defs/Queue/properties/source"))
