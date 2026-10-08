@@ -4286,21 +4286,24 @@ exceptions:
 - rule: CFG-SCHEMA-5
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawDatabaseConfig
-  class: decision
-  reason: 'BReg''s database block carries pool bounds and SQL role names the shared DatabaseConfig does not define, and the shared block carries trustedRootCertificateRef and testOnlyPlaintext, which BReg does not implement; embedding it would add a database TLS posture, not a respelling'
-  resolution: 'Decision for Jeremi raised 2026-10-08 by the BReg authored-formats track: either the shared DatabaseConfig gains pool and roles members and BReg flattens it through the shared-block recipe, adopting trustedRootCertificateRef, or BReg moves pool and roles beside an embedded DatabaseConfig as a stable-move'
+  class: pending
+  wp: WP3
+  reason: RawDatabaseConfig redeclares the shared block DatabaseConfig
+  resolution: Embed DatabaseConfig unchanged from the platform schema
 - rule: CFG-SCHEMA-5
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawListenerConfig
-  class: stable-move
-  reason: 'BReg''s listener holds publicOrigin beside bind, so its type is not the shared ListenerConfig'
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): move listener.publicOrigin to a top-level publicOrigin, as breg-review writes it, and type listener as the shared ListenerConfig; refuse listener.publicOrigin with config.removed-key naming publicOrigin'
+  class: pending
+  wp: WP3
+  reason: RawListenerConfig redeclares the shared block ListenerConfig
+  resolution: Embed ListenerConfig unchanged from the platform schema
 - rule: CFG-VAL-7
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawContextualClaimNames/properties/grantSourceIssuer
-  class: stable-move
-  reason: 'grantSourceIssuer names the token claim that carries a grant''s source issuer, not an issuer URL, and the member name does not say so'
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): rename authentication.authorityClaims.contextual.grantSourceIssuer to grantSourceIssuerClaim; refuse the old key with config.removed-key'
+  class: pending
+  wp: WP3
+  reason: grantSourceIssuer is not typed as $defs/Url
+  resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-CHECK-1
   format: breg/schema-test-credentials
   location: products/platform/config-formats.yaml#/check
