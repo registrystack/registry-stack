@@ -33,7 +33,6 @@ impl Fixture {
             });
         }
         let manifest = ExportManifest {
-            format_version: 1,
             source_id: id.to_owned(),
             provenance: BTreeMap::from([
                 ("producer".to_owned(), "source-contract-test".to_owned()),
@@ -454,7 +453,8 @@ fn interrupted_replacement_and_baseline_advance_restore_the_complete_prior_state
             },
         ];
         let journal = Journal {
-            format_version: 1,
+            api_version: JOURNAL_API_VERSION.to_owned(),
+            kind: JOURNAL_KIND.to_owned(),
             operations,
         };
         write(
@@ -521,7 +521,8 @@ fn recovery_checks_every_precondition_before_touching_independent_edits() {
         JOURNAL_PATH,
         Some(&Contents {
             text: serde_json::to_string(&Journal {
-                format_version: 1,
+                api_version: JOURNAL_API_VERSION.to_owned(),
+                kind: JOURNAL_KIND.to_owned(),
                 operations,
             })
             .unwrap(),
@@ -560,7 +561,8 @@ fn build_refuses_recovery_capability_planted_in_writable_shared_state() {
         let current = read(&fixture.project, "sources/protected.yaml", MAX_FILE_BYTES).unwrap();
         files::ensure_state_directory(&fixture.project).unwrap();
         let journal = Journal {
-            format_version: 1,
+            api_version: JOURNAL_API_VERSION.to_owned(),
+            kind: JOURNAL_KIND.to_owned(),
             operations: vec![Operation {
                 path: "sources/protected.yaml".to_owned(),
                 before: Some(Contents {
@@ -850,7 +852,6 @@ fn import_refuses_more_than_256_artifacts() {
     let root = fixture.root.path().join("too-many-artifacts");
     fs::create_dir_all(&root).unwrap();
     let manifest = ExportManifest {
-        format_version: 1,
         source_id: "lookup".to_owned(),
         provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
         artifacts: (0..=MAX_ARTIFACTS)
@@ -882,7 +883,6 @@ fn import_refuses_artifact_over_one_mebibyte() {
         &"a".repeat((MAX_FILE_BYTES + 1) as usize),
     );
     let manifest = ExportManifest {
-        format_version: 1,
         source_id: "lookup".to_owned(),
         provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
         artifacts: vec![ExportArtifact {
@@ -925,7 +925,6 @@ fn import_refuses_export_over_sixteen_mebibytes_aggregate() {
         sha256: digest(sources.as_bytes()),
     });
     let manifest = ExportManifest {
-        format_version: 1,
         source_id: "lookup".to_owned(),
         provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
         artifacts,
@@ -947,7 +946,6 @@ fn import_refuses_provenance_outside_its_bounds() {
     let root = fixture.root.path().join("bad-provenance");
     fs::create_dir_all(&root).unwrap();
     let manifest = ExportManifest {
-        format_version: 1,
         source_id: "lookup".to_owned(),
         provenance: BTreeMap::new(),
         artifacts: Vec::new(),
@@ -971,7 +969,6 @@ fn import_refuses_yaml_artifact_that_is_not_a_mapping() {
     let content = "not-a-mapping\n";
     put(&root, "sources/lookup.yaml", content);
     let manifest = ExportManifest {
-        format_version: 1,
         source_id: "lookup".to_owned(),
         provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
         artifacts: vec![ExportArtifact {
@@ -1000,7 +997,6 @@ fn import_refuses_export_without_exactly_one_sources_artifact() {
     put(&root, "sources/lookup.yaml", lookup);
     put(&root, "sources/extra.yaml", extra);
     let manifest = ExportManifest {
-        format_version: 1,
         source_id: "lookup".to_owned(),
         provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
         artifacts: vec![
@@ -1031,7 +1027,6 @@ fn import_refuses_artifact_stem_outside_its_bounds() {
     let root = fixture.root.path().join("bad-stem-artifact");
     fs::create_dir_all(&root).unwrap();
     let manifest = ExportManifest {
-        format_version: 1,
         source_id: "lookup".to_owned(),
         provenance: BTreeMap::from([("producer".to_owned(), "source-contract-test".to_owned())]),
         artifacts: vec![ExportArtifact {
@@ -1184,4 +1179,81 @@ fn import_reads_the_committed_example_manifest() {
         .expect("the example manifest decodes");
     assert_eq!(document.source_id, "registry-status");
     assert_eq!(document.artifacts.len(), 8);
+}
+
+const EXAMPLES: &str =
+    "../../products/evidence/examples/formats/source-imports/.evidence/source-imports";
+
+fn example(name: &str) -> Contents {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(EXAMPLES)
+        .join(name);
+    Contents {
+        text: fs::read_to_string(path).expect("the example reads"),
+        mode: 0o600,
+    }
+}
+
+#[test]
+fn the_registered_state_example_is_a_readable_baseline() {
+    let state = parse_state(Some(&example("state.json"))).expect("the example reads");
+    assert_eq!(state.imports.len(), 1);
+}
+
+#[test]
+fn the_registered_journal_example_is_a_readable_transaction() {
+    let journal = example("transaction.json");
+    require_envelope(
+        &journal.text,
+        JOURNAL_API_VERSION,
+        JOURNAL_KIND,
+        JOURNAL_EARLIER,
+    )
+    .expect("the envelope matches");
+    let journal: Journal = serde_json::from_str(&journal.text).expect("the example decodes");
+    assert_eq!(journal.operations.len(), 1);
+}
+
+#[test]
+fn a_baseline_without_the_envelope_is_refused_with_its_fix() {
+    let mut earlier: Value = serde_json::from_str(&example("state.json").text).unwrap();
+    let members = earlier.as_object_mut().unwrap();
+    members.remove("apiVersion");
+    members.remove("kind");
+    members.insert("formatVersion".to_owned(), Value::from(1));
+    let text = serde_json::to_string(&earlier).unwrap();
+    let error = parse_state(Some(&Contents { text, mode: 0o600 })).unwrap_err();
+    assert_eq!(error.to_string(), STATE_EARLIER);
+}
+
+#[test]
+fn a_journal_without_the_envelope_is_refused_with_its_fix_and_left_in_place() {
+    let fixture = Fixture::new();
+    let lock = ProjectLock::acquire(&fixture.project).unwrap();
+    files::ensure_state_directory(&fixture.project).unwrap();
+    let text = r#"{"formatVersion":1,"operations":[]}"#.to_owned();
+    write(
+        &fixture.project,
+        JOURNAL_PATH,
+        Some(&Contents {
+            text: text.clone(),
+            mode: 0o600,
+        }),
+    )
+    .unwrap();
+    let error = recover(&lock).unwrap_err();
+    assert_eq!(error.to_string(), JOURNAL_EARLIER);
+    assert_eq!(
+        fs::read_to_string(fixture.project.join(JOURNAL_PATH)).unwrap(),
+        text
+    );
+}
+
+#[test]
+fn a_written_baseline_carries_the_envelope() {
+    let encoded = encode_state(&State::default()).unwrap();
+    let written: Value = serde_json::from_str(&encoded.text).unwrap();
+    assert_eq!(written["apiVersion"], STATE_API_VERSION);
+    assert_eq!(written["kind"], STATE_KIND);
+    assert!(written.get("formatVersion").is_none());
 }

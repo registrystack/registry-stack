@@ -694,3 +694,19 @@ reader. `evidencectl dev` refuses a state file in the earlier shape without
 changing it. Migration: finish the session with the evidencectl that started
 it (`evidencectl dev stop`, then `evidencectl dev clean`), then run
 `evidencectl dev start` again.
+
+### BREAKING: the source-import baseline and journal have an envelope
+
+`.evidence/source-imports/state.json` opens with `apiVersion:
+id.registrystack.org/formats/evidence/source-import-state/v1alpha1` and
+`kind: EvidenceSourceImportState`; `.evidence/source-imports/transaction.json`
+opens with `apiVersion:
+id.registrystack.org/formats/evidence/source-import-journal/v1alpha1` and
+`kind: EvidenceSourceImportJournal`. `formatVersion` is gone from both, and
+from each recorded export manifest inside the baseline. A file in the earlier
+shape is refused and left as it is. Migration for the baseline: delete
+`.evidence/source-imports` and run `evidencectl source import` again; every
+file that differs from the export is then reported as a conflict to resolve.
+Migration for a journal left by an interrupted import: run `evidencectl source
+import` with the evidencectl that started it to finish or roll back, then
+rerun.

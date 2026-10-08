@@ -25,6 +25,13 @@
 
 ### Evidence authoring tools
 
+- BREAKING: the source-import baseline (`.evidence/source-imports/state.json`)
+  and transaction journal (`.evidence/source-imports/transaction.json`) open
+  with `apiVersion` and `kind` in place of `formatVersion`. `evidencectl source
+  import` refuses a file in the earlier shape with a message that names the
+  fix. See "Evidence tooling files" in
+  `release/notes/config-conventions/evidence.md`.
+
 - BREAKING: the session state `evidencectl dev` retains in
   `.evidence/dev/state.json` opens with `apiVersion`
   (`id.registrystack.org/formats/evidence/dev-state/v6`) and `kind`

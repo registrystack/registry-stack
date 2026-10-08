@@ -3626,9 +3626,11 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/source-import-state/v1alpha1
+      kind: EvidenceSourceImportState
+      checkedBy:
+        file: crates/registry-evidencectl/src/source_import/mod.rs
+        symbol: STATE_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/source-import-state/v1alpha1
       kind: EvidenceSourceImportState
@@ -3639,7 +3641,7 @@ formats:
       function: parse_state
       type: State
     check: none
-    example: none
+    example: products/evidence/examples/formats/source-imports/.evidence/source-imports/state.json
     conformance:
       requiredText: none
       optionalText: none
@@ -3655,9 +3657,11 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/evidence/source-import-journal/v1alpha1
+      kind: EvidenceSourceImportJournal
+      checkedBy:
+        file: crates/registry-evidencectl/src/source_import/mod.rs
+        symbol: JOURNAL_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/evidence/source-import-journal/v1alpha1
       kind: EvidenceSourceImportJournal
@@ -3668,7 +3672,7 @@ formats:
       function: recover
       type: Journal
     check: none
-    example: none
+    example: products/evidence/examples/formats/source-imports/.evidence/source-imports/transaction.json
     conformance:
       requiredText: none
       optionalText: none

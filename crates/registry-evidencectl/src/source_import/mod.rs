@@ -60,11 +60,42 @@ pub(crate) struct DetachArgs {
     pub project: PathBuf,
 }
 
+/// The `apiVersion` and `kind` of the baseline `evidencectl source import`
+/// keeps in `.evidence/source-imports/state.json`.
+pub(crate) const STATE_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/source-import-state/v1alpha1";
+pub(crate) const STATE_KIND: &str = "EvidenceSourceImportState";
+/// The `apiVersion` and `kind` of the transaction journal kept in
+/// `.evidence/source-imports/transaction.json` while an import is applied.
+pub(crate) const JOURNAL_API_VERSION: &str =
+    "id.registrystack.org/formats/evidence/source-import-journal/v1alpha1";
+pub(crate) const JOURNAL_KIND: &str = "EvidenceSourceImportJournal";
+/// Refusals for a file an earlier evidencectl wrote without the envelope. The
+/// file is left as it is, so that evidencectl can still finish its work.
+const STATE_EARLIER: &str = "the source-import baseline in .evidence/source-imports/state.json was written by an earlier evidencectl; keep it for inspection, delete .evidence/source-imports, and run evidencectl source import again";
+const JOURNAL_EARLIER: &str = "the source-import transaction journal in .evidence/source-imports/transaction.json was written by an earlier evidencectl; run evidencectl source import with that evidencectl to finish or roll back the transaction, then rerun it";
+
+/// Refuse a file that does not open with the expected `apiVersion` and
+/// `kind`, naming the fix. Both files embed project content beyond the
+/// shared reader's document bound, so the envelope is checked here.
+pub(crate) fn require_envelope(
+    text: &str,
+    api_version: &str,
+    kind: &str,
+    earlier: &str,
+) -> Result<()> {
+    let document: serde_json::Value =
+        serde_json::from_str(text).context("the file is not valid JSON")?;
+    if document["apiVersion"] != api_version || document["kind"] != kind {
+        bail!("{earlier}");
+    }
+    Ok(())
+}
+
 /// The manifest as the source-import baseline records it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExportManifest {
-    format_version: u32,
     source_id: String,
     provenance: BTreeMap<String, String>,
     artifacts: Vec<ExportArtifact>,
@@ -101,7 +132,8 @@ struct RetainedArtifact {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct State {
-    format_version: u32,
+    api_version: String,
+    kind: String,
     imports: BTreeMap<String, InstalledExport>,
     /// Exact accepted local content, including keep/resolved choices. Current
     /// authored bytes may subsequently differ and are read anew for every plan.
@@ -111,7 +143,8 @@ struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            format_version: 1,
+            api_version: STATE_API_VERSION.to_owned(),
+            kind: STATE_KIND.to_owned(),
             imports: BTreeMap::new(),
             accepted: BTreeMap::new(),
         }
@@ -556,7 +589,6 @@ fn load_export(directory: &Path) -> Result<InstalledExport> {
         content.text.as_bytes(),
     )?;
     let mut manifest = ExportManifest {
-        format_version: 1,
         source_id: document.source_id,
         provenance: document.provenance,
         artifacts: document
@@ -642,16 +674,14 @@ fn parse_state(content: Option<&Contents>) -> Result<State> {
     let Some(content) = content else {
         return Ok(State::default());
     };
+    require_envelope(&content.text, STATE_API_VERSION, STATE_KIND, STATE_EARLIER)?;
     let state: State =
         serde_json::from_str(&content.text).context("parsing the source-import baseline")?;
-    if state.format_version != 1 || state.imports.len() > 64 {
-        bail!("source-import baseline has an unsupported version or exceeds its bound");
+    if state.imports.len() > 64 {
+        bail!("source-import baseline exceeds its bound");
     }
     for (id, installed) in &state.imports {
-        if id != &installed.manifest.source_id
-            || !valid_local_identifier(id)
-            || installed.manifest.format_version != 1
-        {
+        if id != &installed.manifest.source_id || !valid_local_identifier(id) {
             bail!("source-import baseline has inconsistent source identity");
         }
         for path in installed.upstream.keys().chain(installed.retained.keys()) {
@@ -843,7 +873,8 @@ struct Operation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Journal {
-    format_version: u32,
+    api_version: String,
+    kind: String,
     operations: Vec<Operation>,
 }
 
@@ -855,7 +886,8 @@ fn transact(lock: &ProjectLock, operations: Vec<Operation>) -> Result<()> {
     }
     files::ensure_state_directory(&lock.root)?;
     let journal = Journal {
-        format_version: 1,
+        api_version: JOURNAL_API_VERSION.to_owned(),
+        kind: JOURNAL_KIND.to_owned(),
         operations,
     };
     let text = serde_json::to_string(&journal)?;
@@ -905,10 +937,16 @@ fn recover(lock: &ProjectLock) -> Result<()> {
     let Some(content) = read(&lock.root, JOURNAL_PATH, MAX_JOURNAL_BYTES)? else {
         return Ok(());
     };
+    require_envelope(
+        &content.text,
+        JOURNAL_API_VERSION,
+        JOURNAL_KIND,
+        JOURNAL_EARLIER,
+    )?;
     let journal: Journal =
         serde_json::from_str(&content.text).context("reading source-import recovery journal")?;
-    if journal.format_version != 1 || journal.operations.len() > files::MAX_PROJECT_FILES + 1 {
-        bail!("source-import recovery journal has an unsupported version or bound");
+    if journal.operations.len() > files::MAX_PROJECT_FILES + 1 {
+        bail!("source-import recovery journal exceeds its bound");
     }
     let mut paths = BTreeSet::new();
     for operation in &journal.operations {
