@@ -356,6 +356,19 @@ class ConfigureTests(unittest.TestCase):
             ],
             [str(project / "runtime.yaml"), str(project / "runtime.example.yaml")],
         )
+        schemas = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            settings["yaml.schemas"][(schemas / "project.schema.json").as_uri()],
+            [str(project / "scheduling.yaml")],
+        )
+        self.assertEqual(
+            settings["yaml.schemas"][(schemas / "records.schema.json").as_uri()],
+            [str(project / "records.yaml")],
+        )
+        self.assertEqual(
+            settings["yaml.schemas"][(schemas / "fixture.schema.json").as_uri()],
+            [str(project / "fixtures/*.yaml"), str(project / "fixtures/*.yml")],
+        )
 
 
 if __name__ == "__main__":

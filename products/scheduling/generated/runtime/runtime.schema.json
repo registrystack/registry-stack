@@ -4,11 +4,6 @@
       "additionalProperties": false,
       "description": "The audit journal: where it is written and the key its hashes use.",
       "else": {
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
         "required": [
           "path"
         ]
@@ -34,35 +29,23 @@
           "description": "Secret reference to the audit hash key."
         },
         "path": {
-          "default": null,
           "description": "The active audit file. Required for, and only allowed with, `file`.",
           "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
-        "retainDays": {
-          "default": null,
-          "description": "Delete rotated files older than this many days (default 90).",
+        "retentionDays": {
+          "description": "Delete rotated files older than this many days. Only allowed with\n`file`; omitted, rotated files are kept 90 days.",
           "format": "uint32",
           "maximum": 36500,
           "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "rotateBytes": {
-          "default": null,
-          "description": "Rotate the active file once it reaches this many bytes (default 100 MiB).",
+          "description": "Rotate the active file once it reaches this many bytes. Only allowed\nwith `file`; omitted, the file rotates at 100 MiB.",
           "format": "uint64",
           "maximum": 4294967295,
           "minimum": 1048576,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         }
       },
       "required": [
@@ -72,39 +55,18 @@
         "not": {
           "anyOf": [
             {
-              "properties": {
-                "path": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "path"
               ]
             },
             {
-              "properties": {
-                "rotateBytes": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "rotateBytes"
               ]
             },
             {
-              "properties": {
-                "retainDays": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
-                "retainDays"
+                "retentionDays"
               ]
             }
           ]
@@ -175,22 +137,15 @@
           "additionalProperties": {
             "$ref": "#/$defs/HookDestinationConfig"
           },
-          "description": "Logical URL hook destinations. The governed policy names only these\nids; URL, signing secret, and retry ceilings stay deployment-owned.\nAt most 128 are bound, each id a lowercase ASCII letter followed by up\nto 63 lowercase letters, digits, `-`, or `_`.",
+          "description": "Logical URL hook destinations. The governed policy names only these\nids; URL, signing secret, and retry ceilings stay deployment-owned.\nAt most 128 are bound, each keyed by a local identifier.",
           "maxProperties": 128,
           "propertyNames": {
-            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         },
         "reminders": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReminderDestinationConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ReminderDestinationConfig"
         }
       },
       "type": "object"
@@ -232,8 +187,7 @@
           "type": "integer"
         },
         "hmacSha256KeyRef": {
-          "pattern": "^secret:(?:env|file)/",
-          "type": "string"
+          "$ref": "#/$defs/SecretReference"
         },
         "maximumAttempts": {
           "default": 8,
@@ -244,7 +198,8 @@
           "type": "integer"
         },
         "url": {
-          "type": "string"
+          "$ref": "#/$defs/Url",
+          "description": "An https URL, or http on 127.0.0.1, localhost, or [::1], without a\nquery or fragment."
         }
       },
       "required": [
@@ -320,6 +275,11 @@
         "private-address",
         "container-private"
       ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
     "OidcConfig": {
@@ -436,15 +396,11 @@
       "additionalProperties": false,
       "properties": {
         "bearerTokenRef": {
-          "default": null,
-          "pattern": "^secret:(?:env|file)/",
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/SecretReference"
         },
         "url": {
-          "type": "string"
+          "$ref": "#/$defs/Url",
+          "description": "An https URL, or http on 127.0.0.1, localhost, or [::1], without a\nquery or fragment."
         }
       },
       "required": [
@@ -456,18 +412,18 @@
       "additionalProperties": false,
       "description": "Retention periods the retention sweep enforces. Every value is deployment\nconfiguration, never policy: a jurisdiction's retention schedule approves\nthe deployed numbers, and changing one is an operational event.",
       "properties": {
-        "attemptReceiptDays": {
+        "attemptReceiptRetentionDays": {
           "default": 7,
-          "description": "How long a stored idempotency receipt stays replayable, at least one\nday.",
-          "format": "uint16",
+          "description": "How long a stored idempotency receipt stays replayable, from one\nthrough 65535 days.",
+          "format": "uint32",
           "maximum": 65535,
           "minimum": 1,
           "type": "integer"
         },
-        "hookPayloadDays": {
+        "hookPayloadRetentionDays": {
           "default": 7,
           "description": "Lifetime of canonical hook envelopes retained for retry and\ndead-letter inspection, from one through thirty days.",
-          "format": "uint16",
+          "format": "uint32",
           "maximum": 30,
           "minimum": 1,
           "type": "integer"
@@ -649,7 +605,7 @@
   "description": "The operator runtime configuration document.",
   "properties": {
     "apiVersion": {
-      "const": "registry.registrystack.org/scheduling-runtime/v1alpha1",
+      "const": "id.registrystack.org/formats/scheduling/runtime/v1alpha1",
       "type": "string"
     },
     "audit": {

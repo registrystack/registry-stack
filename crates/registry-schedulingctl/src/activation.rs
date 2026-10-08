@@ -76,11 +76,10 @@ struct Loaded {
 fn load(config_path: &Path) -> Result<Loaded> {
     let config_path =
         fs::canonicalize(config_path).context("resolving the Scheduling runtime configuration")?;
-    let config = RuntimeConfig::load(&config_path)
-        .with_context(|| format!("loading {}", config_path.display()))?;
+    let config = crate::project::load_runtime_config(&config_path)?;
     let loaded = config
         .load_policy()
-        .with_context(|| format!("loading {}", config.policy_path().display()))?;
+        .map_err(|error| crate::project::runtime_refusal(&config_path, error))?;
     let resolver = crate::records::secret_resolver(&config)?;
     Ok(Loaded {
         config_path,
@@ -104,7 +103,7 @@ fn connect_runtime(loaded: &Loaded) -> Result<PostgresStore> {
 }
 
 fn hook_payload_retention(config: &RuntimeConfig) -> Duration {
-    Duration::from_secs(u64::from(config.retention.hook_payload_days) * 24 * 60 * 60)
+    Duration::from_secs(u64::from(config.retention.hook_payload_retention_days) * 24 * 60 * 60)
 }
 
 /// The closed code of a candidate whose hook destinations cannot run, which
@@ -120,7 +119,7 @@ fn candidate_hooks(
     schema: String,
 ) -> Result<ActivatedHooks> {
     ActivatedHooks::activate(
-        &loaded.policy.hooks,
+        &loaded.policy.hook_declarations(),
         &loaded.config.destinations.hooks,
         &loaded.resolver,
         identity,
@@ -140,7 +139,7 @@ async fn verify_retained(
     deployed: DeployedPolicy,
 ) -> Result<(), StoreError> {
     let hooks = ActivatedHooks::activate(
-        &loaded.policy.hooks,
+        &loaded.policy.hook_declarations(),
         &loaded.config.destinations.hooks,
         &loaded.resolver,
         HookRuntimeIdentity {
@@ -297,7 +296,7 @@ pub fn plan(config_path: &Path) -> Result<Value> {
     // before it writes anything, so plan reports the same refusal. A key is
     // resolved only to learn that it exists at a usable size, then dropped.
     let hook_refusal = ActivatedHooks::check_destinations(
-        &loaded.policy.hooks,
+        &loaded.policy.hook_declarations(),
         &loaded.config.destinations.hooks,
         &loaded.resolver,
     )
@@ -415,7 +414,7 @@ fn apply_audited(
     candidate_hooks(
         &loaded,
         HookRuntimeIdentity {
-            scheduling_id: loaded.policy.scheduling.id.clone(),
+            scheduling_id: loaded.policy.project.id.to_string(),
             policy_revision: 1,
             policy_digest: loaded.policy.policy_digest(),
         },

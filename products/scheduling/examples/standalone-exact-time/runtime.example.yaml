@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json
 # A complete Scheduling runtime configuration: the document
 # `scheduling serve --runtime-config` reads and `schedulingctl plan`,
 # `schedulingctl apply`, and `schedulingctl status` read with --runtime-config.
@@ -13,7 +14,7 @@
 # Substitution never applies to a *Ref field, whose value must be written as a
 # literal secret reference, nor under secretProviders, nor to the authored
 # scheduling.yaml.
-apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 package:
   # The package `schedulingctl package --output` writes: scheduling.yaml and
@@ -104,7 +105,7 @@ authentication:
 audit:
   # One single-writer destination. `file`, the default, appends to the
   # absolute path, rotates at rotateBytes (default 100 MiB), and deletes
-  # rotated files after retainDays (default 90); `stdout` hands each entry to
+  # rotated files after retentionDays (default 90); `stdout` hands each entry to
   # the process supervisor and takes neither path nor the rotation keys.
   destination: file
   path: /var/lib/registry-scheduling/audit.ndjson
@@ -127,7 +128,7 @@ destinations: {}
 retention:
   # Attempt receipts/listing cursors and hook delivery payloads have separate
   # bounded lifetimes. Appointment, reminder, and history retention are
-  # deferred; audit.retainDays bounds rotated audit files. Seven days is a
+  # deferred; audit.retentionDays bounds rotated audit files. Seven days is a
   # default, not a jurisdictional recommendation.
-  attemptReceiptDays: 7
-  hookPayloadDays: 7
+  attemptReceiptRetentionDays: 7
+  hookPayloadRetentionDays: 7

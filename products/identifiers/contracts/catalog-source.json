@@ -202,6 +202,30 @@
       "description": "Registry Scheduling runtime configuration JSON Schema."
     },
     {
+      "glob": "products/scheduling/generated/project/*.schema.json",
+      "sourcePath": "crates/registry-scheduling-core/src/schema.rs",
+      "owner": "scheduling",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Scheduling project JSON Schema."
+    },
+    {
+      "glob": "products/scheduling/generated/records/*.schema.json",
+      "sourcePath": "crates/registry-scheduling-core/src/schema.rs",
+      "owner": "scheduling",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Scheduling records JSON Schema."
+    },
+    {
+      "glob": "products/scheduling/generated/fixture/*.schema.json",
+      "sourcePath": "crates/registry-scheduling-core/src/schema.rs",
+      "owner": "scheduling",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Scheduling fixture JSON Schema."
+    },
+    {
       "glob": "products/messaging/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-messaging/src/schema.rs",
       "owner": "messaging",

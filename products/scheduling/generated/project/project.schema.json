@@ -1,0 +1,541 @@
+{
+  "$defs": {
+    "ArrivalOffering": {
+      "additionalProperties": false,
+      "description": "The arrival-window block of an offering.",
+      "properties": {
+        "horizonDays": {
+          "description": "How far ahead of the window's start booking is open.",
+          "format": "uint32",
+          "maximum": 3650,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "leadTimeMinutes": {
+          "description": "The earliest lead time a caller may book the window at.",
+          "format": "uint32",
+          "maximum": 5256000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "window": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The published window this offering serves arrivals in."
+        }
+      },
+      "required": [
+        "window",
+        "leadTimeMinutes",
+        "horizonDays"
+      ],
+      "type": "object"
+    },
+    "Channel": {
+      "description": "The authenticated channel a subquota limits.",
+      "enum": [
+        "public",
+        "assisted",
+        "urgent",
+        "walk-in"
+      ],
+      "type": "string"
+    },
+    "ExactTimeOffering": {
+      "additionalProperties": false,
+      "description": "The exact-time block of an offering: appointment length, protections, and\nthe interchangeable pool that backs it.",
+      "properties": {
+        "bufferAfterMinutes": {
+          "description": "Cleanup time occupied after the displayed end.",
+          "format": "uint32",
+          "maximum": 1440,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "bufferBeforeMinutes": {
+          "description": "Setup time occupied before the displayed start.",
+          "format": "uint32",
+          "maximum": 1440,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "durationMinutes": {
+          "format": "uint32",
+          "maximum": 1440,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "horizonDays": {
+          "description": "How far ahead booking is open.",
+          "format": "uint32",
+          "maximum": 3650,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "leadTimeMinutes": {
+          "description": "The earliest lead time a caller may book at.",
+          "format": "uint32",
+          "maximum": 5256000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumRecipients": {
+          "description": "The largest party the offering serves.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pool": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The pool of interchangeable members backing this offering. A pool is\nits members, never an independent counter."
+        },
+        "startIncrementMinutes": {
+          "description": "The grid displayed starts must land on.",
+          "format": "uint32",
+          "maximum": 1440,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "durationMinutes",
+        "bufferBeforeMinutes",
+        "bufferAfterMinutes",
+        "leadTimeMinutes",
+        "horizonDays",
+        "pool",
+        "startIncrementMinutes",
+        "maximumRecipients"
+      ],
+      "type": "object"
+    },
+    "HoldPolicy": {
+      "additionalProperties": false,
+      "description": "The hold policy every offering inherits.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "maximumPerCaller": {
+          "description": "The most live holds one caller may keep at once.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ttlMinutes": {
+          "description": "How long a hold keeps its capacity: at most one day.",
+          "format": "uint32",
+          "maximum": 1440,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ttlMinutes",
+        "maximumPerCaller",
+        "because"
+      ],
+      "type": "object"
+    },
+    "HolidaySetPolicy": {
+      "additionalProperties": false,
+      "description": "A named, revisioned set of holiday dates.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "dates": {
+          "description": "The dates the set closes. A set that closes no date omits the member.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "because"
+      ],
+      "type": "object"
+    },
+    "HookPolicy": {
+      "additionalProperties": false,
+      "description": "One observer hook: the shared Registry Stack hook declaration narrowed to\nthe closed Scheduling contract. It runs after commit, follows one of three\nappointment lifecycle triggers, delivers to a URL destination, and takes\nno condition and no proposal principal.",
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/ObserverHandler"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "phase": {
+          "$ref": "#/$defs/ObserverPhase"
+        },
+        "projection": {
+          "description": "The fields of the trigger's closed projection the observer receives.\nA hook that needs none lists none.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "trigger": {
+          "$ref": "#/$defs/ObserverTrigger"
+        }
+      },
+      "required": [
+        "id",
+        "phase",
+        "trigger",
+        "projection",
+        "handler"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ObserverHandler": {
+      "description": "Where an observer hook delivers, chosen by its `type` member. Scheduling\ndelivers to a URL destination the runtime configuration binds, and to\nnothing else.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "destinationId": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "destinationId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ObserverPhase": {
+      "description": "When an observer hook runs. Scheduling runs every hook after the\nappointment transaction commits, never inside its capacity transaction.",
+      "enum": [
+        "after"
+      ],
+      "type": "string"
+    },
+    "ObserverTrigger": {
+      "description": "The appointment lifecycle transition an observer hook follows.",
+      "enum": [
+        "appointment.confirmed",
+        "appointment.rescheduled",
+        "appointment.cancelled"
+      ],
+      "type": "string"
+    },
+    "OfferingPolicy": {
+      "additionalProperties": false,
+      "description": "One bookable thing a deployment offers.",
+      "properties": {
+        "arrival": {
+          "$ref": "#/$defs/ArrivalOffering",
+          "description": "Present exactly when `mode` is `arrival-window`."
+        },
+        "because": {
+          "type": "string"
+        },
+        "cancellationCutoffMinutes": {
+          "description": "How late before the displayed start a booking may still be cancelled.",
+          "format": "uint32",
+          "maximum": 5256000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duplicateActiveKey": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The caller attribute an active-booking duplicate check keys on, when\nthe service defines one. Phone numbers and email addresses are never\nvalid duplicate keys."
+        },
+        "exactTime": {
+          "$ref": "#/$defs/ExactTimeOffering",
+          "description": "Present exactly when `mode` is `exact-time`."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "mode": {
+          "$ref": "#/$defs/SchedulingMode"
+        },
+        "prerequisites": {
+          "description": "Prerequisite references a requesting party must hold. An offering\nwith no prerequisite omits the member.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "reminders": {
+          "description": "Authored reminder offsets for this offering. The runtime mints one\nrevision-bound intent per offset whose due time is still ahead when\nthe appointment commits; message transport stays external (INT-02).\nAn offering with no reminders omits the member or lists none.",
+          "items": {
+            "$ref": "#/$defs/ReminderOffsetPolicy"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "requiresCapabilities": {
+          "description": "Capabilities every backing member must have for this offering. An\noffering that requires none omits the member.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "service": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "id",
+        "service",
+        "label",
+        "mode",
+        "location",
+        "because",
+        "cancellationCutoffMinutes"
+      ],
+      "type": "object"
+    },
+    "OpeningPatternPolicy": {
+      "additionalProperties": false,
+      "description": "A bounded weekly opening pattern over local wall-clock time. The timezone\ncomes from the location record the pattern references.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "effectiveFrom": {
+          "type": "string"
+        },
+        "effectiveUntil": {
+          "type": "string"
+        },
+        "endTime": {
+          "type": "string"
+        },
+        "holidaySet": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "location": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "startTime": {
+          "type": "string"
+        },
+        "weekdays": {
+          "items": {
+            "$ref": "#/$defs/PolicyWeekday"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "location",
+        "holidaySet",
+        "weekdays",
+        "startTime",
+        "endTime",
+        "effectiveFrom",
+        "effectiveUntil",
+        "because"
+      ],
+      "type": "object"
+    },
+    "PolicyWeekday": {
+      "description": "One weekday of an opening pattern.",
+      "enum": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun"
+      ],
+      "type": "string"
+    },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ReminderOffsetPolicy": {
+      "additionalProperties": false,
+      "description": "One authored reminder offset: a notification intent becomes due this many\nminutes before the displayed start of an appointment on the offering.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "offsetMinutes": {
+          "format": "uint32",
+          "maximum": 5256000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "offsetMinutes",
+        "because"
+      ],
+      "type": "object"
+    },
+    "SchedulingMode": {
+      "description": "How an offering delivers its service.",
+      "enum": [
+        "exact-time",
+        "arrival-window"
+      ],
+      "type": "string"
+    },
+    "ServicePolicy": {
+      "additionalProperties": false,
+      "description": "A service a deployment schedules.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The authored scheduling project, `scheduling.yaml`.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/scheduling/project/v1alpha1",
+      "type": "string"
+    },
+    "channels": {
+      "description": "The channels this deployment serves. The vocabulary is closed by the\n`Channel` type itself; the declaration narrows it to the served\nsubset, every subquota must draw on a declared channel, and a request\nnaming anything else is refused. The set is required and holds at\nleast one channel: a deployment that names none serves none.",
+      "items": {
+        "$ref": "#/$defs/Channel"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "holdPolicy": {
+      "$ref": "#/$defs/HoldPolicy"
+    },
+    "holidaySets": {
+      "items": {
+        "$ref": "#/$defs/HolidaySetPolicy"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "hooks": {
+      "description": "Observer hooks. A project with none omits the member.",
+      "items": {
+        "$ref": "#/$defs/HookPolicy"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "kind": {
+      "const": "SchedulingProject",
+      "type": "string"
+    },
+    "offerings": {
+      "items": {
+        "$ref": "#/$defs/OfferingPolicy"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "openings": {
+      "items": {
+        "$ref": "#/$defs/OpeningPatternPolicy"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity"
+    },
+    "services": {
+      "items": {
+        "$ref": "#/$defs/ServicePolicy"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "project",
+    "services",
+    "offerings",
+    "holidaySets",
+    "openings",
+    "channels",
+    "holdPolicy"
+  ],
+  "title": "Registry Scheduling project",
+  "type": "object"
+}

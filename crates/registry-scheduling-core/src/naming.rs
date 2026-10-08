@@ -2,18 +2,42 @@
 
 //! Fixed names of the Scheduling authoring and runtime artifacts.
 
-/// apiVersion of an authored scheduling policy package.
+/// apiVersion of the authored scheduling project file.
 pub const SCHEDULING_POLICY_API_VERSION: &str =
+    "id.registrystack.org/formats/scheduling/project/v1alpha1";
+
+/// The project file's former apiVersion, refused with the current one named.
+pub const RETIRED_SCHEDULING_POLICY_API_VERSION: &str =
     "registry.registrystack.org/scheduling-policy-package/v1alpha1";
 
-/// Kind of an authored scheduling policy package.
-pub const SCHEDULING_POLICY_KIND: &str = "SchedulingPolicyPackage";
+/// Kind of the authored scheduling project file.
+pub const SCHEDULING_POLICY_KIND: &str = "SchedulingProject";
+
+/// `$id` of the project file's JSON Schema.
+pub const SCHEDULING_PROJECT_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json";
+
+/// apiVersion of an operator records document.
+pub const SCHEDULING_RECORDS_API_VERSION: &str =
+    "id.registrystack.org/formats/scheduling/records/v1alpha1";
+
+/// Kind of an operator records document.
+pub const SCHEDULING_RECORDS_KIND: &str = "SchedulingRecords";
+
+/// `$id` of the records document's JSON Schema.
+pub const SCHEDULING_RECORDS_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json";
 
 /// File name of the authored policy inside a scheduling project.
 pub const AUTHORED_POLICY_FILE: &str = "scheduling.yaml";
 
 /// apiVersion of the operator runtime configuration document.
 pub const SCHEDULING_RUNTIME_API_VERSION: &str =
+    "id.registrystack.org/formats/scheduling/runtime/v1alpha1";
+
+/// The runtime configuration's former apiVersion, refused with the current
+/// one named.
+pub const RETIRED_SCHEDULING_RUNTIME_API_VERSION: &str =
     "registry.registrystack.org/scheduling-runtime/v1alpha1";
 
 /// Kind of the operator runtime configuration document.
@@ -32,10 +56,25 @@ pub const SCHEDULING_PROBLEM_TYPE_BASE: &str =
 
 /// apiVersion of an offline replay fixture.
 pub const SCHEDULING_FIXTURE_API_VERSION: &str =
+    "id.registrystack.org/formats/scheduling/fixture/v1alpha1";
+
+/// A fixture's former apiVersion, refused with the current one named.
+pub const RETIRED_SCHEDULING_FIXTURE_API_VERSION: &str =
     "registry.registrystack.org/scheduling-fixture/v1alpha1";
 
 /// Kind of an offline replay fixture.
 pub const SCHEDULING_FIXTURE_KIND: &str = "SchedulingFixture";
+
+/// `$id` of the fixture's JSON Schema.
+pub const SCHEDULING_FIXTURE_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json";
+
+/// apiVersion of the report every `schedulingctl` command writes as JSON.
+pub const SCHEDULING_CTL_REPORT_API_VERSION: &str =
+    "id.registrystack.org/formats/scheduling/ctl-report/v1alpha1";
+
+/// Kind of the report every `schedulingctl` command writes as JSON.
+pub const SCHEDULING_CTL_REPORT_KIND: &str = "SchedulingCtlReport";
 
 // HTTP wire names the runtime and every client share. They live here, beside
 // the artifact names, because they are contract: a route that moves strands
@@ -90,12 +129,33 @@ mod tests {
     fn fixed_names_are_pinned() {
         assert_eq!(
             SCHEDULING_POLICY_API_VERSION,
+            "id.registrystack.org/formats/scheduling/project/v1alpha1"
+        );
+        assert_eq!(
+            RETIRED_SCHEDULING_POLICY_API_VERSION,
             "registry.registrystack.org/scheduling-policy-package/v1alpha1"
         );
-        assert_eq!(SCHEDULING_POLICY_KIND, "SchedulingPolicyPackage");
+        assert_eq!(SCHEDULING_POLICY_KIND, "SchedulingProject");
+        assert_eq!(
+            SCHEDULING_PROJECT_SCHEMA_ID,
+            "https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json"
+        );
+        assert_eq!(
+            SCHEDULING_RECORDS_API_VERSION,
+            "id.registrystack.org/formats/scheduling/records/v1alpha1"
+        );
+        assert_eq!(SCHEDULING_RECORDS_KIND, "SchedulingRecords");
+        assert_eq!(
+            SCHEDULING_RECORDS_SCHEMA_ID,
+            "https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json"
+        );
         assert_eq!(AUTHORED_POLICY_FILE, "scheduling.yaml");
         assert_eq!(
             SCHEDULING_RUNTIME_API_VERSION,
+            "id.registrystack.org/formats/scheduling/runtime/v1alpha1"
+        );
+        assert_eq!(
+            RETIRED_SCHEDULING_RUNTIME_API_VERSION,
             "registry.registrystack.org/scheduling-runtime/v1alpha1"
         );
         assert_eq!(SCHEDULING_RUNTIME_KIND, "SchedulingRuntimeConfig");
@@ -110,9 +170,22 @@ mod tests {
         );
         assert_eq!(
             SCHEDULING_FIXTURE_API_VERSION,
+            "id.registrystack.org/formats/scheduling/fixture/v1alpha1"
+        );
+        assert_eq!(
+            RETIRED_SCHEDULING_FIXTURE_API_VERSION,
             "registry.registrystack.org/scheduling-fixture/v1alpha1"
         );
         assert_eq!(SCHEDULING_FIXTURE_KIND, "SchedulingFixture");
+        assert_eq!(
+            SCHEDULING_FIXTURE_SCHEMA_ID,
+            "https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json"
+        );
+        assert_eq!(
+            SCHEDULING_CTL_REPORT_API_VERSION,
+            "id.registrystack.org/formats/scheduling/ctl-report/v1alpha1"
+        );
+        assert_eq!(SCHEDULING_CTL_REPORT_KIND, "SchedulingCtlReport");
     }
 
     /// The HTTP wire names are contract the same way: routes move only with

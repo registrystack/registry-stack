@@ -358,6 +358,12 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/scheduling/scripts/check-contracts.sh",
     ),
     (
+        # The schema drift tests need no database, so they run in the
+        # contracts job on every pull request that reaches Scheduling.
+        "Scheduling generated schema drift check",
+        "run: products/scheduling/scripts/check-schemas.sh",
+    ),
+    (
         "Scheduling PostgreSQL path filter",
         "scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}",
     ),

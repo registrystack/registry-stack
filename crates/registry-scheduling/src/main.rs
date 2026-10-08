@@ -22,6 +22,9 @@ async fn main() {
     let matches = registry_scheduling::runtime::command().get_matches();
     if let Err(error) = registry_scheduling::runtime::run(&matches).await {
         eprintln!("scheduling: {error}");
+        if let Some(report) = error.configuration_report() {
+            eprint!("{}", report.render_human());
+        }
         std::process::exit(error.exit_code());
     }
 }

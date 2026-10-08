@@ -34,7 +34,7 @@ fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
     let root = canonical_tempdir();
     let package = stage_package(root.path());
     let runtime = serde_json::json!({
-        "apiVersion": "registry.registrystack.org/scheduling-runtime/v1alpha1",
+        "apiVersion": registry_scheduling_core::SCHEDULING_RUNTIME_API_VERSION,
         "kind": "SchedulingRuntimeConfig",
         "package": {"root": package},
         "identity": {"databaseId": "scheduling-operational-logging"},
@@ -50,7 +50,7 @@ fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
         }},
         "audit": {"destination": "stdout", "hashKeyRef": "secret:env/SCHEDULING_TEST_AUDIT_KEY"},
         "destinations": {},
-        "retention": {"attemptReceiptDays": 7}
+        "retention": {"attemptReceiptRetentionDays": 7}
     });
     let runtime_path = root.path().join("runtime.yaml");
     std::fs::write(

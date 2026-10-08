@@ -1,25 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The authored scheduling policy: services, offerings, opening patterns,
+//! The authored scheduling project: services, offerings, opening patterns,
 //! holiday sets, and the hold policy, with the validators a publication gate
 //! runs. Published arrival-window supply is an operator record referenced by
 //! identifier from an arrival offering.
 //!
-//! The policy is layer one of the configuration model. It declares what a
+//! The project is layer one of the configuration model. It declares what a
 //! deployment publishes and why; locations, resource pools, arrival windows,
-//! and dated exceptions are runtime records the policy references by
-//! identifier but never embeds, so the same published policy governs every
+//! and dated exceptions are runtime records the project references by
+//! identifier but never embeds, so the same published project governs every
 //! environment that resolves those identifiers.
 
 use chrono::{DateTime, Utc};
-use registry_platform_hooks::{validate_hooks, HookHandlerSource, HookPhase, HookValidationError};
+use registry_platform_hooks::{validate_hooks, HookDeclaration, HookHandlerSource, HookPhase};
+use registry_platform_yaml::{
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, ProjectIdentity, Reader, RemovedKey,
+    Report, RetiredApiVersion,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-use crate::diagnostics::{PolicyCheckReason, SchedulingDiagnostic};
-use crate::naming::SCHEDULING_POLICY_API_VERSION;
-use crate::naming::SCHEDULING_POLICY_KIND;
+use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
+use crate::naming::{
+    RETIRED_SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND,
+};
+use crate::typed::{
+    MAXIMUM_HORIZON_DAYS, MAXIMUM_HORIZON_MINUTES, MAXIMUM_POOL_MEMBERS, MAXIMUM_REVISION,
+    MAXIMUM_UNITS, MINUTES_PER_DAY,
+};
 use crate::units::{check_because, RequiredUnitsPolicy};
 
 /// The maximum number of entries one policy collection may carry.
@@ -28,8 +37,46 @@ pub const MAXIMUM_COLLECTION_ENTRIES: usize = 256;
 /// The maximum bytes of a human-facing label.
 pub const MAXIMUM_LABEL_BYTES: usize = 128;
 
+/// The format a `scheduling.yaml` file declares (CFG-ENV-1).
+pub const SCHEDULING_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: SCHEDULING_POLICY_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SCHEDULING_POLICY_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: RETIRED_SCHEDULING_POLICY_API_VERSION,
+            replacement:
+                "Write apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1 \
+                          and kind: SchedulingProject, and move the scheduling block to project.",
+        }],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/scheduling",
+            replacement: "Write the identity under project, with id and a text version such as \
+                          2026.1.",
+        },
+        RemovedKey {
+            pointer: "/offerings/*/exactTime/maxRecipients",
+            replacement: "Write maximumRecipients.",
+        },
+        RemovedKey {
+            pointer: "/offerings/*/reminders/*/minutesBefore",
+            replacement: "Write offsetMinutes.",
+        },
+        RemovedKey {
+            pointer: "/holdPolicy/maxPerCaller",
+            replacement: "Write maximumPerCaller.",
+        },
+        RemovedKey {
+            pointer: "/hooks/*/handler/kind",
+            replacement: "Write type: url.",
+        },
+    ],
+};
+
 /// One weekday of an opening pattern.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyWeekday {
     Mon,
@@ -56,24 +103,20 @@ impl PolicyWeekday {
     }
 }
 
-/// The identity of the deployment the policy governs.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PolicyIdentity {
-    pub id: String,
-    pub version: u64,
-}
-
 /// A service a deployment schedules.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServicePolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub label: String,
 }
 
 /// How an offering delivers its service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum SchedulingMode {
     ExactTime,
@@ -83,86 +126,209 @@ pub enum SchedulingMode {
 /// The exact-time block of an offering: appointment length, protections, and
 /// the interchangeable pool that backs it.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExactTimeOffering {
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MINUTES_PER_DAY>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MINUTES_PER_DAY>")
+    )]
     pub duration_minutes: u32,
     /// Setup time occupied before the displayed start.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 0, MINUTES_PER_DAY>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<0, MINUTES_PER_DAY>")
+    )]
     pub buffer_before_minutes: u32,
     /// Cleanup time occupied after the displayed end.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 0, MINUTES_PER_DAY>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<0, MINUTES_PER_DAY>")
+    )]
     pub buffer_after_minutes: u32,
     /// The earliest lead time a caller may book at.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_HORIZON_MINUTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_HORIZON_MINUTES>")
+    )]
     pub lead_time_minutes: u32,
     /// How far ahead booking is open.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_HORIZON_DAYS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_HORIZON_DAYS>")
+    )]
     pub horizon_days: u32,
     /// The pool of interchangeable members backing this offering. A pool is
     /// its members, never an independent counter.
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub pool: String,
     /// The grid displayed starts must land on.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MINUTES_PER_DAY>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MINUTES_PER_DAY>")
+    )]
     pub start_increment_minutes: u32,
     /// The largest party the offering serves.
-    pub max_recipients: u32,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+    )]
+    pub maximum_recipients: u32,
 }
 
 /// The arrival-window block of an offering.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArrivalOffering {
     /// The published window this offering serves arrivals in.
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub window: String,
     /// The earliest lead time a caller may book the window at.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_HORIZON_MINUTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_HORIZON_MINUTES>")
+    )]
     pub lead_time_minutes: u32,
     /// How far ahead of the window's start booking is open.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_HORIZON_DAYS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_HORIZON_DAYS>")
+    )]
     pub horizon_days: u32,
 }
 
 /// One authored reminder offset: a notification intent becomes due this many
 /// minutes before the displayed start of an appointment on the offering.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReminderOffsetPolicy {
-    pub minutes_before: u32,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_HORIZON_MINUTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_HORIZON_MINUTES>")
+    )]
+    pub offset_minutes: u32,
     pub because: String,
 }
 
 /// One bookable thing a deployment offers.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OfferingPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub service: String,
     pub label: String,
     pub mode: SchedulingMode,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub location: String,
     pub because: String,
     /// Present exactly when `mode` is `exact-time`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact_time: Option<ExactTimeOffering>,
     /// Present exactly when `mode` is `arrival-window`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrival: Option<ArrivalOffering>,
     /// How late before the displayed start a booking may still be cancelled.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 0, MAXIMUM_HORIZON_MINUTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<0, MAXIMUM_HORIZON_MINUTES>")
+    )]
     pub cancellation_cutoff_minutes: u32,
     /// Authored reminder offsets for this offering. The runtime mints one
     /// revision-bound intent per offset whose due time is still ahead when
     /// the appointment commits; message transport stays external (INT-02).
-    #[serde(default)]
+    /// An offering with no reminders omits the member or lists none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
     pub reminders: Vec<ReminderOffsetPolicy>,
     /// The caller attribute an active-booking duplicate check keys on, when
     /// the service defines one. Phone numbers and email addresses are never
     /// valid duplicate keys.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
     pub duplicate_active_key: Option<String>,
-    /// Capabilities every backing member must have for this offering.
+    /// Capabilities every backing member must have for this offering. An
+    /// offering that requires none omits the member.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::non_empty_unique_local_ids",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<registry_platform_yaml::LocalId>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub requires_capabilities: Vec<String>,
-    /// Prerequisite references a requesting party must hold.
+    /// Prerequisite references a requesting party must hold. An offering
+    /// with no prerequisite omits the member.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::non_empty_unique_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<String>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub prerequisites: Vec<String>,
 }
 
 /// A bounded weekly opening pattern over local wall-clock time. The timezone
 /// comes from the location record the pattern references.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpeningPatternPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub location: String,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub holiday_set: String,
+    #[serde(deserialize_with = "crate::typed::unique_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<PolicyWeekday>",
+            length(min = 1)
+        )
+    )]
     pub weekdays: Vec<PolicyWeekday>,
     pub start_time: String,
     pub end_time: String,
@@ -173,16 +339,38 @@ pub struct OpeningPatternPolicy {
 
 /// A named, revisioned set of holiday dates.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HolidaySetPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "crate::typed::bounded_u64::<_, 1, MAXIMUM_REVISION>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<1, MAXIMUM_REVISION>")
+    )]
     pub revision: u64,
     pub because: String,
+    /// The dates the set closes. A set that closes no date omits the member.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::non_empty_unique_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<String>",
+            length(min = 1, max = 256)
+        )
+    )]
     pub dates: Vec<String>,
 }
 
 /// The authenticated channel a subquota limits.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Channel {
     Public,
@@ -220,10 +408,18 @@ impl Channel {
 
 /// A per-channel ceiling within a window's published capacity.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowSubquota {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub channel: Channel,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+    )]
     pub units: u32,
     pub because: String,
 }
@@ -234,6 +430,7 @@ pub struct WindowSubquota {
 /// promise nothing keeps. There is no default and no borrowing from the
 /// next window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum LeftoverCapacityPolicy {
     /// Leftover units would lapse with the window.
@@ -256,49 +453,95 @@ pub enum LeftoverCapacityPolicy {
 /// windows, so two windows backed by the same pool may not overlap, whatever
 /// either staffing block declares. Disjoint windows may reuse the pool.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowStaffing {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub pool: String,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u32::<_, 1, MAXIMUM_POOL_MEMBERS>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::BoundedU32<1, MAXIMUM_POOL_MEMBERS>>")
+    )]
     pub reserved_members: Option<u32>,
     pub because: String,
 }
 
 /// A published arrival window with its capacity.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublishedWindow {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "crate::typed::bounded_u64::<_, 1, MAXIMUM_REVISION>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<1, MAXIMUM_REVISION>")
+    )]
     pub revision: u64,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub offering: String,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub location: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
     /// Published capacity in the unit basis the units policy defines.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+    )]
     pub units: u32,
     pub units_policy: RequiredUnitsPolicy,
+    /// Per-channel ceilings within `units`. A window that limits no channel
+    /// omits the member.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::non_empty_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 4)))]
     pub subquotas: Vec<WindowSubquota>,
     /// Declared intent for the window's leftover capacity. Nothing reads it
     /// in this version, so a declaration is refused at authoring; the field
     /// stays so a refusal can name it.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leftover: Option<LeftoverCapacityPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staffing: Option<WindowStaffing>,
     pub because: String,
 }
 
 /// The hold policy every offering inherits.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HoldPolicy {
+    /// How long a hold keeps its capacity: at most one day.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MINUTES_PER_DAY>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MINUTES_PER_DAY>")
+    )]
     pub ttl_minutes: u32,
-    pub max_per_caller: u32,
+    /// The most live holds one caller may keep at once.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+    )]
+    pub maximum_per_caller: u32,
     pub because: String,
 }
-
-/// The shared Registry Stack hook declaration shape. Scheduling adds a closed
-/// observer contract: after-commit URL handlers over three appointment
-/// lifecycle triggers, with no condition or proposal principal.
-pub type HookPolicy = registry_platform_hooks::HookDeclaration;
 
 pub const APPOINTMENT_CONFIRMED_TRIGGER: &str = "appointment.confirmed";
 pub const APPOINTMENT_RESCHEDULED_TRIGGER: &str = "appointment.rescheduled";
@@ -315,38 +558,191 @@ const APPOINTMENT_OBSERVER_FIELDS: &[&str] = &[
 ];
 const CANCELLATION_OBSERVER_FIELDS: &[&str] = &["appointmentId", "revision", "state"];
 
-/// The authored scheduling policy package.
+/// When an observer hook runs. Scheduling runs every hook after the
+/// appointment transaction commits, never inside its capacity transaction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ObserverPhase {
+    After,
+}
+
+/// The appointment lifecycle transition an observer hook follows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum ObserverTrigger {
+    #[serde(rename = "appointment.confirmed")]
+    AppointmentConfirmed,
+    #[serde(rename = "appointment.rescheduled")]
+    AppointmentRescheduled,
+    #[serde(rename = "appointment.cancelled")]
+    AppointmentCancelled,
+}
+
+impl ObserverTrigger {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AppointmentConfirmed => APPOINTMENT_CONFIRMED_TRIGGER,
+            Self::AppointmentRescheduled => APPOINTMENT_RESCHEDULED_TRIGGER,
+            Self::AppointmentCancelled => APPOINTMENT_CANCELLED_TRIGGER,
+        }
+    }
+
+    /// The closed projection this trigger publishes to an observer.
+    const fn projection_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::AppointmentConfirmed | Self::AppointmentRescheduled => {
+                APPOINTMENT_OBSERVER_FIELDS
+            }
+            Self::AppointmentCancelled => CANCELLATION_OBSERVER_FIELDS,
+        }
+    }
+}
+
+/// Where an observer hook delivers, chosen by its `type` member. Scheduling
+/// delivers to a URL destination the runtime configuration binds, and to
+/// nothing else.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum ObserverHandler {
+    Url {
+        #[serde(deserialize_with = "crate::typed::local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+        destination_id: String,
+    },
+}
+registry_platform_yaml::tagged_union!(ObserverHandler);
+
+/// The serialized form of [`ObserverHandler`].
+#[derive(Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+enum ObserverHandlerWire<'a> {
+    Url { destination_id: &'a str },
+}
+
+impl Serialize for ObserverHandler {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Url { destination_id } => ObserverHandlerWire::Url { destination_id },
+        }
+        .serialize(serializer)
+    }
+}
+
+/// One observer hook: the shared Registry Stack hook declaration narrowed to
+/// the closed Scheduling contract. It runs after commit, follows one of three
+/// appointment lifecycle triggers, delivers to a URL destination, and takes
+/// no condition and no proposal principal.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HookPolicy {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
+    pub phase: ObserverPhase,
+    pub trigger: ObserverTrigger,
+    /// The fields of the trigger's closed projection the observer receives.
+    /// A hook that needs none lists none.
+    #[serde(deserialize_with = "crate::typed::unique_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<String>")
+    )]
+    pub projection: Vec<String>,
+    pub handler: ObserverHandler,
+}
+
+impl HookPolicy {
+    /// The shared declaration the hook runtime reads.
+    #[must_use]
+    pub fn declaration(&self) -> HookDeclaration {
+        let ObserverHandler::Url { destination_id } = &self.handler;
+        HookDeclaration {
+            id: self.id.clone(),
+            phase: match self.phase {
+                ObserverPhase::After => HookPhase::After,
+            },
+            trigger: self.trigger.as_str().to_owned(),
+            when: None,
+            principal: None,
+            projection: self.projection.iter().cloned().collect(),
+            handler: HookHandlerSource::Url {
+                destination_id: destination_id.clone(),
+            },
+        }
+    }
+}
+
+/// The authored scheduling project, `scheduling.yaml`.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchedulingPolicy {
     pub api_version: String,
     pub kind: String,
-    pub scheduling: PolicyIdentity,
+    pub project: ProjectIdentity,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
     pub services: Vec<ServicePolicy>,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
     pub offerings: Vec<OfferingPolicy>,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
     pub holiday_sets: Vec<HolidaySetPolicy>,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
     pub openings: Vec<OpeningPatternPolicy>,
-    /// The channels this deployment declares it serves. The vocabulary is
-    /// closed by the `Channel` type itself; a declaration narrows it to the
-    /// served subset, every subquota must draw on a declared channel, and a
-    /// request naming anything else is refused. An absent declaration
-    /// declares nothing beyond the vocabulary.
-    #[serde(default)]
+    /// The channels this deployment serves. The vocabulary is closed by the
+    /// `Channel` type itself; the declaration narrows it to the served
+    /// subset, every subquota must draw on a declared channel, and a request
+    /// naming anything else is refused. The set is required and holds at
+    /// least one channel: a deployment that names none serves none.
+    #[serde(deserialize_with = "crate::typed::unique_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<Channel>", length(min = 1))
+    )]
     pub channels: Vec<Channel>,
     pub hold_policy: HoldPolicy,
-    #[serde(default)]
+    /// Observer hooks. A project with none omits the member.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
     pub hooks: Vec<HookPolicy>,
 }
 
-/// Parse a policy from its authored YAML, with the failing path preserved.
-pub fn parse_policy_yaml(
-    text: &str,
-) -> Result<SchedulingPolicy, serde_path_to_error::Error<serde_norway::Error>> {
-    let deserializer = serde_norway::Deserializer::from_str(text);
-    serde_path_to_error::deserialize(deserializer)
-}
-
 impl SchedulingPolicy {
+    /// Read one `scheduling.yaml` file through the shared reader, without
+    /// its semantic checks. `file` is the name diagnostics carry. A refusal
+    /// is the report a check command prints unchanged.
+    pub fn decode(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
+        let mut hook = registry_platform_config::AuthoredExpressions;
+        Reader::new(file)
+            .with_hook(&mut hook)
+            .decode::<Self>(bytes, &Expect::one(&SCHEDULING_PROJECT_FORMAT))
+    }
+
+    /// Read and check one `scheduling.yaml` file: every structural problem,
+    /// or every finding of [`SchedulingPolicy::check`], each at its position.
+    pub fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
+        let decoded = Self::decode(file, bytes)?;
+        let findings = decoded.value.check();
+        if findings.is_empty() {
+            Ok(decoded)
+        } else {
+            Err(findings_report(&decoded.document, &findings))
+        }
+    }
+
     #[must_use]
     pub fn offering(&self, id: &str) -> Option<&OfferingPolicy> {
         self.offerings.iter().find(|offering| offering.id == id)
@@ -355,6 +751,13 @@ impl SchedulingPolicy {
     #[must_use]
     pub fn holiday_set(&self, id: &str) -> Option<&HolidaySetPolicy> {
         self.holiday_sets.iter().find(|set| set.id == id)
+    }
+
+    /// The shared declarations of the project's observer hooks, in
+    /// declaration order.
+    #[must_use]
+    pub fn hook_declarations(&self) -> Vec<HookDeclaration> {
+        self.hooks.iter().map(HookPolicy::declaration).collect()
     }
 
     /// The canonical digest of this policy package: `sha256:` followed by 64
@@ -371,50 +774,47 @@ impl SchedulingPolicy {
         format!("sha256:{}", hex(&digest))
     }
 
-    /// Check the whole policy. Every finding names the path that failed.
+    /// Check the whole project. Every finding names the RFC 6901 pointer that
+    /// failed. The reader already refuses a value outside its type, so these
+    /// checks cover the rules that span members, and a project built in code.
     pub fn check(&self) -> Vec<SchedulingDiagnostic> {
         let mut findings = Vec::new();
         if self.api_version != SCHEDULING_POLICY_API_VERSION {
             findings.push(SchedulingDiagnostic::new(
-                "apiVersion",
+                "/apiVersion",
                 PolicyCheckReason::UnsupportedApiVersion,
             ));
         }
         if self.kind != SCHEDULING_POLICY_KIND {
             findings.push(SchedulingDiagnostic::new(
-                "kind",
+                "/kind",
                 PolicyCheckReason::UnsupportedKind,
             ));
         }
-        if !valid_identifier(&self.scheduling.id) {
+        if self.project.version.trim().is_empty() {
             findings.push(SchedulingDiagnostic::new(
-                "scheduling.id",
-                PolicyCheckReason::InvalidIdentifier,
-            ));
-        }
-        if self.scheduling.version == 0 {
-            findings.push(SchedulingDiagnostic::new(
-                "scheduling.version",
-                PolicyCheckReason::InvalidBound,
+                "/project/version",
+                PolicyCheckReason::EmptyText,
             ));
         }
 
-        check_collection_non_empty(&self.services, "services", &mut findings);
-        check_collection_non_empty(&self.offerings, "offerings", &mut findings);
-        check_collection_non_empty(&self.holiday_sets, "holidaySets", &mut findings);
-        check_collection_non_empty(&self.openings, "openings", &mut findings);
-        check_collection_bound(&self.services, "services", &mut findings);
-        check_collection_bound(&self.offerings, "offerings", &mut findings);
-        check_collection_bound(&self.holiday_sets, "holidaySets", &mut findings);
-        check_collection_bound(&self.openings, "openings", &mut findings);
+        check_collection_non_empty(&self.services, "/services", &mut findings);
+        check_collection_non_empty(&self.offerings, "/offerings", &mut findings);
+        check_collection_non_empty(&self.holiday_sets, "/holidaySets", &mut findings);
+        check_collection_non_empty(&self.openings, "/openings", &mut findings);
+        check_collection_non_empty(&self.channels, "/channels", &mut findings);
+        check_collection_bound(&self.services, "/services", &mut findings);
+        check_collection_bound(&self.offerings, "/offerings", &mut findings);
+        check_collection_bound(&self.holiday_sets, "/holidaySets", &mut findings);
+        check_collection_bound(&self.openings, "/openings", &mut findings);
 
-        // A declared channel set is a closed list of the channels this
-        // deployment serves; naming one twice declares it once.
+        // The channel set is a closed list of the channels this deployment
+        // serves; naming one twice declares it once.
         let mut declared_channels: Vec<Channel> = Vec::new();
         for (index, channel) in self.channels.iter().enumerate() {
             if declared_channels.contains(channel) {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("channels[{index}]"),
+                    format!("/channels/{index}"),
                     PolicyCheckReason::DuplicateIdentifier,
                 ));
             }
@@ -423,61 +823,52 @@ impl SchedulingPolicy {
 
         let mut service_ids = Vec::new();
         for (index, service) in self.services.iter().enumerate() {
-            let path = format!("services[{index}]");
-            if !valid_identifier(&service.id) {
-                findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.id"),
-                    PolicyCheckReason::InvalidIdentifier,
-                ));
-            }
-            if service.label.trim().is_empty() || service.label.len() > MAXIMUM_LABEL_BYTES {
-                findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.label"),
-                    PolicyCheckReason::InvalidBound,
-                ));
-            }
+            let path = format!("/services/{index}");
+            check_identifier(&service.id, &format!("{path}/id"), &mut findings);
+            check_label(&service.label, &format!("{path}/label"), &mut findings);
             push_unique(&mut service_ids, &service.id, &path, &mut findings);
         }
 
         for (index, set) in self.holiday_sets.iter().enumerate() {
-            let path = format!("holidaySets[{index}]");
+            let path = format!("/holidaySets/{index}");
             // A holiday set with no dates is complete: it observes none.
             if set.revision == 0 {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.revision"),
+                    format!("{path}/revision"),
                     PolicyCheckReason::InvalidBound,
                 ));
             }
-            check_because(&set.because, &format!("{path}.because"), &mut findings);
-            check_identifier(&set.id, &format!("{path}.id"), &mut findings);
+            check_because(&set.because, &format!("{path}/because"), &mut findings);
+            check_identifier(&set.id, &format!("{path}/id"), &mut findings);
+            check_collection_bound(&set.dates, &format!("{path}/dates"), &mut findings);
             for (date_index, date) in set.dates.iter().enumerate() {
                 if !valid_iso_date(date) {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.dates[{date_index}]"),
+                        format!("{path}/dates/{date_index}"),
                         PolicyCheckReason::MalformedValue,
                     ));
                 }
             }
-            self.check_unique_id(&set.id, &path, "holidaySets", &mut findings);
+            self.check_unique_id(&set.id, &path, Collection::HolidaySets, &mut findings);
         }
 
         for (index, opening) in self.openings.iter().enumerate() {
-            let path = format!("openings[{index}]");
-            check_identifier(&opening.id, &format!("{path}.id"), &mut findings);
+            let path = format!("/openings/{index}");
+            check_identifier(&opening.id, &format!("{path}/id"), &mut findings);
             check_identifier(
                 &opening.location,
-                &format!("{path}.location"),
+                &format!("{path}/location"),
                 &mut findings,
             );
             if self.holiday_set(&opening.holiday_set).is_none() {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.holidaySet"),
+                    format!("{path}/holidaySet"),
                     PolicyCheckReason::UnknownHolidaySet,
                 ));
             }
             check_collection_non_empty(
                 &opening.weekdays,
-                &format!("{path}.weekdays"),
+                &format!("{path}/weekdays"),
                 &mut findings,
             );
             // A value outside its grammar is named where it stands, and the
@@ -490,7 +881,7 @@ impl SchedulingPolicy {
             ] {
                 if !valid_hh_mm(value) {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.{field}"),
+                        format!("{path}/{field}"),
                         PolicyCheckReason::MalformedValue,
                     ));
                 }
@@ -499,8 +890,8 @@ impl SchedulingPolicy {
                 valid_hh_mm(&opening.start_time) && valid_hh_mm(&opening.end_time);
             if clocks_are_clocks && opening.start_time >= opening.end_time {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.endTime"),
-                    PolicyCheckReason::InvalidBound,
+                    format!("{path}/endTime"),
+                    PolicyCheckReason::InvertedRange,
                 ));
             }
             for (field, value) in [
@@ -509,7 +900,7 @@ impl SchedulingPolicy {
             ] {
                 if !valid_iso_date(value) {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.{field}"),
+                        format!("{path}/{field}"),
                         PolicyCheckReason::MalformedValue,
                     ));
                 }
@@ -518,8 +909,8 @@ impl SchedulingPolicy {
                 valid_iso_date(&opening.effective_from) && valid_iso_date(&opening.effective_until);
             if dates_are_dates && opening.effective_from > opening.effective_until {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.effectiveUntil"),
-                    PolicyCheckReason::InvalidBound,
+                    format!("{path}/effectiveUntil"),
+                    PolicyCheckReason::InvertedRange,
                 ));
             } else if let (Some(from), Some(until)) = (
                 chrono::NaiveDate::parse_from_str(&opening.effective_from, "%Y-%m-%d").ok(),
@@ -532,13 +923,13 @@ impl SchedulingPolicy {
                     > i64::from(registry_platform_calendar::MAXIMUM_PATTERN_SPAN_DAYS)
                 {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.effectiveUntil"),
+                        format!("{path}/effectiveUntil"),
                         PolicyCheckReason::PatternSpanTooLarge,
                     ));
                 }
             }
-            check_because(&opening.because, &format!("{path}.because"), &mut findings);
-            self.check_unique_id(&opening.id, &path, "openings", &mut findings);
+            check_because(&opening.because, &format!("{path}/because"), &mut findings);
+            self.check_unique_id(&opening.id, &path, Collection::Openings, &mut findings);
         }
 
         for (index, offering) in self.offerings.iter().enumerate() {
@@ -548,7 +939,7 @@ impl SchedulingPolicy {
             if let Some(arrival) = &offering.arrival {
                 if self.sells_pool(&arrival.window) {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("offerings[{index}].arrival.window"),
+                        format!("/offerings/{index}/arrival/window"),
                         PolicyCheckReason::SupplyIdentifierCollision,
                     ));
                 }
@@ -557,23 +948,38 @@ impl SchedulingPolicy {
 
         check_because(
             &self.hold_policy.because,
-            "holdPolicy.because",
+            "/holdPolicy/because",
             &mut findings,
         );
-        if self.hold_policy.ttl_minutes == 0 || self.hold_policy.max_per_caller == 0 {
+        if self.hold_policy.ttl_minutes == 0 {
             findings.push(SchedulingDiagnostic::new(
-                "holdPolicy",
+                "/holdPolicy/ttlMinutes",
+                PolicyCheckReason::InvalidBound,
+            ));
+        }
+        if self.hold_policy.maximum_per_caller == 0 {
+            findings.push(SchedulingDiagnostic::new(
+                "/holdPolicy/maximumPerCaller",
                 PolicyCheckReason::InvalidBound,
             ));
         }
 
-        check_collection_bound(&self.hooks, "hooks", &mut findings);
+        check_collection_bound(&self.hooks, "/hooks", &mut findings);
+        let mut hook_ids = Vec::new();
         for (index, hook) in self.hooks.iter().enumerate() {
-            check_identifier(&hook.id, &format!("hooks[{index}].id"), &mut findings);
-            check_scheduling_hook(hook, index, &mut findings);
+            let path = format!("/hooks/{index}");
+            check_identifier(&hook.id, &format!("{path}/id"), &mut findings);
+            push_unique(&mut hook_ids, &hook.id, &path, &mut findings);
+            check_scheduling_hook(hook, &path, &mut findings);
         }
-        if let Err(error) = validate_hooks(&self.hooks) {
-            findings.push(hook_validation_diagnostic(&error));
+        // Every shared rule a Scheduling hook can break is already named
+        // above at its own member; the shared validator stays the backstop.
+        if hook_ids.len() == self.hooks.len() && validate_hooks(&self.hook_declarations()).is_err()
+        {
+            findings.push(SchedulingDiagnostic::new(
+                "/hooks",
+                PolicyCheckReason::InvalidHookDeclaration,
+            ));
         }
 
         findings
@@ -585,32 +991,27 @@ impl SchedulingPolicy {
         index: usize,
         findings: &mut Vec<SchedulingDiagnostic>,
     ) {
-        let path = format!("offerings[{index}]");
-        check_identifier(&offering.id, &format!("{path}.id"), findings);
-        check_identifier(&offering.service, &format!("{path}.service"), findings);
+        let path = format!("/offerings/{index}");
+        check_identifier(&offering.id, &format!("{path}/id"), findings);
+        check_identifier(&offering.service, &format!("{path}/service"), findings);
         if !service_ids_contains(self, &offering.service) {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.service"),
+                format!("{path}/service"),
                 PolicyCheckReason::UnknownService,
             ));
         }
-        check_identifier(&offering.location, &format!("{path}.location"), findings);
-        if offering.label.trim().is_empty() || offering.label.len() > MAXIMUM_LABEL_BYTES {
-            findings.push(SchedulingDiagnostic::new(
-                format!("{path}.label"),
-                PolicyCheckReason::InvalidBound,
-            ));
-        }
-        check_because(&offering.because, &format!("{path}.because"), findings);
-        self.check_unique_id(&offering.id, &path, "offerings", findings);
+        check_identifier(&offering.location, &format!("{path}/location"), findings);
+        check_label(&offering.label, &format!("{path}/label"), findings);
+        check_because(&offering.because, &format!("{path}/because"), findings);
+        self.check_unique_id(&offering.id, &path, Collection::Offerings, findings);
 
-        let (block, block_reason_path) = match offering.mode {
+        let (block, block_member) = match offering.mode {
             SchedulingMode::ExactTime => (offering.exact_time.is_some(), "exactTime"),
             SchedulingMode::ArrivalWindow => (offering.arrival.is_some(), "arrival"),
         };
         if !block {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.{block_reason_path}"),
+                format!("{path}/{block_member}"),
                 PolicyCheckReason::MissingModeField,
             ));
         }
@@ -618,29 +1019,32 @@ impl SchedulingPolicy {
             SchedulingMode::ExactTime => {
                 if offering.arrival.is_some() {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.arrival"),
+                        format!("{path}/arrival"),
                         PolicyCheckReason::WrongModeField,
                     ));
                 }
                 if let Some(exact) = &offering.exact_time {
-                    let block_path = format!("{path}.exactTime");
-                    if exact.duration_minutes == 0
-                        || exact.lead_time_minutes == 0
-                        || exact.horizon_days == 0
-                        || exact.start_increment_minutes == 0
-                        || exact.max_recipients == 0
-                    {
-                        findings.push(SchedulingDiagnostic::new(
-                            block_path.clone(),
-                            PolicyCheckReason::InvalidBound,
-                        ));
+                    let block_path = format!("{path}/exactTime");
+                    for (member, value) in [
+                        ("durationMinutes", exact.duration_minutes),
+                        ("leadTimeMinutes", exact.lead_time_minutes),
+                        ("horizonDays", exact.horizon_days),
+                        ("startIncrementMinutes", exact.start_increment_minutes),
+                        ("maximumRecipients", exact.maximum_recipients),
+                    ] {
+                        if value == 0 {
+                            findings.push(SchedulingDiagnostic::new(
+                                format!("{block_path}/{member}"),
+                                PolicyCheckReason::InvalidBound,
+                            ));
+                        }
                     }
-                    check_identifier(&exact.pool, &format!("{block_path}.pool"), findings);
+                    check_identifier(&exact.pool, &format!("{block_path}/pool"), findings);
                     let horizon_minutes = u64::from(exact.horizon_days) * 24 * 60;
                     if u64::from(exact.lead_time_minutes) > horizon_minutes {
                         findings.push(SchedulingDiagnostic::new(
-                            format!("{block_path}.leadTimeMinutes"),
-                            PolicyCheckReason::InvalidBound,
+                            format!("{block_path}/leadTimeMinutes"),
+                            PolicyCheckReason::LeadTimeBeyondHorizon,
                         ));
                     }
                 }
@@ -648,24 +1052,29 @@ impl SchedulingPolicy {
             SchedulingMode::ArrivalWindow => {
                 if offering.exact_time.is_some() {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.exactTime"),
+                        format!("{path}/exactTime"),
                         PolicyCheckReason::WrongModeField,
                     ));
                 }
                 if let Some(arrival) = &offering.arrival {
-                    let block_path = format!("{path}.arrival");
-                    check_identifier(&arrival.window, &format!("{block_path}.window"), findings);
-                    if arrival.lead_time_minutes == 0 || arrival.horizon_days == 0 {
-                        findings.push(SchedulingDiagnostic::new(
-                            block_path.clone(),
-                            PolicyCheckReason::InvalidBound,
-                        ));
+                    let block_path = format!("{path}/arrival");
+                    check_identifier(&arrival.window, &format!("{block_path}/window"), findings);
+                    for (member, value) in [
+                        ("leadTimeMinutes", arrival.lead_time_minutes),
+                        ("horizonDays", arrival.horizon_days),
+                    ] {
+                        if value == 0 {
+                            findings.push(SchedulingDiagnostic::new(
+                                format!("{block_path}/{member}"),
+                                PolicyCheckReason::InvalidBound,
+                            ));
+                        }
                     }
                     let horizon_minutes = u64::from(arrival.horizon_days) * 24 * 60;
                     if u64::from(arrival.lead_time_minutes) > horizon_minutes {
                         findings.push(SchedulingDiagnostic::new(
-                            format!("{block_path}.leadTimeMinutes"),
-                            PolicyCheckReason::InvalidBound,
+                            format!("{block_path}/leadTimeMinutes"),
+                            PolicyCheckReason::LeadTimeBeyondHorizon,
                         ));
                     }
                 }
@@ -673,31 +1082,31 @@ impl SchedulingPolicy {
         }
 
         if let Some(key) = &offering.duplicate_active_key {
-            check_identifier(key, &format!("{path}.duplicateActiveKey"), findings);
+            check_identifier(key, &format!("{path}/duplicateActiveKey"), findings);
         }
-        check_collection_bound(&offering.reminders, &format!("{path}.reminders"), findings);
+        check_collection_bound(&offering.reminders, &format!("{path}/reminders"), findings);
         let mut reminder_offsets: Vec<u32> = Vec::new();
         for (offset_index, reminder) in offering.reminders.iter().enumerate() {
-            let reminder_path = format!("{path}.reminders[{offset_index}]");
-            if reminder.minutes_before == 0 {
+            let reminder_path = format!("{path}/reminders/{offset_index}");
+            if reminder.offset_minutes == 0 {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{reminder_path}.minutesBefore"),
+                    format!("{reminder_path}/offsetMinutes"),
                     PolicyCheckReason::InvalidBound,
                 ));
             }
             // Two offsets at the same distance would mint two intents due at
             // the same instant for one appointment: one reminder per moment.
-            if reminder_offsets.contains(&reminder.minutes_before) {
+            if reminder_offsets.contains(&reminder.offset_minutes) {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{reminder_path}.minutesBefore"),
+                    format!("{reminder_path}/offsetMinutes"),
                     PolicyCheckReason::DuplicateIdentifier,
                 ));
             } else {
-                reminder_offsets.push(reminder.minutes_before);
+                reminder_offsets.push(reminder.offset_minutes);
             }
             check_because(
                 &reminder.because,
-                &format!("{reminder_path}.because"),
+                &format!("{reminder_path}/because"),
                 findings,
             );
         }
@@ -708,26 +1117,25 @@ impl SchedulingPolicy {
         // here instead.
         check_collection_bound(
             &offering.requires_capabilities,
-            &format!("{path}.requiresCapabilities"),
+            &format!("{path}/requiresCapabilities"),
             findings,
         );
         check_collection_bound(
             &offering.prerequisites,
-            &format!("{path}.prerequisites"),
+            &format!("{path}/prerequisites"),
             findings,
         );
-        for capability in &offering.requires_capabilities {
-            if !valid_identifier(capability) {
-                findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.requiresCapabilities"),
-                    PolicyCheckReason::InvalidIdentifier,
-                ));
-            }
+        for (capability_index, capability) in offering.requires_capabilities.iter().enumerate() {
+            check_identifier(
+                capability,
+                &format!("{path}/requiresCapabilities/{capability_index}"),
+                findings,
+            );
         }
-        for prerequisite in &offering.prerequisites {
+        for (prerequisite_index, prerequisite) in offering.prerequisites.iter().enumerate() {
             if !valid_reference(prerequisite) {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.prerequisites"),
+                    format!("{path}/prerequisites/{prerequisite_index}"),
                     PolicyCheckReason::InvalidIdentifier,
                 ));
             }
@@ -738,14 +1146,22 @@ impl SchedulingPolicy {
     /// against this policy. Policy authoring can validate the identifier
     /// reference alone; existence and the window's capacity contract belong
     /// to the operator records that carry the supply.
+    ///
+    /// A finding about an offering's reference points into the project; a
+    /// finding about a window points into the records, at `/windows`.
     pub fn check_window_records(&self, windows: &[PublishedWindow]) -> Vec<SchedulingDiagnostic> {
         let mut findings = Vec::new();
-        check_collection_bound(windows, "windows", &mut findings);
+        if windows.len() > MAXIMUM_COLLECTION_ENTRIES {
+            findings.push(SchedulingDiagnostic::records(
+                "/windows",
+                PolicyCheckReason::TooManyEntries,
+            ));
+        }
         for (index, offering) in self.offerings.iter().enumerate() {
             if let Some(arrival) = &offering.arrival {
                 match windows.iter().find(|window| window.id == arrival.window) {
                     None => findings.push(SchedulingDiagnostic::new(
-                        format!("offerings[{index}].arrival.window"),
+                        format!("/offerings/{index}/arrival/window"),
                         PolicyCheckReason::UnknownWindow,
                     )),
                     Some(window)
@@ -753,7 +1169,7 @@ impl SchedulingPolicy {
                             || window.location != offering.location =>
                     {
                         findings.push(SchedulingDiagnostic::new(
-                            format!("offerings[{index}].arrival.window"),
+                            format!("/offerings/{index}/arrival/window"),
                             PolicyCheckReason::MismatchedReference,
                         ));
                     }
@@ -762,7 +1178,13 @@ impl SchedulingPolicy {
             }
         }
         for (index, window) in windows.iter().enumerate() {
-            self.check_window(window, windows, index, &mut findings);
+            let mut window_findings = Vec::new();
+            self.check_window(window, windows, index, &mut window_findings);
+            findings.extend(
+                window_findings
+                    .into_iter()
+                    .map(|finding| finding.with_area(FindingArea::Records)),
+            );
         }
         findings
     }
@@ -774,34 +1196,38 @@ impl SchedulingPolicy {
         index: usize,
         findings: &mut Vec<SchedulingDiagnostic>,
     ) {
-        let path = format!("windows[{index}]");
-        check_identifier(&window.id, &format!("{path}.id"), findings);
+        let path = format!("/windows/{index}");
+        check_identifier(&window.id, &format!("{path}/id"), findings);
         if window.revision == 0 {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.revision"),
+                format!("{path}/revision"),
                 PolicyCheckReason::InvalidBound,
             ));
         }
-        check_because(&window.because, &format!("{path}.because"), findings);
-        if windows.iter().filter(|other| other.id == window.id).count() > 1 {
+        check_because(&window.because, &format!("{path}/because"), findings);
+        if windows
+            .iter()
+            .take(index)
+            .any(|other| other.id == window.id)
+        {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.id"),
+                format!("{path}/id"),
                 PolicyCheckReason::DuplicateIdentifier,
             ));
         }
-        if window.units == 0 || window.units > i32::MAX as u32 {
+        if window.units == 0 || window.units > MAXIMUM_UNITS {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.units"),
+                format!("{path}/units"),
                 PolicyCheckReason::InvalidBound,
             ));
         }
         if window.end <= window.start {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.end"),
-                PolicyCheckReason::InvalidBound,
+                format!("{path}/end"),
+                PolicyCheckReason::InvertedRange,
             ));
         }
-        findings.extend(window.units_policy.check(&format!("{path}.unitsPolicy")));
+        findings.extend(window.units_policy.check(&format!("{path}/unitsPolicy")));
 
         // A pool and a window anchor their capacity transactions on one row
         // keyed by the identifier, so the two supply namespaces must stay
@@ -811,21 +1237,21 @@ impl SchedulingPolicy {
         // pool still depends on.
         if self.sells_pool(&window.id) {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.id"),
+                format!("{path}/id"),
                 PolicyCheckReason::SupplyIdentifierCollision,
             ));
         }
 
         if window.leftover.is_some() {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.leftover"),
+                format!("{path}/leftover"),
                 PolicyCheckReason::LeftoverUnsupported,
             ));
         }
 
         match self.offering(&window.offering) {
             None => findings.push(SchedulingDiagnostic::new(
-                format!("{path}.offering"),
+                format!("{path}/offering"),
                 PolicyCheckReason::UnknownOffering,
             )),
             Some(offering) => {
@@ -837,7 +1263,7 @@ impl SchedulingPolicy {
                     || offering.location != window.location
                 {
                     findings.push(SchedulingDiagnostic::new(
-                        format!("{path}.offering"),
+                        format!("{path}/offering"),
                         PolicyCheckReason::WrongModeField,
                     ));
                 }
@@ -847,16 +1273,16 @@ impl SchedulingPolicy {
         let mut channels = Vec::new();
         let mut subquota_units = 0_u32;
         for (subquota_index, subquota) in window.subquotas.iter().enumerate() {
-            let subquota_path = format!("{path}.subquotas[{subquota_index}]");
-            check_identifier(&subquota.id, &format!("{subquota_path}.id"), findings);
+            let subquota_path = format!("{path}/subquotas/{subquota_index}");
+            check_identifier(&subquota.id, &format!("{subquota_path}/id"), findings);
             check_because(
                 &subquota.because,
-                &format!("{subquota_path}.because"),
+                &format!("{subquota_path}/because"),
                 findings,
             );
             if subquota.units == 0 {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{subquota_path}.units"),
+                    format!("{subquota_path}/units"),
                     PolicyCheckReason::InvalidBound,
                 ));
             } else {
@@ -864,15 +1290,15 @@ impl SchedulingPolicy {
             }
             if channels.contains(&subquota.channel) {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{subquota_path}.channel"),
+                    format!("{subquota_path}/channel"),
                     PolicyCheckReason::DuplicateIdentifier,
                 ));
             }
-            // A declared set is closed: a subquota may not limit capacity
+            // The declared set is closed: a subquota may not limit capacity
             // for a channel the deployment does not say it serves.
-            if !self.channels.is_empty() && !self.channels.contains(&subquota.channel) {
+            if !self.channels.contains(&subquota.channel) {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{subquota_path}.channel"),
+                    format!("{subquota_path}/channel"),
                     PolicyCheckReason::UnknownChannel,
                 ));
             }
@@ -880,16 +1306,16 @@ impl SchedulingPolicy {
         }
         if subquota_units > window.units {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.subquotas"),
+                format!("{path}/subquotas"),
                 PolicyCheckReason::SubquotaOverdrawn,
             ));
         }
 
         if let Some(staffing) = &window.staffing {
-            check_identifier(&staffing.pool, &format!("{path}.staffing.pool"), findings);
+            check_identifier(&staffing.pool, &format!("{path}/staffing/pool"), findings);
             check_because(
                 &staffing.because,
-                &format!("{path}.staffing.because"),
+                &format!("{path}/staffing/because"),
                 findings,
             );
             // A pool that backs a window may not also back an exact-time
@@ -906,7 +1332,7 @@ impl SchedulingPolicy {
             });
             if mixed_modes {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.staffing.pool"),
+                    format!("{path}/staffing/pool"),
                     PolicyCheckReason::SharedSupplyUnpartitioned,
                 ));
             }
@@ -924,7 +1350,7 @@ impl SchedulingPolicy {
             });
             if doubly_claimed {
                 findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.staffing.pool"),
+                    format!("{path}/staffing/pool"),
                     PolicyCheckReason::SharedSupplyUnpartitioned,
                 ));
             }
@@ -947,103 +1373,65 @@ impl SchedulingPolicy {
         &self,
         id: &str,
         path: &str,
-        collection: &str,
+        collection: Collection,
         findings: &mut Vec<SchedulingDiagnostic>,
     ) {
-        let duplicate = match collection {
-            "offerings" => {
-                self.offerings
-                    .iter()
-                    .filter(|offering| offering.id == id)
-                    .count()
-                    > 1
-            }
-            "openings" => {
-                self.openings
-                    .iter()
-                    .filter(|opening| opening.id == id)
-                    .count()
-                    > 1
-            }
-            "holidaySets" => self.holiday_sets.iter().filter(|set| set.id == id).count() > 1,
-            _ => false,
+        let index = path
+            .rsplit('/')
+            .next()
+            .and_then(|segment| segment.parse::<usize>().ok())
+            .unwrap_or(0);
+        let repeated = match collection {
+            Collection::Offerings => self
+                .offerings
+                .iter()
+                .take(index)
+                .any(|offering| offering.id == id),
+            Collection::Openings => self
+                .openings
+                .iter()
+                .take(index)
+                .any(|opening| opening.id == id),
+            Collection::HolidaySets => self.holiday_sets.iter().take(index).any(|set| set.id == id),
         };
-        if duplicate {
+        if repeated {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.id"),
+                format!("{path}/id"),
                 PolicyCheckReason::DuplicateIdentifier,
             ));
         }
     }
 }
 
-fn check_scheduling_hook(
-    hook: &HookPolicy,
-    index: usize,
-    findings: &mut Vec<SchedulingDiagnostic>,
-) {
-    let path = format!("hooks[{index}]");
-    if hook.phase != HookPhase::After || !matches!(hook.handler, HookHandlerSource::Url { .. }) {
+/// A project collection whose entries carry unique ids.
+#[derive(Clone, Copy)]
+enum Collection {
+    Offerings,
+    Openings,
+    HolidaySets,
+}
+
+fn check_scheduling_hook(hook: &HookPolicy, path: &str, findings: &mut Vec<SchedulingDiagnostic>) {
+    let ObserverHandler::Url { destination_id } = &hook.handler;
+    if !valid_hook_destination_id(destination_id) {
         findings.push(SchedulingDiagnostic::new(
-            format!("{path}.phase"),
-            PolicyCheckReason::UnsupportedHookPhase,
+            format!("{path}/handler/destinationId"),
+            PolicyCheckReason::InvalidHookDestination,
         ));
     }
-    if let HookHandlerSource::Url { destination_id } = &hook.handler {
-        if !valid_hook_destination_id(destination_id) {
-            findings.push(SchedulingDiagnostic::new(
-                format!("{path}.handler.destinationId"),
-                PolicyCheckReason::InvalidHookDestination,
-            ));
-        }
-    }
-    let allowed_projection = match hook.trigger.as_str() {
-        APPOINTMENT_CONFIRMED_TRIGGER | APPOINTMENT_RESCHEDULED_TRIGGER => {
-            Some(APPOINTMENT_OBSERVER_FIELDS)
-        }
-        APPOINTMENT_CANCELLED_TRIGGER => Some(CANCELLATION_OBSERVER_FIELDS),
-        _ => None,
-    };
-    let Some(allowed_projection) = allowed_projection else {
-        findings.push(SchedulingDiagnostic::new(
-            format!("{path}.trigger"),
-            PolicyCheckReason::UnsupportedHookTrigger,
-        ));
-        return;
-    };
-    if hook.when.is_some() {
-        findings.push(SchedulingDiagnostic::new(
-            format!("{path}.when"),
-            PolicyCheckReason::UnsupportedHookCondition,
-        ));
-    }
-    if hook.principal.is_some() {
-        findings.push(SchedulingDiagnostic::new(
-            format!("{path}.principal"),
-            PolicyCheckReason::UnsupportedHookPrincipal,
-        ));
-    }
-    for field in &hook.projection {
+    let allowed_projection = hook.trigger.projection_fields();
+    for (field_index, field) in hook.projection.iter().enumerate() {
         if !allowed_projection.contains(&field.as_str()) {
             findings.push(SchedulingDiagnostic::new(
-                format!("{path}.projection"),
+                format!("{path}/projection/{field_index}"),
                 PolicyCheckReason::UnsupportedHookProjection,
             ));
-            break;
         }
     }
 }
 
 fn valid_hook_destination_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase())
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
+    valid_identifier(value)
 }
 
 /// One window, or one channel slice of a window, whose proposed capacity fell
@@ -1249,29 +1637,6 @@ fn service_ids_contains(policy: &SchedulingPolicy, id: &str) -> bool {
     policy.services.iter().any(|service| service.id == id)
 }
 
-fn hook_validation_diagnostic(error: &HookValidationError) -> SchedulingDiagnostic {
-    match error {
-        HookValidationError::EmptyHookId { index } => SchedulingDiagnostic::new(
-            format!("hooks[{index}].id"),
-            PolicyCheckReason::InvalidIdentifier,
-        ),
-        HookValidationError::DuplicateHookId { index, .. } => SchedulingDiagnostic::new(
-            format!("hooks[{index}].id"),
-            PolicyCheckReason::DuplicateIdentifier,
-        ),
-        HookValidationError::BeforePhaseRemoteHandler { index, .. } => SchedulingDiagnostic::new(
-            format!("hooks[{index}].phase"),
-            PolicyCheckReason::UnsupportedHookPhase,
-        ),
-        HookValidationError::AbiMissing { index, .. }
-        | HookValidationError::AbiUnknown { index, .. } => SchedulingDiagnostic::new(
-            format!("hooks[{index}].handler.abi"),
-            PolicyCheckReason::UnsupportedHookAbi,
-        ),
-        _ => SchedulingDiagnostic::new("hooks", PolicyCheckReason::InvalidHookDeclaration),
-    }
-}
-
 fn push_unique(
     seen: &mut Vec<String>,
     id: &str,
@@ -1280,7 +1645,7 @@ fn push_unique(
 ) {
     if seen.iter().any(|known| known == id) {
         findings.push(SchedulingDiagnostic::new(
-            format!("{path}.id"),
+            format!("{path}/id"),
             PolicyCheckReason::DuplicateIdentifier,
         ));
     } else {
@@ -1309,7 +1674,7 @@ fn check_collection_bound<T>(
     if collection.len() > MAXIMUM_COLLECTION_ENTRIES {
         findings.push(SchedulingDiagnostic::new(
             path,
-            PolicyCheckReason::InvalidBound,
+            PolicyCheckReason::TooManyEntries,
         ));
     }
 }
@@ -1323,9 +1688,19 @@ fn check_identifier(id: &str, path: &str, findings: &mut Vec<SchedulingDiagnosti
     }
 }
 
-/// The identifier grammar shared by every policy id: non-empty, at most 64
-/// bytes, starting with a lowercase letter and continuing with lowercase
-/// letters, digits, and hyphens.
+fn check_label(label: &str, path: &str, findings: &mut Vec<SchedulingDiagnostic>) {
+    if label.trim().is_empty() || label.len() > MAXIMUM_LABEL_BYTES {
+        findings.push(SchedulingDiagnostic::new(
+            path,
+            PolicyCheckReason::InvalidLabel,
+        ));
+    }
+}
+
+/// The identifier grammar shared by every Scheduling id, the local
+/// identifier of CFG-ID-1: non-empty, at most 64 bytes, starting with a
+/// lowercase letter and continuing with lowercase letters, digits, hyphens,
+/// and underscores.
 #[must_use]
 pub fn valid_identifier(value: &str) -> bool {
     let bytes = value.as_bytes();
@@ -1334,7 +1709,7 @@ pub fn valid_identifier(value: &str) -> bool {
         && matches!(bytes.first(), Some(b'a'..=b'z'))
         && bytes[1..]
             .iter()
-            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'))
 }
 
 /// A reference an offering may require a party to hold: a stable scoped
@@ -1344,7 +1719,7 @@ pub fn valid_reference(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
 }
 
-fn valid_hh_mm(value: &str) -> bool {
+pub(crate) fn valid_hh_mm(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 5
         && bytes[2] == b':'
@@ -1356,7 +1731,7 @@ fn valid_hh_mm(value: &str) -> bool {
         && value[3..].parse::<u32>().is_ok_and(|minute| minute < 60)
 }
 
-fn valid_iso_date(value: &str) -> bool {
+pub(crate) fn valid_iso_date(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 10
         && bytes[4] == b'-'
@@ -1382,19 +1757,19 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::model::{LedgerClaim, LedgerKind, PartyCounts};
+    use crate::naming::AUTHORED_POLICY_FILE;
     use chrono::TimeZone as _;
 
     fn utc(hour: u32, minute: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 10, hour, minute, 0).unwrap()
     }
 
-    pub fn minimal_exact_time_policy() -> SchedulingPolicy {
-        let yaml = r#"
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+    const MINIMAL_EXACT_TIME_PROJECT: &str = r#"
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: registry-updates
-  version: 1
+  version: "1"
 services:
   - id: registry-update
     label: Registry record update
@@ -1413,10 +1788,8 @@ offerings:
       horizonDays: 60
       pool: update-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
@@ -1432,21 +1805,47 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 5
-  maxPerCaller: 3
+  maximumPerCaller: 3
   because: Holds are short because counter capacity is scarce.
 "#;
-        serde_norway::from_str(yaml).expect("the minimal policy parses")
+
+    fn decode(yaml: &str) -> SchedulingPolicy {
+        SchedulingPolicy::decode(AUTHORED_POLICY_FILE, yaml.as_bytes())
+            .unwrap_or_else(|report| panic!("{}", report.render_human()))
+            .value
+    }
+
+    /// The diagnostics a refused project reports, as `pointer code`.
+    fn refusals(yaml: &str) -> Vec<String> {
+        match SchedulingPolicy::read(AUTHORED_POLICY_FILE, yaml.as_bytes()) {
+            Ok(_) => Vec::new(),
+            Err(report) => report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| format!("{} {}", diagnostic.path, diagnostic.code))
+                .collect(),
+        }
+    }
+
+    fn rendered(findings: &[SchedulingDiagnostic]) -> Vec<String> {
+        findings.iter().map(ToString::to_string).collect()
+    }
+
+    pub fn minimal_exact_time_policy() -> SchedulingPolicy {
+        decode(MINIMAL_EXACT_TIME_PROJECT)
     }
 
     pub fn household_window_policy() -> SchedulingPolicy {
-        let yaml = r#"
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+        decode(
+            r#"
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: household-days
-  version: 3
+  version: "3"
 services:
   - id: household-day
     label: Household registration day
@@ -1462,13 +1861,10 @@ offerings:
       leadTimeMinutes: 60
       horizonDays: 45
     cancellationCutoffMinutes: 1440
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry office.
-    dates: []
 openings:
   - id: hall-hours
     location: civic-hall
@@ -1479,57 +1875,82 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall opens on Saturday mornings.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 10
-  maxPerCaller: 2
+  maximumPerCaller: 2
   because: Households need a few minutes to gather documents.
-"#;
-        serde_norway::from_str(yaml).expect("the household policy parses")
+"#,
+        )
     }
 
     fn household_windows() -> Vec<PublishedWindow> {
-        let records: crate::model::SchedulingFacts = serde_norway::from_str(
+        crate::typed::decode_fragment::<Vec<PublishedWindow>>(
             r#"
-windows:
-  - id: household-morning-window
-    revision: 2
-    offering: household-morning
-    location: civic-hall
-    start: 2026-10-10T08:00:00Z
-    end: 2026-10-10T10:00:00Z
-    units: 3
-    unitsPolicy:
-      kind: perRecipient
-      perRecipient: 1
-      because: Each recipient consumes one serving slot.
-    subquotas:
-      - id: public-quota
-        channel: public
-        units: 2
-        because: Most households book the public channel.
-      - id: assisted-quota
-        channel: assisted
-        units: 1
-        because: Assisted bookings hold a protected unit.
-    because: The Saturday morning household block, sized for two officers.
+- id: household-morning-window
+  revision: 2
+  offering: household-morning
+  location: civic-hall
+  start: 2026-10-10T08:00:00Z
+  end: 2026-10-10T10:00:00Z
+  units: 3
+  unitsPolicy:
+    type: per-recipient
+    perRecipient: 1
+    because: Each recipient consumes one serving slot.
+  subquotas:
+    - id: public-quota
+      channel: public
+      units: 2
+      because: Most households book the public channel.
+    - id: assisted-quota
+      channel: assisted
+      units: 1
+      because: Assisted bookings hold a protected unit.
+  because: The Saturday morning household block, sized for two officers.
 "#,
         )
-        .expect("the household window records parse");
-        records.windows
+        .expect("the household window records read")
+    }
+
+    fn exact_time_offering(pool: &str) -> OfferingPolicy {
+        OfferingPolicy {
+            id: "urgent-five".to_owned(),
+            service: "household-day".to_owned(),
+            label: "Urgent five-minute slot".to_owned(),
+            mode: SchedulingMode::ExactTime,
+            location: "civic-hall".to_owned(),
+            because: "Urgent matters get exact five-minute slots.".to_owned(),
+            exact_time: Some(ExactTimeOffering {
+                duration_minutes: 5,
+                buffer_before_minutes: 0,
+                buffer_after_minutes: 0,
+                lead_time_minutes: 30,
+                horizon_days: 14,
+                pool: pool.to_owned(),
+                start_increment_minutes: 5,
+                maximum_recipients: 1,
+            }),
+            arrival: None,
+            cancellation_cutoff_minutes: 60,
+            reminders: Vec::new(),
+            duplicate_active_key: None,
+            requires_capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+        }
     }
 
     #[test]
     fn the_minimal_policies_carry_no_findings() {
-        assert!(
-            minimal_exact_time_policy().check().is_empty(),
-            "{:?}",
-            minimal_exact_time_policy().check()
+        assert_eq!(
+            rendered(&minimal_exact_time_policy().check()),
+            Vec::<String>::new()
         );
-        assert!(
-            household_window_policy().check().is_empty(),
-            "{:?}",
-            household_window_policy().check()
+        assert_eq!(
+            rendered(&household_window_policy().check()),
+            Vec::<String>::new()
         );
+        assert_eq!(refusals(MINIMAL_EXACT_TIME_PROJECT), Vec::<String>::new());
     }
 
     #[test]
@@ -1549,17 +1970,128 @@ windows:
         assert_ne!(policy.policy_digest(), edited.policy_digest());
     }
 
+    /// The stored form of a project is the authored form: it reads back
+    /// through the same types, writes no null, and spells every renamed
+    /// member the way the project file does.
+    #[test]
+    fn the_stored_form_reads_back_as_written() {
+        let policy = minimal_exact_time_policy();
+        let stored = serde_json::to_value(&policy).expect("the project serializes");
+        assert_eq!(
+            stored["project"],
+            serde_json::json!({"id": "registry-updates", "version": "1"})
+        );
+        assert_eq!(stored["offerings"][0]["exactTime"]["maximumRecipients"], 1);
+        assert_eq!(stored["holdPolicy"]["maximumPerCaller"], 3);
+        assert!(stored["offerings"][0].get("arrival").is_none());
+        assert!(stored["offerings"][0].get("requiresCapabilities").is_none());
+        assert!(stored.get("hooks").is_none());
+        let read_back: SchedulingPolicy =
+            serde_json::from_value(stored).expect("the stored form reads back");
+        assert_eq!(read_back, policy);
+    }
+
     #[test]
     fn envelope_and_identity_findings_are_path_addressed() {
         let mut policy = minimal_exact_time_policy();
         policy.api_version = "registry.registrystack.org/other/v1".to_owned();
         policy.kind = "Other".to_owned();
-        policy.scheduling.version = 0;
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"apiVersion: unsupported-api-version".to_owned()));
-        assert!(rendered.contains(&"kind: unsupported-kind".to_owned()));
-        assert!(rendered.contains(&"scheduling.version: invalid-bound".to_owned()));
+        policy.project.version = " ".to_owned();
+        let rendered = rendered(&policy.check());
+        assert!(rendered
+            .contains(&"/apiVersion: scheduling.project.unsupported-api-version".to_owned()));
+        assert!(rendered.contains(&"/kind: scheduling.project.unsupported-kind".to_owned()));
+        assert!(rendered.contains(&"/project/version: scheduling.project.empty-text".to_owned()));
+    }
+
+    /// The retired apiVersion and every renamed member are refused by the
+    /// reader, each at its position, with the replacement to write.
+    #[test]
+    fn the_retired_spelling_is_refused_naming_its_replacement() {
+        let retired = MINIMAL_EXACT_TIME_PROJECT.replace(
+            "id.registrystack.org/formats/scheduling/project/v1alpha1",
+            "registry.registrystack.org/scheduling-policy-package/v1alpha1",
+        );
+        let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, retired.as_bytes())
+            .expect_err("the retired apiVersion is refused");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.path, "/apiVersion");
+        assert!(diagnostic
+            .suggested_action
+            .contains("id.registrystack.org/formats/scheduling/project/v1alpha1"));
+
+        let renamed = MINIMAL_EXACT_TIME_PROJECT
+            .replace(
+                "project:\n  id: registry-updates\n  version: \"1\"",
+                "scheduling:\n  id: registry-updates\n  version: 1",
+            )
+            .replace("maximumRecipients", "maxRecipients")
+            .replace("maximumPerCaller", "maxPerCaller");
+        let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, renamed.as_bytes())
+            .expect_err("the renamed members are refused");
+        let paths: Vec<&str> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect();
+        for path in [
+            "/scheduling",
+            "/offerings/0/exactTime/maxRecipients",
+            "/holdPolicy/maxPerCaller",
+        ] {
+            assert!(paths.contains(&path), "{paths:?}");
+        }
+        for diagnostic in report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.removed-key")
+        {
+            assert!(
+                diagnostic.suggested_action.starts_with("Write "),
+                "{}",
+                diagnostic.suggested_action
+            );
+        }
+    }
+
+    /// CFG-EMPTY-2: a restricting list written empty would read as "no
+    /// restriction", so the reader refuses it and names the omission; the
+    /// served channel set is required and holds at least one channel.
+    #[test]
+    fn an_empty_restricting_list_is_refused_and_names_the_omission() {
+        for (from, to, pointer) in [
+            (
+                "    cancellationCutoffMinutes: 240\n",
+                "    cancellationCutoffMinutes: 240\n    requiresCapabilities: []\n",
+                "/offerings/0/requiresCapabilities config.",
+            ),
+            (
+                "    cancellationCutoffMinutes: 240\n",
+                "    cancellationCutoffMinutes: 240\n    prerequisites: []\n",
+                "/offerings/0/prerequisites config.",
+            ),
+            (
+                "    dates: [\"2026-12-25\"]\n",
+                "    dates: []\n",
+                "/holidaySets/0/dates config.",
+            ),
+        ] {
+            let yaml = MINIMAL_EXACT_TIME_PROJECT.replace(from, to);
+            let refusals = refusals(&yaml);
+            assert!(
+                refusals.iter().any(|refusal| refusal.starts_with(pointer)),
+                "{refusals:?}"
+            );
+        }
+
+        let yaml =
+            MINIMAL_EXACT_TIME_PROJECT.replace("channels: [public, assisted]", "channels: []");
+        assert_eq!(
+            refusals(&yaml),
+            ["/channels scheduling.project.empty-collection"]
+        );
+        let yaml = MINIMAL_EXACT_TIME_PROJECT.replace("channels: [public, assisted]\n", "");
+        assert_eq!(refusals(&yaml).len(), 1, "{:?}", refusals(&yaml));
     }
 
     #[test]
@@ -1571,12 +2103,30 @@ windows:
             lead_time_minutes: 60,
             horizon_days: 45,
         });
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"offerings[0].exactTime: missing-mode-field".to_owned()));
+        let rendered = rendered(&policy.check());
+        assert!(rendered
+            .contains(&"/offerings/0/exactTime: scheduling.project.missing-mode-field".to_owned()));
         // The stray arrival block is refused as a whole; its window reference
         // is not validated because the block must be removed, not repaired.
-        assert!(rendered.contains(&"offerings[0].arrival: wrong-mode-field".to_owned()));
+        assert!(rendered
+            .contains(&"/offerings/0/arrival: scheduling.project.wrong-mode-field".to_owned()));
+    }
+
+    /// A finding about a member the file never writes is placed at the key
+    /// of the nearest member it does write.
+    #[test]
+    fn a_finding_on_an_absent_member_is_placed_at_its_nearest_written_ancestor() {
+        let yaml = MINIMAL_EXACT_TIME_PROJECT
+            .replace("    mode: exact-time\n", "    mode: arrival-window\n");
+        let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, yaml.as_bytes())
+            .expect_err("a mode without its block is refused");
+        let missing = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "scheduling.project.missing-mode-field")
+            .expect("the missing block is reported");
+        assert_eq!(missing.path, "/offerings/0/arrival");
+        assert!(missing.source.is_some());
     }
 
     #[test]
@@ -1584,10 +2134,12 @@ windows:
         let mut policy = minimal_exact_time_policy();
         policy.offerings[0].service = "no-such-service".to_owned();
         policy.openings[0].holiday_set = "no-such-holidays".to_owned();
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"offerings[0].service: unknown-service".to_owned()));
-        assert!(rendered.contains(&"openings[0].holidaySet: unknown-holiday-set".to_owned()));
+        let rendered = rendered(&policy.check());
+        assert!(rendered
+            .contains(&"/offerings/0/service: scheduling.project.unknown-service".to_owned()));
+        assert!(rendered.contains(
+            &"/openings/0/holidaySet: scheduling.project.unknown-holiday-set".to_owned()
+        ));
     }
 
     #[test]
@@ -1598,9 +2150,10 @@ windows:
         neighbour.id = "household-afternoon".to_owned();
         policy.offerings.push(neighbour);
 
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(ToString::to_string).collect();
-        assert!(rendered.contains(&"offerings[1].arrival.window: mismatched-reference".to_owned()));
+        let rendered = rendered(&policy.check_window_records(&windows));
+        assert!(rendered.contains(
+            &"/offerings/1/arrival/window: scheduling.project.mismatched-reference".to_owned()
+        ));
     }
 
     /// The weekly expansion serves at most MAXIMUM_PATTERN_SPAN_DAYS days, and
@@ -1620,28 +2173,31 @@ windows:
         policy.openings[0].effective_until = until(u64::from(
             registry_platform_calendar::MAXIMUM_PATTERN_SPAN_DAYS,
         ));
-        assert!(policy.check().is_empty(), "{:?}", policy.check());
+        assert_eq!(rendered(&policy.check()), Vec::<String>::new());
 
         policy.openings[0].effective_until =
             until(u64::from(registry_platform_calendar::MAXIMUM_PATTERN_SPAN_DAYS) + 1);
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"openings[0].effectiveUntil: pattern-span-too-large".to_owned()));
+        let rendered = rendered(&policy.check());
+        assert!(rendered.contains(
+            &"/openings/0/effectiveUntil: scheduling.project.pattern-span-too-large".to_owned()
+        ));
     }
 
     #[test]
     fn duplicate_ids_across_one_collection_are_rejected() {
         let mut policy = minimal_exact_time_policy();
         policy.offerings.push(policy.offerings[0].clone());
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        let rendered = rendered(&policy.check());
         assert_eq!(
             rendered
                 .iter()
                 .filter(|f| f.ends_with("duplicate-identifier"))
                 .count(),
-            2
+            1,
+            "{rendered:?}"
         );
+        assert!(rendered
+            .contains(&"/offerings/1/id: scheduling.project.duplicate-identifier".to_owned()));
     }
 
     /// Authored reminder offsets are part of the reviewed policy: a zero
@@ -1652,33 +2208,36 @@ windows:
         let mut policy = minimal_exact_time_policy();
         policy.offerings[0].reminders = vec![
             ReminderOffsetPolicy {
-                minutes_before: 0,
+                offset_minutes: 0,
                 because: "   ".to_owned(),
             },
             ReminderOffsetPolicy {
-                minutes_before: 1440,
+                offset_minutes: 1440,
                 because: "One reminder the day before a counter update.".to_owned(),
             },
             ReminderOffsetPolicy {
-                minutes_before: 1440,
+                offset_minutes: 1440,
                 because: "A second reminder at the same distance.".to_owned(),
             },
         ];
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(
-            rendered.contains(&"offerings[0].reminders[0].minutesBefore: invalid-bound".to_owned())
-        );
-        assert!(rendered.contains(&"offerings[0].reminders[0].because: invalid-because".to_owned()));
-        assert!(rendered
-            .contains(&"offerings[0].reminders[2].minutesBefore: duplicate-identifier".to_owned()));
+        let rendered_findings = rendered(&policy.check());
+        assert!(rendered_findings.contains(
+            &"/offerings/0/reminders/0/offsetMinutes: scheduling.project.invalid-bound".to_owned()
+        ));
+        assert!(rendered_findings.contains(
+            &"/offerings/0/reminders/0/because: scheduling.project.invalid-because".to_owned()
+        ));
+        assert!(rendered_findings.contains(
+            &"/offerings/0/reminders/2/offsetMinutes: scheduling.project.duplicate-identifier"
+                .to_owned()
+        ));
 
         policy.offerings[0].reminders.truncate(2);
         policy.offerings[0].reminders[0] = ReminderOffsetPolicy {
-            minutes_before: 60,
+            offset_minutes: 60,
             because: "One reminder an hour before.".to_owned(),
         };
-        assert!(policy.check().is_empty(), "{:?}", policy.check());
+        assert_eq!(rendered(&policy.check()), Vec::<String>::new());
     }
 
     #[test]
@@ -1686,9 +2245,9 @@ windows:
         let policy = household_window_policy();
         let mut windows = household_windows();
         windows[0].subquotas[0].units = 3;
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"windows[0].subquotas: subquota-overdrawn".to_owned()));
+        let rendered = rendered(&policy.check_window_records(&windows));
+        assert!(rendered
+            .contains(&"/windows/0/subquotas: scheduling.records.subquota-overdrawn".to_owned()));
     }
 
     #[test]
@@ -1696,18 +2255,17 @@ windows:
         let policy = household_window_policy();
         let mut windows = household_windows();
         windows[0].units = i32::MAX as u32;
-        assert!(
-            policy.check_window_records(&windows).is_empty(),
+        assert_eq!(
+            rendered(&policy.check_window_records(&windows)),
+            Vec::<String>::new(),
             "the largest ledger allocation must remain valid"
         );
 
         windows[0].units = i32::MAX as u32 + 1;
-        let rendered: Vec<String> = policy
-            .check_window_records(&windows)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(rendered, vec!["windows[0].units: invalid-bound".to_owned()]);
+        assert_eq!(
+            rendered(&policy.check_window_records(&windows)),
+            vec!["/windows/0/units: scheduling.records.invalid-bound".to_owned()]
+        );
     }
 
     #[test]
@@ -1715,17 +2273,17 @@ windows:
         let policy = household_window_policy();
         let mut windows = household_windows();
         windows[0].subquotas[1].channel = Channel::Public;
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(
-            rendered.contains(&"windows[0].subquotas[1].channel: duplicate-identifier".to_owned())
-        );
+        let rendered = rendered(&policy.check_window_records(&windows));
+        assert!(rendered.contains(
+            &"/windows/0/subquotas/1/channel: scheduling.records.duplicate-identifier".to_owned()
+        ));
     }
 
-    /// COR-3 / D5(a): a declared channel set is closed. A subquota may not
-    /// reserve capacity for a channel the deployment does not say it serves,
-    /// and a declaration naming one channel twice declares it once. An
-    /// absent declaration declares nothing beyond the vocabulary.
+    /// COR-3 / D5(a): the declared channel set is closed and required. A
+    /// subquota may not reserve capacity for a channel the deployment does
+    /// not say it serves, a declaration naming one channel twice declares it
+    /// once, and a project that declares no channel serves none: the empty
+    /// set fails closed rather than open onto the whole vocabulary.
     #[test]
     fn a_subquota_may_not_draw_on_an_undeclared_channel() {
         let mut policy = household_window_policy();
@@ -1733,36 +2291,46 @@ windows:
         // The window serves public and assisted; the deployment declares
         // only assisted.
         policy.channels = vec![Channel::Assisted];
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        let rendered_findings = rendered(&policy.check_window_records(&windows));
         assert!(
-            rendered.contains(&"windows[0].subquotas[0].channel: unknown-channel".to_owned()),
-            "{rendered:?}"
+            rendered_findings.contains(
+                &"/windows/0/subquotas/0/channel: scheduling.records.unknown-channel".to_owned()
+            ),
+            "{rendered_findings:?}"
         );
-        assert!(!rendered
+        assert!(!rendered_findings
             .iter()
-            .any(|finding| finding.starts_with("windows[0].subquotas[1].channel:")));
+            .any(|finding| finding.starts_with("/windows/0/subquotas/1/channel:")));
 
-        // With no declaration, the vocabulary alone governs and the same
-        // subquotas check clean.
+        // An empty declaration is refused on the project, and every subquota
+        // draws on an undeclared channel.
         policy.channels = Vec::new();
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(
-            rendered
+        assert!(rendered(&policy.check())
+            .contains(&"/channels: scheduling.project.empty-collection".to_owned()));
+        let rendered_findings = rendered(&policy.check_window_records(&windows));
+        assert_eq!(
+            rendered_findings
                 .iter()
-                .all(|finding| !finding.ends_with("unknown-channel")),
-            "{rendered:?}"
+                .filter(|finding| finding.ends_with("unknown-channel"))
+                .count(),
+            2,
+            "{rendered_findings:?}"
         );
 
         // A repeated declaration is a duplicate identifier.
         policy.channels = vec![Channel::Public, Channel::Public];
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        let rendered_findings = rendered(&policy.check());
         assert!(
-            rendered.contains(&"channels[1]: duplicate-identifier".to_owned()),
-            "{rendered:?}"
+            rendered_findings
+                .contains(&"/channels/1: scheduling.project.duplicate-identifier".to_owned()),
+            "{rendered_findings:?}"
         );
+        // The reader refuses the same repetition where it stands.
+        let yaml = MINIMAL_EXACT_TIME_PROJECT
+            .replace("channels: [public, assisted]", "channels: [public, public]");
+        assert!(refusals(&yaml)
+            .iter()
+            .any(|refusal| refusal.starts_with("/channels/1 ")));
     }
 
     /// A resource pool and a published window anchor their capacity
@@ -1774,57 +2342,35 @@ windows:
     fn a_pool_and_a_window_may_not_share_one_supply_identifier() {
         let mut policy = household_window_policy();
         let windows = household_windows();
-        assert!(policy.check().is_empty(), "{:?}", policy.check());
-        assert!(
-            policy.check_window_records(&windows).is_empty(),
-            "{:?}",
-            policy.check_window_records(&windows)
+        assert_eq!(rendered(&policy.check()), Vec::<String>::new());
+        assert_eq!(
+            rendered(&policy.check_window_records(&windows)),
+            Vec::<String>::new()
         );
 
-        policy.offerings.push(OfferingPolicy {
-            id: "urgent-five".to_owned(),
-            service: "household-day".to_owned(),
-            label: "Urgent five-minute slot".to_owned(),
-            mode: SchedulingMode::ExactTime,
-            location: "civic-hall".to_owned(),
-            because: "Urgent matters get exact five-minute slots.".to_owned(),
-            exact_time: Some(ExactTimeOffering {
-                duration_minutes: 5,
-                buffer_before_minutes: 0,
-                buffer_after_minutes: 0,
-                lead_time_minutes: 30,
-                horizon_days: 14,
-                pool: "household-morning-window".to_owned(),
-                start_increment_minutes: 5,
-                max_recipients: 1,
-            }),
-            arrival: None,
-            cancellation_cutoff_minutes: 60,
-            reminders: Vec::new(),
-            duplicate_active_key: None,
-            requires_capabilities: Vec::new(),
-            prerequisites: Vec::new(),
-        });
+        policy
+            .offerings
+            .push(exact_time_offering("household-morning-window"));
 
         // The policy alone already names both sides: the arrival offering
         // points at a window identifier its own exact-time offering sells.
-        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+        let rendered_findings = rendered(&policy.check());
         assert!(
-            rendered
-                .contains(&"offerings[0].arrival.window: supply-identifier-collision".to_owned()),
-            "{rendered:?}"
+            rendered_findings.contains(
+                &"/offerings/0/arrival/window: scheduling.project.supply-identifier-collision"
+                    .to_owned()
+            ),
+            "{rendered_findings:?}"
         );
 
         // The published record is refused in its own vocabulary, which is
         // the finding the two database writes carry.
-        let rendered: Vec<String> = policy
-            .check_window_records(&windows)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let rendered_findings = rendered(&policy.check_window_records(&windows));
         assert!(
-            rendered.contains(&"windows[0].id: supply-identifier-collision".to_owned()),
-            "{rendered:?}"
+            rendered_findings.contains(
+                &"/windows/0/id: scheduling.records.supply-identifier-collision".to_owned()
+            ),
+            "{rendered_findings:?}"
         );
     }
 
@@ -1846,35 +2392,9 @@ windows:
             reserved_members: None,
             because: "The morning block is staffed by the duty officers.".to_owned(),
         });
-        policy.offerings.push(OfferingPolicy {
-            id: "urgent-five".to_owned(),
-            service: "household-day".to_owned(),
-            label: "Urgent five-minute slot".to_owned(),
-            mode: SchedulingMode::ExactTime,
-            location: "civic-hall".to_owned(),
-            because: "Urgent matters get exact five-minute slots.".to_owned(),
-            exact_time: Some(ExactTimeOffering {
-                duration_minutes: 5,
-                buffer_before_minutes: 0,
-                buffer_after_minutes: 0,
-                lead_time_minutes: 30,
-                horizon_days: 14,
-                pool: "officer-pool".to_owned(),
-                start_increment_minutes: 5,
-                max_recipients: 1,
-            }),
-            arrival: None,
-            cancellation_cutoff_minutes: 60,
-            reminders: Vec::new(),
-            duplicate_active_key: None,
-            requires_capabilities: Vec::new(),
-            prerequisites: Vec::new(),
-        });
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(
-            rendered.contains(&"windows[0].staffing.pool: shared-supply-unpartitioned".to_owned())
-        );
+        policy.offerings.push(exact_time_offering("officer-pool"));
+        let shared = "/windows/0/staffing/pool: scheduling.records.shared-supply-unpartitioned";
+        assert!(rendered(&policy.check_window_records(&windows)).contains(&shared.to_owned()));
 
         // A partition does not attribute the supply across modes, so the mix
         // is refused with the partition declared.
@@ -1883,11 +2403,7 @@ windows:
             reserved_members: Some(2),
             because: "Two of the four duty officers staff the block.".to_owned(),
         });
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(
-            rendered.contains(&"windows[0].staffing.pool: shared-supply-unpartitioned".to_owned())
-        );
+        assert!(rendered(&policy.check_window_records(&windows)).contains(&shared.to_owned()));
 
         // A partitioned staffing block over a pool no exact-time offering
         // sells makes the share explicit and passes.
@@ -1896,10 +2412,9 @@ windows:
             reserved_members: Some(2),
             because: "Two of the four duty officers staff the block.".to_owned(),
         });
-        assert!(
-            policy.check_window_records(&windows).is_empty(),
-            "{:?}",
-            policy.check_window_records(&windows)
+        assert_eq!(
+            rendered(&policy.check_window_records(&windows)),
+            Vec::<String>::new()
         );
 
         // A window with no staffing block draws on no pool at all, so it
@@ -1939,43 +2454,25 @@ windows:
             }),
             because: "A second block in the same hall.".to_owned(),
         });
-        // The second window's offering linkage is wrong on purpose in this
-        // fixture; only the supply finding is asserted here.
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert_eq!(
-            rendered
+        let shared_count = |windows: &[PublishedWindow]| {
+            rendered(&policy.check_window_records(windows))
                 .iter()
                 .filter(|finding| finding.ends_with("shared-supply-unpartitioned"))
-                .count(),
-            2
-        );
+                .count()
+        };
+        // The second window's offering linkage is wrong on purpose in this
+        // fixture; only the supply finding is asserted here.
+        assert_eq!(shared_count(&windows), 2);
 
         // A whole-pool claim and an attributed subset still have independent
         // window ledgers, so the authored subset cannot make the overlap safe.
         windows[1].staffing.as_mut().unwrap().reserved_members = Some(1);
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert_eq!(
-            rendered
-                .iter()
-                .filter(|finding| finding.ends_with("shared-supply-unpartitioned"))
-                .count(),
-            2
-        );
+        assert_eq!(shared_count(&windows), 2);
 
         // Two attributed subsets are equally unenforceable: their claims lock
         // and consume separate window ids rather than a shared staffing slice.
         windows[0].staffing.as_mut().unwrap().reserved_members = Some(1);
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert_eq!(
-            rendered
-                .iter()
-                .filter(|finding| finding.ends_with("shared-supply-unpartitioned"))
-                .count(),
-            2
-        );
+        assert_eq!(shared_count(&windows), 2);
 
         // Disjoint windows may reuse the pool regardless of their advisory
         // attributed member counts.
@@ -1985,11 +2482,7 @@ windows:
             ..windows[1].clone()
         };
         windows[1] = disjoint;
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(!rendered
-            .iter()
-            .any(|f| f.ends_with("shared-supply-unpartitioned")));
+        assert_eq!(shared_count(&windows), 0);
     }
 
     /// AT-10, pure half: a normal reduction below standing commitments is
@@ -2273,135 +2766,127 @@ windows:
         );
     }
 
-    #[test]
-    fn scheduling_observer_hooks_accept_only_the_closed_runtime_contract() {
-        let mut policy = minimal_exact_time_policy();
-        policy.hooks = vec![serde_json::from_value(serde_json::json!({
-            "id": "appointment-observer",
-            "phase": "after",
-            "trigger": "appointment.confirmed",
-            "projection": [],
-            "handler": {"kind": "url", "destinationId": "appointment-events"},
-        }))
-        .expect("the shared declaration shape parses")];
-        assert!(policy.check().is_empty());
-
-        policy.hooks[0] = serde_json::from_value(serde_json::json!({
-            "id": "appointment-observer",
-            "phase": "after",
-            "trigger": "appointment.confirmed",
-            "projection": [],
-            "handler": {"kind": "wasm", "module": "observer.wasm", "abi": "vendor.hook/v9"},
-        }))
-        .expect("the declaration shape parses before semantic validation");
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"hooks[0].handler.abi: unsupported-hook-abi".to_owned()));
-
-        policy.hooks[0] = serde_json::from_value(serde_json::json!({
-            "id": "appointment-observer",
-            "phase": "before",
-            "trigger": "appointment.confirmed",
-            "projection": [],
-            "handler": {"kind": "url", "destinationId": "appointment-events"},
-        }))
-        .expect("the declaration shape parses before semantic validation");
-        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
-        assert!(rendered.contains(&"hooks[0].phase: unsupported-hook-phase".to_owned()));
-
-        policy.hooks[0] = serde_json::from_value(serde_json::json!({
-            "id": "appointment-observer",
-            "phase": "after",
-            "trigger": "appointment.confirmed",
-            "projection": [],
-            "handler": {"kind": "rhai", "script": "observer.rhai"},
-        }))
-        .expect("the declaration shape parses before semantic validation");
-        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
-        assert!(rendered.contains(&"hooks[0].handler.abi: unsupported-hook-abi".to_owned()));
-
-        policy.hooks[0] = serde_json::from_value(serde_json::json!({
-            "id": "appointment-observer",
-            "phase": "after",
-            "trigger": "appointment.confirmed",
-            "projection": [],
-            "handler": {"kind": "url", "destinationId": "https://receiver.example"},
-        }))
-        .expect("the declaration shape parses before product validation");
-        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
-        assert!(rendered
-            .contains(&"hooks[0].handler.destinationId: invalid-hook-destination".to_owned()));
-
-        policy.hooks[0] = serde_json::from_value(serde_json::json!({
-            "id": "appointment-observer",
-            "phase": "after",
-            "trigger": "appointment.confirmed",
-            "projection": [],
-            "handler": {"kind": "url", "destinationId": "appointment-events"},
-        }))
-        .expect("the shared declaration shape parses");
-        policy.hooks.push(policy.hooks[0].clone());
-        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
-        assert!(rendered.contains(&"hooks[1].id: duplicate-identifier".to_owned()));
-
-        for (member, value, expected) in [
-            (
-                "trigger",
-                serde_json::json!("hold.expired"),
-                "hooks[0].trigger: unsupported-hook-trigger",
-            ),
-            (
-                "when",
-                serde_json::json!({"state": "active"}),
-                "hooks[0].when: unsupported-hook-condition",
-            ),
-            (
-                "principal",
-                serde_json::json!("scheduling-hook"),
-                "hooks[0].principal: unsupported-hook-principal",
-            ),
-            (
-                "projection",
-                serde_json::json!(["actor"]),
-                "hooks[0].projection: unsupported-hook-projection",
-            ),
-        ] {
-            let mut declaration = serde_json::json!({
-                "id": "appointment-observer",
-                "phase": "after",
-                "trigger": "appointment.confirmed",
-                "projection": [],
-                "handler": {"kind": "url", "destinationId": "appointment-events"},
-            });
-            declaration[member] = value;
-            policy.hooks = vec![serde_json::from_value(declaration).expect("the shape parses")];
-            let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
-            assert!(rendered.contains(&expected.to_owned()), "{rendered:?}");
-        }
-
-        policy.hooks = vec![serde_json::from_value(serde_json::json!({
-            "id": "cancellation-observer",
-            "phase": "after",
-            "trigger": "appointment.cancelled",
-            "projection": ["reason"],
-            "handler": {"kind": "url", "destinationId": "appointment-events"},
-        }))
-        .expect("the shared declaration shape parses")];
-        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
-        assert!(rendered.contains(&"hooks[0].projection: unsupported-hook-projection".to_owned()));
+    fn with_hooks(hooks: &str) -> String {
+        format!("{MINIMAL_EXACT_TIME_PROJECT}hooks:\n{hooks}")
     }
 
+    const OBSERVER: &str = "  - id: appointment-observer
+    phase: after
+    trigger: appointment.confirmed
+    projection: []
+    handler:
+      type: url
+      destinationId: appointment-events
+";
+
+    /// SEC-17 / SEC-24: an observer hook runs after commit, follows one of
+    /// three appointment lifecycle triggers, receives only that trigger's
+    /// closed projection, and delivers to a URL destination the runtime
+    /// configuration binds. The reader refuses every other phase, trigger,
+    /// and handler, and any condition or principal, each at its position;
+    /// the semantic check refuses a projection field outside the closed set
+    /// and a repeated id.
+    #[test]
+    fn scheduling_observer_hooks_accept_only_the_closed_runtime_contract() {
+        let yaml = with_hooks(OBSERVER);
+        assert_eq!(refusals(&yaml), Vec::<String>::new());
+        let policy = decode(&yaml);
+        let declarations = policy.hook_declarations();
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0].phase, HookPhase::After);
+        assert_eq!(declarations[0].trigger, APPOINTMENT_CONFIRMED_TRIGGER);
+        assert!(declarations[0].when.is_none());
+        assert!(declarations[0].principal.is_none());
+        assert!(matches!(
+            &declarations[0].handler,
+            HookHandlerSource::Url { destination_id } if destination_id == "appointment-events"
+        ));
+
+        for (from, to, pointer) in [
+            ("phase: after", "phase: before", "/hooks/0/phase "),
+            (
+                "trigger: appointment.confirmed",
+                "trigger: hold.expired",
+                "/hooks/0/trigger ",
+            ),
+            (
+                "      type: url\n      destinationId: appointment-events\n",
+                "      type: wasm\n      module: observer.wasm\n      abi: vendor.hook/v9\n",
+                "/hooks/0/handler/type ",
+            ),
+            (
+                "      type: url\n      destinationId: appointment-events\n",
+                "      type: rhai\n      script: observer.rhai\n",
+                "/hooks/0/handler/type ",
+            ),
+            (
+                "destinationId: appointment-events",
+                "destinationId: https://receiver.example",
+                "/hooks/0/handler/destinationId ",
+            ),
+            (
+                "    projection: []\n",
+                "    projection: []\n    when:\n      state: active\n",
+                "/hooks/0/when config.unknown-key",
+            ),
+            (
+                "    projection: []\n",
+                "    projection: []\n    principal: scheduling-hook\n",
+                "/hooks/0/principal config.unknown-key",
+            ),
+            (
+                "projection: []",
+                "projection: [actor]",
+                "/hooks/0/projection/0 scheduling.project.unsupported-hook-projection",
+            ),
+        ] {
+            let refusals = refusals(&with_hooks(&OBSERVER.replace(from, to)));
+            assert!(
+                refusals.iter().any(|refusal| refusal.starts_with(pointer)),
+                "{pointer}: {refusals:?}"
+            );
+        }
+
+        let cancellation = OBSERVER
+            .replace("appointment.confirmed", "appointment.cancelled")
+            .replace("projection: []", "projection: [revision, reason]");
+        assert_eq!(
+            refusals(&with_hooks(&cancellation)),
+            ["/hooks/0/projection/1 scheduling.project.unsupported-hook-projection"]
+        );
+
+        assert_eq!(
+            refusals(&with_hooks(&format!("{OBSERVER}{OBSERVER}"))),
+            ["/hooks/1/id scheduling.project.duplicate-identifier"]
+        );
+
+        // A project built in code is held to the same destination grammar.
+        let mut policy = decode(&yaml);
+        policy.hooks[0].handler = ObserverHandler::Url {
+            destination_id: "https://receiver.example".to_owned(),
+        };
+        assert_eq!(
+            rendered(&policy.check()),
+            ["/hooks/0/handler/destinationId: scheduling.project.invalid-hook-destination"]
+        );
+    }
+
+    /// The member spellings Scheduling hooks once carried, a repeated key,
+    /// and a handler naming members of another handler type are refused by
+    /// the reader, never silently narrowed.
     #[test]
     fn legacy_duplicate_and_mismatched_hook_members_are_refused_by_the_shared_shape() {
-        let base =
-            serde_norway::to_string(&minimal_exact_time_policy()).expect("the fixture serializes");
         for hooks in [
-            "hooks:\n- id: observer\n  abi: registry.scheduling-hook/v1\n  because: legacy",
-            "hooks:\n- id: observer\n  phase: after\n  phase: before\n  trigger: appointment.confirmed\n  projection: []\n  handler:\n    kind: url\n    destinationId: appointment-events",
-            "hooks:\n- id: observer\n  phase: after\n  trigger: appointment.confirmed\n  projection: []\n  handler:\n    kind: wasm\n    script: observer.rhai\n    abi: registry.hook-handler/v1",
+            "  - id: observer\n    abi: registry.scheduling-hook/v1\n    because: legacy\n",
+            "  - id: observer\n    phase: after\n    phase: before\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      destinationId: appointment-events\n",
+            "  - id: observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      type: url\n      script: observer.rhai\n      abi: registry.hook-handler/v1\n",
+            "  - id: observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      kind: url\n      destinationId: appointment-events\n",
         ] {
-            let yaml = base.replace("hooks: []", hooks);
-            assert!(parse_policy_yaml(&yaml).is_err(), "accepted:\n{hooks}");
+            let refusals = refusals(&with_hooks(hooks));
+            assert!(
+                refusals.iter().any(|refusal| refusal.starts_with("/hooks/0")),
+                "accepted:\n{hooks}\n{refusals:?}"
+            );
         }
     }
 
@@ -2412,16 +2897,19 @@ windows:
         assert!(policy.check_window_records(&windows).is_empty());
 
         windows[0].leftover = Some(LeftoverCapacityPolicy::BecomesWalkIn);
-        let findings = policy.check_window_records(&windows);
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"windows[0].leftover: leftover-unsupported".to_owned()));
+        assert_eq!(
+            rendered(&policy.check_window_records(&windows)),
+            ["/windows/0/leftover: scheduling.records.leftover-unsupported"]
+        );
     }
 
     #[test]
     fn identifiers_dates_and_times_follow_their_grammars() {
         assert!(valid_identifier("north-counter-2"));
+        assert!(valid_identifier("north_counter"));
         assert!(!valid_identifier("North"));
         assert!(!valid_identifier("north counter"));
+        assert!(!valid_identifier("_north"));
         assert!(!valid_identifier(""));
         assert!(!valid_identifier(&"x".repeat(65)));
         assert!(valid_hh_mm("09:00"));
@@ -2436,64 +2924,85 @@ windows:
     /// project: no addition turns `9:00 AM` into a clock, only a correction.
     /// The reason says so, and it names the field that is actually malformed,
     /// so adopter tooling can refuse the document instead of reporting it as
-    /// incomplete authoring. A well-formed value that breaks its range stays
-    /// an invalid bound: the text parses, the range does not hold.
+    /// incomplete authoring. A well-formed value that ends before it starts
+    /// is an inverted range: the text parses, the range does not hold.
     #[test]
     fn a_clock_or_date_outside_its_grammar_is_malformed_rather_than_unbounded() {
-        let rendered = |policy: &SchedulingPolicy| -> Vec<String> {
-            policy.check().iter().map(ToString::to_string).collect()
-        };
-
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].start_time = "9:00 AM".to_owned();
         assert_eq!(
-            rendered(&policy),
-            ["openings[0].startTime: malformed-value"]
+            rendered(&policy.check()),
+            ["/openings/0/startTime: scheduling.project.malformed-value"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].end_time = "12.30".to_owned();
-        assert_eq!(rendered(&policy), ["openings[0].endTime: malformed-value"]);
+        assert_eq!(
+            rendered(&policy.check()),
+            ["/openings/0/endTime: scheduling.project.malformed-value"]
+        );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].effective_from = "01/10/2026".to_owned();
         assert_eq!(
-            rendered(&policy),
-            ["openings[0].effectiveFrom: malformed-value"]
+            rendered(&policy.check()),
+            ["/openings/0/effectiveFrom: scheduling.project.malformed-value"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.holiday_sets[0].dates[0] = "25 December 2026".to_owned();
         assert_eq!(
-            rendered(&policy),
-            ["holidaySets[0].dates[0]: malformed-value"]
+            rendered(&policy.check()),
+            ["/holidaySets/0/dates/0: scheduling.project.malformed-value"]
         );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].end_time = "08:00".to_owned();
-        assert_eq!(rendered(&policy), ["openings[0].endTime: invalid-bound"]);
+        assert_eq!(
+            rendered(&policy.check()),
+            ["/openings/0/endTime: scheduling.project.inverted-range"]
+        );
 
         let mut policy = minimal_exact_time_policy();
         policy.openings[0].effective_until = "2026-09-30".to_owned();
         assert_eq!(
-            rendered(&policy),
-            ["openings[0].effectiveUntil: invalid-bound"]
+            rendered(&policy.check()),
+            ["/openings/0/effectiveUntil: scheduling.project.inverted-range"]
+        );
+    }
+
+    #[test]
+    fn a_lead_time_past_the_horizon_is_refused_at_the_lead_time() {
+        let mut policy = minimal_exact_time_policy();
+        policy.offerings[0]
+            .exact_time
+            .as_mut()
+            .unwrap()
+            .horizon_days = 1;
+        policy.offerings[0]
+            .exact_time
+            .as_mut()
+            .unwrap()
+            .lead_time_minutes = 1441;
+        assert_eq!(
+            rendered(&policy.check()),
+            ["/offerings/0/exactTime/leadTimeMinutes: scheduling.project.lead-time-beyond-horizon"]
         );
     }
 
     #[test]
     fn weekdays_and_channels_serialize_in_their_published_spelling() {
         assert_eq!(
-            serde_norway::to_string(&PolicyWeekday::Wed).unwrap(),
-            "wed\n"
+            serde_json::to_value(PolicyWeekday::Wed).unwrap(),
+            serde_json::json!("wed")
         );
         assert_eq!(
-            serde_norway::from_str::<PolicyWeekday>("wed").unwrap(),
+            crate::typed::decode_fragment::<PolicyWeekday>("wed").unwrap(),
             PolicyWeekday::Wed
         );
         assert_eq!(Channel::WalkIn.as_str(), "walk-in");
         assert_eq!(
-            serde_norway::from_str::<Channel>("walk-in").unwrap(),
+            crate::typed::decode_fragment::<Channel>("walk-in").unwrap(),
             Channel::WalkIn
         );
         assert_eq!(PolicyWeekday::Sun.to_chrono(), chrono::Weekday::Sun);
@@ -2513,23 +3022,48 @@ windows:
 
     #[test]
     fn unknown_policy_fields_are_refused() {
-        let yaml = r#"
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
-  id: broken
-  version: 1
-services: []
-offerings: []
-holidaySets: []
-openings: []
-holdPolicy:
-  ttlMinutes: 5
-  maxPerCaller: 3
-  because: Holds are short.
-surprise: true
-"#;
-        assert!(parse_policy_yaml(yaml).is_err());
+        let yaml = format!("{MINIMAL_EXACT_TIME_PROJECT}surprise: true\nanother: 1\n");
+        let refusals = refusals(&yaml);
+        assert!(
+            refusals.contains(&"/surprise config.unknown-key".to_owned()),
+            "{refusals:?}"
+        );
+        assert!(
+            refusals.contains(&"/another config.unknown-key".to_owned()),
+            "{refusals:?}"
+        );
+    }
+
+    /// Every integer member reads within its real bound, refused where it
+    /// stands without repeating the value.
+    #[test]
+    fn integer_members_are_bounded_by_the_reader() {
+        for (from, to, pointer) in [
+            (
+                "ttlMinutes: 5",
+                "ttlMinutes: 1441",
+                "/holdPolicy/ttlMinutes",
+            ),
+            (
+                "maximumPerCaller: 3",
+                "maximumPerCaller: 0",
+                "/holdPolicy/maximumPerCaller",
+            ),
+            (
+                "durationMinutes: 30",
+                "durationMinutes: 0",
+                "/offerings/0/exactTime/durationMinutes",
+            ),
+            (
+                "horizonDays: 60",
+                "horizonDays: 3651",
+                "/offerings/0/exactTime/horizonDays",
+            ),
+            ("revision: 1", "revision: 0", "/holidaySets/0/revision"),
+        ] {
+            let refusals = refusals(&MINIMAL_EXACT_TIME_PROJECT.replace(from, to));
+            assert_eq!(refusals, [format!("{pointer} config.out-of-range")]);
+        }
     }
 
     #[test]
@@ -2541,9 +3075,9 @@ surprise: true
                 label: "Filler service".to_owned(),
             })
             .collect();
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"services: invalid-bound".to_owned()));
+        let rendered_findings = rendered(&policy.check());
+        assert!(rendered_findings
+            .contains(&"/services: scheduling.project.too-many-entries".to_owned()));
 
         let at_bound = minimal_exact_time_policy();
         assert!(at_bound.check().is_empty());
@@ -2562,9 +3096,13 @@ surprise: true
         policy.offerings[0].prerequisites = (0..=MAXIMUM_COLLECTION_ENTRIES)
             .map(|index| format!("urn:evidence:residency-{index}"))
             .collect();
-        let rendered: Vec<String> = policy.check().iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"offerings[0].requiresCapabilities: invalid-bound".to_owned()));
-        assert!(rendered.contains(&"offerings[0].prerequisites: invalid-bound".to_owned()));
+        let rendered_findings = rendered(&policy.check());
+        assert!(rendered_findings.contains(
+            &"/offerings/0/requiresCapabilities: scheduling.project.too-many-entries".to_owned()
+        ));
+        assert!(rendered_findings.contains(
+            &"/offerings/0/prerequisites: scheduling.project.too-many-entries".to_owned()
+        ));
 
         let mut at_bound = minimal_exact_time_policy();
         at_bound.offerings[0].requires_capabilities = (1..=MAXIMUM_COLLECTION_ENTRIES)

@@ -1,0 +1,782 @@
+{
+  "$defs": {
+    "AboveHighestBand": {
+      "description": "What a party above the highest band costs, or that it is refused, chosen\nby its `type` member.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "refuse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "units",
+              "type": "string"
+            },
+            "units": {
+              "format": "uint32",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "units"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "BandedInput": {
+      "description": "The closed input set a banded table may read. Tier 1 reads exactly one.",
+      "enum": [
+        "service-recipient-count"
+      ],
+      "type": "string"
+    },
+    "CalendarExceptionRecord": {
+      "additionalProperties": false,
+      "description": "An owned dated exception over local wall-clock time, the record form of\n`registry_platform_calendar::CalendarException`. An exception is scoped to\none location: a closure at one counter never closes another.",
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "date": {
+          "description": "The local date, `YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "endTime": {
+          "description": "The local end time, `HH:MM`.",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ExceptionRecordKind"
+        },
+        "location": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The location this exception applies to."
+        },
+        "reopens": {
+          "type": "string"
+        },
+        "startTime": {
+          "description": "The local start time, `HH:MM`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "location",
+        "kind",
+        "date",
+        "startTime",
+        "endTime"
+      ],
+      "type": "object"
+    },
+    "Channel": {
+      "description": "The authenticated channel a subquota limits.",
+      "enum": [
+        "public",
+        "assisted",
+        "urgent",
+        "walk-in"
+      ],
+      "type": "string"
+    },
+    "ExceptionRecordKind": {
+      "description": "The layer an exception occupies, mirrored for records.",
+      "enum": [
+        "closure",
+        "opening"
+      ],
+      "type": "string"
+    },
+    "FixtureAdmissionRequest": {
+      "additionalProperties": false,
+      "description": "One replayed request as an author writes it.\n\nThis is the authoring form of an admission request, not the wire form. It\ncarries everything the wire request carries plus `rescheduleOf`, the claim\nthis case replaces: a fixture legitimately says \"this case reschedules that\none\", where an HTTP caller may not, because on the wire the exclusion is\nthe runtime's to supply from inside its own transaction.",
+      "properties": {
+        "capabilities": {
+          "description": "The capabilities the party holds. A party holding none omits the\nmember.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 256,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "channel": {
+          "description": "The channel the caller books through. It is free text so a fixture\ncan exercise the refusal of a channel outside the vocabulary.",
+          "type": "string"
+        },
+        "duplicateKey": {
+          "type": "string"
+        },
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "party": {
+          "$ref": "#/$defs/FixtureParty"
+        },
+        "policyRevision": {
+          "description": "The policy revision the caller resolved the offering under. Replay\nruns the policy at revision 1.",
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "prerequisites": {
+          "description": "The prerequisites the party holds. A party holding none omits the\nmember.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "rescheduleOf": {
+          "description": "The claim this case replaces. Its allocation is left out of this\ncase's conflict checks and removed when the case is admitted, so a\nreschedule never competes with what it replaces. A claim an earlier\ncase booked is `case:` followed by that case's name.",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "windowRevision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "offering",
+        "start",
+        "party",
+        "policyRevision"
+      ],
+      "type": "object"
+    },
+    "FixtureCase": {
+      "additionalProperties": false,
+      "description": "One replayed request and its expectation.",
+      "properties": {
+        "expect": {
+          "$ref": "#/$defs/FixtureExpectation"
+        },
+        "name": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The case name, which also identifies the claim an admitted case\nrecords."
+        },
+        "request": {
+          "$ref": "#/$defs/FixtureAdmissionRequest"
+        }
+      },
+      "required": [
+        "name",
+        "request",
+        "expect"
+      ],
+      "type": "object"
+    },
+    "FixtureExpectation": {
+      "description": "One case's expected outcome, chosen by its `type` member.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "resource": {
+              "$ref": "#/$defs/LocalId",
+              "description": "The pool member an exact-time case lands on. Omit it to accept\nany member."
+            },
+            "type": {
+              "const": "admitted",
+              "type": "string"
+            },
+            "units": {
+              "format": "uint32",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "units"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "description": "A public problem code, exactly as a caller would receive it.",
+              "enum": [
+                "authentication.refused",
+                "booking.duplicate-active",
+                "cancellation.cutoff-passed",
+                "capability.unmatched",
+                "capacity.exhausted",
+                "cursor.expired",
+                "cursor.invalid",
+                "eligibility.unavailable",
+                "hold.expired",
+                "hold.released",
+                "hook.unavailable",
+                "horizon.outside",
+                "idempotency.expired",
+                "idempotency.key-reused",
+                "location.closed",
+                "operation.not-authorized",
+                "party.capacity-inadequate",
+                "policy.changed",
+                "precondition.failed",
+                "precondition.required",
+                "prerequisite.missing",
+                "profile.not-authorized",
+                "request.body-too-large",
+                "request.invalid",
+                "request.method-not-allowed",
+                "request.not-found",
+                "request.unprocessable",
+                "request.unsupported-media-type",
+                "revision.mismatch",
+                "schedule.unpublished",
+                "service.unavailable"
+              ],
+              "type": "string"
+            },
+            "type": {
+              "const": "refused",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FixtureParty": {
+      "additionalProperties": false,
+      "description": "The party one replayed case requests for. Zero is allowed in both counts\nso a fixture can exercise the refusal of a party the offering cannot\nserve.",
+      "properties": {
+        "attendees": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recipients": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recipients",
+        "attendees"
+      ],
+      "type": "object"
+    },
+    "LedgerClaim": {
+      "additionalProperties": false,
+      "description": "One entry in the authoritative supply ledger.\n\n`start` and `end` are the occupied interval including any setup and cleanup\nbuffers, so two claims that merely touch at their displayed times still\nconflict when their buffers overlap.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "The authenticated channel the claim was allocated in, when the supply\ncarries channel subquotas."
+        },
+        "duplicateKey": {
+          "description": "The duplicate-active key this claim holds, when the offering defines\none.",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "expiresAt": {
+          "description": "Hold expiry. An expired hold stops consuming capacity at this instant\neven when the cleanup worker is delayed.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "kind": {
+          "$ref": "#/$defs/LedgerKind"
+        },
+        "offering": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The offering whose duplicate-active policy owns this claim."
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "supplyId": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The pool member resource (exact time) or the window (arrival) this\nclaim occupies."
+        },
+        "units": {
+          "description": "Recipient units consumed. Exact-time claims on one member consume one.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "offering",
+        "supplyId",
+        "kind",
+        "start",
+        "end",
+        "units"
+      ],
+      "type": "object"
+    },
+    "LedgerKind": {
+      "description": "What a ledger entry allocates supply for.",
+      "oneOf": [
+        {
+          "const": "booking",
+          "description": "A confirmed booking.",
+          "type": "string"
+        },
+        {
+          "const": "hold",
+          "description": "A temporary hold.",
+          "type": "string"
+        }
+      ]
+    },
+    "LeftoverCapacityPolicy": {
+      "description": "What a window says happens to its leftover capacity when it closes. The\ndeclaration names an intent; this version of the runtime reads none of\nit, so `check` refuses a window that declares one rather than accept a\npromise nothing keeps. There is no default and no borrowing from the\nnext window.",
+      "oneOf": [
+        {
+          "const": "expires-unused",
+          "description": "Leftover units would lapse with the window.",
+          "type": "string"
+        },
+        {
+          "const": "becomes-walk-in",
+          "description": "Leftover units would become available to the walk-in channel.",
+          "type": "string"
+        }
+      ]
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "LocationRecord": {
+      "additionalProperties": false,
+      "description": "A location record: the layer of configuration an operator maintains at\nruntime, not inside the authored policy.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "timezone": {
+          "description": "A named IANA timezone such as `Asia/Bangkok`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "timezone"
+      ],
+      "type": "object"
+    },
+    "PoolMember": {
+      "additionalProperties": false,
+      "description": "One interchangeable member of a resource pool.\n\n`available` carries no reason. Why a member is unavailable is private staff\ninformation; the public answer to a caller is that capacity is exhausted.",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "capabilities": {
+          "description": "The capabilities this member carries. Omitted or `[]`, it carries\nnone and serves only offerings that require none.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "maxItems": 256,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "resourceId": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "resourceId",
+        "available"
+      ],
+      "type": "object"
+    },
+    "PublishedWindow": {
+      "additionalProperties": false,
+      "description": "A published arrival window with its capacity.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "leftover": {
+          "$ref": "#/$defs/LeftoverCapacityPolicy",
+          "description": "Declared intent for the window's leftover capacity. Nothing reads it\nin this version, so a declaration is refused at authoring; the field\nstays so a refusal can name it."
+        },
+        "location": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "revision": {
+          "format": "uint64",
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "staffing": {
+          "$ref": "#/$defs/WindowStaffing"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "subquotas": {
+          "description": "Per-channel ceilings within `units`. A window that limits no channel\nomits the member.",
+          "items": {
+            "$ref": "#/$defs/WindowSubquota"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array"
+        },
+        "units": {
+          "description": "Published capacity in the unit basis the units policy defines.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "unitsPolicy": {
+          "$ref": "#/$defs/RequiredUnitsPolicy"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "offering",
+        "location",
+        "start",
+        "end",
+        "units",
+        "unitsPolicy",
+        "because"
+      ],
+      "type": "object"
+    },
+    "RequiredUnitsPolicy": {
+      "description": "How an offering converts a party into consumed recipient units, chosen by\nits `type` member.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Every party costs the same fixed units.",
+          "properties": {
+            "because": {
+              "type": "string"
+            },
+            "type": {
+              "const": "fixed",
+              "type": "string"
+            },
+            "units": {
+              "format": "uint32",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "units",
+            "because"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A party costs its recipient count times `per_recipient`.",
+          "properties": {
+            "because": {
+              "type": "string"
+            },
+            "perRecipient": {
+              "format": "uint32",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "per-recipient",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "perRecipient",
+            "because"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A party costs whatever band its recipient count falls in.",
+          "properties": {
+            "aboveHighestBand": {
+              "$ref": "#/$defs/AboveHighestBand"
+            },
+            "bands": {
+              "items": {
+                "$ref": "#/$defs/UnitBand"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "because": {
+              "type": "string"
+            },
+            "input": {
+              "$ref": "#/$defs/BandedInput"
+            },
+            "type": {
+              "const": "banded-table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "bands",
+            "aboveHighestBand",
+            "because"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ResourcePool": {
+      "additionalProperties": false,
+      "description": "A pool of interchangeable resources backing exact-time offerings. A pool is\nits concrete members, never an independent counter.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/PoolMember"
+          },
+          "maxItems": 256,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "members"
+      ],
+      "type": "object"
+    },
+    "SchedulingFacts": {
+      "additionalProperties": false,
+      "description": "The environment records an admission runs against: locations, pools,\npublished windows, and dated exceptions. In production these are runtime records; in an offline\nreplay they are fixture facts. The evaluator never reads or mutates them\ndirectly; its caller resolves them into the context the evaluator takes.\nA fixture may omit an empty collection; replay fails fast when a case\nreferences a record the facts do not carry.",
+      "properties": {
+        "exceptions": {
+          "items": {
+            "$ref": "#/$defs/CalendarExceptionRecord"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/LocationRecord"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "pools": {
+          "items": {
+            "$ref": "#/$defs/ResourcePool"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "windows": {
+          "description": "Published arrival-window supply owned by this deployment's operator\nrecords. The policy references these records by identifier.",
+          "items": {
+            "$ref": "#/$defs/PublishedWindow"
+          },
+          "maxItems": 256,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "UnitBand": {
+      "additionalProperties": false,
+      "description": "One band of a banded units table: parties up to `up_to` recipients cost\n`units`.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "units": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "upTo": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "upTo",
+        "units",
+        "because"
+      ],
+      "type": "object"
+    },
+    "WindowStaffing": {
+      "additionalProperties": false,
+      "description": "The staffing block a window's supply is carved from, when the window is\nbacked by the same concrete resources an exact-time pool sells.\n\nA pool that backs a window may not also back an exact-time offering: a\nwindow claim occupies the window's own supply while an exact-time claim\noccupies the member it books, so the two modes would double-book the same\nstaffing in a ledger that cannot see the conflict. That mix is refused at\npublication whatever this block declares.\n\n`reserved_members` records how many pool members the window's supply is\nintended to use. The current ledger does not enforce that partition between\nwindows, so two windows backed by the same pool may not overlap, whatever\neither staffing block declares. Disjoint windows may reuse the pool.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "pool": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "reservedMembers": {
+          "format": "uint32",
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pool",
+        "because"
+      ],
+      "type": "object"
+    },
+    "WindowSubquota": {
+      "additionalProperties": false,
+      "description": "A per-channel ceiling within a window's published capacity.",
+      "properties": {
+        "because": {
+          "type": "string"
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "units": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "channel",
+        "units",
+        "because"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An offline replay fixture: synthetic facts, a starting ledger, and cases.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/scheduling/fixture/v1alpha1",
+      "type": "string"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/FixtureCase"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "facts": {
+      "$ref": "#/$defs/SchedulingFacts"
+    },
+    "initial": {
+      "description": "The claims the ledger holds before the first case. A fixture that\nstarts from an empty ledger omits the member.",
+      "items": {
+        "$ref": "#/$defs/LedgerClaim"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "kind": {
+      "const": "SchedulingFixture",
+      "type": "string"
+    },
+    "name": {
+      "$ref": "#/$defs/LocalId"
+    },
+    "now": {
+      "description": "The single observed instant every case runs at.",
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "name",
+    "now",
+    "facts",
+    "cases"
+  ],
+  "title": "Registry Scheduling fixture",
+  "type": "object"
+}

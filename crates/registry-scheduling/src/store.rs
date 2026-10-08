@@ -3081,7 +3081,7 @@ async fn mint_reminders(
     now: DateTime<Utc>,
 ) -> Result<(), StoreError> {
     for reminder in &offering.reminders {
-        let minutes = reminder.minutes_before;
+        let minutes = reminder.offset_minutes;
         let Some(due_at) = claim
             .displayed_start
             .checked_sub_signed(TimeDelta::minutes(i64::from(minutes)))

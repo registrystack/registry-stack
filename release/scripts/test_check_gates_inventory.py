@@ -948,6 +948,11 @@ class GateInventoryTest(unittest.TestCase):
                 "Scheduling contract reproduction",
             ),
             (
+                "run: products/scheduling/scripts/check-schemas.sh",
+                "run: true # Scheduling schema drift disabled",
+                "Scheduling generated schema drift check",
+            ),
+            (
                 "scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}",
                 "scheduling_postgres: 'false'",
                 "Scheduling PostgreSQL path filter",

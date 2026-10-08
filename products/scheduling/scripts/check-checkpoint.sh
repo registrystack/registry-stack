@@ -19,11 +19,10 @@ python3 products/scheduling/scripts/check_database_test_isolation.py
 python3 -m unittest discover -s products/scheduling/scripts -p 'test_*.py'
 python3 products/scheduling/scripts/validate_contracts.py
 
-# The committed runtime configuration schema is reproduced by its generator,
-# never hand-edited; the drift test runs only under the schema feature, so
-# the checkpoint is the gate that runs it.
-CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
-  cargo test --locked --quiet -p registry-scheduling --features schema
+# The committed configuration schemas are reproduced by their generators,
+# never hand-edited; the drift tests run only under the schema feature, so
+# the checkpoint runs them too.
+products/scheduling/scripts/check-schemas.sh
 
 if [ ! -x "$schedulingctl_bin" ]; then
   echo "build schedulingctl first or set SCHEDULINGCTL_BIN" >&2
@@ -51,27 +50,45 @@ done
 
 # The journeys must answer what they claim to answer, not merely exit 0.
 check_output=$("$schedulingctl_bin" check "$work/standalone-exact-time")
-echo "$check_output" | grep -q '^status: complete'
+echo "$check_output" | grep -q '^Authoring check passed.$'
+echo "$check_output" | grep -q '^0 errors, 0 warnings in 4 files$'
 test_output=$("$schedulingctl_bin" test "$work/standalone-exact-time")
 echo "$test_output" | grep -q '^Offline synthetic fixtures passed.$'
 echo "$test_output" | grep -q '^proofBoundary: offline_synthetic$'
 
-# A project that carries findings reports them: check exits 0 with findings
-# by default, refuses under --deny-findings, and a broken fixture proof is
-# never green. sed writes beside the file and mv replaces it, because sed -i
-# spells differ between the development hosts and CI.
+# A refused value is an error at its position: check exits 1 and names the
+# file, line, and pointer on stderr, and the JSON envelope is a domain
+# refusal. A broken fixture proof is never green. sed writes beside the file
+# and mv replaces it, because sed -i spells differ between the development
+# hosts and CI.
 broken="$work/broken"
 "$schedulingctl_bin" init "$broken" --template standalone-exact-time >/dev/null
 sed 's/ttlMinutes: [0-9][0-9]*/ttlMinutes: 0/' \
   "$broken/scheduling.yaml" >"$broken/scheduling.yaml.next"
 mv "$broken/scheduling.yaml.next" "$broken/scheduling.yaml"
-findings=$("$schedulingctl_bin" check "$broken")
-echo "$findings" | grep -q '^status: incomplete$'
-echo "$findings" | grep -q '^finding '
-if "$schedulingctl_bin" check "$broken" --deny-findings >/dev/null 2>&1; then
-  echo 'check --deny-findings accepted a finding-carrying project' >&2
+status=0
+refusal=$("$schedulingctl_bin" check "$broken" 2>&1 >/dev/null) || status=$?
+if [ "$status" -ne 1 ]; then
+  echo "check exited $status on an out-of-range value instead of 1" >&2
   exit 1
 fi
+echo "$refusal" | grep -q '^error\[config.out-of-range\] .*/scheduling.yaml:[0-9]*:[0-9]* /holdPolicy/ttlMinutes$'
+status=0
+"$schedulingctl_bin" check "$broken" --format json >"$work/refusal.json" 2>/dev/null || status=$?
+if [ "$status" -ne 1 ]; then
+  echo "check --format json exited $status on an out-of-range value instead of 1" >&2
+  exit 1
+fi
+python3 - "$work/refusal.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    report = json.load(handle)
+assert report["ok"] is False, report["status"]
+assert report["status"] == "domain-refusal", report["status"]
+assert [d["path"] for d in report["diagnostics"]] == ["/holdPolicy/ttlMinutes"]
+PY
 sed 's/offering: registry-update-30/offering: no-such-offering/' \
   "$broken/fixtures/counter-stations.yaml" >"$broken/fixtures/counter-stations.yaml.next"
 mv "$broken/fixtures/counter-stations.yaml.next" "$broken/fixtures/counter-stations.yaml"
@@ -97,13 +114,13 @@ path = Path(sys.argv[1])
 document = yaml.safe_load(path.read_text(encoding="utf-8"))
 for window in document["windows"]:
     window["unitsPolicy"] = {
-        "kind": "bandedTable",
-        "input": "serviceRecipientCount",
+        "type": "banded-table",
+        "input": "service-recipient-count",
         "bands": [
             {"upTo": 2, "units": 1, "because": "One unit for one or two recipients."},
             {"upTo": 3, "units": 2, "because": "Two units for three recipients."},
         ],
-        "aboveHighestBand": {"policy": "refuse"},
+        "aboveHighestBand": {"type": "refuse"},
         "because": "Household size decides the serving slots.",
     }
 path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")

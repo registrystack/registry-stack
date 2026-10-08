@@ -2072,25 +2072,30 @@ formats:
     stability: experimental
     topLevel: project
     current:
-      apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-      kind: SchedulingPolicyPackage
+      apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+      kind: SchedulingProject
       checkedBy:
         file: crates/registry-scheduling-core/src/naming.rs
         symbol: SCHEDULING_POLICY_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
       kind: SchedulingProject
-    schema: none
+    schema:
+      path: products/scheduling/generated/project/project.schema.json
+      id: https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-scheduling-core --features schema --example authoring-schemas -- --output products/scheduling/generated
+      driftCheck: crates/registry-scheduling-core/src/schema.rs
     reader:
       crate: registry-scheduling-core
       file: crates/registry-scheduling-core/src/policy.rs
-      function: parse_policy_yaml
+      function: read
       type: SchedulingPolicy
     check: schedulingctl check {project}
     example: products/scheduling/examples/standalone-exact-time/scheduling.yaml
     conformance:
-      requiredText: /scheduling/id
-      optionalText: /offerings/0/because
+      requiredText: /project/id
+      optionalText: /offerings/0/duplicateActiveKey
       integer: /offerings/0/exactTime/durationMinutes
       boolean: none
       idList: /services
@@ -2106,22 +2111,29 @@ formats:
     audience: authored
     stability: experimental
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+      kind: SchedulingRecords
+      checkedBy:
+        file: crates/registry-scheduling-core/src/naming.rs
+        symbol: SCHEDULING_RECORDS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
       kind: SchedulingRecords
-    schema: none
+    schema:
+      path: products/scheduling/generated/records/records.schema.json
+      id: https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-scheduling-core --features schema --example authoring-schemas -- --output products/scheduling/generated
+      driftCheck: crates/registry-scheduling-core/src/schema.rs
     reader:
-      crate: registry-schedulingctl
-      file: crates/registry-schedulingctl/src/records.rs
-      function: parse_records
-      type: SchedulingFacts
+      crate: registry-scheduling-core
+      file: crates/registry-scheduling-core/src/model.rs
+      function: read
+      type: SchedulingRecords
     check: schedulingctl check {project}
     example: products/scheduling/examples/standalone-exact-time/records.yaml
     conformance:
-      requiredText: /locations/0/id
+      requiredText: none
       optionalText: none
       integer: none
       boolean: /pools/0/members/0/available
@@ -2132,12 +2144,12 @@ formats:
   - id: scheduling/fixture
     product: scheduling
     title: Scheduling fixture
-    files: [fixtures/*.yaml]
+    files: [fixtures/*.yaml, fixtures/*.yml]
     syntax: yaml
     audience: authored
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+      apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
       kind: SchedulingFixture
       checkedBy:
         file: crates/registry-scheduling-core/src/naming.rs
@@ -2145,18 +2157,23 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
       kind: SchedulingFixture
-    schema: none
+    schema:
+      path: products/scheduling/generated/fixture/fixture.schema.json
+      id: https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-scheduling-core --features schema --example authoring-schemas -- --output products/scheduling/generated
+      driftCheck: crates/registry-scheduling-core/src/schema.rs
     reader:
-      crate: registry-schedulingctl
-      file: crates/registry-schedulingctl/src/project.rs
-      function: load_fixture
+      crate: registry-scheduling-core
+      file: crates/registry-scheduling-core/src/fixture.rs
+      function: read
       type: SchedulingFixture
-    check: schedulingctl test {project}
+    check: schedulingctl check {project}
     example: products/scheduling/examples/standalone-arrival-window/fixtures/household-afternoon.yaml
     conformance:
-      requiredText: none
+      requiredText: /name
       optionalText: none
-      integer: none
+      integer: /facts/windows/0/units
       boolean: none
       idList: /facts/locations
     securityMembers: []
@@ -2169,7 +2186,7 @@ formats:
     audience: operator
     stability: experimental
     current:
-      apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1
       kind: SchedulingRuntimeConfig
       checkedBy:
         file: crates/registry-scheduling-core/src/naming.rs
@@ -2188,12 +2205,12 @@ formats:
       file: crates/registry-scheduling/src/config.rs
       function: load
       type: RuntimeConfig
-    check: none
+    check: schedulingctl check {project} --runtime-config {file}
     example: products/scheduling/examples/standalone-exact-time/runtime.example.yaml
     conformance:
       requiredText: /authentication/oidc/audience
       optionalText: /audit/path
-      integer: /retention/hookPayloadDays
+      integer: /retention/hookPayloadRetentionDays
       boolean: none
     securityMembers:
       - pointer: /listener/bind
@@ -2213,9 +2230,11 @@ formats:
     audience: generated
     stability: experimental
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/scheduling/ctl-report/v1alpha1
+      kind: SchedulingCtlReport
+      checkedBy:
+        file: crates/registry-scheduling-core/src/naming.rs
+        symbol: SCHEDULING_CTL_REPORT_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/scheduling/ctl-report/v1alpha1
       kind: SchedulingCtlReport
@@ -2225,7 +2244,7 @@ formats:
       file: crates/registry-schedulingctl/src/report.rs
       symbol: write
     check: none
-    example: none
+    example: products/scheduling/examples/formats/ctl-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []

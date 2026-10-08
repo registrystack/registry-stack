@@ -12,7 +12,7 @@ export const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
 const PRODUCT_MARKERS = [
   ['registry.yaml', 'kind', 'RegistryProject', 'apiVersion', 'registry.registrystack.org/v1alpha1', true],
   ['casework.yaml', 'kind', 'CaseworkProject', 'apiVersion', 'registry.registrystack.org/casework/'],
-  ['scheduling.yaml', 'kind', 'SchedulingPolicyPackage', 'apiVersion', 'registry.registrystack.org/scheduling-policy-package/'],
+  ['scheduling.yaml', 'kind', 'SchedulingProject', 'apiVersion', 'id.registrystack.org/formats/scheduling/project/'],
   ['messaging.yaml', 'kind', 'MessagingPackage', 'apiVersion', 'registry.registrystack.org/messaging-package/'],
   ['origins.yaml', '', '', 'schemaVersion', 'registry-discovery/origins/'],
   ['manifest.yaml', 'kind', 'RenderBundle', 'apiVersion', 'id.registrystack.org/formats/render/bundle/'],

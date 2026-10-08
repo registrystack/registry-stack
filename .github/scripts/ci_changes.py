@@ -1248,6 +1248,9 @@ def classify(
                 "products/breg/generated/runtime/",
                 "products/casework/generated/runtime/",
                 "products/scheduling/generated/runtime/",
+                "products/scheduling/generated/project/",
+                "products/scheduling/generated/records/",
+                "products/scheduling/generated/fixture/",
                 "products/messaging/generated/runtime/",
                 "products/discovery/schemas/",
             )

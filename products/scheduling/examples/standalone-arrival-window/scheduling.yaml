@@ -1,8 +1,9 @@
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: household-days
-  version: 3
+  version: "3"
 services:
   - id: household-day
     label: Household registration day
@@ -18,8 +19,6 @@ offerings:
       leadTimeMinutes: 60
       horizonDays: 45
     cancellationCutoffMinutes: 1440
-    requiresCapabilities: []
-    prerequisites: []
   - id: household-afternoon
     service: household-day
     label: Afternoon household block
@@ -31,13 +30,10 @@ offerings:
       leadTimeMinutes: 60
       horizonDays: 45
     cancellationCutoffMinutes: 1440
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry office.
-    dates: []
 openings:
   - id: hall-hours
     location: civic-hall
@@ -57,7 +53,8 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall reopens on Saturday afternoons for banded household visits.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 10
-  maxPerCaller: 2
+  maximumPerCaller: 2
   because: Households need a few minutes to gather documents.

@@ -24,11 +24,11 @@ use uuid::Uuid;
 /// The advisory lock every apply takes for its transaction.
 const MIGRATION_LOCK_KEY: i64 = 0x7363_6865_6475_6c65;
 
-const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+const POLICY: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: registry-updates
-  version: 1
+  version: "1"
 services:
   - id: registry-update
     label: Registry record update
@@ -47,15 +47,12 @@ offerings:
       horizonDays: 60
       pool: update-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry offices.
-    dates: []
 openings:
   - id: bangkok-counter-hours
     location: bangkok-counter
@@ -66,9 +63,10 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 5
-  maxPerCaller: 3
+  maximumPerCaller: 3
   because: Holds are short because counter capacity is scarce.
 "#;
 
@@ -240,7 +238,7 @@ impl Deployment {
             .map(|digest| format!("  expectedDigest: {digest}\n"))
             .unwrap_or_default();
         let text = format!(
-            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+            "apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1\n\
              kind: SchedulingRuntimeConfig\n\
              package:\n  root: {package}\n{expected}\
              identity:\n  databaseId: {database_id}\n\
@@ -253,7 +251,7 @@ impl Deployment {
              \x20 migrationUrlRef: secret:env/{migration}\n\
              \x20 testOnlyPlaintext: true\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/{audit_key}\n\
-             retention:\n  attemptReceiptDays: 2\n",
+             retention:\n  attemptReceiptRetentionDays: 2\n",
             package = package.display(),
             database_id = options.database_id,
             bind = options.bind,
@@ -406,7 +404,7 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
 async fn plan_reports_a_hook_destination_apply_cannot_sign_for() {
     let deployment = Deployment::single("activation_plan_hook_key").await;
     let policy = format!(
-        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n"
+        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     );
     let package = deployment.package("package", &policy);
     let key_secret = format!("{}_HOOK_KEY", deployment.audit_secret);

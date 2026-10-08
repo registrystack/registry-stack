@@ -128,7 +128,7 @@ test('a symlinked questions directory does not declare a project root', () => {
 
 for (const [file, content] of [
   ['casework.yaml', 'kind: CaseworkProject\n'],
-  ['scheduling.yaml', 'apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1\n'],
+  ['scheduling.yaml', 'apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1\n'],
   ['messaging.yaml', 'kind: MessagingPackage\n'],
   ['origins.yaml', 'schemaVersion: registry-discovery/origins/v1alpha1\n'],
   ['manifest.yaml', 'apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\n'],

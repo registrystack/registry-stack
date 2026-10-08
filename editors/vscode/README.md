@@ -11,7 +11,7 @@ Project roots use each product's own authoring marker:
 | Base Registry Engine | `registry.yaml` declaring `RegistryProject` |
 | Evidence | `evidence-project.yaml`, or `source.openapi.yaml` beside `questions/` |
 | Registry Casework | `casework.yaml` declaring `CaseworkProject` |
-| Registry Scheduling | `scheduling.yaml` declaring `SchedulingPolicyPackage` |
+| Registry Scheduling | `scheduling.yaml` declaring `SchedulingProject` |
 | Registry Messaging | `messaging.yaml` declaring `MessagingPackage` |
 | Registry Discovery | `origins.yaml` declaring the Discovery origins schema |
 | Registry Render | `manifest.yaml` declaring `RenderBundle` |

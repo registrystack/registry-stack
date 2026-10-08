@@ -3458,6 +3458,60 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "scheduling",
+      "title": "Registry Scheduling fixture",
+      "description": "Registry Scheduling fixture JSON Schema.",
+      "source": {
+        "path": "crates/registry-scheduling-core/src/schema.rs",
+        "sha256": "e9ad23ee1bd7f91ae0dbef75b46d2edaf99d644f50d47d036e0f512ae26464be"
+      },
+      "artifact": {
+        "path": "products/scheduling/generated/fixture/fixture.schema.json",
+        "sha256": "968ec77a589957cfcd70eb6d4c2f906bf1285308f295c80af295673f51c36572",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "scheduling",
+      "title": "Registry Scheduling project",
+      "description": "Registry Scheduling project JSON Schema.",
+      "source": {
+        "path": "crates/registry-scheduling-core/src/schema.rs",
+        "sha256": "e9ad23ee1bd7f91ae0dbef75b46d2edaf99d644f50d47d036e0f512ae26464be"
+      },
+      "artifact": {
+        "path": "products/scheduling/generated/project/project.schema.json",
+        "sha256": "4e357155b17d753e4d15394ab3a0750dc0319a57505aa36719fe54e0f83489f2",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "scheduling",
+      "title": "Registry Scheduling records",
+      "description": "Registry Scheduling records JSON Schema.",
+      "source": {
+        "path": "crates/registry-scheduling-core/src/schema.rs",
+        "sha256": "e9ad23ee1bd7f91ae0dbef75b46d2edaf99d644f50d47d036e0f512ae26464be"
+      },
+      "artifact": {
+        "path": "products/scheduling/generated/records/records.schema.json",
+        "sha256": "1c1030390a47406fe6109ef404c7e1daa8e9903d7b2ad113991e158a2f38e380",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -3467,11 +3521,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "d4b85149f512b495f8ea2cf058b19a043a0b010913829aecd966d9436f8af071"
+        "sha256": "fe7d682a346c331b5675d2f0b0772091e298bdeb5f6f209e1ee48a6d6e907d51"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "46d38fe1b65adbb920d8df63990903a18becb608e149b99bd4e6747d96619b26",
+        "sha256": "cada07f3dd5802426d63db48e1f66d3eaeb6fd90c5a8b98f181b4a247d252893",
         "mediaType": "application/schema+json"
       }
     },

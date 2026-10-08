@@ -179,7 +179,7 @@ impl SchedulingService {
         policy_digest: String,
         hasher: AuditKeyHasher,
         audit: SchedulingAudit,
-        attempt_receipt_days: u16,
+        attempt_receipt_days: u32,
     ) -> Self {
         Self {
             store,
@@ -621,7 +621,7 @@ impl SchedulingService {
                 &supply.context(),
                 request,
                 self.policy.hold_policy.ttl_minutes,
-                self.policy.hold_policy.max_per_caller,
+                self.policy.hold_policy.maximum_per_caller,
                 commitment,
             )
             .await;
@@ -1148,7 +1148,7 @@ impl SchedulingService {
                     Some(exact.buffer_before_minutes),
                     Some(exact.buffer_after_minutes),
                     Some(exact.start_increment_minutes),
-                    Some(exact.max_recipients),
+                    Some(exact.maximum_recipients),
                 ),
                 None => (None, None, None, None, None),
             };
@@ -1190,7 +1190,7 @@ impl SchedulingService {
                 .reminders
                 .iter()
                 .map(|reminder| ReminderDocument {
-                    minutes_before: reminder.minutes_before,
+                    minutes_before: reminder.offset_minutes,
                 })
                 .collect(),
             requires_capabilities: offering.requires_capabilities.clone(),
@@ -2422,7 +2422,7 @@ mod tests {
             horizon_days: 30,
             pool: "north-stations".to_owned(),
             start_increment_minutes: 30,
-            max_recipients: 2,
+            maximum_recipients: 2,
         }
     }
 
@@ -2931,14 +2931,15 @@ mod tests {
         }
 
         let current_policy: SchedulingPolicy = serde_json::from_value(json!({
-            "apiVersion": "registry.registrystack.org/scheduling-policy-package/v1alpha1",
-            "kind": "SchedulingPolicyPackage",
-            "scheduling": {"id": "test", "version": 99},
+            "apiVersion": "id.registrystack.org/formats/scheduling/project/v1alpha1",
+            "kind": "SchedulingProject",
+            "project": {"id": "test", "version": "99"},
             "services": [],
             "offerings": [],
             "holidaySets": [],
             "openings": [],
-            "holdPolicy": {"ttlMinutes": 5, "maxPerCaller": 1, "because": "test"}
+            "channels": ["public"],
+            "holdPolicy": {"ttlMinutes": 5, "maximumPerCaller": 1, "because": "test"}
         }))
         .expect("a policy used only for replay projection");
         let replay_receipt = json!({

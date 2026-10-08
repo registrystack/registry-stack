@@ -907,6 +907,9 @@ jobs:
       - name: Scheduling contract consistency
         run: products/scheduling/scripts/check-contracts.sh
 
+      - name: Check Scheduling schemas against their generators
+        run: products/scheduling/scripts/check-schemas.sh
+
   scheduling-postgres:
     name: Scheduling PostgreSQL transactions
     needs: [changes, rust-policy]

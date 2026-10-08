@@ -23,11 +23,11 @@ use uuid::Uuid;
 /// validates the authored policy at `package.root`, so a deployment
 /// configuration this test can load needs one, even though `intents` itself
 /// never reads it.
-const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+const POLICY: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: registry-updates
-  version: 1
+  version: "1"
 services:
   - id: registry-update
     label: Registry record update
@@ -46,15 +46,12 @@ offerings:
       horizonDays: 60
       pool: update-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry offices.
-    dates: []
 openings:
   - id: bangkok-counter-hours
     location: bangkok-counter
@@ -65,9 +62,10 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: Counter opening hours reviewed by the office manager.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 5
-  maxPerCaller: 3
+  maximumPerCaller: 3
   because: Holds are short because counter capacity is scarce.
 "#;
 
@@ -164,7 +162,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
     std::fs::write(
         root.path().join("runtime.yaml"),
         format!(
-            "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+            "apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1\n\
              kind: SchedulingRuntimeConfig\n\
              package:\n  root: {project}\n\
              listener:\n  bind: 127.0.0.1:8106\n  tlsTermination: development-loopback\n\
@@ -176,7 +174,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
              \x20 migrationUrlRef: secret:env/SCHEDULING_INTENTS_TEST_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
              audit:\n  path: {audit}\n  hashKeyRef: secret:env/SCHEDULING_INTENTS_TEST_AUDIT\n\
-             retention:\n  attemptReceiptDays: 2\n",
+             retention:\n  attemptReceiptRetentionDays: 2\n",
             project = project.display(),
             audit = root.path().join("audit.ndjson").display(),
         ),

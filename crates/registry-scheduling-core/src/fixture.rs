@@ -10,36 +10,164 @@
 //! fixture can tell the story of several callers in sequence.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{
+    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, RemovedKey, Report,
+    RetiredApiVersion,
+};
+use serde::{de, Deserialize, Deserializer};
 
 use registry_platform_calendar::CalendarEvaluationError;
 
 use crate::admission::{
     evaluate_exact_time_admission, evaluate_window_admission, ExactTimeContext, WindowContext,
 };
+use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::model::{
     AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot, PartyCounts, SchedulingFacts,
 };
-use crate::naming::{SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND};
-use crate::policy::{SchedulingMode, SchedulingPolicy};
+use crate::naming::{
+    RETIRED_SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND,
+};
+use crate::policy::{SchedulingMode, SchedulingPolicy, MAXIMUM_COLLECTION_ENTRIES};
 use crate::problem::ProblemCode;
 use crate::resolve::{
     covers_span, location_closure_intervals, location_open_intervals, ResolveError,
 };
+use crate::typed::{MAXIMUM_REVISION, MAXIMUM_UNITS};
 
-/// One case's expected outcome.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "outcome", rename_all = "camelCase", deny_unknown_fields)]
+/// The policy revision replay runs every case under. A case resolves its
+/// offering at this revision; a case naming another exercises the
+/// `policy.changed` refusal.
+pub const REPLAY_POLICY_REVISION: u64 = 1;
+
+/// The format a replay fixture declares (CFG-ENV-1).
+pub const SCHEDULING_FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: SCHEDULING_FIXTURE_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(SCHEDULING_FIXTURE_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: RETIRED_SCHEDULING_FIXTURE_API_VERSION,
+            replacement:
+                "Write apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1, \
+                          and type: admitted or type: refused in place of each outcome.",
+        }],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/cases/*/expect/outcome",
+            replacement: "Write type: admitted or type: refused.",
+        },
+        RemovedKey {
+            pointer: "/facts/windows/*/unitsPolicy/kind",
+            replacement: "Write type: fixed, per-recipient, or banded-table.",
+        },
+        RemovedKey {
+            pointer: "/facts/windows/*/unitsPolicy/aboveHighestBand/policy",
+            replacement: "Write type: refuse or units.",
+        },
+    ],
+};
+
+/// One case's expected outcome, chosen by its `type` member.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum FixtureExpectation {
     Admitted {
+        #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_UNITS>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
+        )]
         units: u32,
-        #[serde(default)]
+        /// The pool member an exact-time case lands on. Omit it to accept
+        /// any member.
+        #[serde(
+            default,
+            deserialize_with = "crate::typed::optional_local_id",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "Option<registry_platform_yaml::LocalId>")
+        )]
         resource: Option<String>,
     },
     Refused {
         /// A public problem code, exactly as a caller would receive it.
-        code: String,
+        #[serde(deserialize_with = "public_problem_code")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "public_problem_code_schema")
+        )]
+        code: ProblemCode,
     },
+}
+registry_platform_yaml::tagged_union!(FixtureExpectation);
+
+/// A code outside the closed problem vocabulary.
+const UNKNOWN_PROBLEM_CODE: Invalid = Invalid::expected(
+    "a problem code Registry Scheduling returns",
+    "Write a code from the Scheduling problem vocabulary, such as capacity.exhausted.",
+);
+
+/// A code a caller never receives as the public projection of a refusal.
+const DETAILED_PROBLEM_CODE: Invalid = Invalid::expected(
+    "a public problem code",
+    "Expect the public code a caller receives; the detailed code is disclosed only on the \
+     authorized explain path.",
+);
+
+/// A refused case's expected code: public, from the closed vocabulary.
+fn public_problem_code<'de, D>(deserializer: D) -> Result<ProblemCode, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let code = String::deserialize(deserializer)?;
+    match ProblemCode::from_code(&code) {
+        None => Err(de::Error::custom(UNKNOWN_PROBLEM_CODE)),
+        Some(problem) if problem.is_detailed_only() => {
+            Err(de::Error::custom(DETAILED_PROBLEM_CODE))
+        }
+        Some(problem) => Ok(problem),
+    }
+}
+
+#[cfg(feature = "schema")]
+fn public_problem_code_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let codes: Vec<&str> = ProblemCode::ALL
+        .iter()
+        .filter(|problem| !problem.is_detailed_only())
+        .map(|problem| problem.code())
+        .collect();
+    schemars::json_schema!({ "type": "string", "enum": codes })
+}
+
+/// The party one replayed case requests for. Zero is allowed in both counts
+/// so a fixture can exercise the refusal of a party the offering cannot
+/// serve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FixtureParty {
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 0, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<0, MAXIMUM_UNITS>")
+    )]
+    pub recipients: u32,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 0, MAXIMUM_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<0, MAXIMUM_UNITS>")
+    )]
+    pub attendees: u32,
 }
 
 /// One replayed request as an author writes it.
@@ -49,21 +177,71 @@ pub enum FixtureExpectation {
 /// this case replaces: a fixture legitimately says "this case reschedules that
 /// one", where an HTTP caller may not, because on the wire the exclusion is
 /// the runtime's to supply from inside its own transaction.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FixtureAdmissionRequest {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub offering: String,
     pub start: DateTime<Utc>,
-    pub party: PartyCounts,
+    pub party: FixtureParty,
+    /// The channel the caller books through. It is free text so a fixture
+    /// can exercise the refusal of a channel outside the vocabulary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_key: Option<String>,
+    /// The policy revision the caller resolved the offering under. Replay
+    /// runs the policy at revision 1.
+    #[serde(deserialize_with = "crate::typed::bounded_u64::<_, 1, MAXIMUM_REVISION>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<1, MAXIMUM_REVISION>")
+    )]
     pub policy_revision: u64,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u64::<_, 1, MAXIMUM_REVISION>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::BoundedU64<1, MAXIMUM_REVISION>>")
+    )]
     pub window_revision: Option<u64>,
+    /// The capabilities the party holds. A party holding none omits the
+    /// member.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::unique_local_ids",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::UniqueList<registry_platform_yaml::LocalId>",
+            length(max = 256)
+        )
+    )]
     pub capabilities: Vec<String>,
+    /// The prerequisites the party holds. A party holding none omits the
+    /// member.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::unique_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<String>", length(max = 256))
+    )]
     pub prerequisites: Vec<String>,
     /// The claim this case replaces. Its allocation is left out of this
     /// case's conflict checks and removed when the case is admitted, so a
-    /// reschedule never competes with what it replaces.
+    /// reschedule never competes with what it replaces. A claim an earlier
+    /// case booked is `case:` followed by that case's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reschedule_of: Option<String>,
 }
 
@@ -91,7 +269,10 @@ impl FixtureAdmissionRequest {
         AdmissionRequest {
             offering: offering.clone(),
             start: *start,
-            party: *party,
+            party: PartyCounts {
+                recipients: party.recipients,
+                attendees: party.attendees,
+            },
             channel: channel.clone(),
             duplicate_key: duplicate_key.clone(),
             policy_revision: *policy_revision,
@@ -104,35 +285,44 @@ impl FixtureAdmissionRequest {
 }
 
 /// One replayed request and its expectation.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FixtureCase {
+    /// The case name, which also identifies the claim an admitted case
+    /// records.
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub name: String,
     pub request: FixtureAdmissionRequest,
     pub expect: FixtureExpectation,
 }
 
 /// An offline replay fixture: synthetic facts, a starting ledger, and cases.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchedulingFixture {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("const" = "id.registrystack.org/formats/scheduling/fixture/v1alpha1"))
+    )]
     pub api_version: String,
+    #[cfg_attr(feature = "schema", schemars(extend("const" = "SchedulingFixture")))]
     pub kind: String,
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub name: String,
     /// The single observed instant every case runs at.
     pub now: DateTime<Utc>,
     pub facts: SchedulingFacts,
-    #[serde(default)]
+    /// The claims the ledger holds before the first case. A fixture that
+    /// starts from an empty ledger omits the member.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(length(max = 256)))]
     pub initial: Vec<LedgerClaim>,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
     pub cases: Vec<FixtureCase>,
-}
-
-/// Parse a fixture from its authored YAML, with the failing path preserved.
-pub fn parse_fixture_yaml(
-    text: &str,
-) -> Result<SchedulingFixture, serde_path_to_error::Error<serde_norway::Error>> {
-    let deserializer = serde_norway::Deserializer::from_str(text);
-    serde_path_to_error::deserialize(deserializer)
 }
 
 /// Whether one replayed case matched its expectation.
@@ -161,12 +351,9 @@ pub struct CaseOutcome {
 }
 
 /// Replay stopped before a case could be evaluated: the fixture and policy do
-/// not fit together, or an expectation names a code outside the closed
-/// vocabulary.
+/// not fit together.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ReplayError {
-    #[error("the fixture envelope is not a scheduling fixture")]
-    UnsupportedEnvelope,
     #[error("case {case} requests unknown offering {offering}")]
     UnknownOffering { case: String, offering: String },
     #[error("case {case} needs pool {pool}, which the facts do not declare")]
@@ -181,13 +368,6 @@ pub enum ReplayError {
     DuplicateCaseName { case: String },
     #[error("case {case} reschedules claim {claim}, which no claim in the ledger carries")]
     UnknownRescheduleTarget { case: String, claim: String },
-    #[error("case {case} expects code {code}, which is outside the closed vocabulary")]
-    UnknownExpectationCode { case: String, code: String },
-    #[error(
-        "case {case} expects code {code}, which only the authorized explain path discloses; \
-         expect the public code instead"
-    )]
-    DetailedExpectationCode { case: String, code: String },
     #[error(
         "case {case} targets offering {offering}, whose mode block is absent; the policy does \
          not pass its check"
@@ -206,19 +386,108 @@ pub enum ReplayError {
     Calendar(#[from] CalendarEvaluationError),
 }
 
+/// The name a fixture read from bytes carries in its diagnostics when the
+/// caller has no file name for it.
+pub const SCHEDULING_FIXTURE_FILE: &str = "fixture.yaml";
+
 impl SchedulingFixture {
-    /// Check the fixture envelope and every expectation code before any case
-    /// runs, so a broken fixture fails fast instead of half-way through.
-    pub fn check(&self, policy: &SchedulingPolicy) -> Result<(), ReplayError> {
-        if self.api_version != SCHEDULING_FIXTURE_API_VERSION
-            || self.kind != SCHEDULING_FIXTURE_KIND
-        {
-            return Err(ReplayError::UnsupportedEnvelope);
+    /// Read one fixture document, refusing what its shape does not carry
+    /// with every position.
+    pub fn decode(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
+        let mut hook = registry_platform_config::AuthoredExpressions;
+        Reader::new(file)
+            .with_hook(&mut hook)
+            .decode::<Self>(bytes, &Expect::one(&SCHEDULING_FIXTURE_FORMAT))
+    }
+
+    /// Read one fixture and check it against `policy`: every structural
+    /// problem, or every finding of [`SchedulingFixture::findings`], each at
+    /// its position.
+    pub fn read(
+        file: &str,
+        bytes: &[u8],
+        policy: &SchedulingPolicy,
+    ) -> Result<Decoded<Self>, Report> {
+        let decoded = Self::decode(file, bytes)?;
+        let findings = decoded.value.findings(policy);
+        if findings.is_empty() {
+            Ok(decoded)
+        } else {
+            Err(findings_report(&decoded.document, &findings))
+        }
+    }
+
+    /// What a check can say about this fixture before any case runs: its
+    /// case names identify claims and so stay distinct, its collections stay
+    /// within their bounds, every case names an offering `policy` declares,
+    /// and its facts are records `policy` accepts. An offering whose window
+    /// the facts do not carry is not a finding here: a fixture replays the
+    /// offerings its cases name.
+    #[must_use]
+    pub fn findings(&self, policy: &SchedulingPolicy) -> Vec<SchedulingDiagnostic> {
+        let mut findings = Vec::new();
+        let fixture = |path: String, reason| {
+            SchedulingDiagnostic::in_area(FindingArea::Fixture, path, reason)
+        };
+        if self.cases.is_empty() {
+            findings.push(fixture(
+                "/cases".to_owned(),
+                PolicyCheckReason::EmptyCollection,
+            ));
+        }
+        if self.cases.len() > MAXIMUM_COLLECTION_ENTRIES {
+            findings.push(fixture(
+                "/cases".to_owned(),
+                PolicyCheckReason::TooManyEntries,
+            ));
+        }
+        if self.initial.len() > MAXIMUM_COLLECTION_ENTRIES {
+            findings.push(fixture(
+                "/initial".to_owned(),
+                PolicyCheckReason::TooManyEntries,
+            ));
         }
         // A replayed claim is identified by its case name, and a reschedule
         // names the claim it replaces. Two cases under one name would answer
         // to each other's id: the second silently erases the first's claim,
         // and one reschedule frees two allocations.
+        for (index, case) in self.cases.iter().enumerate() {
+            if self.cases[..index]
+                .iter()
+                .any(|earlier| earlier.name == case.name)
+            {
+                findings.push(fixture(
+                    format!("/cases/{index}/name"),
+                    PolicyCheckReason::DuplicateIdentifier,
+                ));
+            }
+        }
+        // A case replays against an offering of the project, by identifier;
+        // one the project does not declare would stop replay before any case
+        // ran.
+        for (index, case) in self.cases.iter().enumerate() {
+            if policy.offering(&case.request.offering).is_none() {
+                findings.push(fixture(
+                    format!("/cases/{index}/request/offering"),
+                    PolicyCheckReason::UnknownOffering,
+                ));
+            }
+        }
+        findings.extend(
+            self.facts
+                .check(policy)
+                .into_iter()
+                .filter(|finding| finding.area == FindingArea::Records)
+                .map(|finding| finding.with_area(FindingArea::Fixture).under("/facts")),
+        );
+        findings
+    }
+
+    /// Check that every case fits the policy and the facts before any case
+    /// runs, so a broken fixture fails fast instead of half-way through.
+    pub fn check(&self, policy: &SchedulingPolicy) -> Result<(), ReplayError> {
+        // A replayed claim is identified by its case name; see
+        // `SchedulingFixture::findings`.
         let mut seen: Vec<&str> = Vec::with_capacity(self.cases.len());
         for case in &self.cases {
             if seen.contains(&case.name.as_str()) {
@@ -229,23 +498,6 @@ impl SchedulingFixture {
             seen.push(&case.name);
         }
         for case in &self.cases {
-            if let FixtureExpectation::Refused { code } = &case.expect {
-                match ProblemCode::from_code(code) {
-                    None => {
-                        return Err(ReplayError::UnknownExpectationCode {
-                            case: case.name.clone(),
-                            code: code.clone(),
-                        });
-                    }
-                    Some(problem) if problem.is_detailed_only() => {
-                        return Err(ReplayError::DetailedExpectationCode {
-                            case: case.name.clone(),
-                            code: code.clone(),
-                        });
-                    }
-                    Some(_) => {}
-                }
-            }
             let offering = policy.offering(&case.request.offering).ok_or_else(|| {
                 ReplayError::UnknownOffering {
                     case: case.name.clone(),
@@ -354,7 +606,7 @@ impl SchedulingFixture {
                     }
                 }
                 (FixtureExpectation::Refused { code }, Err(refusal)) => {
-                    if refusal.public_code().code() == code.as_str() {
+                    if refusal.public_code() == *code {
                         CaseStatus::Pass
                     } else {
                         CaseStatus::Fail
@@ -432,7 +684,7 @@ fn replay_case(
             location: offering.location.clone(),
         }))?;
 
-    let revision = policy.scheduling.version;
+    let revision = REPLAY_POLICY_REVISION;
     match offering.mode {
         SchedulingMode::ExactTime => {
             let exact = offering.exact_time.as_ref().ok_or(CaseStoppage::Replay(
@@ -581,12 +833,12 @@ impl From<ResolveError> for ReplayError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CalendarExceptionRecord, ExceptionRecordKind, LocationRecord, PartyCounts};
+    use crate::model::{CalendarExceptionRecord, ExceptionRecordKind, LocationRecord};
+    use crate::naming::AUTHORED_POLICY_FILE;
     use registry_platform_calendar::CalendarInterval;
 
-    fn exact_time_fixture_yaml() -> &'static str {
-        r#"
-apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+    const EXACT_TIME_FIXTURE: &str = r#"
+apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
 kind: SchedulingFixture
 name: last-station
 now: 2026-10-05T00:00:00Z
@@ -598,12 +850,9 @@ facts:
     - id: update-stations
       members:
         - resourceId: station-1
-          capabilities: []
           available: true
         - resourceId: station-2
-          capabilities: []
           available: true
-initial: []
 cases:
   - name: first-caller-takes-the-last-station
     request:
@@ -614,10 +863,8 @@ cases:
         attendees: 1
       duplicateKey: subject:one
       policyRevision: 1
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 1
   - name: same-key-retry-is-refused
     request:
@@ -628,22 +875,17 @@ cases:
         attendees: 1
       duplicateKey: subject:one
       policyRevision: 1
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: refused
+      type: refused
       code: booking.duplicate-active
-"#
-    }
+"#;
 
-    fn policy_for_fixture() -> SchedulingPolicy {
-        crate::policy::parse_policy_yaml(
-            r#"
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+    const EXACT_TIME_PROJECT: &str = r#"
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: registry-updates
-  version: 1
+  version: "1"
 services:
   - id: registry-update
     label: Registry record update
@@ -662,16 +904,13 @@ offerings:
       horizonDays: 30
       pool: update-stations
       startIncrementMinutes: 30
-      maxRecipients: 1
+      maximumRecipients: 1
     cancellationCutoffMinutes: 240
     duplicateActiveKey: subject
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry office.
-    dates: []
 openings:
   - id: counter-hours
     location: north-counter
@@ -682,28 +921,77 @@ openings:
     effectiveFrom: "2026-10-05"
     effectiveUntil: "2026-10-05"
     because: Counter opening hours reviewed by the office manager.
+channels: [public]
 holdPolicy:
   ttlMinutes: 5
-  maxPerCaller: 3
+  maximumPerCaller: 3
   because: Holds are short because counter capacity is scarce.
-"#,
-        )
-        .expect("the policy parses")
+"#;
+
+    fn read_policy(yaml: &str) -> SchedulingPolicy {
+        SchedulingPolicy::read(AUTHORED_POLICY_FILE, yaml.as_bytes())
+            .unwrap_or_else(|report| panic!("{}", report.render_human()))
+            .value
+    }
+
+    fn policy_for_fixture() -> SchedulingPolicy {
+        read_policy(EXACT_TIME_PROJECT)
+    }
+
+    fn read_fixture(yaml: &str, policy: &SchedulingPolicy) -> SchedulingFixture {
+        SchedulingFixture::read(SCHEDULING_FIXTURE_FILE, yaml.as_bytes(), policy)
+            .unwrap_or_else(|report| panic!("{}", report.render_human()))
+            .value
+    }
+
+    /// The diagnostics a refused fixture reports, as `pointer code`.
+    fn refusals(yaml: &str, policy: &SchedulingPolicy) -> Vec<String> {
+        match SchedulingFixture::read(SCHEDULING_FIXTURE_FILE, yaml.as_bytes(), policy) {
+            Ok(_) => Vec::new(),
+            Err(report) => report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| format!("{} {}", diagnostic.path, diagnostic.code))
+                .collect(),
+        }
     }
 
     #[test]
-    fn fixtures_parse_and_refuse_unknown_fields() {
-        let fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
+    fn fixtures_read_and_refuse_unknown_fields() {
+        let policy = policy_for_fixture();
+        let fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         assert_eq!(fixture.name, "last-station");
+        assert_eq!(
+            refusals(&format!("{EXACT_TIME_FIXTURE}stray: true\n"), &policy),
+            ["/stray config.unknown-key"]
+        );
+    }
+
+    /// The former envelope and the former expectation member are refused,
+    /// each naming its replacement.
+    #[test]
+    fn the_former_spellings_are_refused_with_their_replacements() {
+        let policy = policy_for_fixture();
+        let retired = EXACT_TIME_FIXTURE.replace(
+            "id.registrystack.org/formats/scheduling/fixture/v1alpha1",
+            "registry.registrystack.org/scheduling-fixture/v1alpha1",
+        );
+        assert_eq!(
+            refusals(&retired, &policy),
+            ["/apiVersion config.retired-api-version"]
+        );
+        let renamed = EXACT_TIME_FIXTURE.replacen("type: admitted", "outcome: admitted", 1);
+        let found = refusals(&renamed, &policy);
         assert!(
-            parse_fixture_yaml(&format!("{}stray: true\n", exact_time_fixture_yaml())).is_err()
+            found.contains(&"/cases/0/expect/outcome config.removed-key".to_owned()),
+            "{found:?}"
         );
     }
 
     #[test]
     fn replay_threads_admitted_cases_into_the_ledger() {
         let policy = policy_for_fixture();
-        let fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
+        let fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         let outcomes = fixture.replay(&policy).expect("replays");
         assert_eq!(outcomes.len(), 2);
         assert_eq!(outcomes[0].status, CaseStatus::Pass);
@@ -719,7 +1007,7 @@ holdPolicy:
     fn an_admitted_reschedule_replaces_its_allocation_once() {
         let policy = policy_for_fixture();
         let yaml = r#"
-apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
 kind: SchedulingFixture
 name: move-one-booking
 now: 2026-10-05T00:00:00Z
@@ -731,7 +1019,6 @@ facts:
     - id: update-stations
       members:
         - resourceId: station-1
-          capabilities: []
           available: true
 initial:
   - id: booking-9
@@ -753,10 +1040,8 @@ cases:
       duplicateKey: subject:one
       policyRevision: 1
       rescheduleOf: booking-9
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 1
       resource: station-1
   - name: the-freed-slot-serves-another-caller
@@ -768,14 +1053,12 @@ cases:
         attendees: 1
       duplicateKey: subject:two
       policyRevision: 1
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 1
       resource: station-1
 "#;
-        let fixture = parse_fixture_yaml(yaml).expect("parses");
+        let fixture = read_fixture(yaml, &policy);
         let outcomes = fixture.replay(&policy).expect("replays");
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes
@@ -785,22 +1068,31 @@ cases:
 
     /// COR-6. A replayed claim is identified by its case name, so two cases
     /// under one name answer to each other's id: the second erases the
-    /// first's claim and one reschedule frees two allocations.
+    /// first's claim and one reschedule frees two allocations. The reader
+    /// refuses the second name at its position, and replay refuses a
+    /// fixture built in code the same way.
     #[test]
     fn duplicate_case_names_are_refused_before_any_case_runs() {
         let policy = policy_for_fixture();
-        let mut fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
-        let repeated = fixture.cases[0].name.clone();
-        fixture.cases[1].name = repeated.clone();
+        let repeated = EXACT_TIME_FIXTURE.replace(
+            "name: same-key-retry-is-refused",
+            "name: first-caller-takes-the-last-station",
+        );
+        assert_eq!(
+            refusals(&repeated, &policy),
+            ["/cases/1/name scheduling.fixture.duplicate-identifier"]
+        );
+
+        let mut fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
+        let name = fixture.cases[0].name.clone();
+        fixture.cases[1].name = name.clone();
         assert_eq!(
             fixture.check(&policy),
-            Err(ReplayError::DuplicateCaseName {
-                case: repeated.clone()
-            })
+            Err(ReplayError::DuplicateCaseName { case: name.clone() })
         );
         assert_eq!(
             fixture.replay(&policy),
-            Err(ReplayError::DuplicateCaseName { case: repeated })
+            Err(ReplayError::DuplicateCaseName { case: name })
         );
     }
 
@@ -810,7 +1102,7 @@ cases:
     #[test]
     fn a_reschedule_of_a_claim_the_ledger_does_not_carry_is_reported() {
         let policy = policy_for_fixture();
-        let mut fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
+        let mut fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         fixture.cases[0].request.reschedule_of = Some("booking-404".to_owned());
         assert_eq!(
             fixture.replay(&policy),
@@ -824,22 +1116,17 @@ cases:
     #[test]
     fn broken_fixtures_stop_before_running() {
         let policy = policy_for_fixture();
-        let mut fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
-
-        fixture.cases[1].expect = FixtureExpectation::Refused {
-            code: "authorization.refused".to_owned(),
-        };
+        // A code outside the closed vocabulary is refused at its position.
+        let unknown = EXACT_TIME_FIXTURE.replace(
+            "code: booking.duplicate-active",
+            "code: authorization.refused",
+        );
         assert_eq!(
-            fixture.check(&policy),
-            Err(ReplayError::UnknownExpectationCode {
-                case: "same-key-retry-is-refused".to_owned(),
-                code: "authorization.refused".to_owned()
-            })
+            refusals(&unknown, &policy),
+            ["/cases/1/expect/code config.invalid-value"]
         );
 
-        fixture.cases[1].expect = FixtureExpectation::Refused {
-            code: "capacity.exhausted".to_owned(),
-        };
+        let mut fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         fixture.cases[0].request.offering = "no-such-offering".to_owned();
         assert!(matches!(
             fixture.check(&policy),
@@ -847,22 +1134,71 @@ cases:
         ));
     }
 
+    /// A case naming an offering the project does not declare is a finding
+    /// at the case's reference, so a check reports it before any replay.
+    #[test]
+    fn a_case_naming_an_undeclared_offering_is_found_at_its_reference() {
+        let policy = policy_for_fixture();
+        let fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
+        let offering = fixture.cases[1].request.offering.clone();
+        let renamed = EXACT_TIME_FIXTURE.replacen(
+            &format!("offering: {offering}"),
+            "offering: no-such-offering",
+            2,
+        );
+        assert_eq!(
+            refusals(&renamed, &policy),
+            [
+                "/cases/0/request/offering scheduling.fixture.unknown-offering",
+                "/cases/1/request/offering scheduling.fixture.unknown-offering",
+            ]
+        );
+    }
+
     /// A detailed-only expectation code can never match: replay compares the
-    /// public projection, so the check refuses it up front with the code named.
+    /// public projection, so the reader refuses it at its position.
     #[test]
     fn a_detailed_only_expectation_code_is_refused_before_any_case_runs() {
         let policy = policy_for_fixture();
-        let mut fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
-        fixture.cases[1].expect = FixtureExpectation::Refused {
-            code: "resource.unavailable".to_owned(),
-        };
-        assert_eq!(
-            fixture.check(&policy),
-            Err(ReplayError::DetailedExpectationCode {
-                case: "same-key-retry-is-refused".to_owned(),
-                code: "resource.unavailable".to_owned(),
-            })
+        let detailed = EXACT_TIME_FIXTURE.replace(
+            "code: booking.duplicate-active",
+            "code: resource.unavailable",
         );
+        assert_eq!(
+            refusals(&detailed, &policy),
+            ["/cases/1/expect/code config.invalid-value"]
+        );
+    }
+
+    /// A refused value is never repeated in the diagnostic that refuses it.
+    #[test]
+    fn a_refused_expectation_code_is_not_repeated() {
+        let policy = policy_for_fixture();
+        let unknown =
+            EXACT_TIME_FIXTURE.replace("code: booking.duplicate-active", "code: zz-private-value");
+        let report = SchedulingFixture::read(SCHEDULING_FIXTURE_FILE, unknown.as_bytes(), &policy)
+            .expect_err("refused");
+        assert!(!report.render_human().contains("zz-private-value"));
+        assert!(!report
+            .to_json_value()
+            .to_string()
+            .contains("zz-private-value"));
+    }
+
+    /// The facts a fixture carries are records the policy accepts, reported
+    /// below `/facts` in the fixture itself.
+    #[test]
+    fn fixture_facts_are_checked_against_the_policy_at_their_position() {
+        let policy = policy_for_fixture();
+        let repeated = EXACT_TIME_FIXTURE.replace("resourceId: station-2", "resourceId: station-1");
+        let found = refusals(&repeated, &policy);
+        assert!(
+            found
+                .iter()
+                .all(|finding| finding.starts_with("/facts/pools/0/members/")),
+            "{found:?}"
+        );
+        assert!(!found.is_empty());
     }
 
     /// A policy whose mode block is missing fails the fixture with a typed
@@ -871,8 +1207,8 @@ cases:
     #[test]
     fn a_policy_missing_its_mode_block_fails_the_fixture_not_the_process() {
         let mut policy = policy_for_fixture();
+        let fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         policy.offerings[0].exact_time = None;
-        let fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
         assert_eq!(
             fixture.check(&policy),
             Err(ReplayError::ModeBlockMissing {
@@ -895,8 +1231,8 @@ cases:
     #[test]
     fn an_opening_referencing_an_undeclared_holiday_set_fails_the_fixture() {
         let mut policy = policy_for_fixture();
+        let fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         policy.openings[0].holiday_set = "no-such-holidays".to_owned();
-        let fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
         assert_eq!(
             fixture.replay(&policy),
             Err(ReplayError::HolidaySetMissing {
@@ -925,10 +1261,10 @@ cases:
             }],
             pools: vec![],
             windows: vec![],
-            exceptions: vec![crate::model::CalendarExceptionRecord {
+            exceptions: vec![CalendarExceptionRecord {
                 id: "systems-training".to_owned(),
                 location: "north-counter".to_owned(),
-                kind: crate::model::ExceptionRecordKind::Closure,
+                kind: ExceptionRecordKind::Closure,
                 date: "2026-10-05".to_owned(),
                 start_time: "09:00".to_owned(),
                 end_time: "10:00".to_owned(),
@@ -952,7 +1288,7 @@ cases:
     #[test]
     fn window_cases_deplete_the_published_window() {
         let yaml = r#"
-apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
 kind: SchedulingFixture
 name: household-morning
 now: 2026-10-09T20:00:00Z
@@ -960,7 +1296,6 @@ facts:
   locations:
     - id: civic-hall
       timezone: Asia/Bangkok
-  pools: []
   windows:
     - id: household-morning-window
       revision: 2
@@ -970,7 +1305,7 @@ facts:
       end: 2026-10-10T03:00:00Z
       units: 3
       unitsPolicy:
-        kind: perRecipient
+        type: per-recipient
         perRecipient: 1
         because: Each recipient consumes one serving slot.
       subquotas:
@@ -983,7 +1318,6 @@ facts:
           units: 1
           because: Assisted bookings hold a protected unit.
       because: The Saturday morning household block.
-initial: []
 cases:
   - name: first-household
     request:
@@ -993,12 +1327,10 @@ cases:
         recipients: 2
         attendees: 3
       channel: public
-      policyRevision: 3
+      policyRevision: 1
       windowRevision: 2
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 2
   - name: second-household-overdraws-the-public-subquota
     request:
@@ -1008,12 +1340,10 @@ cases:
         recipients: 1
         attendees: 1
       channel: public
-      policyRevision: 3
+      policyRevision: 1
       windowRevision: 2
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: refused
+      type: refused
       code: capacity.exhausted
   - name: assisted-household-fits-the-protected-unit
     request:
@@ -1023,21 +1353,19 @@ cases:
         recipients: 1
         attendees: 1
       channel: assisted
-      policyRevision: 3
+      policyRevision: 1
       windowRevision: 2
-      capabilities: []
-      prerequisites: []
     expect:
-      outcome: admitted
+      type: admitted
       units: 1
 "#;
-        let policy = crate::policy::parse_policy_yaml(
+        let policy = read_policy(
             r#"
-apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
-kind: SchedulingPolicyPackage
-scheduling:
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
   id: household-days
-  version: 3
+  version: "3"
 services:
   - id: household-day
     label: Household registration day
@@ -1053,13 +1381,10 @@ offerings:
       leadTimeMinutes: 60
       horizonDays: 45
     cancellationCutoffMinutes: 1440
-    requiresCapabilities: []
-    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
     because: Public holidays observed by the registry office.
-    dates: []
 openings:
   - id: hall-hours
     location: civic-hall
@@ -1070,16 +1395,15 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall opens on Saturday mornings.
+channels: [public, assisted]
 holdPolicy:
   ttlMinutes: 10
-  maxPerCaller: 2
+  maximumPerCaller: 2
   because: Households need a few minutes to gather documents.
 "#,
-        )
-        .expect("the policy parses");
-        assert!(policy.check().is_empty(), "{:?}", policy.check());
+        );
 
-        let fixture = parse_fixture_yaml(yaml).expect("parses");
+        let fixture = read_fixture(yaml, &policy);
         let outcomes = fixture.replay(&policy).expect("replays");
         assert!(
             outcomes
@@ -1088,7 +1412,7 @@ holdPolicy:
             "{outcomes:?}"
         );
 
-        let mut closed = parse_fixture_yaml(yaml).expect("parses a closed-window fixture");
+        let mut closed = read_fixture(yaml, &policy);
         closed.facts.exceptions.push(CalendarExceptionRecord {
             id: "hall-closure".to_owned(),
             location: "civic-hall".to_owned(),
@@ -1101,7 +1425,7 @@ holdPolicy:
         });
         closed.cases.truncate(1);
         closed.cases[0].expect = FixtureExpectation::Refused {
-            code: "location.closed".to_owned(),
+            code: ProblemCode::LocationClosed,
         };
         let outcomes = closed
             .replay(&policy)
@@ -1110,10 +1434,11 @@ holdPolicy:
     }
 
     #[test]
-    fn party_counts_parse_from_the_fixture_surface() {
-        let fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
+    fn party_counts_read_from_the_fixture_surface() {
+        let policy = policy_for_fixture();
+        let fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         assert_eq!(
-            fixture.cases[0].request.party,
+            fixture.cases[0].request.admission().party,
             PartyCounts {
                 recipients: 1,
                 attendees: 1,

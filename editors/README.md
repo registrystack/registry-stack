@@ -73,8 +73,9 @@ can be recognized without claiming unrelated YAML.
 Setup copies maintained schemas from this checkout and adds a **Registry Stack:
 check** task where the product supplies a validation command. Use **Tasks: Run
 Task** in VS Code or **task: spawn** in Zed. No validator is run automatically
-when a file opens. Casework, Scheduling, and Messaging currently publish runtime
-schemas; their policy/package validation comes from their check task. Render
+when a file opens. Casework and Messaging currently publish runtime schemas;
+their policy/package validation comes from their check task. Scheduling
+publishes schemas for its project, records, fixture, and runtime files. Render
 maps its bundle `manifest.yaml`, its `labels/*.yaml` tables, and a `runtime.yaml`
 beside them. Manifest maps the selected document to the metadata manifest
 schema and every `profile.yaml` below the project to the profile descriptor

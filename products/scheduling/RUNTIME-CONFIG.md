@@ -23,9 +23,19 @@ with the path of the field that holds it.
 The closed envelope is:
 
 ```yaml
-apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
+apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1
 kind: SchedulingRuntimeConfig
 ```
+
+The earlier `registry.registrystack.org/scheduling-runtime/v1alpha1` envelope
+is refused with a diagnostic naming this one. So are the renamed keys
+`audit.retainDays`, `retention.attemptReceiptDays`, and
+`retention.hookPayloadDays`, each naming the key that replaced it.
+`schedulingctl check PROJECT --runtime-config FILE` reads a runtime file the
+way startup does, against the project's policy, with no package, database,
+network, or secret material, and reports every refusal at its file, line,
+column, and JSON pointer. `--environment` fills the file's `${NAME}`
+expressions from the current environment first.
 
 `package.root` selects one directory. The runtime always loads
 `package.root/scheduling.yaml`; no second project selector can override it. In
@@ -176,7 +186,7 @@ listing, and its read, reschedule, cancel, and hold release. `audit.destination`
 destination requires `audit.path`, the absolute active audit file, which one
 process writes at a time; the file rotates at `audit.rotateBytes` (default 100
 MiB, at least 1 MiB, at most 4294967295) and rotated files are removed after
-`audit.retainDays` (default 90, at most 36500). `stdout` takes none of the
+`audit.retentionDays` (default 90, at most 36500). `stdout` takes none of the
 three and leaves collection and retention to the platform that reads the
 stream. The runtime writes its operational logs to standard error whatever the
 destination is, so a `stdout` stream carries audit entries alone. `RUST_LOG`
@@ -239,14 +249,14 @@ bindings are allowed so retained events captured under an earlier policy can
 finish with their exact original binding. Startup refuses if a retained event's
 binding is no longer available.
 
-`retention.attemptReceiptDays` covers idempotency attempt receipts and is at
-least one day; listing cursors keep their fixed fifteen-minute lifetime.
-`retention.hookPayloadDays` sets the canonical observer payload's retry and
+`retention.attemptReceiptRetentionDays` covers idempotency attempt receipts
+from 1 through 65535 days; listing cursors keep their fixed fifteen-minute
+lifetime. `retention.hookPayloadRetentionDays` sets the canonical observer payload's retry and
 dead-letter lifetime from 1 through 30 days. Both configured values default to
 seven days, which is not a jurisdictional recommendation. Appointment, history,
 and reminder outbox retention remain deferred, so a hold or appointment keeps
 the verified issuer and subject that own it for as long as it exists;
-`audit.retainDays` bounds rotated audit files. An idempotency receipt past its period is erased, so an
+`audit.retentionDays` bounds rotated audit files. An idempotency receipt past its period is erased, so an
 exact retry after expiry answers `idempotency.expired` with HTTP 410 instead of
 replaying the first answer. The same sweep clears the attempt's raw token
 issuer, subject, and key; the row stays, identified only by a SHA-256 digest of

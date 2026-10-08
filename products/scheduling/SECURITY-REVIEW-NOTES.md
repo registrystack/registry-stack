@@ -86,7 +86,7 @@ audit entries. The threats this surface answers:
   swept in this milestone (SCHEDULING-DEF-06, recorded in
   `RUNTIME-CONFIG.md`), so a hold or appointment keeps its owner's raw
   issuer and subject (SCHEDULING-SEC-34).
-  Rotated audit files are removed after `audit.retainDays`, 90 days by
+  Rotated audit files are removed after `audit.retentionDays`, 90 days by
   default, which is equally a placeholder.
 - Reminder intents with no configured destination stay local and readable
   in place; nothing is delivered by default.
@@ -289,15 +289,15 @@ row SCHEDULING-SEC-19, which replaced deferral SCHEDULING-DEF-03.
 obvious fix, putting serde's reason in the message, would echo
 operator-authored text into the startup log, where a runtime configuration
 names secret references, database URLs, and destinations. *Default:* the
-message names the member path (a document refused whole is reported at
-`/`), carries serde's reason with its line and column, and strips the
-offending value out of any `invalid type:` or `invalid value:` clause,
-keeping only the shape word. *Tests:*
+runtime file and the packaged policy are read by the shared configuration
+reader, whose diagnostics carry a stable code, the member's JSON Pointer
+(a document refused whole is reported at the root), the file with its line
+and column, and a fix, and are built from the expected shape and bound
+rather than from the refused value. *Tests:*
 `a_runtime_document_refused_whole_is_reported_at_the_root`,
-`a_refused_value_never_survives_the_clause_that_names_it`,
 `a_runtime_document_the_reader_stops_on_names_the_line_and_column`,
 `a_rejected_runtime_member_names_the_cause_without_the_value`,
-`a_refused_authored_policy_names_the_member_and_the_cause` (all
+`a_refused_packaged_policy_names_the_member_and_its_position` (all
 `config.rs`), plus the standing
 `typed_parse_path_does_not_echo_the_rejected_value`
 (SCHEDULING-SEC-13).

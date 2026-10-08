@@ -28,6 +28,9 @@ mod naming;
 mod policy;
 mod problem;
 mod resolve;
+#[cfg(feature = "schema")]
+pub mod schema;
+mod typed;
 mod units;
 mod wire;
 
@@ -39,5 +42,6 @@ pub use naming::*;
 pub use policy::*;
 pub use problem::*;
 pub use resolve::*;
+pub use typed::*;
 pub use units::*;
 pub use wire::*;

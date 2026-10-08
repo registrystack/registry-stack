@@ -766,7 +766,7 @@ deferred:
       (SCHEDULING-SEC-33); nothing else in the database is swept, so a hold
       or appointment keeps its owner's verified issuer and subject for as
       long as it exists (SCHEDULING-SEC-34). Rotated audit files are removed
-      after audit.retainDays.
+      after audit.retentionDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a
       sweep that does not run.

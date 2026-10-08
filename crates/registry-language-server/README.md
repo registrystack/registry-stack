@@ -19,7 +19,7 @@ holding several products can be read without guessing which tool is talking.
 | Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
 | BReg | `registry.yaml`: `RegistryProject` or BReg `apiVersion` | `breg` |
 | Casework | `casework.yaml`: `CaseworkProject` or Casework `apiVersion` | `casework` |
-| Scheduling | `scheduling.yaml`: `SchedulingPolicyPackage` or Scheduling `apiVersion` | `scheduling` |
+| Scheduling | `scheduling.yaml`: `SchedulingProject` or Scheduling `apiVersion` | `scheduling` |
 | Messaging | `messaging.yaml`: `MessagingPackage` or Messaging `apiVersion` | `messaging` |
 | Discovery | `origins.yaml` with a Discovery origins `schemaVersion` | `discovery` |
 | Manifest | `metadata.yaml` with `schema_version: registry-manifest/v1`, or an explicit project marker | `manifest` |

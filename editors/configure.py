@@ -49,8 +49,12 @@ SCHEMAS = {
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
     ),
     "scheduling": (
+        ("products/scheduling/generated/project/project.schema.json", "scheduling.yaml"),
         ("products/scheduling/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/scheduling/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+        ("products/scheduling/generated/records/records.schema.json", "records.yaml"),
+        ("products/scheduling/generated/fixture/fixture.schema.json", "fixtures/*.yaml"),
+        ("products/scheduling/generated/fixture/fixture.schema.json", "fixtures/*.yml"),
     ),
     "messaging": (
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.yaml"),
