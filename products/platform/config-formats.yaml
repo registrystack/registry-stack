@@ -1132,7 +1132,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: write_failure
     check: none
-    example: none
+    example: products/breg/examples/formats/ctl-report.json
     conformance: none
     securityMembers: []
     restrictingMembers: []

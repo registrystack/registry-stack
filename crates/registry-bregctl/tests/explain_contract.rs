@@ -853,3 +853,29 @@ fn committed_examples_are_what_explain_writes() {
         );
     }
 }
+
+/// The `breg/ctl-report` format's example is the whole report one `explain`
+/// run writes, committed as written.
+#[test]
+fn committed_report_example_is_what_bregctl_writes() {
+    let project = fixture_path("products/breg/examples/access-review");
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "actions",
+        project.to_str().expect("fixture path is UTF-8"),
+    ]);
+    assert!(
+        output.status.success(),
+        "bregctl explain actions {project:?} failed: {output:?}"
+    );
+    let path = repo_root().join("products/breg/examples/formats/ctl-report.json");
+    let committed =
+        std::fs::read(&path).unwrap_or_else(|error| panic!("example {path:?} reads: {error}"));
+    assert!(
+        committed == output.stdout,
+        "{path:?} is not what `bregctl --format json explain actions` writes now; rewrite it \
+         with the command in products/breg/contracts/explain/README.md"
+    );
+}

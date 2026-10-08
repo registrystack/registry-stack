@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "command": "explain",
+  "profile": "authoring",
+  "revision": "sha256:05230d021ecfa00e4811cbfd4719c0a8d985098ce01b7e3673b65a8f16112303",
+  "findings": [],
+  "explanation": {
+    "actions": [],
+    "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+    "kind": "ActionsExplanation"
+  }
+}

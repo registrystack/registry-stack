@@ -89,6 +89,11 @@ bregctl --format json explain lifecycle |
   jq .explanation >"$examples/lifecycle-explanation.json"
 ```
 
+The whole report around an explanation is the `breg/ctl-report` format. Its
+example is the report `bregctl --format json explain actions "$project"`
+writes, committed as `products/breg/examples/formats/ctl-report.json`; the
+same test holds it to the command's output byte for byte.
+
 ## What is pinned, what is opaque, and why
 
 A key is **pinned** (named in `required`, typed, `additionalProperties:

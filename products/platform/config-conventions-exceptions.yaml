@@ -474,13 +474,6 @@ exceptions:
   class: stable-move
   reason: the format carries no kind
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write and check kind: BRegCtlReport'
-- rule: CFG-SCHEMA-1
-  format: breg/ctl-report
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
 - rule: CFG-SCHEMA-2
   format: breg/dev-clients
   location: products/platform/config-formats.yaml#/schema
