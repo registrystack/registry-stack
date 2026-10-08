@@ -45,6 +45,11 @@ UUID = {"type": "string", "format": "uuid"}
 FILES_CHECKED = {"type": "integer", "minimum": 1, "maximum": 1 + 1 + 1 + 1 + 64 + 3 * 1024}
 
 
+def passthrough(reason: str) -> dict:
+    """An object carried in another product's grammar, which this report does not describe."""
+    return {"type": "object", "x-registry-passthrough": reason}
+
+
 DIGEST = {"$ref": "#/$defs/Digest"}
 LOCAL_ID = {"$ref": "#/$defs/LocalId"}
 URL = {"$ref": "#/$defs/Url"}
@@ -912,8 +917,20 @@ REPORTS = {
                 },
             },
             "bregAuthoringChanges": ARRAY,
-            "bregAuthoringPatch": OBJECT,
-            "candidateRuntimeBinding": OBJECT,
+            "bregAuthoringPatch": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "event": passthrough("the hook fragment is part of the Base Registry Engine authoring project, in its grammar"),
+                    "events": {
+                        "type": "array",
+                        "x-registry-passthrough": "the hook fragments are part of the Base Registry Engine authoring project, in its grammar",
+                    },
+                    "accessProfile": passthrough("the access profile fragment is part of the Base Registry Engine authoring project, in its grammar"),
+                    "devClients": passthrough("the dev clients fragment is part of the Base Registry Engine authoring project, in its grammar"),
+                },
+            },
+            "candidateRuntimeBinding": passthrough("the candidate binding is a Base Registry Engine runtime binding, in its grammar"),
             "diagnostics": WARNINGS,
             "activation": {"const": "not_performed"},
             "next": STRING_ARRAY,
@@ -999,7 +1016,16 @@ REPORTS = {
             "resource": STRING,
             "audience": STRING,
             "journal": STRING,
-            "sources": OBJECT,
+            "sources": {
+                "type": "object",
+                "propertyNames": LOCAL_ID,
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["project", "bregUrl"],
+                    "properties": {"project": STRING, "bregUrl": {"oneOf": [URL, {"type": "null"}]}},
+                },
+            },
             "clients": OBJECT_ARRAY,
             "directory": {
                 "type": "object",

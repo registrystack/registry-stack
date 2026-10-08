@@ -2519,13 +2519,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/dev-report
-  location: products/casework/contracts/cli/DevReport.schema.json#/oneOf/0/properties/sources
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: casework/dev-token-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -2916,20 +2909,6 @@ exceptions:
   class: stable-move
   reason: value not_performed is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-4
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/0/properties/bregAuthoringPatch
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: casework/source-add-report
-  location: products/casework/contracts/cli/SourceAddReport.schema.json#/oneOf/0/properties/candidateRuntimeBinding
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: casework/status-report
   location: products/platform/config-formats.yaml#/current/apiVersion

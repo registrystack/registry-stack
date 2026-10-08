@@ -94,7 +94,33 @@
           "type": "string"
         },
         "sources": {
-          "type": "object"
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "project",
+              "bregUrl"
+            ],
+            "properties": {
+              "project": {
+                "type": "string"
+              },
+              "bregUrl": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/Url"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
         },
         "clients": {
           "type": "array",
@@ -271,6 +297,11 @@
         ],
         "unevaluatedProperties": false
       }
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
     },
     "Url": {
       "description": "An absolute http or https URL with a host and no user information.",
