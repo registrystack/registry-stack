@@ -375,7 +375,7 @@ fn target_refusal(error: anyhow::Error, target: &Path) -> anyhow::Error {
             None,
             "",
             "",
-            "the deployment target does not match the closed offline validation contract",
+            &format!("the deployment target was refused: {error}"),
             ACTION,
         )
     };
@@ -2833,6 +2833,20 @@ factSchema: schemas/record-status-facts.schema.yaml
             assert_eq!(file, "governance.yaml");
             assert_eq!(path, "/assuranceProfile");
         }
+    }
+
+    #[test]
+    fn an_unclassified_target_refusal_names_its_cause_and_the_fix() {
+        let report = refused(target_refusal(
+            anyhow::anyhow!("target governance published public key paths must be strings"),
+            Path::new("target"),
+        ));
+        let printed = printed(&report);
+        assert!(
+            printed.contains("target governance published public key paths must be strings"),
+            "{printed}"
+        );
+        assert!(printed.contains("evidence.target.incomplete"), "{printed}");
     }
 
     /// A project with a marker, an empty questions directory, and `files`.
