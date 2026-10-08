@@ -39,21 +39,47 @@ A case file (`cases/<id>.yaml`) has these members:
                 spelling: {role}          the member's key in the other
                                           spelling (camelCase or snake_case),
                                           beside it, with the same value
+                duplicateItem: {role}     the first item of the list at the
+                                          `idList` or `set` pointer, copied
+                                          after its last item
+                pathOutside: {role, via}  the file the `relativePath` pointer
+                                          names, moved outside the work
+                                          directory's project and reached
+                                          through `../` segments
+                                          (`via: parent`) or through a
+                                          symbolic link left in its place
+                                          (`via: link`)
+                boundaries: {}            one run per integer member of the
+                                          example whose schema (the registry's
+                                          `schema.path`) bounds it on both
+                                          sides: its maximum plus one, then
+                                          its minimum minus one
+  run         optional, `init`: run the harness's `init` command for the
+              format instead of its check, and assert that the file it writes
+              starts with a `# yaml-language-server: $schema=` modeline naming
+              the format's schema `$id` (or a local copy of that schema); such
+              a case takes `expect: {exit: 0, report: false}` and nothing else
   encoding    optional: byteOrderMark, lineEndings (crlf), appendBytes (hex),
               size (pad with comment lines to this many bytes)
   args        optional extra arguments for the check command
   expect      exit; report (default true: stdout is one JSON report); and
-              diagnostics, each with code, path, optional severity
-              (default error), at ({line, column} relative to an anchor of
-              the mutation, or `file`), optional from (the anchor: start,
-              value, key, root, apiVersion, kind), optional suggestedAction,
-              message, and related ({path, at, from} each)
+              diagnostics, each with code (`any` matches every code; for a
+              rule that fixes the place but not the code), path, optional
+              severity (default error), at ({line, column} relative to an
+              anchor of the mutation, or `file`), optional from (the anchor:
+              start, value, key, root, apiVersion, kind, item, itemId, first,
+              firstId), optional suggestedAction, message, and related
+              ({path, at, from} each)
   human       optional: also run without `--format json` and find each
               diagnostic in the human output
 
 Text in a case expands `{marker}` (the planted value that must never be
 printed), `{repeat:N:text}`, and the values of the mutated site: `{pointer}`,
-`{key}`, and `{numberOfUnit}`.
+`{key}`, `{numberOfUnit}`, and for `duplicateItem` the copy's `{index}`.
+
+A role pointer that does not resolve in the example is a harness error that
+names the registry entry to update, so a moved example member fails loudly
+instead of making a case silently inapplicable.
 
 `formats.yaml` beside the cases says how to stage a format whose check needs
 more than a copy of the example's directory: `project` (the directory to
@@ -63,15 +89,25 @@ the example), `write` ({path: text} in the project copy), `values`
 ({name: template}), `prepare` (commands run in order in the work directory
 before the check, each program taken from the binary directory, such as one
 that generates disposable key material), `digests` (a SHA256SUMS file in the
-project copy to refresh), `removedKeys`, and `retiredApiVersions`.
+project copy to refresh), `removedKeys`, `retiredApiVersions`, and `init`
+({command, file}: the command that starts a project in `{directory}`, and the
+file of this format it writes there, relative to that directory). A format
+with an `init` command gets its `run: init` cells even when its check is not
+reached.
 
 `expected-failures.yaml` lists the cells that fail because a product has not
-yet converged on the conventions, the formats with a check command that are
-not reached, and the cases that apply to no format. A failing cell outside it
-fails the run. With `--strict`, an entry that no longer holds (a cell that now
+yet converged on the conventions, each with a digest of its sorted problem
+list, the formats with a check command that are not reached, and the cases
+that apply to no format. A failing cell outside it fails the run, and so does
+a listed cell whose problems no longer match the digest, or whose problems
+include a marker leak, a signal, an exit status above 3, or a timeout: those
+are never expected failures. When a format's baseline fails, its other check
+cells are `blocked` (not run), so the baseline entry is the format's one
+entry. With `--strict`, an entry that no longer holds (a cell that now
 passes, a format now reached, a case that now applies) fails the run too, as
 does an unlisted unreached format or inapplicable case.
-`--write-expected-failures` rewrites the file from the current results.
+`--write-expected-failures` rewrites the file from the current results; it
+is the only writer, and it records no cell that leaks, crashes, or times out.
 
 Run through products/platform/scripts/run-config-conformance.sh, which
 provides PyYAML.
@@ -81,8 +117,11 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import hashlib
+import importlib.util
 import json
+import math
 import os
 import re
 import shlex
@@ -95,7 +134,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -125,6 +164,9 @@ OPERATIONS = (
     "removedKeys",
     "retiredApiVersion",
     "spelling",
+    "duplicateItem",
+    "pathOutside",
+    "boundaries",
 )
 DEFAULT_FROM = {
     None: "start",
@@ -135,9 +177,21 @@ DEFAULT_FROM = {
     "removedKeys": "key",
     "spelling": "key",
     "retiredApiVersion": "apiVersion",
+    "duplicateItem": "item",
+    "pathOutside": "value",
+    "boundaries": "value",
 }
 ENVELOPE = ("apiVersion", "kind")
-STATUSES = ("pass", "expected failure", "fail", "stale", "not applicable")
+STATUSES = ("pass", "expected failure", "fail", "stale", "blocked", "not applicable")
+# An expected diagnostic whose code is ANY_CODE matches a diagnostic of any
+# code at its path and position.
+ANY_CODE = "any"
+OUTSIDE = "conformance-outside"
+MODELINE = "# yaml-language-server: $schema="
+LEAK = "the output repeats the planted marker value (CFG-SEC-3)"
+UNMASKABLE = re.compile(
+    r"(?:^|: )(?:killed by signal \d+|the command did not finish within \d+ seconds|exit status (\d+), expected \d+)"
+)
 
 
 class NotApplicable(Exception):
@@ -233,6 +287,9 @@ class Site:
 class Variant:
     text: str
     sites: list[Site]
+    # Called once the project is staged, with the text and the staging; it
+    # returns the text to write and may change the staged files.
+    finish: Callable[[str, "Staged"], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -245,12 +302,15 @@ class Format:
     kind: str | None
     roles: dict[str, str | None]
     harness: dict[str, Any]
+    schema: str | None = None
+    schema_id: str | None = None
 
     def with_harness(self, harness: dict[str, Any]) -> "Format":
         return dataclasses.replace(self, harness=dict(harness))
 
 
-CASE_KEYS = {"id", "rules", "summary", "appliesTo", "mutation", "encoding", "args", "expect", "human"}
+CASE_KEYS = {"id", "rules", "summary", "appliesTo", "mutation", "encoding", "args", "expect", "human", "run"}
+RUN_MODES = ("init",)
 APPLIES_KEYS = {"audiences", "envelope", "formats"}
 ENCODING_KEYS = {"byteOrderMark", "lineEndings", "appendBytes", "size"}
 EXPECT_KEYS = {"exit", "report", "diagnostics"}
@@ -269,6 +329,7 @@ class Case:
     args: list[str]
     expect: dict[str, Any]
     human: bool
+    run: str | None = None
 
     @property
     def operation(self) -> str | None:
@@ -319,6 +380,15 @@ class Case:
         human = doc.get("human", False)
         if not isinstance(human, bool):
             raise fail("`human` is not true or false")
+        run = doc.get("run")
+        if run is not None:
+            if run not in RUN_MODES:
+                raise fail(f"`run` is not one of {', '.join(RUN_MODES)}")
+            if expect != {"exit": 0, "report": False}:
+                raise fail("a `run: init` case expects `{exit: 0, report: false}`")
+            extra = sorted({"mutation", "encoding", "args", "human"} & set(doc))
+            if extra:
+                raise fail(f"a `run: init` case takes no `{extra[0]}`")
         return cls(
             id=stem,
             rules=list(rules),
@@ -329,6 +399,7 @@ class Case:
             args=list(args),
             expect=dict(expect),
             human=human,
+            run=run,
         )
 
 
@@ -390,6 +461,14 @@ def find(root: yaml.Node | None, pointer: str) -> tuple[yaml.Node | None, yaml.N
     return key, node
 
 
+def find_inserted(root: yaml.Node | None, pointer: str) -> tuple[yaml.Node, yaml.Node]:
+    """The key and value at a pointer the mutation itself just wrote."""
+    key, node = find(root, pointer)
+    if key is None or node is None:
+        raise HarnessError(f"the mutated example has no `{pointer}`")
+    return key, node
+
+
 def last_line(node: yaml.Node) -> int:
     """The 0-based line of the last character a node's source covers."""
     if isinstance(node, yaml.MappingNode) and not node.flow_style and node.value:
@@ -439,9 +518,20 @@ def role_pointer(fmt: Format, role: str) -> str:
     return pointer
 
 
-def scalar_at(root: yaml.Node | None, pointer: str, fmt: Format) -> tuple[yaml.Node | None, yaml.Node]:
+def missing_pointer(fmt: Format, role: str, pointer: str) -> HarnessError:
+    return HarnessError(
+        f"{fmt.id}: the conformance {role} pointer {pointer} does not resolve in the example;"
+        f" update the format's conformance block in {REGISTRY}"
+    )
+
+
+def scalar_at(
+    root: yaml.Node | None, pointer: str, fmt: Format, role: str | None = None
+) -> tuple[yaml.Node | None, yaml.Node]:
     key, node = find(root, pointer)
     if node is None:
+        if role is not None:
+            raise missing_pointer(fmt, role, pointer)
         raise HarnessError(f"{fmt.id}: the example has no member at {pointer}")
     if not isinstance(node, yaml.ScalarNode):
         raise HarnessError(f"{fmt.id}: the member at {pointer} is not a scalar")
@@ -455,8 +545,9 @@ def site_values(pointer: str) -> dict[str, str]:
 
 
 def mutate_member(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
-    pointer = role_pointer(fmt, str(spec.get("role")))
-    key, node = scalar_at(compose(text), pointer, fmt)
+    role = str(spec.get("role"))
+    pointer = role_pointer(fmt, role)
+    key, node = scalar_at(compose(text), pointer, fmt, role)
     text, start = replace_span(text, node, expand(str(spec.get("value", "")), {}))
     anchors = {"start": (1, 1), "value": position(text, start)}
     if key is not None:
@@ -474,7 +565,7 @@ def edit_envelope(text: str, spec: dict[str, Any]) -> str:
         key, node = child(root, member)
         wanted = spec[member]
         if wanted == "remove":
-            if key is not None:
+            if key is not None and node is not None:
                 lines = text.splitlines(keepends=True)
                 del lines[key.start_mark.line : last_line(node) + 1]
                 text = "".join(lines)
@@ -534,7 +625,7 @@ def mutate_removed_keys(text: str, spec: dict[str, Any], fmt: Format) -> list[Va
     root = compose(text)
     sites = []
     for pointer in inserted:
-        key, node = find(root, pointer)
+        key, node = find_inserted(root, pointer)
         anchors = {"start": (1, 1), "key": mark(key.start_mark), "value": mark(node.start_mark)}
         sites.append(Site(anchors, site_values(pointer)))
     return [Variant(text, sites)]
@@ -560,7 +651,7 @@ def mutate_spelling(text: str, spec: dict[str, Any], fmt: Format) -> list[Varian
         raise NotApplicable(f"the {role} member's key is one word")
     parent_pointer = pointer[: pointer.rfind("/")]
     root = compose(text)
-    _, node = scalar_at(root, pointer, fmt)
+    _, node = scalar_at(root, pointer, fmt, role)
     _, parent = find(root, parent_pointer)
     if not isinstance(parent, yaml.MappingNode):
         raise NotApplicable(f"the {role} member is not in a mapping")
@@ -569,9 +660,182 @@ def mutate_spelling(text: str, spec: dict[str, Any], fmt: Format) -> list[Varian
     source = text[node.start_mark.index : node.end_mark.index]
     text = insert_member(text, parent, other, source)
     other_pointer = f"{parent_pointer}/{other}"
-    key, value = find(compose(text), other_pointer)
+    key, value = find_inserted(compose(text), other_pointer)
     anchors = {"start": (1, 1), "key": mark(key.start_mark), "value": mark(value.start_mark)}
     return [Variant(text, [Site(anchors, site_values(other_pointer))])]
+
+
+def mutate_duplicate_item(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
+    role = str(spec.get("role"))
+    pointer = role_pointer(fmt, role)
+    _, node = find(compose(text), pointer)
+    if node is None:
+        raise missing_pointer(fmt, role, pointer)
+    if not isinstance(node, yaml.SequenceNode) or not node.value:
+        raise HarnessError(f"{fmt.id}: the {role} member at {pointer} is not a list with an item")
+    first, count = node.value[0], len(node.value)
+    if node.flow_style:
+        source = text[first.start_mark.index : first.end_mark.index]
+        index = node.value[-1].end_mark.index
+        text = text[:index] + ", " + source + text[index:]
+    else:
+        dash = text.rfind("-", 0, first.start_mark.index)
+        begin = text.rfind("\n", 0, dash) + 1
+        if dash < 0 or text[begin:dash].strip() or text[dash + 1 : first.start_mark.index].strip():
+            raise HarnessError(f"{fmt.id}: the first item of {pointer} does not start its own `-` line")
+        text, end = line_start(text, last_line(first) + 1)
+        copy = text[begin:end]
+        text, index = line_start(text, last_line(node) + 1)
+        text = text[:index] + copy + text[index:]
+    _, node = find(compose(text), pointer)
+    assert isinstance(node, yaml.SequenceNode)
+    anchors = {"start": (1, 1), "item": mark(node.value[count].start_mark), "first": mark(node.value[0].start_mark)}
+    for name, item in (("itemId", node.value[count]), ("firstId", node.value[0])):
+        _, identifier = child(item, "id")
+        if identifier is not None:
+            anchors[name] = mark(identifier.start_mark)
+    return [Variant(text, [Site(anchors, dict(site_values(pointer), index=str(count)))])]
+
+
+def mutate_path_outside(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
+    role = str(spec.get("role"))
+    via = spec.get("via")
+    if via not in ("parent", "link"):
+        raise HarnessError("`pathOutside` takes `via: parent` or `via: link`")
+    pointer = role_pointer(fmt, role)
+    key, node = scalar_at(compose(text), pointer, fmt, role)
+    named = node.value
+    name = Path(named).name
+
+    def move_outside(staged: Staged) -> None:
+        original = staged.target.parent / named
+        if not original.is_file():
+            raise HarnessError(f"{fmt.id}: the {role} member names {named}, which the staged project lacks")
+        outside = staged.work / OUTSIDE / name
+        outside.parent.mkdir(exist_ok=True)
+        shutil.copyfile(original, outside)
+        if via == "link":
+            original.unlink()
+            original.symlink_to(os.path.relpath(outside, original.parent))
+
+    start = node.start_mark.index
+    if via == "parent":
+        text, start = replace_span(text, node, json.dumps(f"../{OUTSIDE}/{name}"))
+        length = len(json.dumps(f"../{OUTSIDE}/{name}"))
+
+        def finish(current: str, staged: Staged) -> str:
+            move_outside(staged)
+            depth = len(staged.target.parent.relative_to(staged.work).parts)
+            value = json.dumps("../" * depth + f"{OUTSIDE}/{name}")
+            return current[:start] + value + current[start + length :]
+    else:
+
+        def finish(current: str, staged: Staged) -> str:
+            move_outside(staged)
+            return current
+
+    anchors = {"start": (1, 1), "value": position(text, start)}
+    if key is not None:
+        anchors["key"] = mark(key.start_mark)
+    return [Variant(text, [Site(anchors, site_values(pointer))], finish)]
+
+
+@functools.cache
+def lint_module() -> Any:
+    """check-config-conventions.py, whose schema helpers read a format's bounds."""
+    path = Path(__file__).with_name("check-config-conventions.py")
+    spec = importlib.util.spec_from_file_location("check_config_conventions", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+@functools.cache
+def load_schema(path: str) -> Any:
+    try:
+        return lint_module().load_document(Path(path))
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        raise HarnessError(f"cannot read the schema {path}: {error}") from error
+
+
+def integer_bound(part: dict, keyword: str) -> int | None:
+    value = part.get(keyword)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return {
+        "minimum": math.ceil(value),
+        "exclusiveMinimum": math.floor(value) + 1,
+        "maximum": math.floor(value),
+        "exclusiveMaximum": math.ceil(value) - 1,
+    }[keyword]
+
+
+def integer_bounds(schema: Any, pointer: str) -> tuple[int, int] | None:
+    """The one (minimum, maximum) pair the schema gives an integer member, or None."""
+    lint = lint_module()
+    candidates = lint.resolve_member(schema, pointer)
+    if not candidates:
+        return None
+    found = set()
+    for node, _ in candidates:
+        parts = list(lint.expand(schema, node))
+        for group in lint.alternatives(schema, node):
+            integers = [branch for branch in group if "integer" in set().union(*(lint.types_of(p) for p in branch))]
+            if len(integers) > 1:
+                return None
+            parts += integers[0] if integers else []
+        if "integer" not in set().union(*(lint.types_of(part) for part in parts)):
+            return None
+        lows = [b for p in parts for k in ("minimum", "exclusiveMinimum") if (b := integer_bound(p, k)) is not None]
+        highs = [b for p in parts for k in ("maximum", "exclusiveMaximum") if (b := integer_bound(p, k)) is not None]
+        if not lows or not highs:
+            return None
+        found.add((max(lows), min(highs)))
+    return found.pop() if len(found) == 1 else None
+
+
+def integer_scalars(node: yaml.Node | None, pointer: str = "") -> list[tuple[str, yaml.Node | None, yaml.Node]]:
+    """Each plain integer scalar of a composed document, in document order, with its pointer and key."""
+    found = []
+    if isinstance(node, yaml.MappingNode):
+        for key, value in node.value:
+            if isinstance(key, yaml.ScalarNode):
+                inner = f"{pointer}/{key.value.replace('~', '~0').replace('/', '~1')}"
+                if isinstance(value, yaml.ScalarNode):
+                    if value.tag == "tag:yaml.org,2002:int" and value.style is None:
+                        found.append((inner, key, value))
+                else:
+                    found += integer_scalars(value, inner)
+    elif isinstance(node, yaml.SequenceNode):
+        for index, value in enumerate(node.value):
+            if isinstance(value, yaml.ScalarNode):
+                if value.tag == "tag:yaml.org,2002:int" and value.style is None:
+                    found.append((f"{pointer}/{index}", None, value))
+            else:
+                found += integer_scalars(value, f"{pointer}/{index}")
+    return found
+
+
+def mutate_boundaries(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
+    if not fmt.schema:
+        raise NotApplicable("the format registers no schema to read bounds from")
+    schema = load_schema(fmt.schema)
+    variants = []
+    for pointer, key, node in integer_scalars(compose(text)):
+        bounds = integer_bounds(schema, pointer)
+        if bounds is None:
+            continue
+        for value in (bounds[1] + 1, bounds[0] - 1):
+            changed, start = replace_span(text, node, str(value))
+            anchors = {"start": (1, 1), "value": position(changed, start)}
+            if key is not None:
+                anchors["key"] = mark(key.start_mark)
+            variants.append(Variant(changed, [Site(anchors, site_values(pointer))]))
+    if not variants:
+        raise NotApplicable("the example has no integer member its schema bounds on both sides")
+    return variants
 
 
 def mutate(text: str, mutation: dict[str, Any] | None, fmt: Format) -> list[Variant]:
@@ -597,6 +861,9 @@ def mutate(text: str, mutation: dict[str, Any] | None, fmt: Format) -> list[Vari
         "removedKeys": mutate_removed_keys,
         "retiredApiVersion": mutate_retired,
         "spelling": mutate_spelling,
+        "duplicateItem": mutate_duplicate_item,
+        "pathOutside": mutate_path_outside,
+        "boundaries": mutate_boundaries,
     }
     if operation not in handlers:
         raise HarnessError(f"unknown mutation `{operation}`")
@@ -641,7 +908,7 @@ def relative(anchor: tuple[int, int], at: dict[str, int]) -> tuple[int, int]:
 
 
 def resolve_position(spec: dict[str, Any], operation: str | None, site: Site) -> tuple[int | None, int | None]:
-    at = spec.get("at")
+    at = spec["at"]
     if at == "file":
         return None, None
     name = spec.get("from")
@@ -779,14 +1046,18 @@ def normalized(file: Any) -> str | None:
 
 def describe(code: Any, path: Any, line: Any, column: Any) -> str:
     where = path or "the root"
+    if code == ANY_CODE:
+        code = "a diagnostic of any code"
     if line is None:
         return f"{code} at {where} (file)"
     return f"{code} at {where} {line}:{column}"
 
 
 def actual_record(diag: dict[str, Any]) -> dict[str, Any]:
-    source = diag.get("source") if isinstance(diag.get("source"), dict) else {}
-    related = diag.get("related") if isinstance(diag.get("related"), list) else []
+    source = diag.get("source")
+    source = source if isinstance(source, dict) else {}
+    related = diag.get("related")
+    related = related if isinstance(related, list) else []
     return {
         "severity": diag.get("severity"),
         "code": diag.get("code"),
@@ -809,7 +1080,7 @@ def actual_record(diag: dict[str, Any]) -> dict[str, Any]:
 
 def matches(want: dict[str, Any], got: dict[str, Any]) -> bool:
     for member in ("severity", "code", "path", "line", "column"):
-        if want[member] != got[member]:
+        if want[member] != got[member] and not (member == "code" and want[member] == ANY_CODE):
             return False
     if normalized(want["file"]) != got["file"]:
         return False
@@ -868,12 +1139,13 @@ def human_problems(expected: list[dict[str, Any]], output: str) -> list[str]:
     lines = output.splitlines()
     problems = []
     for item in expected:
-        header = f"{item['severity']}[{item['code']}] "
+        code = r"[a-z0-9.-]+" if item["code"] == ANY_CODE else re.escape(item["code"])
+        header = re.compile(rf"{re.escape(item['severity'])}\[{code}\] ")
         found = False
         for line in lines:
-            if not line.startswith(header):
+            if not (start := header.match(line)):
                 continue
-            location, _, path = line[len(header) :].partition(" ")
+            location, _, path = line[start.end() :].partition(" ")
             if path == item["path"] and location_matches(location, item["file"], item["line"], item["column"]):
                 found = True
                 break
@@ -906,7 +1178,7 @@ def note_matches(line: str, related: dict[str, Any]) -> bool:
 
 def marker_problems(stdout: bytes, stderr: bytes) -> list[str]:
     if MARKER.encode() in stdout or MARKER.encode() in stderr:
-        return ["the output repeats the planted marker value (CFG-SEC-3)"]
+        return [LEAK]
     return []
 
 
@@ -928,6 +1200,8 @@ def not_applicable(case: Case, fmt: Format) -> str | None:
     formats = case.applies_to.get("formats")
     if formats and fmt.id not in formats:
         return f"the case applies to {', '.join(formats)}"
+    if case.run == "init" and not fmt.harness.get("init"):
+        return "the harness declares no init command"
     return None
 
 
@@ -958,11 +1232,44 @@ def inapplicable_reason(case: Case, reasons: list[str]) -> str:
 # Expected failures
 
 
+@dataclass(frozen=True)
+class Listed:
+    """An expected failure: why the cell fails, and a digest of its problems."""
+
+    reason: str
+    digest: str
+
+
 @dataclass
 class ExpectedFailures:
-    failures: dict[tuple[str, str], str]
+    failures: dict[tuple[str, str], Listed]
     unreached: dict[str, str]
     inapplicable: dict[str, str]
+
+
+def digest(problems: list[str]) -> str:
+    """A short digest of a cell's problems, independent of their order."""
+    return hashlib.sha256("\n".join(sorted(problems)).encode("utf-8")).hexdigest()[:12]
+
+
+def unmaskable(problem: str) -> bool:
+    """A leak, a crash, or a hang: never an expected failure."""
+    if problem.endswith(LEAK):
+        return True
+    match = UNMASKABLE.search(problem)
+    return match is not None and (match.group(1) is None or int(match.group(1)) > 3)
+
+
+def unmasked(problems: list[str], listed: Listed) -> str | None:
+    """Why a listed cell's problems still fail the run, or None when the entry covers them."""
+    if any(unmaskable(problem) for problem in problems):
+        return "a leak, a crash, or a timeout is never an expected failure"
+    if digest(problems) != listed.digest:
+        return (
+            f"its problems changed since expected-failures.yaml recorded digest {listed.digest};"
+            " rerun with --write-expected-failures if the change is intended"
+        )
+    return None
 
 
 def statuses(
@@ -970,9 +1277,9 @@ def statuses(
 ) -> dict[tuple[str, str], str]:
     status = {}
     for cell, problems in results.items():
-        listed = cell in expected.failures
+        listed = expected.failures.get(cell)
         if problems:
-            status[cell] = "expected failure" if listed else "fail"
+            status[cell] = "expected failure" if listed and unmasked(problems, listed) is None else "fail"
         else:
             status[cell] = "stale" if listed else "pass"
     return status
@@ -994,8 +1301,12 @@ EXPECTED_HEADER = """\
 # --write-expected-failures` against binaries built from this tree. A failing
 # cell is a format whose reader has not yet converged on the conventions in
 # products/platform/CONFIG-CONVENTIONS.md, not a reason to weaken a case:
-# remove the entry when the product conforms. The runner fails on a failing
-# cell missing here, and with --strict on an entry that no longer holds.
+# remove the entry when the product conforms. Each entry's digest covers the
+# cell's sorted problems, so a listed cell whose problems change fails the run;
+# a leak, a crash, or a timeout is never listed. A format whose baseline fails
+# has only its baseline entry: its other cells do not run. The runner fails on
+# a failing cell missing here, and with --strict on an entry that no longer
+# holds.
 """
 
 
@@ -1003,8 +1314,8 @@ def write_expected_failures(path: Path, value: ExpectedFailures, case_order: lis
     order = {case: index for index, case in enumerate(case_order)}
     document = {
         "expectedFailures": [
-            {"format": fmt, "case": case, "reason": text}
-            for (fmt, case), text in sorted(
+            {"format": fmt, "case": case, "reason": listed.reason, "digest": listed.digest}
+            for (fmt, case), listed in sorted(
                 value.failures.items(), key=lambda item: (item[0][0], order.get(item[0][1], len(order)), item[0][1])
             )
         ],
@@ -1019,7 +1330,7 @@ def write_expected_failures(path: Path, value: ExpectedFailures, case_order: lis
 
 
 EXPECTED_SECTIONS = {
-    "expectedFailures": ("format", "case", "reason"),
+    "expectedFailures": ("format", "case", "reason", "digest"),
     "unreachedFormats": ("format", "reason"),
     "inapplicableCases": ("case", "reason"),
 }
@@ -1049,11 +1360,14 @@ def load_expected_failures(path: Path) -> ExpectedFailures:
                 raise HarnessError(f"{path.name}: a `{section}` entry needs exactly {', '.join(members)}")
             if not all(isinstance(entry[m], str) and entry[m] for m in members):
                 raise HarnessError(f"{path.name}: a `{section}` entry has an empty member")
-            key = tuple(entry[m] for m in members[:-1])
-            key = key if len(key) > 1 else key[0]
+            if "digest" in entry and not re.fullmatch(r"[0-9a-f]{12}", entry["digest"]):
+                raise HarnessError(f"{path.name}: a `{section}` digest is not 12 lowercase hexadecimal digits")
+            names = [m for m in members if m not in ("reason", "digest")]
+            values = tuple(entry[m] for m in names)
+            key = values[0] if len(names) == 1 else values
             if key in targets[section]:
                 raise HarnessError(f"{path.name}: `{section}` lists {key} twice")
-            targets[section][key] = entry["reason"]
+            targets[section][key] = Listed(entry["reason"], entry["digest"]) if "digest" in entry else entry["reason"]
     return value
 
 
@@ -1081,10 +1395,12 @@ def load_registry(path: Path) -> list[Format]:
     document = load_yaml(path)
     if not isinstance(document, dict) or not isinstance(document.get("formats"), list):
         raise HarnessError(f"{path} has no `formats` list")
+    root = path.parents[2]
     formats = []
     for entry in document["formats"]:
         target = entry.get("target")
         roles = entry.get("conformance")
+        schema = entry.get("schema") if isinstance(entry.get("schema"), dict) else {}
         formats.append(
             Format(
                 id=entry["id"],
@@ -1095,13 +1411,15 @@ def load_registry(path: Path) -> list[Format]:
                 kind=target.get("kind") if isinstance(target, dict) else None,
                 roles={role: none(pointer) for role, pointer in roles.items()} if isinstance(roles, dict) else {},
                 harness={},
+                schema=str(root / schema["path"]) if isinstance(schema.get("path"), str) else None,
+                schema_id=schema["id"] if isinstance(schema.get("id"), str) else None,
             )
         )
     return formats
 
 
 HARNESS_KEYS = {
-    "project", "copies", "set", "write", "values", "prepare", "digests", "removedKeys", "retiredApiVersions"
+    "project", "copies", "set", "write", "values", "prepare", "digests", "removedKeys", "retiredApiVersions", "init"
 }
 
 
@@ -1118,6 +1436,11 @@ def load_harness(path: Path) -> dict[str, dict[str, Any]]:
         prepare = harness.get("prepare", [])
         if not isinstance(prepare, list) or not all(isinstance(command, str) for command in prepare):
             raise HarnessError(f"{path.name}: {format_id}: `prepare` is not a list of commands")
+        init = harness.get("init")
+        if init is not None and not (
+            isinstance(init, dict) and set(init) == {"command", "file"} and all(isinstance(v, str) for v in init.values())
+        ):
+            raise HarnessError(f"{path.name}: {format_id}: `init` needs exactly `command` and `file`, both text")
     return formats
 
 
@@ -1231,8 +1554,9 @@ def command_argv(
     """A command template's arguments, its program taken from the binary directory."""
     argv = [expand(part, values) for part in shlex.split(command)]
     for part in argv:
-        if LEFTOVER.search(part):
-            raise HarnessError(f"{fmt.id}: no value for {LEFTOVER.search(part).group(0)} in `{command}`")
+        leftover = LEFTOVER.search(part)
+        if leftover:
+            raise HarnessError(f"{fmt.id}: no value for {leftover.group(0)} in `{command}`")
     program = bin_dir / argv[0]
     if not (program.is_file() and os.access(program, os.X_OK)):
         return None, f"{argv[0]} is not in the binary directory"
@@ -1281,6 +1605,8 @@ def exit_problem(code: int | None, wanted: int, stderr: bytes, prefix: str = "")
         return [f"{prefix}the command did not finish within {TIMEOUT_SECONDS} seconds"]
     if code == wanted:
         return []
+    if code < 0:
+        return [f"{prefix}killed by signal {-code}"]
     first = next((line.strip() for line in stderr.decode("utf-8", "replace").splitlines() if line.strip()), "")
     return [f"{prefix}exit status {code}, expected {wanted}" + (f": {first}" if first else "")]
 
@@ -1326,8 +1652,51 @@ def check_variant(
     return problems
 
 
+def modeline_problems(path: Path, name: str, schema_id: str | None) -> list[str]:
+    """How the first line of a file init wrote departs from the schema modeline (CFG-SCHEMA-7)."""
+    if schema_id is None:
+        return ["the format registers no schema `$id` for the modeline to name"]
+    if not path.is_file():
+        return [f"init wrote no {name}"]
+    first = path.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0].rstrip("\r")
+    if not first.startswith(MODELINE):
+        return [f"the first line of {name} is not a `{MODELINE}` modeline"]
+    named = first[len(MODELINE) :].strip()
+    if named == schema_id:
+        return []
+    local = path.parent / named
+    if "://" not in named and local.is_file():
+        try:
+            document = json.loads(local.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            document = None
+        if isinstance(document, dict) and document.get("$id") == schema_id:
+            return []
+    return [f"the modeline in {name} names neither the format's schema `$id` nor a local copy of that schema"]
+
+
+def run_init_cell(fmt: Format, bin_dir: Path) -> list[str]:
+    """Run the format's init command in a fresh directory and check the modeline of the file it writes."""
+    init = fmt.harness["init"]
+    work = Path(os.path.realpath(tempfile.mkdtemp(prefix="config-conformance.")))
+    try:
+        values = {"work": str(work), "directory": str(work / "init")}
+        argv, missing = command_argv(init["command"], fmt, values, bin_dir)
+        if argv is None:
+            return [str(missing)]
+        code, stdout, stderr = run_command(argv, work, check_environment(bin_dir))
+        problems = exit_problem(code, 0, stderr, "init: ") + marker_problems(stdout, stderr)
+        if code == 0:
+            problems += modeline_problems(work / "init" / init["file"], init["file"], fmt.schema_id)
+        return list(dict.fromkeys(sanitize(problem, str(work)) for problem in problems))
+    finally:
+        remove_tree(work)
+
+
 def run_cell(root: Path, fmt: Format, case: Case, bin_dir: Path) -> list[str]:
     """Run one case against one format; the problems found, sanitized."""
+    if case.run == "init":
+        return run_init_cell(fmt, bin_dir)
     staged = stage(root, fmt)
     try:
         argv, missing = check_argv(fmt, staged.values, bin_dir)
@@ -1341,7 +1710,8 @@ def run_cell(root: Path, fmt: Format, case: Case, bin_dir: Path) -> list[str]:
         for variant in mutate(text, case.mutation, fmt):
             if staged.target.is_symlink():
                 staged.target.unlink()
-            staged.target.write_bytes(encode(variant.text, case.encoding))
+            written = variant.finish(variant.text, staged) if variant.finish else variant.text
+            staged.target.write_bytes(encode(written, case.encoding))
             if fmt.harness.get("digests"):
                 refresh_digests(staged, fmt.harness["digests"])
             expected = resolve_expected(case.expect, case.operation, variant, str(staged.target))
@@ -1367,7 +1737,7 @@ def run_cells(
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=ROOT, help="repository root")
     parser.add_argument("--bin-dir", type=Path, help="directory of built binaries (default: <root>/target/debug)")
     parser.add_argument("--strict", action="store_true", help="also fail on stale or unacknowledged entries")
@@ -1389,17 +1759,23 @@ class Plan:
     cases: list[Case]
     cells: list[tuple[Format, Case]]
     inapplicable: dict[tuple[str, str], str]
+    # Formats whose check is not reached but whose harness declares `init`:
+    # they get the `run: init` cells only.
+    init_only: list[Format] = field(default_factory=list)
 
 
 def plan(root: Path, formats: list[Format], cases: list[Case], harness: dict[str, dict[str, Any]]) -> Plan:
     reached, skipped = partition_formats(formats)
     reached = [fmt.with_harness(harness.get(fmt.id, {})) for fmt in reached]
+    init_only = [
+        fmt.with_harness(harness[fmt.id]) for fmt in formats if fmt.id in skipped and harness.get(fmt.id, {}).get("init")
+    ]
     cells, inapplicable = [], {}
     for fmt in reached:
         text = prepare_example((root / str(fmt.example)).read_text(encoding="utf-8"), fmt, {})
         for case in cases:
             why = not_applicable(case, fmt)
-            if why is None:
+            if why is None and case.run is None:
                 try:
                     mutate(text, case.mutation, fmt)
                 except NotApplicable as error:
@@ -1408,7 +1784,15 @@ def plan(root: Path, formats: list[Format], cases: list[Case], harness: dict[str
                 cells.append((fmt, case))
             else:
                 inapplicable[(fmt.id, case.id)] = why
-    return Plan(reached, skipped, cases, cells, inapplicable)
+    for fmt in init_only:
+        for case in cases:
+            if case.run is not None:
+                why = not_applicable(case, fmt)
+                if why is None:
+                    cells.append((fmt, case))
+                else:
+                    inapplicable[(fmt.id, case.id)] = why
+    return Plan(reached, skipped, cases, cells, inapplicable, init_only)
 
 
 def validate_ids(expected: ExpectedFailures, formats: list[Format], cases: list[Case], harness: dict[str, Any]) -> None:
@@ -1453,19 +1837,22 @@ def main(argv: list[str] | None = None) -> int:
         work = plan(root, selected, chosen, harness)
         baselines = [(fmt, case) for fmt, case in work.cells if case.id == BASELINE]
         results = run_cells(root, baselines, bin_dir, args.jobs)
-        others = []
+        # A format whose baseline fails gets no other check cell: its one
+        # expected failure is the baseline's. An init cell does not read the
+        # example, so it runs regardless.
+        others, blocked = [], []
         for fmt, case in work.cells:
             if case.id == BASELINE:
                 continue
-            if results[(fmt.id, BASELINE)]:
-                results[(fmt.id, case.id)] = ["the baseline case fails for this format, so the case did not run"]
+            if case.run is None and results[(fmt.id, BASELINE)]:
+                blocked.append((fmt.id, case.id))
             else:
                 others.append((fmt, case))
         results.update(run_cells(root, others, bin_dir, args.jobs))
     except HarnessError as error:
         print(f"run-config-conformance: error: {error}", file=sys.stderr)
         return 1
-    return report(args, work, results, expected, expected_path)
+    return report(args, work, results, expected, expected_path, blocked)
 
 
 def report(
@@ -1474,8 +1861,11 @@ def report(
     results: dict[tuple[str, str], list[str]],
     expected: ExpectedFailures,
     expected_path: Path,
+    blocked: list[tuple[str, str]] | None = None,
 ) -> int:
     status = statuses(results, expected)
+    for cell in blocked or []:
+        status[cell] = "blocked"
     for cell in work.inapplicable:
         status[cell] = "not applicable"
     partial = bool(args.only_format or args.only_case)
@@ -1490,23 +1880,37 @@ def report(
             inapplicable[case.id] = inapplicable_reason(case, reasons)
 
     if args.write_expected_failures:
-        failures = {cell: reason(problems) for cell, problems in results.items() if problems}
+        failures, refused = {}, []
+        for cell, problems in results.items():
+            if any(unmaskable(problem) for problem in problems):
+                refused.append(cell)
+            elif problems:
+                failures[cell] = Listed(reason(problems), digest(problems))
         value = ExpectedFailures(failures, unreached, inapplicable)
         write_expected_failures(expected_path, value, [case.id for case in work.cases])
+        for format_id, case_id in refused:
+            print(f"FAIL {format_id} {case_id}")
+            print("  not recorded: a leak, a crash, or a timeout is never an expected failure")
+            for problem in results[(format_id, case_id)]:
+                print(f"  {problem}")
         print(
             f"wrote {expected_path.name}: {plural(len(failures), 'expected failure')}, "
             f"{plural(len(unreached), 'unreached format')}, {plural(len(inapplicable), 'inapplicable case')}"
         )
-        return 0
+        return 1 if refused else 0
 
     if args.matrix:
-        for fmt in work.reached:
+        for fmt in work.reached + work.init_only:
             for case in work.cases:
-                print(f"{fmt.id}\t{case.id}\t{status[(fmt.id, case.id)]}")
+                if (fmt.id, case.id) in status:
+                    print(f"{fmt.id}\t{case.id}\t{status[(fmt.id, case.id)]}")
     for (format_id, case_id), problems in results.items():
         cell_status = status[(format_id, case_id)]
         if cell_status == "fail" or (cell_status == "expected failure" and args.verbose):
             print(f"{cell_status.upper()} {format_id} {case_id}")
+            listed = expected.failures.get((format_id, case_id))
+            if cell_status == "fail" and listed is not None:
+                print(f"  listed in expected-failures.yaml, but {unmasked(problems, listed)}")
             for problem in problems:
                 print(f"  {problem}")
     if args.verbose:
@@ -1514,6 +1918,7 @@ def report(
             print(f"not applicable {format_id} {case_id}: {why}")
 
     stale = [f"stale: {f} {c} now passes" for (f, c), s in status.items() if s == "stale"]
+    stale += [f"stale: {f} {c} is blocked by its failing baseline" for (f, c) in expected.failures if status.get((f, c)) == "blocked"]
     strict_problems = []
     if not partial:
         stale += [f"stale: {f} {c} no longer runs" for (f, c) in expected.failures if (f, c) not in status]
@@ -1531,7 +1936,8 @@ def report(
     counts = Counter(status.values())
     print(
         f"{plural(len(status), 'cell')}: {counts['pass']} pass, {plural(counts['expected failure'], 'expected failure')}, "
-        f"{counts['fail']} fail, {counts['stale']} stale, {counts['not applicable']} not applicable"
+        f"{counts['fail']} fail, {counts['stale']} stale, {counts['blocked']} blocked, "
+        f"{counts['not applicable']} not applicable"
     )
     if counts["fail"]:
         return 1

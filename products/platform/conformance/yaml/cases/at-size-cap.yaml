@@ -1,0 +1,8 @@
+id: at-size-cap
+rules: [CFG-YAML-6]
+summary: A file of exactly 1 MiB, padded with comment lines at run time, is accepted.
+encoding:
+  size: 1048576
+expect:
+  exit: 0
+  diagnostics: []

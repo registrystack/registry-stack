@@ -1,0 +1,15 @@
+id: path-link-outside-project
+rules: [CFG-VAL-8]
+summary: A path inside the project whose link resolves outside the project directory is refused at the path member.
+appliesTo:
+  audiences: [authored]
+mutation:
+  pathOutside:
+    role: relativePath
+    via: link
+expect:
+  exit: 1
+  diagnostics:
+    - code: any
+      path: "{pointer}"
+      at: {line: 1, column: 1}

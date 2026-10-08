@@ -5,9 +5,11 @@
 formats:
   breg/module:
     project: products/breg/acceptance/asset-site-placement
+    init: {command: "bregctl init {directory}", file: modules/record-notes/module.yaml}
 
   casework/fixture:
     project: products/casework/examples/payment-review
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: fixtures/standalone-decision.yaml}
   casework/simulation:
     project: products/casework/examples/multi-stage-routing-clocks
   casework/holiday-set:
@@ -15,16 +17,20 @@ formats:
 
   scheduling/fixture:
     project: products/scheduling/examples/standalone-arrival-window
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: fixtures/counter-stations.yaml}
 
   messaging/template:
     project: products/messaging/examples/starter
+    init: {command: "messagingctl init {directory}", file: templates/appointment-reminder/1/template.yaml}
   messaging/provider:
     project: products/messaging/examples/starter
+    init: {command: "messagingctl init {directory}", file: providers/sms-gateway/provider.yaml}
   # The removed key the Messaging runtime refuses by name; the registry does
   # not declare it yet.
   messaging/runtime:
     removedKeys:
       - /authentication/oidc/jwksUri
+    init: {command: "messagingctl init {directory}", file: runtime.example.yaml}
 
   discovery/evidence-mapping:
     project: products/discovery/fixtures/project
@@ -41,18 +47,22 @@ formats:
       evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
     prepare:
       - evidencectl keygen signing --out-dir {project}/secrets
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
   evidence/question:
     project: crates/registry-evidencectl/templates/sqlite-extract
     write:
       evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: questions/record-status.yaml}
   evidence/source:
     project: crates/registry-evidencectl/templates/sqlite-extract
     write:
       evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: sources/record-status.yaml}
   evidence/selector:
     project: crates/registry-evidencectl/templates/sqlite-extract
     write:
       evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: selectors/record-reference-v1.yaml}
   evidence/target-governance:
     project: crates/registry-evidencectl/templates/sqlite-extract
     write:
@@ -102,3 +112,35 @@ formats:
       - /listener/port
       - /metricsListener/bindHost
       - /metricsListener/port
+
+  # The command each product documents for starting a project, and the file
+  # of the format it writes there (CFG-SCHEMA-7: its first line is the schema
+  # modeline). Formats with an entry above carry their `init` there.
+  breg/project:
+    init: {command: "bregctl init {directory}", file: registry.yaml}
+  breg/runtime:
+    init: {command: "bregctl init {directory}", file: runtime.example.yaml}
+  breg/journeys:
+    init: {command: "bregctl init {directory}", file: tests/journeys.yaml}
+  breg/dev-clients:
+    init: {command: "bregctl init {directory}", file: dev-clients.yaml}
+  casework/project:
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: casework.yaml}
+  casework/runtime:
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
+  casework/dev-clients:
+    init: {command: "caseworkctl init --template standalone-decision {directory}", file: dev-clients.yaml}
+  scheduling/project:
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: scheduling.yaml}
+  scheduling/records:
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
+  scheduling/runtime:
+    init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: runtime.example.yaml}
+  messaging/project:
+    init: {command: "messagingctl init {directory}", file: messaging.yaml}
+  render/bundle:
+    init: {command: "registry-render init {directory}", file: manifest.yaml}
+  render/labels:
+    init: {command: "registry-render init {directory}", file: labels/en.yaml}
+  evidence/authoring-project:
+    init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: evidence-project.yaml}

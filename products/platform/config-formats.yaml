@@ -96,6 +96,9 @@ formats:
       optionalText: /package/sourceRevision
       integer: /entities/0/batch/maximumItems
       boolean: /accessProfiles/0/default
+      idList: /entities
+      set: /accessProfiles/0/requiredPurposes
+      reference: /entities/0/fields/2/vocabulary
     securityMembers:
       - pointer: /accessProfiles/*/anonymous
         whenOmitted: closed
@@ -1126,6 +1129,9 @@ formats:
       optionalText: none
       integer: /reviewKinds/0/retention/terminalDays
       boolean: none
+      idList: /queues
+      set: /accessProfiles/0/requiredScopes
+      reference: /reviewKinds/0/stages/0/queue
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: unclassified
@@ -1205,6 +1211,7 @@ formats:
       optionalText: /expect/queue
       integer: none
       boolean: none
+      operand: /review/display/amountMinor
     securityMembers: []
     restrictingMembers: []
   - id: casework/simulation
@@ -1263,6 +1270,7 @@ formats:
       optionalText: none
       integer: /revision
       boolean: none
+      set: /dates
     securityMembers: []
     restrictingMembers: []
   - id: casework/dev-clients
@@ -2018,6 +2026,9 @@ formats:
       optionalText: /offerings/0/because
       integer: /offerings/0/exactTime/durationMinutes
       boolean: none
+      idList: /services
+      set: /openings/0/weekdays
+      reference: /offerings/0/service
     securityMembers: []
     restrictingMembers: []
   - id: scheduling/records
@@ -2047,6 +2058,8 @@ formats:
       optionalText: none
       integer: none
       boolean: /pools/0/members/0/available
+      idList: /locations
+      reference: /exceptions/0/location
     securityMembers: []
     restrictingMembers: []
   - id: scheduling/fixture
@@ -2078,6 +2091,7 @@ formats:
       optionalText: none
       integer: none
       boolean: none
+      idList: /facts/locations
     securityMembers: []
     restrictingMembers: []
   - id: scheduling/runtime
@@ -2180,6 +2194,9 @@ formats:
       optionalText: /senderProfiles/0/sender
       integer: /senderProfiles/1/maximumSegments
       boolean: /providers/1/idempotentSubmit
+      idList: /providers
+      set: /accessProfiles/0/requiredScopes
+      reference: /senderProfiles/0/provider
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: unclassified
@@ -2211,6 +2228,7 @@ formats:
       optionalText: none
       integer: none
       boolean: none
+      set: /locales
     securityMembers: []
     restrictingMembers: []
   - id: messaging/provider
@@ -2240,6 +2258,7 @@ formats:
       optionalText: none
       integer: /capabilities/concurrencyLimit
       boolean: none
+      relativePath: /prepareScript
     securityMembers: []
     restrictingMembers: []
   - id: messaging/runtime
@@ -2276,6 +2295,7 @@ formats:
       optionalText: /audit/path
       integer: /retention/recordDays
       boolean: none
+      set: /authentication/oidc/allowedClients
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
@@ -2412,6 +2432,7 @@ formats:
       optionalText: /jurisdiction
       integer: none
       boolean: none
+      set: /alternatives/0/evidenceTypeIds
     securityMembers: []
     restrictingMembers: []
   - id: discovery/runtime
@@ -2521,6 +2542,9 @@ formats:
       optionalText: none
       integer: /documents/0/version
       boolean: none
+      idList: /documents
+      set: /documents/0/labels
+      relativePath: /documents/0/entry
     securityMembers: []
     restrictingMembers: []
   - id: render/labels
@@ -2648,6 +2672,9 @@ formats:
       optionalText: /requirements/0/observationTimezone
       integer: /rateLimits/burstPerPrincipal
       boolean: /requirements/0/concepts/0/required
+      idList: /requirements
+      set: /requirements/0/purposes
+      relativePath: /sources/source-a/extractScript
     securityMembers:
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
@@ -2752,6 +2779,7 @@ formats:
       optionalText: none
       integer: none
       boolean: none
+      idList: /cases
     securityMembers: []
     restrictingMembers: []
   - id: evidence/authoring-project
@@ -2821,6 +2849,7 @@ formats:
       optionalText: /subject/role
       integer: /governance/validitySeconds
       boolean: none
+      idList: /answers
     securityMembers: []
     restrictingMembers: []
   - id: evidence/source
@@ -2850,6 +2879,7 @@ formats:
       optionalText: none
       integer: none
       boolean: none
+      set: /request/projection
     securityMembers: []
     restrictingMembers: []
   - id: evidence/selector
@@ -3426,6 +3456,7 @@ formats:
       optionalText: none
       integer: /datasets/0/entities/0/fields/0/constraints/max_length
       boolean: none
+      idList: /datasets
     securityMembers: []
     restrictingMembers: []
   - id: manifest/profile
@@ -3455,6 +3486,7 @@ formats:
       optionalText: /profile/description
       integer: none
       boolean: none
+      relativePath: /fixtures/0/path
     securityMembers: []
     restrictingMembers: []
 

@@ -117,6 +117,12 @@ ENUMS = {
 SCHEMA_ORIGINS = ("generated", "hand-written", "frozen-contract")
 WHEN_OMITTED = ("refused", "open", "closed", "unclassified")
 CONFORMANCE_CASES = {"requiredText": str, "optionalText": str, "integer": int, "boolean": bool}
+# Optional roles naming a shape the generic corpus cases mutate: a list of
+# named items (CFG-ID-5), a set (CFG-ID-6), a reference to a local identifier
+# (CFG-ID-4), a relative path to a file beside the example (CFG-VAL-8), and an
+# operand another declaration types (CFG-VAL-9).
+CONFORMANCE_SHAPES = ("idList", "set", "reference", "relativePath", "operand")
+LOCAL_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 CLASSES = ("protocol-constant", "external-format", "exchange-model", "stable-move", "decision", "pending")
 GROWTH_CLASSES = frozenset({"protocol-constant", "external-format", "exchange-model"})
@@ -741,7 +747,7 @@ def expand(root: object, node: object, depth: int = 0) -> list[dict]:
     return nodes
 
 
-def alternatives(root: object, node: object) -> list[list[dict]]:
+def alternatives(root: object, node: object) -> list[list[list[dict]]]:
     groups = []
     for part in expand(root, node):
         for keyword in ("anyOf", "oneOf"):
@@ -1212,9 +1218,19 @@ class Lint:
         cases = entry["conformance"]
         if cases == "none":
             return
-        if not isinstance(cases, dict) or set(cases) != set(CONFORMANCE_CASES):
-            self.error(f"{fid}: conformance needs exactly {', '.join(CONFORMANCE_CASES)}, or none")
+        if (
+            not isinstance(cases, dict)
+            or not set(CONFORMANCE_CASES) <= set(cases)
+            or set(cases) - set(CONFORMANCE_CASES) - set(CONFORMANCE_SHAPES)
+        ):
+            self.error(
+                f"{fid}: conformance needs {', '.join(CONFORMANCE_CASES)}, may add "
+                f"{', '.join(CONFORMANCE_SHAPES)}, or is none"
+            )
             return
+        for shape in CONFORMANCE_SHAPES:
+            if shape in cases and cases[shape] != "none" and document is not None:
+                self.check_conformance_shape(fid, entry, shape, str(cases[shape]), document, schema)
         for case, expected in CONFORMANCE_CASES.items():
             member = cases[case]
             if member == "none" or document is None:
@@ -1244,6 +1260,47 @@ class Lint:
                 self.error(f"{fid}: conformance requiredText {member} is not required by the schema")
             if case == "optionalText" and steps and steps[-1]:
                 self.error(f"{fid}: conformance optionalText {member} is required by the schema")
+
+    def check_conformance_shape(
+        self, fid: str, entry: dict, shape: str, member: str, document: object, schema: object
+    ) -> None:
+        value: object = document
+        for token in split_pointer(member):
+            if isinstance(value, dict) and token in value:
+                value = value[token]
+            elif isinstance(value, list) and token.isdigit() and int(token) < len(value):
+                value = value[int(token)]
+            else:
+                self.error(f"{fid}: conformance {shape} {member} does not resolve in the example")
+                return
+        problem = None
+        if shape == "idList" and not (
+            isinstance(value, list) and value
+            and all(isinstance(item, dict) and isinstance(item.get("id"), str) for item in value)
+        ):
+            problem = "is not a list of mappings with an `id` in the example"
+        elif shape == "set" and not (
+            isinstance(value, list) and value
+            and all(item is not None and not isinstance(item, (list, dict)) for item in value)
+        ):
+            problem = "is not a list of scalars in the example"
+        elif shape == "reference" and not (isinstance(value, str) and LOCAL_ID_RE.match(value)):
+            problem = "is not an identifier in the example"
+        elif shape == "operand" and not isinstance(value, (int, float)):
+            problem = "is not a number or boolean in the example"
+        elif shape == "relativePath":
+            directory = (self.root / str(entry["example"])).parent
+            relative = Path(value) if isinstance(value, str) else None
+            if (
+                relative is None or relative.is_absolute() or ".." in relative.parts
+                or not (directory / relative).is_file()
+            ):
+                problem = "does not name a file in the example's directory"
+        if problem:
+            self.error(f"{fid}: conformance {shape} {member} {problem}")
+            return
+        if isinstance(schema, dict) and resolve_member(schema, member) is None:
+            self.error(f"{fid}: conformance {shape} {member} does not resolve in the schema")
 
     def check_members(self, fid: str, entry: dict, schema: object) -> None:
         security = entry["securityMembers"]

@@ -1,0 +1,17 @@
+id: duplicate-id
+rules: [CFG-ID-5]
+summary: A list of named items with its first item copied after the last is refused at the copy's id, naming the first item's id.
+mutation:
+  duplicateItem:
+    role: idList
+expect:
+  exit: 1
+  diagnostics:
+    - code: config.duplicate-id
+      path: "{pointer}/{index}/id"
+      from: itemId
+      at: {line: 1, column: 1}
+      related:
+        - path: "{pointer}/0/id"
+          from: firstId
+          at: {line: 1, column: 1}

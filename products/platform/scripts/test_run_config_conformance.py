@@ -27,6 +27,7 @@ import textwrap
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -57,7 +58,7 @@ labels: {owner: team}
 """
 
 
-def demo_format(**changes) -> "runner.Format":
+def demo_format(**changes) -> Any:
     values = dict(
         id="demo/project",
         syntax="yaml",
@@ -241,6 +242,166 @@ class MutationTest(unittest.TestCase):
     def test_unknown_operation_is_a_harness_error(self) -> None:
         with self.assertRaises(runner.HarnessError):
             runner.mutate(EXAMPLE, {"rename": {}}, demo_format())
+
+    def test_cfg_id_5_duplicate_item_copies_the_first_item_after_the_last(self) -> None:
+        fmt = demo_format(roles={"idList": "/items"})
+        variant = one(runner.mutate(EXAMPLE, {"duplicateItem": {"role": "idList"}}, fmt))
+        self.assertIn(
+            "  - id: first\n    enabled: true\n    note: 'quoted'\n"
+            "  - id: first\n    enabled: true\n    note: 'quoted'\nlabels:",
+            variant.text,
+        )
+        site = variant.sites[0]
+        self.assertEqual(site.anchors["item"], (14, 5))
+        self.assertEqual(site.anchors["itemId"], (14, 9))
+        self.assertEqual(site.anchors["first"], (11, 5))
+        self.assertEqual(site.anchors["firstId"], (11, 9))
+        self.assertEqual(site.values["pointer"], "/items")
+        self.assertEqual(site.values["index"], "1")
+
+    def test_duplicate_item_copies_an_item_whose_dash_stands_alone(self) -> None:
+        text = "entities:\n  -\n    id: person\n    note: x\nother: 1\n"
+        fmt = demo_format(roles={"idList": "/entities"})
+        variant = one(runner.mutate(text, {"duplicateItem": {"role": "idList"}}, fmt))
+        self.assertEqual(
+            variant.text,
+            "entities:\n  -\n    id: person\n    note: x\n  -\n    id: person\n    note: x\nother: 1\n",
+        )
+        self.assertEqual(variant.sites[0].anchors["item"], (6, 5))
+        self.assertEqual(variant.sites[0].anchors["firstId"], (3, 9))
+
+    def test_cfg_id_6_duplicate_item_in_a_block_set(self) -> None:
+        text = "scopes:\n  - read\n  - write\n"
+        fmt = demo_format(roles={"set": "/scopes"})
+        variant = one(runner.mutate(text, {"duplicateItem": {"role": "set"}}, fmt))
+        self.assertEqual(variant.text, "scopes:\n  - read\n  - write\n  - read\n")
+        self.assertEqual(variant.sites[0].anchors["item"], (4, 5))
+        self.assertEqual(variant.sites[0].anchors["first"], (2, 5))
+        self.assertEqual(variant.sites[0].values["index"], "2")
+        self.assertNotIn("itemId", variant.sites[0].anchors)
+
+    def test_cfg_id_6_duplicate_item_in_a_flow_set(self) -> None:
+        fmt = demo_format(roles={"set": "/labels"})
+        variant = one(runner.mutate("labels: [a, 'b']\n", {"duplicateItem": {"role": "set"}}, fmt))
+        self.assertEqual(variant.text, "labels: [a, 'b', a]\n")
+        self.assertEqual(variant.sites[0].anchors["item"], (1, 18))
+        self.assertEqual(variant.sites[0].anchors["first"], (1, 10))
+
+    def test_duplicate_item_needs_a_list(self) -> None:
+        fmt = demo_format(roles={"set": "/project/id"})
+        with self.assertRaises(runner.HarnessError):
+            runner.mutate(EXAMPLE, {"duplicateItem": {"role": "set"}}, fmt)
+
+    def test_duplicate_item_without_the_role_does_not_apply(self) -> None:
+        with self.assertRaises(runner.NotApplicable):
+            runner.mutate(EXAMPLE, {"duplicateItem": {"role": "set"}}, demo_format())
+
+    def test_a_role_pointer_the_example_lacks_names_the_registry(self) -> None:
+        for mutation, roles in (
+            ({"duplicateItem": {"role": "idList"}}, {"idList": "/queues"}),
+            ({"member": {"role": "reference", "value": "x"}}, {"reference": "/queues/0/id"}),
+            ({"pathOutside": {"role": "relativePath", "via": "parent"}}, {"relativePath": "/script"}),
+        ):
+            with self.assertRaises(runner.HarnessError) as raised:
+                runner.mutate(EXAMPLE, mutation, demo_format(roles=roles))
+            message = str(raised.exception)
+            self.assertIn("demo/project: the conformance", message)
+            self.assertIn("does not resolve in the example", message)
+            self.assertIn(runner.REGISTRY, message)
+
+    def path_example(self, temporary: str) -> Any:
+        work = Path(os.path.realpath(temporary))
+        directory = work / "project/sub"
+        (directory / "scripts").mkdir(parents=True)
+        (directory / "scripts/run.rhai").write_text("script\n", encoding="utf-8")
+        target = directory / "file.yaml"
+        target.write_text("script: scripts/run.rhai\n", encoding="utf-8")
+        return runner.Staged(work, target, work / "project", {})
+
+    def test_cfg_val_8_path_outside_climbs_out_of_the_work_directory(self) -> None:
+        fmt = demo_format(roles={"relativePath": "/script"})
+        variant = one(
+            runner.mutate("script: scripts/run.rhai\n", {"pathOutside": {"role": "relativePath", "via": "parent"}}, fmt)
+        )
+        self.assertEqual(variant.sites[0].anchors["value"], (1, 9))
+        self.assertEqual(variant.sites[0].values["pointer"], "/script")
+        with tempfile.TemporaryDirectory() as temporary:
+            staged = self.path_example(temporary)
+            text = variant.finish(variant.text, staged)
+            self.assertEqual(text, 'script: "../../conformance-outside/run.rhai"\n')
+            outside = staged.work / "conformance-outside/run.rhai"
+            self.assertEqual(outside.read_text(encoding="utf-8"), "script\n")
+            self.assertTrue((staged.target.parent / "scripts/run.rhai").is_file())
+
+    def test_cfg_val_8_path_outside_through_a_link(self) -> None:
+        fmt = demo_format(roles={"relativePath": "/script"})
+        text = "script: scripts/run.rhai\n"
+        variant = one(runner.mutate(text, {"pathOutside": {"role": "relativePath", "via": "link"}}, fmt))
+        with tempfile.TemporaryDirectory() as temporary:
+            staged = self.path_example(temporary)
+            self.assertEqual(variant.finish(variant.text, staged), text)
+            link = staged.target.parent / "scripts/run.rhai"
+            self.assertTrue(link.is_symlink())
+            self.assertFalse(os.path.isabs(os.readlink(link)))
+            self.assertEqual(Path(os.path.realpath(link)), staged.work / "conformance-outside/run.rhai")
+            self.assertEqual(link.read_text(encoding="utf-8"), "script\n")
+
+    def test_path_outside_needs_the_file_the_path_names(self) -> None:
+        fmt = demo_format(roles={"relativePath": "/script"})
+        variant = one(
+            runner.mutate("script: scripts/gone.rhai\n", {"pathOutside": {"role": "relativePath", "via": "link"}}, fmt)
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            staged = self.path_example(temporary)
+            with self.assertRaises(runner.HarnessError):
+                variant.finish(variant.text, staged)
+
+    def test_path_outside_names_its_route(self) -> None:
+        fmt = demo_format(roles={"relativePath": "/script"})
+        with self.assertRaises(runner.HarnessError):
+            runner.mutate("script: a.rhai\n", {"pathOutside": {"role": "relativePath", "via": "tunnel"}}, fmt)
+
+    def schema_format(self, temporary: str, schema: dict) -> Any:
+        path = Path(temporary) / "demo.schema.json"
+        path.write_text(json.dumps(schema), encoding="utf-8")
+        return demo_format(schema=str(path))
+
+    def test_cfg_qty_4_boundaries_sweep_each_bounded_integer(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "a": {"type": "integer", "minimum": 1, "exclusiveMaximum": 10},
+                "b": {"type": "integer", "minimum": 0},
+                "list": {"type": "array", "items": {"$ref": "#/$defs/limit"}},
+            },
+            "$defs": {"limit": {"type": "integer", "minimum": 2, "maximum": 5}},
+        }
+        text = "a: 5\nb: 3\nlist: [4]\nquoted: '7'\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            variants = runner.mutate(text, {"boundaries": {}}, fmt)
+        self.assertEqual(
+            [variant.text for variant in variants],
+            [
+                "a: 10\nb: 3\nlist: [4]\nquoted: '7'\n",
+                "a: 0\nb: 3\nlist: [4]\nquoted: '7'\n",
+                "a: 5\nb: 3\nlist: [6]\nquoted: '7'\n",
+                "a: 5\nb: 3\nlist: [1]\nquoted: '7'\n",
+            ],
+        )
+        self.assertEqual(
+            [(variant.sites[0].values["pointer"], variant.sites[0].anchors["value"]) for variant in variants],
+            [("/a", (1, 4)), ("/a", (1, 4)), ("/list/0", (3, 8)), ("/list/0", (3, 8))],
+        )
+
+    def test_boundaries_without_a_bounded_integer_or_a_schema_do_not_apply(self) -> None:
+        with self.assertRaises(runner.NotApplicable):
+            runner.mutate(EXAMPLE, {"boundaries": {}}, demo_format())
+        schema = {"type": "object", "properties": {"b": {"type": "integer", "minimum": 0}}}
+        with tempfile.TemporaryDirectory() as temporary:
+            fmt = self.schema_format(temporary, schema)
+            with self.assertRaises(runner.NotApplicable):
+                runner.mutate("b: 3\n", {"boundaries": {}}, fmt)
 
 
 class EncodingTest(unittest.TestCase):
@@ -476,6 +637,57 @@ class ReportTest(unittest.TestCase):
             "<work>/project/a.yaml <marker>",
         )
 
+    def test_cfg_id_4_any_code_matches_every_code_at_the_stated_place(self) -> None:
+        anything = expected(code=runner.ANY_CODE)
+        self.assertEqual(runner.match_problems([anything], [diagnostic(code="demo.reference.unknown")]), [])
+        self.assertEqual(
+            runner.match_problems([anything], [diagnostic(path="/b")]),
+            ["missing a diagnostic of any code at /a 3:1", "unexpected yaml.duplicate-key at /b 3:1"],
+        )
+        self.assertEqual(
+            runner.match_problems([anything], [diagnostic(), diagnostic(code="demo.other")]),
+            ["unexpected demo.other at /a 3:1"],
+        )
+
+    def test_any_code_in_the_human_output(self) -> None:
+        output = "error[demo.reference.unknown] /w/p.yaml:3:1 /a\n  x\n  next: y\n1 error, 0 warnings in 1 file\n"
+        self.assertEqual(runner.human_problems([expected(code=runner.ANY_CODE)], output), [])
+        self.assertEqual(
+            runner.human_problems([expected(code=runner.ANY_CODE, path="/b")], output),
+            ["human output has no line for a diagnostic of any code at /b 3:1"],
+        )
+
+    def test_cfg_schema_7_modeline_problems(self) -> None:
+        schema_id = "https://id.registrystack.org/schemas/demo/project.v1alpha1.schema.json"
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            file = directory / "project.yaml"
+            file.write_text(f"# yaml-language-server: $schema={schema_id}\napiVersion: x\n", encoding="utf-8")
+            self.assertEqual(runner.modeline_problems(file, "project.yaml", schema_id), [])
+            (directory / "schemas").mkdir()
+            (directory / "schemas/project.schema.json").write_text(json.dumps({"$id": schema_id}), encoding="utf-8")
+            file.write_text("# yaml-language-server: $schema=schemas/project.schema.json\n", encoding="utf-8")
+            self.assertEqual(runner.modeline_problems(file, "project.yaml", schema_id), [])
+            (directory / "schemas/other.schema.json").write_text(json.dumps({"$id": "x"}), encoding="utf-8")
+            file.write_text("# yaml-language-server: $schema=schemas/other.schema.json\n", encoding="utf-8")
+            self.assertEqual(
+                runner.modeline_problems(file, "project.yaml", schema_id),
+                ["the modeline in project.yaml names neither the format's schema `$id` nor a local copy of that schema"],
+            )
+            file.write_text("apiVersion: x\n", encoding="utf-8")
+            self.assertEqual(
+                runner.modeline_problems(file, "project.yaml", schema_id),
+                ["the first line of project.yaml is not a `# yaml-language-server: $schema=` modeline"],
+            )
+            self.assertEqual(
+                runner.modeline_problems(directory / "absent.yaml", "absent.yaml", schema_id),
+                ["init wrote no absent.yaml"],
+            )
+            self.assertEqual(
+                runner.modeline_problems(file, "project.yaml", None),
+                ["the format registers no schema `$id` for the modeline to name"],
+            )
+
 
 class PlanTest(unittest.TestCase):
     def case(self, **changes):
@@ -510,6 +722,33 @@ class PlanTest(unittest.TestCase):
                 "x",
             )
 
+    def test_cfg_schema_7_an_init_case_runs_the_init_command_only(self) -> None:
+        init = self.case(run="init", expect={"exit": 0, "report": False})
+        self.assertEqual(init.run, "init")
+        self.assertIsNone(self.case().run)
+        for changes in (
+            {"run": "build", "expect": {"exit": 0, "report": False}},
+            {"run": "init", "expect": {"exit": 1, "report": False}},
+            {"run": "init", "expect": {"exit": 0, "diagnostics": []}},
+            {"run": "init", "expect": {"exit": 0, "report": False}, "mutation": {"append": "a: 1\n"}},
+            {"run": "init", "expect": {"exit": 0, "report": False}, "args": ["--force"]},
+            {"run": "init", "expect": {"exit": 0, "report": False}, "encoding": {"size": 9}},
+            {"run": "init", "expect": {"exit": 0, "report": False}, "human": True},
+        ):
+            with self.assertRaises(runner.HarnessError, msg=changes):
+                self.case(**changes)
+        harnessed = demo_format(harness={"init": {"command": "fakectl init {directory}", "file": "project.yaml"}})
+        self.assertIsNone(runner.not_applicable(init, harnessed))
+        self.assertEqual(runner.not_applicable(init, demo_format()), "the harness declares no init command")
+
+    def test_harness_init_needs_a_command_and_a_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "formats.yaml"
+            for init in ("fakectl init", {"command": "fakectl init {directory}"}, {"command": 1, "file": "a"}):
+                path.write_text(yaml.safe_dump({"formats": {"demo/project": {"init": init}}}), encoding="utf-8")
+                with self.assertRaises(runner.HarnessError, msg=init):
+                    runner.load_harness(path)
+
     def test_skipped_formats_name_their_reason(self) -> None:
         formats = [
             demo_format(check=None),
@@ -531,13 +770,17 @@ class PlanTest(unittest.TestCase):
 
 class ExpectedFailuresTest(unittest.TestCase):
     def test_cfg_check_3_statuses(self) -> None:
+        dup = ["missing yaml.duplicate-key at /a 3:1"]
         expected = runner.ExpectedFailures(
-            failures={("demo/a", "dup"): "r1", ("demo/a", "anchor"): "r2"},
+            failures={
+                ("demo/a", "dup"): runner.Listed("r1", runner.digest(dup)),
+                ("demo/a", "anchor"): runner.Listed("r2", runner.digest(["x"])),
+            },
             unreached={},
             inapplicable={},
         )
         results = {
-            ("demo/a", "dup"): ["missing yaml.duplicate-key at /a 3:1"],
+            ("demo/a", "dup"): list(reversed(dup)),
             ("demo/a", "anchor"): [],
             ("demo/a", "tag"): ["exit status 2, expected 1"],
             ("demo/a", "alias"): [],
@@ -552,6 +795,47 @@ class ExpectedFailuresTest(unittest.TestCase):
             },
         )
 
+    def test_cfg_sec_3_a_leak_a_crash_or_a_timeout_is_never_an_expected_failure(self) -> None:
+        leak = "the output repeats the planted marker value (CFG-SEC-3)"
+        for problems in (
+            [leak, "killed by signal 11"],
+            [leak],
+            ["killed by signal 11"],
+            ["human run: killed by signal 6"],
+            ["exit status 101, expected 1: thread 'main' panicked"],
+            ["preparing with `fakectl prepare {project}`: exit status 134, expected 0"],
+            [f"the command did not finish within {runner.TIMEOUT_SECONDS} seconds"],
+        ):
+            listed = runner.ExpectedFailures({("demo/a", "x"): runner.Listed("r", runner.digest(problems))}, {}, {})
+            self.assertEqual(runner.statuses({("demo/a", "x"): problems}, listed), {("demo/a", "x"): "fail"}, problems)
+            self.assertEqual(
+                runner.unmasked(problems, listed.failures[("demo/a", "x")]),
+                "a leak, a crash, or a timeout is never an expected failure",
+            )
+        for problems in (["exit status 2, expected 1"], ["exit status 3, expected 0"], ["missing a at /b 1:1"]):
+            listed = runner.Listed("r", runner.digest(problems))
+            self.assertIsNone(runner.unmasked(problems, listed), problems)
+
+    def test_a_listed_cell_whose_problems_changed_fails(self) -> None:
+        listed = runner.Listed("r", runner.digest(["missing a at /b 1:1"]))
+        problems = ["missing a at /b 2:1"]
+        expected = runner.ExpectedFailures({("demo/a", "x"): listed}, {}, {})
+        self.assertEqual(runner.statuses({("demo/a", "x"): problems}, expected), {("demo/a", "x"): "fail"})
+        self.assertEqual(
+            runner.unmasked(problems, listed),
+            f"its problems changed since expected-failures.yaml recorded digest {listed.digest};"
+            " rerun with --write-expected-failures if the change is intended",
+        )
+
+    def test_digest_is_short_and_ignores_order(self) -> None:
+        self.assertRegex(runner.digest(["b", "a"]), r"^[0-9a-f]{12}$")
+        self.assertEqual(runner.digest(["b", "a"]), runner.digest(["a", "b"]))
+        self.assertNotEqual(runner.digest(["a"]), runner.digest(["a", "b"]))
+
+    def test_a_signal_is_named(self) -> None:
+        self.assertEqual(runner.exit_problem(-11, 1, b""), ["killed by signal 11"])
+        self.assertEqual(runner.exit_problem(-6, 0, b"", "human run: "), ["human run: killed by signal 6"])
+
     def test_reason_is_the_first_two_problems_with_a_count(self) -> None:
         self.assertEqual(runner.reason(["a", "b", "c", "d"]), "a; b (and 2 more problems)")
         self.assertEqual(runner.reason(["a", "b", "c"]), "a; b (and 1 more problem)")
@@ -562,7 +846,10 @@ class ExpectedFailuresTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "expected-failures.yaml"
             value = runner.ExpectedFailures(
-                failures={("demo/b", "tag"): "r2", ("demo/a", "dup"): "r1"},
+                failures={
+                    ("demo/b", "tag"): runner.Listed("r2", runner.digest(["b"])),
+                    ("demo/a", "dup"): runner.Listed("r1", runner.digest(["a"])),
+                },
                 unreached={"demo/c": "no example"},
                 inapplicable={"retired": "no format declares one"},
             )
@@ -575,17 +862,20 @@ class ExpectedFailuresTest(unittest.TestCase):
     def test_expected_failures_refuse_duplicates_and_unknown_members(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "expected-failures.yaml"
-            entry = {"format": "demo/a", "case": "dup", "reason": "r"}
+            entry = {"format": "demo/a", "case": "dup", "reason": "r", "digest": runner.digest(["a"])}
             path.write_text(yaml.safe_dump({"expectedFailures": [entry, entry]}), encoding="utf-8")
             with self.assertRaises(runner.HarnessError):
                 runner.load_expected_failures(path)
-            path.write_text(yaml.safe_dump({"expectedFailures": [dict(entry, why="x")]}), encoding="utf-8")
-            with self.assertRaises(runner.HarnessError):
-                runner.load_expected_failures(path)
+            for changed in (dict(entry, why="x"), dict(entry, digest="sha256"), {k: entry[k] for k in ("format", "case", "reason")}):
+                path.write_text(yaml.safe_dump({"expectedFailures": [changed]}), encoding="utf-8")
+                with self.assertRaises(runner.HarnessError):
+                    runner.load_expected_failures(path)
 
 
 FAKECTL = r'''#!/usr/bin/env python3
-"""A check command implementing one reader rule: duplicate top-level keys."""
+"""A check command implementing two reader rules: duplicate top-level keys
+and a top-level `script` path that must stay inside the project. `init`
+writes a project whose first line is the schema modeline."""
 import json
 import os
 import sys
@@ -595,6 +885,12 @@ if "--conformance-unknown-option" in args:
     print("error: unexpected argument", file=sys.stderr)
     raise SystemExit(2)
 project = args[1]
+if args[0] == "init":
+    os.makedirs(project)
+    modeline = "" if os.environ.get("FAKECTL_NO_MODELINE") else "# yaml-language-server: $schema=https://example.test/demo.schema.json\n"
+    with open(os.path.join(project, "project.yaml"), "w", encoding="utf-8") as handle:
+        handle.write(modeline + "project:\n  id: demo\n")
+    raise SystemExit(0)
 if args[0] == "prepare":
     if os.path.exists(os.path.join(project, "prepare-fails")):
         print("error: cannot prepare", file=sys.stderr)
@@ -625,6 +921,18 @@ with open(target, encoding="utf-8") as handle:
                              "path": "/" + key, "message": "the first definition"}],
             })
         seen.setdefault(key, number)
+        if key == "script":
+            inside = os.path.realpath(project) + os.sep
+            named = os.path.realpath(os.path.join(project, line.split(":", 1)[1].strip().strip('"')))
+            if not named.startswith(inside) and not os.environ.get("FAKECTL_FOLLOW_PATHS"):
+                diagnostics.append({
+                    "severity": "error",
+                    "code": "demo.path.outside-project",
+                    "path": "/script",
+                    "message": "the path leaves the project directory",
+                    "suggestedAction": "Name a file inside the project directory.",
+                    "source": {"file": target, "line": number, "column": 9},
+                })
 if os.environ.get("FAKECTL_BAD_PATH"):
     for item in diagnostics:
         item["path"] = item["path"].lstrip("/")
@@ -638,7 +946,7 @@ else:
         print(f"error[{item['code']}] {source['file']}:{source['line']}:{source['column']} {item['path']}")
         print("  " + item["message"])
         print("  next: " + item["suggestedAction"])
-        for note in item["related"]:
+        for note in item.get("related", []):
             print(f"  note: {note['file']}:{note['line']}:{note['column']} {note['path']} {note['message']}")
     count = len(diagnostics)
     print(f"{count} error{'' if count == 1 else 's'}, 0 warnings in 1 file")
@@ -653,6 +961,7 @@ formats:
     syntax: yaml
     audience: authored
     target: {apiVersion: id.registrystack.org/formats/demo/project/v1alpha1, kind: DemoProject}
+    schema: {id: https://example.test/demo.schema.json}
     check: fakectl check {project}
     example: products/demo/example/project.yaml
     conformance: {requiredText: /project/id, optionalText: none, integer: none, boolean: none}
@@ -666,6 +975,7 @@ formats:
     syntax: yaml
     audience: authored
     target: none
+    schema: {id: https://example.test/demo.schema.json}
     check: none
     example: products/demo/example/notes.yaml
 """
@@ -779,43 +1089,79 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("skipped demo/notes: no check command", stdout)
         self.assertNotIn(runner.MARKER, stdout)
 
+    def record(self, env: dict[str, str] | None = None) -> dict:
+        code, stdout, _ = self.run_runner("--write-expected-failures", env=env)
+        self.assertEqual(code, 0, stdout)
+        return yaml.safe_load(self.expected_path.read_text(encoding="utf-8"))
+
     def test_cfg_check_3_expected_failure_keeps_the_run_green(self) -> None:
-        self.write_expected(
-            {"expectedFailures": [{"format": "demo/project", "case": "anchor", "reason": "not converged"}]}
-        )
+        self.record()
         code, stdout, _ = self.run_runner()
         self.assertEqual(code, 0, stdout)
         self.assertIn("1 expected failure", stdout)
 
-    def test_strict_refuses_unacknowledged_unreached_formats_and_cases(self) -> None:
-        self.write_expected(
-            {"expectedFailures": [{"format": "demo/project", "case": "anchor", "reason": "not converged"}]}
+    def test_a_listed_failure_whose_problems_change_fails_the_run(self) -> None:
+        document = self.record()
+        document["expectedFailures"][0]["digest"] = runner.digest(["another problem"])
+        self.write_expected(document)
+        code, stdout, _ = self.run_runner()
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("FAIL demo/project anchor", stdout)
+        self.assertIn("listed in expected-failures.yaml, but its problems changed", stdout)
+
+    def test_cfg_sec_3_a_listed_cell_that_leaks_still_fails(self) -> None:
+        code, stdout, _ = self.run_runner("--write-expected-failures", env={"FAKECTL_LEAK": "1"})
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("FAIL demo/project baseline", stdout)
+        self.assertIn("not recorded: a leak, a crash, or a timeout is never an expected failure", stdout)
+        self.assertNotIn(runner.MARKER, stdout)
+        value = runner.load_expected_failures(self.expected_path)
+        self.assertEqual(value.failures, {})
+        document = {
+            "expectedFailures": [
+                {"format": "demo/project", "case": "baseline", "reason": "r", "digest": runner.digest(
+                    ["the output repeats the planted marker value (CFG-SEC-3)"]
+                )}
+            ]
+        }
+        self.write_expected(document)
+        code, stdout, _ = self.run_runner("--matrix", env={"FAKECTL_LEAK": "1"})
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("demo/project\tbaseline\tfail", stdout)
+        self.assertIn("listed in expected-failures.yaml, but a leak, a crash, or a timeout is never an expected failure", stdout)
+
+    def test_a_failing_baseline_is_one_entry_and_blocks_the_other_cases(self) -> None:
+        (self.root / "products/demo/example/needs-prepare").write_text("", encoding="utf-8")
+        document = self.record()
+        self.assertEqual(
+            [(entry["format"], entry["case"]) for entry in document["expectedFailures"]],
+            [("demo/project", "baseline")],
         )
+        code, stdout, _ = self.run_runner("--matrix", "--strict")
+        self.assertEqual(code, 0, stdout)
+        self.assertIn("demo/project\tbaseline\texpected failure", stdout)
+        self.assertIn("demo/project\tduplicate-key\tblocked", stdout)
+        self.assertIn("3 blocked", stdout)
+
+    def test_strict_refuses_unacknowledged_unreached_formats_and_cases(self) -> None:
+        document = self.record()
+        complete = dict(document)
+        del document["unreachedFormats"], document["inapplicableCases"]
+        self.write_expected(document)
         code, stdout, _ = self.run_runner("--strict")
         self.assertEqual(code, 1)
         self.assertIn("demo/runtime has a check command but is not reached: no example", stdout)
         self.assertIn("case operator-only applies to no format", stdout)
-        self.write_expected(
-            {
-                "expectedFailures": [{"format": "demo/project", "case": "anchor", "reason": "not converged"}],
-                "unreachedFormats": [{"format": "demo/runtime", "reason": "no example yet"}],
-                "inapplicableCases": [{"case": "operator-only", "reason": "no operator example yet"}],
-            }
-        )
+        self.write_expected(complete)
         code, stdout, _ = self.run_runner("--strict")
         self.assertEqual(code, 0, stdout)
 
     def test_strict_refuses_a_stale_expected_failure(self) -> None:
-        self.write_expected(
-            {
-                "expectedFailures": [
-                    {"format": "demo/project", "case": "anchor", "reason": "not converged"},
-                    {"format": "demo/project", "case": "duplicate-key", "reason": "not converged"},
-                ],
-                "unreachedFormats": [{"format": "demo/runtime", "reason": "no example yet"}],
-                "inapplicableCases": [{"case": "operator-only", "reason": "no operator example yet"}],
-            }
+        document = self.record()
+        document["expectedFailures"].append(
+            {"format": "demo/project", "case": "duplicate-key", "reason": "not converged", "digest": runner.digest(["x"])}
         )
+        self.write_expected(document)
         code, stdout, _ = self.run_runner()
         self.assertEqual(code, 0, stdout)
         self.assertIn("stale: demo/project duplicate-key now passes", stdout)
@@ -823,7 +1169,9 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 1, stdout)
 
     def test_unknown_ids_in_expected_failures_are_errors(self) -> None:
-        self.write_expected({"expectedFailures": [{"format": "demo/nope", "case": "anchor", "reason": "r"}]})
+        self.write_expected(
+            {"expectedFailures": [{"format": "demo/nope", "case": "anchor", "reason": "r", "digest": runner.digest(["x"])}]}
+        )
         code, _, stderr = self.run_runner()
         self.assertEqual(code, 1)
         self.assertIn("demo/nope", stderr)
@@ -848,12 +1196,79 @@ class EndToEndTest(unittest.TestCase):
     def test_expected_failure_reasons_lead_with_the_diagnostics_that_do_not_match(self) -> None:
         code, _, _ = self.run_runner("--write-expected-failures", env={"FAKECTL_BAD_PATH": "1"})
         self.assertEqual(code, 0)
-        reason = runner.load_expected_failures(self.expected_path).failures[("demo/project", "duplicate-key")]
+        reason = runner.load_expected_failures(self.expected_path).failures[("demo/project", "duplicate-key")].reason
         self.assertRegex(
             reason,
             r"^missing yaml\.duplicate-key at /conformanceDuplicate \d+:1; "
             r"unexpected yaml\.duplicate-key at conformanceDuplicate \d+:1 \(and \d+ more problems?\)$",
         )
+
+    def write_case(self, name: str, case: str) -> None:
+        (self.root / "products/platform/conformance/yaml/cases" / f"{name}.yaml").write_text(
+            textwrap.dedent(case), encoding="utf-8"
+        )
+
+    def write_harness(self, harness: dict) -> None:
+        (self.root / "products/platform/conformance/yaml/formats.yaml").write_text(
+            yaml.safe_dump({"formats": harness}), encoding="utf-8"
+        )
+
+    INIT_CASE = """\
+        id: init-modeline
+        rules: [CFG-SCHEMA-7]
+        summary: The file init writes starts with the schema modeline.
+        run: init
+        expect: {exit: 0, report: false}
+        """
+
+    def test_cfg_schema_7_init_cells_assert_the_modeline(self) -> None:
+        self.write_case("init-modeline", self.INIT_CASE)
+        init = {"command": "fakectl init {directory}", "file": "project.yaml"}
+        self.write_harness({"demo/project": {"init": init}, "demo/notes": {"init": init}})
+        (self.root / "products/demo/example/needs-prepare").write_text("", encoding="utf-8")
+        code, stdout, _ = self.run_runner("--matrix")
+        self.assertIn("demo/project\tbaseline\tfail", stdout)
+        self.assertIn("demo/project\tinit-modeline\tpass", stdout)
+        self.assertIn("demo/notes\tinit-modeline\tpass", stdout)
+        self.assertNotIn("demo/runtime\tinit-modeline", stdout)
+        code, stdout, _ = self.run_runner("--matrix", env={"FAKECTL_NO_MODELINE": "1"})
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL demo/notes init-modeline", stdout)
+        self.assertIn("the first line of project.yaml is not a `# yaml-language-server: $schema=` modeline", stdout)
+
+    PATH_CASE = """\
+        id: {id}
+        rules: [CFG-VAL-8]
+        summary: A path that leaves the project is refused.
+        appliesTo: {{audiences: [authored]}}
+        mutation:
+          pathOutside: {{role: relativePath, via: {via}}}
+        expect:
+          exit: 1
+          diagnostics:
+            - {{code: any, path: "{{pointer}}", at: {{line: 1, column: 1}}}}
+        """
+
+    def test_cfg_val_8_escaping_paths_are_refused(self) -> None:
+        example = self.root / "products/demo/example"
+        (example / "scripts").mkdir()
+        (example / "scripts/run.rhai").write_text("script\n", encoding="utf-8")
+        (example / "project.yaml").write_text(EXAMPLE + "script: scripts/run.rhai\n", encoding="utf-8")
+        registry = self.root / "products/platform/config-formats.yaml"
+        registry.write_text(
+            REGISTRY_TEXT.replace("integer: none, boolean: none}", "integer: none, boolean: none, relativePath: /script}", 1),
+            encoding="utf-8",
+        )
+        self.write_case("path-outside-project", self.PATH_CASE.format(id="path-outside-project", via="parent"))
+        self.write_case("path-link-outside-project", self.PATH_CASE.format(id="path-link-outside-project", via="link"))
+        code, stdout, _ = self.run_runner("--matrix")
+        self.assertIn("demo/project\tbaseline\tpass", stdout)
+        self.assertIn("demo/project\tpath-outside-project\tpass", stdout)
+        self.assertIn("demo/project\tpath-link-outside-project\tpass", stdout)
+        code, stdout, _ = self.run_runner("--matrix", env={"FAKECTL_FOLLOW_PATHS": "1"})
+        self.assertIn("demo/project\tpath-outside-project\tfail", stdout)
+        self.assertIn("demo/project\tpath-link-outside-project\tfail", stdout)
+        self.assertIn("missing a diagnostic of any code at /script 15:9", stdout)
 
     def test_prepare_commands_run_in_the_staged_project_before_the_check(self) -> None:
         (self.root / "products/demo/example/needs-prepare").write_text("", encoding="utf-8")
@@ -934,7 +1349,7 @@ class CommittedCorpusTest(unittest.TestCase):
             text = (ROOT / fmt.example).read_text(encoding="utf-8")
             text = runner.prepare_example(text, fmt, {})
             for case in self.cases:
-                if runner.not_applicable(case, fmt):
+                if case.run or runner.not_applicable(case, fmt):
                     continue
                 try:
                     variants = runner.mutate(text, case.mutation, fmt)

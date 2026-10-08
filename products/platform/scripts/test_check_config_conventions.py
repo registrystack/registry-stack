@@ -611,6 +611,63 @@ class RegistryAccuracyTests(ConventionsTestCase):
         self.repo.fmt()["conformance"]["requiredText"] = "/description"
         self.assertError(self.repo.run(), "requiredText /description is not required by the schema")
 
+    def test_cfg_check_3_accepts_the_optional_shape_roles(self) -> None:
+        self.repo.example["description"] = "notes.md"
+        self.repo.write("products/casework/examples/demo/notes.md", "Notes.\n")
+        self.repo.fmt()["conformance"].update(
+            {
+                "idList": "/queues",
+                "set": "/accessProfiles/reviewer/requiredScopes",
+                "reference": "/project/id",
+                "relativePath": "/description",
+                "operand": "/queues/0/attemptTimeoutMilliseconds",
+            }
+        )
+        self.assertEqual(self.repo.run().errors, [])
+
+    def test_cfg_check_3_refuses_an_unknown_or_missing_conformance_role(self) -> None:
+        self.repo.fmt()["conformance"]["mystery"] = "/project/id"
+        self.assertError(self.repo.run(), "conformance needs requiredText, optionalText, integer, boolean")
+        del self.repo.fmt()["conformance"]["mystery"]
+        del self.repo.fmt()["conformance"]["boolean"]
+        self.assertError(self.repo.run(), "conformance needs requiredText, optionalText, integer, boolean")
+
+    def test_cfg_id_5_refuses_an_id_list_role_that_is_not_a_list_of_named_items(self) -> None:
+        self.repo.fmt()["conformance"]["idList"] = "/accessProfiles/reviewer/requiredScopes"
+        self.assertError(
+            self.repo.run(),
+            "idList /accessProfiles/reviewer/requiredScopes is not a list of mappings with an `id` in the example",
+        )
+
+    def test_cfg_id_6_refuses_a_set_role_that_is_not_a_list_of_scalars(self) -> None:
+        self.repo.fmt()["conformance"]["set"] = "/queues"
+        self.assertError(self.repo.run(), "set /queues is not a list of scalars in the example")
+
+    def test_cfg_id_4_refuses_a_reference_role_that_is_not_an_identifier(self) -> None:
+        self.repo.fmt()["conformance"]["reference"] = "/description"
+        self.assertError(self.repo.run(), "reference /description is not an identifier in the example")
+
+    def test_cfg_val_8_refuses_a_relative_path_role_that_names_no_file_beside_the_example(self) -> None:
+        self.repo.example["description"] = "notes.md"
+        self.repo.fmt()["conformance"]["relativePath"] = "/description"
+        self.assertError(self.repo.run(), "relativePath /description does not name a file in the example's directory")
+        self.repo.example["description"] = "../notes.md"
+        self.repo.write("products/casework/examples/notes.md", "Notes.\n")
+        self.assertError(self.repo.run(), "relativePath /description does not name a file in the example's directory")
+
+    def test_cfg_val_9_refuses_an_operand_role_that_is_text(self) -> None:
+        self.repo.fmt()["conformance"]["operand"] = "/project/id"
+        self.assertError(self.repo.run(), "operand /project/id is not a number or boolean in the example")
+
+    def test_cfg_check_3_refuses_a_shape_role_the_schema_does_not_declare(self) -> None:
+        self.repo.example["extraItems"] = [{"id": "first"}]
+        self.repo.fmt()["conformance"]["idList"] = "/extraItems"
+        self.assertError(self.repo.run(), "idList /extraItems does not resolve in the schema")
+
+    def test_cfg_check_3_refuses_a_shape_role_the_example_lacks(self) -> None:
+        self.repo.fmt()["conformance"]["set"] = "/missing"
+        self.assertError(self.repo.run(), "set /missing does not resolve in the example")
+
     def test_cfg_empty_3_refuses_security_member_the_schema_does_not_declare(self) -> None:
         self.repo.fmt()["securityMembers"].append({"pointer": "/listener/bind", "whenOmitted": "refused"})
         self.assertError(self.repo.run(), "securityMembers /listener/bind does not resolve in the schema")

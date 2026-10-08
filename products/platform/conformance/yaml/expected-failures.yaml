@@ -4,3979 +4,902 @@
 # --write-expected-failures` against binaries built from this tree. A failing
 # cell is a format whose reader has not yet converged on the conventions in
 # products/platform/CONFIG-CONVENTIONS.md, not a reason to weaken a case:
-# remove the entry when the product conforms. The runner fails on a failing
-# cell missing here, and with --strict on an entry that no longer holds.
+# remove the entry when the product conforms. Each entry's digest covers the
+# cell's sorted problems, so a listed cell whose problems change fails the run;
+# a leak, a crash, or a timeout is never listed. A format whose baseline fails
+# has only its baseline entry: its other cells do not run. The runner fails on
+# a failing cell missing here, and with --strict on an entry that no longer
+# holds.
 
 expectedFailures:
+- format: breg/dev-clients
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
+- format: breg/journeys
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: breg/module
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: breg/module
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/module
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: 'the first line of modules/record-notes/module.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: ff75efc6ce00
 - format: breg/project
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: breg/project
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: boolean-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: boolean-member-yes
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: breg/project
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: 'the first line of registry.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: 6991c3866557
+- format: breg/runtime
+  case: init-modeline
+  reason: 'the first line of runtime.example.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: d5db192b6b23
+- format: casework/dev-clients
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: casework/fixture
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: casework/fixture
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/fixture
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: casework/holiday-set
   case: baseline
   reason: the report has no `diagnostics` list
-- format: casework/holiday-set
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/holiday-set
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: ba7fd7872baa
 - format: casework/project
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: casework/project
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/project
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
+- format: casework/runtime
+  case: init-modeline
+  reason: 'the first line of runtime.example.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: d5db192b6b23
 - format: casework/simulation
   case: baseline
   reason: the report has no `diagnostics` list
-- format: casework/simulation
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: casework/simulation
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: ba7fd7872baa
 - format: discovery/evidence-mapping
   case: baseline
   reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
-- format: discovery/evidence-mapping
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/evidence-mapping
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: 62afd6e1701f
 - format: discovery/origins
   case: baseline
   reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
-- format: discovery/origins
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: boolean-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: boolean-member-yes
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: discovery/origins
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: 62afd6e1701f
+- format: evidence/authoring-project
+  case: init-modeline
+  reason: 'the first line of evidence-project.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: 85a7d13749e1
 - format: evidence/bundle
   case: baseline
   reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
-- format: evidence/bundle
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: boolean-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: boolean-member-yes
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/bundle
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: 62afd6e1701f
 - format: evidence/fixture
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: evidence/fixture
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/fixture
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: evidence/question
   case: alias
   reason: missing yaml.alias at /conformanceAlias 48:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8bafc5e93d5e
 - format: evidence/question
   case: alias-spelling
   reason: missing config.unknown-key at /governance/validity_seconds 48:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: d3a5037c38f1
 - format: evidence/question
   case: ambiguous-number
   reason: missing yaml.ambiguous-number at /conformanceNumber 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: f96ecace96b8
 - format: evidence/question
   case: anchor
   reason: missing yaml.anchor at /conformanceAnchor 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 4012a9695728
+- format: evidence/question
+  case: at-size-cap
+  reason: exit status 1, expected 0; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 02071de8d535
 - format: evidence/question
   case: bom-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 4012a9695728
 - format: evidence/question
   case: colon-in-plain-value
   reason: missing yaml.colon-in-plain-value at the root 48:27; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 77b1071ac332
 - format: evidence/question
   case: columns-count-characters
   reason: missing yaml.anchor at /conformanceÉté 48:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 4aa465344271
 - format: evidence/question
   case: comments-only-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b53b1538b609
 - format: evidence/question
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 4012a9695728
 - format: evidence/question
   case: deny-warnings-accepted
   reason: exit status 2, expected 0; unexpected evidencectl.usage at $ (file) (and 2 more problems)
+  digest: 8e7af4154a75
+- format: evidence/question
+  case: duplicate-id
+  reason: missing config.duplicate-id at /answers/1/id 28:9; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: fd409701666c
 - format: evidence/question
   case: duplicate-key
   reason: missing yaml.duplicate-key at /conformanceDuplicate 49:1; unexpected evidencectl.check.refused at $.findings (file) (and 4 more problems)
+  digest: d53ea2008045
 - format: evidence/question
   case: duplicate-key-in-flow-mapping
   reason: missing yaml.duplicate-key at /conformanceFlow/a 48:25; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: bb0df48f3326
 - format: evidence/question
   case: empty-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b53b1538b609
 - format: evidence/question
   case: empty-value-in-required-member
   reason: missing config.null-value at /question 7:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: c72d18248730
 - format: evidence/question
   case: extension-field
   reason: missing config.unknown-key at /x-conformance 48:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: c72544bd3a9a
+- format: evidence/question
+  case: init-modeline
+  reason: 'the first line of questions/record-status.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: 2eea567d279f
 - format: evidence/question
   case: integer-member-exponent
   reason: missing config.expected-integer at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ea53ac68f19a
 - format: evidence/question
   case: integer-member-fraction
   reason: missing config.expected-integer at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ea53ac68f19a
 - format: evidence/question
   case: integer-member-out-of-range
   reason: missing config.out-of-range at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 09632ca154cd
 - format: evidence/question
   case: integer-member-quoted
   reason: missing config.expected-integer at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ea53ac68f19a
 - format: evidence/question
   case: integer-member-underscore
   reason: missing config.expected-integer at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ea53ac68f19a
 - format: evidence/question
   case: integer-member-with-unit
   reason: missing config.expected-integer at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ea53ac68f19a
 - format: evidence/question
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 48:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8a005be9a472
 - format: evidence/question
   case: merge-key
   reason: missing yaml.merge-key at /conformanceMerge/<< 49:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 9503e5299d9a
 - format: evidence/question
   case: missing-api-version
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/question
   case: missing-envelope
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/question
   case: missing-kind
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/question
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 48:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 24ccccfe45dc
 - format: evidence/question
   case: non-string-key
   reason: missing yaml.non-string-key at /7 48:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 503ee5e5538d
 - format: evidence/question
   case: not-utf8
   reason: missing yaml.not-utf8 at the root 48:15; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 545fb19b604a
 - format: evidence/question
   case: null-in-optional-member
   reason: missing config.null-value at /subject/role 13:9; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: e832fa33a57f
 - format: evidence/question
   case: null-in-required-member
   reason: exit status 0, expected 1; missing config.null-value at /question 7:11
+  digest: 15f192c8b81a
 - format: evidence/question
   case: oversize
   reason: missing yaml.too-large at the root (file); unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 46dba9d67e0d
 - format: evidence/question
   case: planted-marker
   reason: missing config.expected-integer at /governance/validitySeconds 44:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ea53ac68f19a
 - format: evidence/question
   case: structural-problems-together
   reason: missing yaml.duplicate-key at /conformanceDuplicate 49:1; missing yaml.anchor at /conformanceAnchor 50:20 (and 4 more problems)
+  digest: 95cef7e967d3
 - format: evidence/question
   case: substitution-in-authored-file
   reason: exit status 0, expected 1; missing config.substitution-not-allowed at /question 7:11
+  digest: f073a11d99f2
 - format: evidence/question
   case: syntax-error
   reason: missing yaml.syntax at the root 48:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 463ffded22f2
 - format: evidence/question
   case: tab-indentation
   reason: missing yaml.tab-indentation at /conformanceTab 49:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: d1774f704074
 - format: evidence/question
   case: tag
   reason: missing yaml.tag at /conformanceTag 48:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 4b7710433402
 - format: evidence/question
   case: text-member-boolean
   reason: exit status 0, expected 1; missing config.expected-string at /question 7:11
+  digest: d8657a003d36
 - format: evidence/question
   case: text-member-integer
   reason: exit status 0, expected 1; missing config.expected-string at /question 7:11
+  digest: d8657a003d36
 - format: evidence/question
   case: text-member-number
   reason: exit status 0, expected 1; missing config.expected-string at /question 7:11
+  digest: d8657a003d36
 - format: evidence/question
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 48:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 0793a4c635d5
 - format: evidence/question
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 48:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b660c44bcfd6
 - format: evidence/question
   case: unexpected-end
   reason: missing yaml.unexpected-end at /conformanceList/2 49:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 15c66ea65fbf
 - format: evidence/question
   case: unknown-keys
   reason: missing config.unknown-key at /conformanceFirst 48:1; missing config.unknown-key at /conformanceSecond 49:1 (and 3 more problems)
+  digest: a90e23370956
 - format: evidence/question
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8e6c487d1089
 - format: evidence/question
   case: wrong-api-version
   reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: d01758b2169a
 - format: evidence/question
   case: wrong-kind
   reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 419c262ab056
 - format: evidence/question
   case: wrong-kind-and-api-version
   reason: missing config.wrong-kind at /kind 7:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: eb366f77e251
 - format: evidence/runtime
   case: baseline
   reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
-- format: evidence/runtime
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: boolean-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: boolean-member-yes
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: removed-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-fallback-in-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-reference
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-references
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-references-flow
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-in-text-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-required-message
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-unset-accepted-without-environment
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: substitution-unset-variable
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/runtime
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: 62afd6e1701f
 - format: evidence/selector
   case: alias
   reason: missing yaml.alias at /conformanceAlias 15:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 19e6fe1f4942
 - format: evidence/selector
   case: ambiguous-number
   reason: missing yaml.ambiguous-number at /conformanceNumber 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: cbdc23d1c77f
 - format: evidence/selector
   case: anchor
   reason: missing yaml.anchor at /conformanceAnchor 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: cb1f57605061
 - format: evidence/selector
   case: bom-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: cb1f57605061
 - format: evidence/selector
   case: colon-in-plain-value
   reason: missing yaml.colon-in-plain-value at the root 15:27; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 9a8adb431f67
 - format: evidence/selector
   case: columns-count-characters
   reason: missing yaml.anchor at /conformanceÉté 15:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 0be5ca095c31
 - format: evidence/selector
   case: comments-only-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: e2d28d84d58a
 - format: evidence/selector
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: cb1f57605061
 - format: evidence/selector
   case: deny-warnings-accepted
   reason: exit status 2, expected 0; unexpected evidencectl.usage at $ (file) (and 2 more problems)
+  digest: aa562837be5f
 - format: evidence/selector
   case: duplicate-key
   reason: missing yaml.duplicate-key at /conformanceDuplicate 16:1; unexpected evidencectl.check.refused at $.findings (file) (and 4 more problems)
+  digest: 47a2152748cf
 - format: evidence/selector
   case: duplicate-key-in-flow-mapping
   reason: missing yaml.duplicate-key at /conformanceFlow/a 15:25; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 68ff886af983
 - format: evidence/selector
   case: empty-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: e2d28d84d58a
 - format: evidence/selector
   case: extension-field
   reason: missing config.unknown-key at /x-conformance 15:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 398e964168c7
+- format: evidence/selector
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: evidence/selector
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 15:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b9af7ea850ee
 - format: evidence/selector
   case: merge-key
   reason: missing yaml.merge-key at /conformanceMerge/<< 16:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 025505ce9233
 - format: evidence/selector
   case: missing-api-version
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/selector
   case: missing-envelope
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/selector
   case: missing-kind
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/selector
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 15:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 6b8f2b53c094
 - format: evidence/selector
   case: non-string-key
   reason: missing yaml.non-string-key at /7 15:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: a98603329fd9
 - format: evidence/selector
   case: not-utf8
   reason: missing yaml.not-utf8 at the root 15:15; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 54eba07cdfe3
 - format: evidence/selector
   case: oversize
   reason: missing yaml.too-large at the root (file); unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 0f065a7a5334
 - format: evidence/selector
   case: structural-problems-together
   reason: missing yaml.duplicate-key at /conformanceDuplicate 16:1; missing yaml.anchor at /conformanceAnchor 17:20 (and 4 more problems)
+  digest: 8ee1baf7d5b9
 - format: evidence/selector
   case: syntax-error
   reason: missing yaml.syntax at the root 15:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 1e61dd05f569
 - format: evidence/selector
   case: tab-indentation
   reason: missing yaml.tab-indentation at /conformanceTab 16:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: c25b2ad2e33d
 - format: evidence/selector
   case: tag
   reason: missing yaml.tag at /conformanceTag 15:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 672170ea59ab
 - format: evidence/selector
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 15:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 6aed61b5d159
 - format: evidence/selector
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 15:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 5f5ae2b21278
 - format: evidence/selector
   case: unexpected-end
   reason: missing yaml.unexpected-end at /conformanceList/2 16:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 122ab104d583
 - format: evidence/selector
   case: unknown-keys
   reason: missing config.unknown-key at /conformanceFirst 15:1; missing config.unknown-key at /conformanceSecond 16:1 (and 3 more problems)
+  digest: 3c56326653ad
 - format: evidence/selector
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 52bc37ad1584
 - format: evidence/selector
   case: wrong-api-version
   reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 9fd3d8ef3099
 - format: evidence/selector
   case: wrong-kind
   reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 815ba0d0793b
 - format: evidence/selector
   case: wrong-kind-and-api-version
   reason: missing config.wrong-kind at /kind 7:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b9614ff0f8ca
 - format: evidence/source
   case: alias
   reason: missing yaml.alias at /conformanceAlias 62:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 9dd74f57b227
 - format: evidence/source
   case: ambiguous-number
   reason: missing yaml.ambiguous-number at /conformanceNumber 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36bd2bbd8380
 - format: evidence/source
   case: anchor
   reason: missing yaml.anchor at /conformanceAnchor 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 856dc1b85ba8
 - format: evidence/source
   case: bom-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 856dc1b85ba8
 - format: evidence/source
   case: colon-in-plain-value
   reason: missing yaml.colon-in-plain-value at the root 62:27; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 881bddcdf0c5
 - format: evidence/source
   case: columns-count-characters
   reason: missing yaml.anchor at /conformanceÉté 62:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 5f1725503ba0
 - format: evidence/source
   case: comments-only-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 14705a2d7f76
 - format: evidence/source
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 856dc1b85ba8
 - format: evidence/source
   case: deny-warnings-accepted
   reason: exit status 2, expected 0; unexpected evidencectl.usage at $ (file) (and 2 more problems)
+  digest: 89cfbac18331
 - format: evidence/source
   case: duplicate-key
   reason: missing yaml.duplicate-key at /conformanceDuplicate 63:1; unexpected evidencectl.check.refused at $.findings (file) (and 4 more problems)
+  digest: 4f0dbb3664b1
 - format: evidence/source
   case: duplicate-key-in-flow-mapping
   reason: missing yaml.duplicate-key at /conformanceFlow/a 62:25; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 3e2f3c8b15ff
+- format: evidence/source
+  case: duplicate-set-item
+  reason: missing config.duplicate-item at /request/projection/1 44:49; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: bcc2a9a728ac
 - format: evidence/source
   case: empty-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 14705a2d7f76
 - format: evidence/source
   case: extension-field
   reason: missing config.unknown-key at /x-conformance 62:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: e85e6441aa71
+- format: evidence/source
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: evidence/source
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 62:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 1bb39eceefee
 - format: evidence/source
   case: merge-key
   reason: missing yaml.merge-key at /conformanceMerge/<< 63:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 740024e71904
 - format: evidence/source
   case: missing-api-version
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/source
   case: missing-envelope
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/source
   case: missing-kind
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
+  digest: a6c4d8d27d0e
 - format: evidence/source
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 62:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: a48d3d308ebb
 - format: evidence/source
   case: non-string-key
   reason: missing yaml.non-string-key at /7 62:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 3bc19cb42089
 - format: evidence/source
   case: not-utf8
   reason: missing yaml.not-utf8 at the root 62:15; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 5868fc34c11a
 - format: evidence/source
   case: oversize
   reason: missing yaml.too-large at the root (file); unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 88d94e950df3
 - format: evidence/source
   case: structural-problems-together
   reason: missing yaml.duplicate-key at /conformanceDuplicate 63:1; missing yaml.anchor at /conformanceAnchor 64:20 (and 4 more problems)
+  digest: 408bce47ddb7
 - format: evidence/source
   case: syntax-error
   reason: missing yaml.syntax at the root 62:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: fa65a5c0fe11
 - format: evidence/source
   case: tab-indentation
   reason: missing yaml.tab-indentation at /conformanceTab 63:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: adbad5b5ff06
 - format: evidence/source
   case: tag
   reason: missing yaml.tag at /conformanceTag 62:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 483b5dfbe5b6
 - format: evidence/source
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 62:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 11551e06c208
 - format: evidence/source
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 62:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 12bb4615e812
 - format: evidence/source
   case: unexpected-end
   reason: missing yaml.unexpected-end at /conformanceList/2 63:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 705be88d380e
 - format: evidence/source
   case: unknown-keys
   reason: missing config.unknown-key at /conformanceFirst 62:1; missing config.unknown-key at /conformanceSecond 63:1 (and 3 more problems)
+  digest: 0c4634719c92
 - format: evidence/source
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b4d50d1ada0d
 - format: evidence/source
   case: wrong-api-version
   reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ce089b577a27
 - format: evidence/source
   case: wrong-kind
   reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: e08dee038af6
 - format: evidence/source
   case: wrong-kind-and-api-version
   reason: missing config.wrong-kind at /kind 7:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 80ece61da62a
 - format: evidence/target-governance
   case: alias
   reason: missing yaml.alias at /conformanceAlias 43:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: f32a7f9e2f7d
 - format: evidence/target-governance
   case: alias-spelling
   reason: missing config.unknown-key at /rateLimits/burst_per_principal 22:130; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b7d98073bdae
 - format: evidence/target-governance
   case: ambiguous-number
   reason: missing yaml.ambiguous-number at /conformanceNumber 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 46576e9a6f11
 - format: evidence/target-governance
   case: anchor
   reason: missing yaml.anchor at /conformanceAnchor 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: dc1cd240a1d1
 - format: evidence/target-governance
   case: bom-accepted
   reason: exit status 1, expected 0; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: a7c235cdd500
 - format: evidence/target-governance
   case: bom-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: dc1cd240a1d1
 - format: evidence/target-governance
   case: colon-in-plain-value
   reason: missing yaml.colon-in-plain-value at the root 43:27; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: d6afd366365e
 - format: evidence/target-governance
   case: columns-count-characters
   reason: missing yaml.anchor at /conformanceÉté 43:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b04a8d5efde8
 - format: evidence/target-governance
   case: comments-only-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8ade4e8fefac
 - format: evidence/target-governance
   case: crlf-keeps-positions
   reason: missing yaml.anchor at /conformanceAnchor 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: dc1cd240a1d1
 - format: evidence/target-governance
   case: deny-warnings-accepted
   reason: exit status 2, expected 0; unexpected evidencectl.usage at $ (file) (and 2 more problems)
+  digest: 6cf01991d4d6
 - format: evidence/target-governance
   case: duplicate-key
   reason: missing yaml.duplicate-key at /conformanceDuplicate 44:1; unexpected evidencectl.check.refused at $.findings (file) (and 4 more problems)
+  digest: f7da001b7088
 - format: evidence/target-governance
   case: duplicate-key-in-flow-mapping
   reason: missing yaml.duplicate-key at /conformanceFlow/a 43:25; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 9ccf983278ac
 - format: evidence/target-governance
   case: empty-file
   reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8ade4e8fefac
 - format: evidence/target-governance
   case: empty-value-in-required-member
   reason: missing config.null-value at /issuer/id 4:10; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 30fbab991f1a
 - format: evidence/target-governance
   case: extension-field
   reason: missing config.unknown-key at /x-conformance 43:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 48532c4be9d5
 - format: evidence/target-governance
   case: integer-member-exponent
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: integer-member-fraction
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: integer-member-out-of-range
   reason: missing config.out-of-range at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: ca31b238d576
 - format: evidence/target-governance
   case: integer-member-quoted
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: integer-member-underscore
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: integer-member-with-unit
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: lone-star
   reason: missing yaml.alias at /conformanceStar 43:18; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 102c27964553
 - format: evidence/target-governance
   case: merge-key
   reason: missing yaml.merge-key at /conformanceMerge/<< 44:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 1f9d049554c6
 - format: evidence/target-governance
   case: missing-api-version
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
 - format: evidence/target-governance
   case: missing-envelope
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
 - format: evidence/target-governance
   case: missing-kind
   reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
+  digest: 1d83d2739cbc
 - format: evidence/target-governance
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 43:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 267966f8199b
 - format: evidence/target-governance
   case: non-string-key
   reason: missing yaml.non-string-key at /7 43:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 6c29e961c992
 - format: evidence/target-governance
   case: not-utf8
   reason: missing yaml.not-utf8 at the root 43:15; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b43fa7b6350b
 - format: evidence/target-governance
   case: null-in-required-member
   reason: missing config.null-value at /issuer/id 4:14; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 345286e2a1b2
 - format: evidence/target-governance
   case: oversize
   reason: missing yaml.too-large at the root (file); unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: b8d3fe0ddf5a
 - format: evidence/target-governance
   case: planted-marker
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: structural-problems-together
   reason: missing yaml.duplicate-key at /conformanceDuplicate 44:1; missing yaml.anchor at /conformanceAnchor 45:20 (and 4 more problems)
+  digest: 4d37b1dade12
 - format: evidence/target-governance
   case: substitution-fallback-in-integer
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: substitution-in-api-version
   reason: missing config.substitution-not-allowed at /apiVersion 1:13; missing config.unsupported-api-version at /apiVersion 1:13 (and 3 more problems)
+  digest: a614303de5da
 - format: evidence/target-governance
   case: substitution-in-integer
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 36e879d93586
 - format: evidence/target-governance
   case: substitution-in-key
   reason: missing config.substitution-not-allowed at /${REGISTRY_CONFORMANCE_VALUE} 43:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 59ca4ae0b42c
 - format: evidence/target-governance
   case: substitution-in-kind
   reason: missing config.substitution-not-allowed at /kind 1:7; missing config.wrong-kind at /kind 1:7 (and 3 more problems)
+  digest: 276a78007032
 - format: evidence/target-governance
   case: substitution-in-reference
   reason: missing config.substitution-not-allowed at /conformanceRef 43:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8e270365911e
 - format: evidence/target-governance
   case: substitution-in-references
   reason: missing config.substitution-not-allowed at /conformanceRefs/0 44:5; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: d8e802e2fed8
 - format: evidence/target-governance
   case: substitution-in-references-flow
   reason: missing config.substitution-not-allowed at /conformanceRefs/0 43:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 2ceaac3e4961
 - format: evidence/target-governance
   case: syntax-error
   reason: missing yaml.syntax at the root 43:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: be633d76edf8
 - format: evidence/target-governance
   case: tab-indentation
   reason: missing yaml.tab-indentation at /conformanceTab 44:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 026ad3d38932
 - format: evidence/target-governance
   case: tag
   reason: missing yaml.tag at /conformanceTag 43:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 6eb849d4446e
 - format: evidence/target-governance
   case: text-member-boolean
   reason: missing config.expected-string at /issuer/id 4:14; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 5ab7935568be
 - format: evidence/target-governance
   case: text-member-integer
   reason: missing config.expected-string at /issuer/id 4:14; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 5ab7935568be
 - format: evidence/target-governance
   case: text-member-number
   reason: missing config.expected-string at /issuer/id 4:14; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 5ab7935568be
 - format: evidence/target-governance
   case: too-deep
   reason: missing yaml.too-deep at /conformanceDeep/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0/0 43:145; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8c394ae1ae17
 - format: evidence/target-governance
   case: unclosed-quote
   reason: missing yaml.unclosed-quote at /conformanceQuote 43:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: c515f277bf31
 - format: evidence/target-governance
   case: unexpected-end
   reason: missing yaml.unexpected-end at /conformanceList/2 44:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 5395e8897e1e
 - format: evidence/target-governance
   case: unknown-keys
   reason: missing config.unknown-key at /conformanceFirst 43:1; missing config.unknown-key at /conformanceSecond 44:1 (and 3 more problems)
+  digest: ff5d8e11dcf3
 - format: evidence/target-governance
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 18694bf7d66c
 - format: evidence/target-governance
   case: wrong-api-version
   reason: missing config.unsupported-api-version at /apiVersion 1:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 8649eb387d9f
 - format: evidence/target-governance
   case: wrong-kind
   reason: missing config.wrong-kind at /kind 1:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: 3cae5869d1c1
 - format: evidence/target-governance
   case: wrong-kind-and-api-version
   reason: missing config.wrong-kind at /kind 2:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
+  digest: e38a63d22fb0
 - format: evidence/target-settings
   case: baseline
   reason: exit status 3, expected 0; unexpected evidence.check.failed at $ (file) (and 3 more problems)
-- format: evidence/target-settings
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: boolean-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: boolean-member-yes
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-fallback-in-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-reference
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-references
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: substitution-in-references-flow
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: evidence/target-settings
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: aa85fcfeb241
 - format: manifest/metadata
   case: baseline
   reason: the output is not one JSON document
-- format: manifest/metadata
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/metadata
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
+  digest: c3d5e54fce90
 - format: manifest/profile
   case: baseline
   reason: the output is not one JSON document
-- format: manifest/profile
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: manifest/profile
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
+  digest: c3d5e54fce90
 - format: messaging/project
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: messaging/project
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: boolean-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: boolean-member-yes
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/project
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: messaging/provider
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: messaging/provider
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/provider
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: messaging/runtime
   case: baseline
   reason: exit status 3, expected 0; unexpected config.refused at package.root (file) (and 2 more problems)
-- format: messaging/runtime
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: removed-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-fallback-in-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-reference
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-references
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-references-flow
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-in-text-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-required-message
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-unset-accepted-without-environment
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: substitution-unset-variable
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/runtime
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  digest: b64d5b97bcbf
+- format: messaging/runtime
+  case: init-modeline
+  reason: 'the first line of runtime.example.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: d5db192b6b23
 - format: messaging/template
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: messaging/template
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: messaging/template
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: render/bundle
   case: baseline
   reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
+  digest: 62afd6e1701f
 - format: render/bundle
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: render/bundle
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
+- format: render/labels
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: scheduling/fixture
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: scheduling/fixture
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/fixture
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: scheduling/project
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: scheduling/project
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: alias-spelling
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: integer-member-exponent
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: integer-member-fraction
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: integer-member-out-of-range
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: integer-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: integer-member-underscore
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: integer-member-with-unit
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: null-in-optional-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: planted-marker
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/project
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
 - format: scheduling/records
   case: baseline
   reason: the report has no `diagnostics` list
+  digest: ba7fd7872baa
 - format: scheduling/records
-  case: alias
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: ambiguous-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: anchor
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: bom-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: bom-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: boolean-member-quoted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: boolean-member-yes
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: colon-in-plain-value
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: columns-count-characters
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: comments-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: comments-only-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: crlf-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: crlf-keeps-positions
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: deny-warnings-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: document-end-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: document-start-accepted
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: duplicate-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: duplicate-key-in-flow-mapping
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: empty-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: empty-value-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: extension-field
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: lone-star
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: merge-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: missing-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: missing-envelope
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: missing-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: multiple-documents
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: non-string-key
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: not-utf8
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: null-in-required-member
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: oversize
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: structural-problems-together
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: substitution-in-authored-file
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: syntax-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: tab-indentation
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: tag
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: text-member-boolean
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: text-member-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: text-member-number
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: too-deep
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: unclosed-quote
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: unexpected-end
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: unknown-keys
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: unrepresentable-integer
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: usage-error
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: wrong-api-version
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: wrong-kind
-  reason: the baseline case fails for this format, so the case did not run
-- format: scheduling/records
-  case: wrong-kind-and-api-version
-  reason: the baseline case fails for this format, so the case did not run
+  case: init-modeline
+  reason: the format registers no schema `$id` for the modeline to name
+  digest: 60e5b6a3446c
+- format: scheduling/runtime
+  case: init-modeline
+  reason: 'the first line of runtime.example.yaml is not a `# yaml-language-server: $schema=` modeline'
+  digest: d5db192b6b23
 unreachedFormats:
 - format: breg/mcp-runtime
   reason: no example
