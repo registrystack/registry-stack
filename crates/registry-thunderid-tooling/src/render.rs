@@ -197,6 +197,10 @@ pub fn agent_type_document(description: &IssuerDescription) -> Result<String, To
     yaml_document(&document)
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "platform/thunderid-resources is registered as an external format: ThunderID owns the grammar of the pinned upstream document and of this crate's rendering of it (CFG-YAML-1)"
+)]
 fn serde_yaml_parse(text: &str) -> Result<Value, ToolingError> {
     serde_norway::from_str(text).map_err(|_| ToolingError::InvalidRender {
         reason: "a pinned upstream document did not parse",
@@ -669,6 +673,10 @@ mod tests {
                 .join("agents/0197aaaa-0000-7000-8000-0000000000a1.yaml"),
         )
         .expect("the machine agent document exists");
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "reads back a ThunderID resource this crate rendered, an external format (platform/thunderid-resources) ThunderID owns, not configuration an operator writes"
+        )]
         let agent: Value = serde_norway::from_str(&agent_text).expect("the agent document parses");
         assert_eq!(agent["resource_type"], json!("agent"));
         assert_eq!(agent["type"], json!("default"));
@@ -698,6 +706,10 @@ mod tests {
                 .join("resource_servers/0197aaaa-0000-7000-8000-0000000000b1.yaml"),
         )
         .expect("the resource server document exists");
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "reads back a ThunderID resource this crate rendered, an external format (platform/thunderid-resources) ThunderID owns, not configuration an operator writes"
+        )]
         let server: Value = serde_norway::from_str(&server_text).expect("it parses");
         assert_eq!(
             server["identifier"],
@@ -715,6 +727,10 @@ mod tests {
                 .join("roles/0197aaaa-0000-7000-8000-0000000000c1.yaml"),
         )
         .expect("the role document exists");
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "reads back a ThunderID resource this crate rendered, an external format (platform/thunderid-resources) ThunderID owns, not configuration an operator writes"
+        )]
         let role: Value = serde_norway::from_str(&role_text).expect("it parses");
         assert_eq!(
             role["permissions"][0]["permissions"],
