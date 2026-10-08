@@ -2277,6 +2277,80 @@ clients:
 }
 
 #[test]
+fn examples_list_prints_the_reader_and_catalogue_diagnostics_in_both_formats() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::tempdir().expect("a temporary directory");
+    // `init` refuses a destination behind a symbolic link, and a platform's
+    // temporary root often is one.
+    let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
+    let project = parent.join("registry");
+    let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
+    assert!(initialized.status.success(), "{initialized:?}");
+    fs::create_dir(project.join("examples")).expect("an examples directory");
+    let catalogue = project.join("examples/scenarios.json");
+    let list = ["examples", "list", project.to_str().unwrap()];
+    // A catalogue an earlier bregctl read, and one whose invoke step names
+    // no action or result: the first is refused by the reader, the second
+    // by the catalogue checks, and both at their positions.
+    for (document, code, line, pointer) in [
+        (
+            "{\"version\": 1, \"scenarios\": []}\n",
+            "config.missing-envelope",
+            1,
+            "",
+        ),
+        (
+            r#"{
+  "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+  "kind": "BRegExampleScenarios",
+  "scenarios": [
+    {
+      "id": "register-entries",
+      "description": "Register configured entries",
+      "input": "examples/inputs.json",
+      "steps": [
+        {"id": "register", "operation": "invoke", "entity": "entry", "client": "writer", "accessProfile": "writer", "input": "register", "capture": "entry"}
+      ]
+    }
+  ]
+}
+"#,
+            "breg.examples.step-members",
+            10,
+            "/scenarios/0/steps/0",
+        ),
+    ] {
+        write(&catalogue, document.as_bytes());
+        let json = plain_bregctl(binary, true, &list);
+        assert_eq!(json.status.code(), Some(1), "{json:?}");
+        assert!(json.stderr.is_empty(), "{json:?}");
+        let report: Value = serde_json::from_slice(&json.stdout).expect("a JSON refusal");
+        assert_eq!(report["ok"], false, "{report}");
+        assert_eq!(report["command"], "examples", "{report}");
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+        assert_eq!(diagnostics.len(), 1, "{report}");
+        assert_eq!(diagnostics[0]["code"], code, "{report}");
+        assert_eq!(diagnostics[0]["path"], pointer, "{report}");
+        assert_eq!(
+            diagnostics[0]["source"]["file"],
+            catalogue.to_str().unwrap()
+        );
+        assert_eq!(diagnostics[0]["source"]["line"], line, "{report}");
+
+        let human = plain_bregctl(binary, false, &list);
+        assert_eq!(human.status.code(), Some(1), "{human:?}");
+        assert!(human.stdout.is_empty(), "{human:?}");
+        let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+        assert!(
+            rendered.starts_with("bregctl examples refused the example scenarios.\n"),
+            "{rendered}"
+        );
+        assert!(rendered.contains(code), "{rendered}");
+    }
+    assert!(!project.join(".breg").exists(), "listing starts nothing");
+}
+
+#[test]
 fn dev_help_names_the_owning_document_and_both_record_options() {
     let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let start = plain_bregctl(binary, false, &["dev", "start", "--help"]);

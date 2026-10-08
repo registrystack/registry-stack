@@ -2279,17 +2279,29 @@ where
         Command::Examples(args) => {
             return match dev::examples::run(args) {
                 Ok(report) => write_examples_success(&report, format, stdout, stderr),
-                Err(error) => write_failure(
-                    &source_failure(
-                        "examples",
-                        diagnostic("examples.failed", "examples", &format!("{error:#}")),
-                        DiagnosticArtifact::CommandArguments,
-                        SuggestedAction::CorrectCommandUsage,
+                Err(error) => match error.downcast::<dev::examples::CatalogueRefused>() {
+                    Ok(refused) => write_refusal(
+                        &Refusal::Document(DocumentRefusal {
+                            command: "examples",
+                            subject: "the example scenarios",
+                            report: refused.0,
+                        }),
+                        format,
+                        stdout,
+                        stderr,
                     ),
-                    format,
-                    stdout,
-                    stderr,
-                ),
+                    Err(error) => write_failure(
+                        &source_failure(
+                            "examples",
+                            diagnostic("examples.failed", "examples", &format!("{error:#}")),
+                            DiagnosticArtifact::CommandArguments,
+                            SuggestedAction::CorrectCommandUsage,
+                        ),
+                        format,
+                        stdout,
+                        stderr,
+                    ),
+                },
             };
         }
         Command::Dev(args) => {

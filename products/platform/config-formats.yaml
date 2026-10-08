@@ -576,10 +576,11 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'version: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
+      kind: BRegExampleScenarios
+      checkedBy:
+        file: crates/registry-bregctl/src/dev/examples.rs
+        symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
       kind: BRegExampleScenarios
@@ -593,8 +594,8 @@ formats:
     example: products/breg/starters/seed-lots/core/examples/scenarios.json
     conformance:
       requiredText: /scenarios/0/id
-      optionalText: /scenarios/0/description
-      integer: /version
+      optionalText: /scenarios/0/steps/0/input
+      integer: none
       boolean: none
     securityMembers: []
     restrictingMembers: []

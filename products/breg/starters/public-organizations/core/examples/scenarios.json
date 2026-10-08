@@ -1,5 +1,6 @@
 {
-  "version": 1,
+  "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+  "kind": "BRegExampleScenarios",
   "scenarios": [
     {
       "id": "starter-data",

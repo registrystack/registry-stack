@@ -17,10 +17,12 @@ and `reviewed-change`. Inputs default to the file declared in
 The runner uses ordinary native client authorization and never issues a schema-test
 receipt. It accepts no remote endpoint, database credential or script.
 
-The examples v1 catalogue is a closed JSON object with `version: 1` and a
-`scenarios` array. Each scenario declares `id`, `description`, `input` (a relative
-file under `examples/`) and `steps`. Every step declares `id`, `operation`,
-`entity`, `client` and `accessProfile`. A `create` step additionally declares an
+The example scenarios catalogue is a closed JSON object that starts with
+`"apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1"`
+and `"kind": "BRegExampleScenarios"`, followed by a `scenarios` array. Each scenario
+declares `id`, `description`, `input` (a relative file under `examples/`) and
+`steps`. Every step declares `id`, `operation`, `entity`, `client` and
+`accessProfile`. A `create` step additionally declares an
 `input` payload key and `capture` alias; other steps declare a `record` alias.
 Inputs contain exactly those named payload objects. A field reference uses the
 same exact `{ "recordCapture": "alias" }` form as authored fixtures. Captures must

@@ -35,9 +35,12 @@ personalized project before use.
 
 ## Authored population scenarios
 
-An `examples/scenarios.json` version 1 catalogue can declare 1..32 scenarios,
-each with 1..100 steps. Scenario identifiers use lowercase letters, digits and
-hyphens, up to 64 characters. Each input file contains exactly the named payloads
+An `examples/scenarios.json` catalogue starts with `"apiVersion":
+"id.registrystack.org/formats/breg/example-scenarios/v1alpha1"` and `"kind":
+"BRegExampleScenarios"`, and can declare 1..32 scenarios, each with 1..100 steps.
+Scenario and step identifiers, and every name a step uses, start with a
+lowercase letter and use lowercase letters, digits, hyphens and underscores, up
+to 64 characters. Each input file contains exactly the named payloads
 used by that scenario. Population steps use `create`, `get`, or `invoke` and
 explicitly name a dev client and access profile.
 

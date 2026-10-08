@@ -4,7 +4,11 @@ use super::{config, private, Clients, State, Status, MAX_BYTES};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use registry_breg_client::*;
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{
+    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified, LocalId,
+    Reader, RemovedKey, Report, Severity, UniqueIdList,
+};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -69,38 +73,105 @@ impl ReviewStep {
         }
     }
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) const API_VERSION: &str = "id.registrystack.org/formats/breg/example-scenarios/v1alpha1";
+pub(super) const KIND: &str = "BRegExampleScenarios";
+const CATALOGUE_FILE: &str = "examples/scenarios.json";
+
+/// The example scenarios catalogue `bregctl examples` reads from a project's
+/// `examples/scenarios.json`.
+const EXAMPLE_SCENARIOS_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[RemovedKey {
+        pointer: "/version",
+        replacement: "Delete `version`; the apiVersion header names the format version.",
+    }],
+};
+
+/// An example scenarios catalogue the shared reader or the catalogue checks
+/// refused. `bregctl examples` prints its diagnostics unchanged (CFG-DIAG-1,
+/// CFG-DIAG-2).
+#[derive(Debug)]
+pub(crate) struct CatalogueRefused(pub Report);
+
+impl std::fmt::Display for CatalogueRefused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0.render_human())
+    }
+}
+
+impl std::error::Error for CatalogueRefused {}
+
+/// Members that name something by a local identifier are decoded through
+/// the reader's `LocalId`, so a refusal carries its code and position
+/// (CFG-ID-1).
+fn local_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    LocalId::deserialize(deserializer).map(LocalId::into_string)
+}
+
+fn optional_local_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    local_id(deserializer).map(Some)
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Catalogue {
-    version: u8,
-    scenarios: Vec<Scenario>,
+    scenarios: UniqueIdList<Scenario>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Scenario {
+    #[serde(deserialize_with = "local_id")]
     id: String,
     description: String,
     input: String,
-    steps: Vec<Step>,
+    steps: UniqueIdList<Step>,
+}
+impl Identified for Scenario {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Step {
+    #[serde(deserialize_with = "local_id")]
     id: String,
     operation: Operation,
+    #[serde(deserialize_with = "local_id")]
     entity: String,
+    #[serde(deserialize_with = "local_id")]
     client: String,
+    #[serde(deserialize_with = "local_id")]
     access_profile: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_local_id")]
     input: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_local_id")]
     capture: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_local_id")]
     record: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
     action: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
     result: Option<String>,
+}
+impl Identified for Step {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -180,78 +251,110 @@ fn read_source(path: &Path) -> Result<Vec<u8>> {
         .map_err(|_| anyhow::anyhow!("examples require bounded ordinary files (maximum 1 MiB)"))
 }
 fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
-    let bytes = read_source(&project.join("examples/scenarios.json"))?;
-    let catalogue: Catalogue =
-        serde_json::from_slice(&bytes).context("examples/scenarios.json must match examples v1")?;
-    if catalogue.version != 1 || catalogue.scenarios.is_empty() || catalogue.scenarios.len() > 32 {
-        bail!("examples v1 requires 1..32 authored scenarios");
+    let path = project.join(CATALOGUE_FILE);
+    let bytes = read_source(&path)?;
+    let decoded = Reader::new(path.display().to_string())
+        .decode::<Catalogue>(&bytes, &Expect::one(&EXAMPLE_SCENARIOS_FORMAT))
+        .map_err(CatalogueRefused)?;
+    let problems = catalogue_problems(&decoded.value, &decoded.document);
+    if !problems.is_empty() {
+        let mut report = Report::new(problems);
+        report.set_files_checked(1);
+        return Err(CatalogueRefused(report).into());
     }
-    let mut ids = BTreeSet::new();
-    for scenario in &catalogue.scenarios {
-        if !config::identifier(&scenario.id)
-            || !ids.insert(&scenario.id)
-            || scenario.description.is_empty()
-            || scenario.description.len() > 1024
-            || scenario.steps.is_empty()
-            || scenario.steps.len() > 100
-        {
-            bail!("examples require unique bounded scenario IDs, descriptions and 1..100 steps");
+    Ok((decoded.value, bytes))
+}
+
+/// The checks the reader's types cannot express, each reported at the
+/// member it concerns (CFG-DIAG-1). Messages name members, never values.
+fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnostic> {
+    let mut problems = Vec::new();
+    let mut refuse = |pointer: &str, code: &str, message: &str, action: &str| {
+        problems.push(document.diagnostic_at_value(
+            Severity::Error,
+            code,
+            pointer,
+            message,
+            action,
+        ));
+    };
+    if catalogue.scenarios.is_empty() || catalogue.scenarios.len() > 32 {
+        refuse(
+            "/scenarios",
+            "breg.examples.scenario-count",
+            "the catalogue must declare 1 to 32 scenarios",
+            "Declare between 1 and 32 scenarios.",
+        );
+    }
+    for (index, scenario) in catalogue.scenarios.iter().enumerate() {
+        let at = format!("/scenarios/{index}");
+        if scenario.description.is_empty() || scenario.description.len() > 1024 {
+            refuse(
+                &format!("{at}/description"),
+                "breg.examples.description-length",
+                "a scenario description must be 1 to 1024 bytes",
+                "Write a description of 1 to 1024 bytes.",
+            );
         }
-        let path = Path::new(&scenario.input);
+        let input = Path::new(&scenario.input);
         if !scenario.input.starts_with("examples/")
-            || path
+            || input
                 .components()
                 .any(|p| !matches!(p, std::path::Component::Normal(_)))
         {
-            bail!("scenario input must be a relative file under examples/");
+            refuse(
+                &format!("{at}/input"),
+                "breg.examples.input-path",
+                "a scenario input must be a relative file under examples/",
+                "Name a file under examples/, such as examples/inputs/starter-data.json, without `.` or `..` segments.",
+            );
         }
-        let mut steps = BTreeSet::new();
-        for step in &scenario.steps {
-            if [&step.id, &step.entity, &step.client, &step.access_profile]
-                .iter()
-                .any(|v| !config::identifier(v))
-                || !steps.insert(&step.id)
-            {
-                bail!(
-                    "steps require unique bounded IDs and explicit entity/client/profile bindings"
-                );
-            }
+        if scenario.steps.is_empty() || scenario.steps.len() > 100 {
+            refuse(
+                &format!("{at}/steps"),
+                "breg.examples.step-count",
+                "a scenario must declare 1 to 100 steps",
+                "Declare between 1 and 100 steps.",
+            );
+        }
+        for (position, step) in scenario.steps.iter().enumerate() {
+            let at = format!("{at}/steps/{position}");
             if step.operation == Operation::Invoke {
                 // Both name something the registry project declares, a governed
                 // action and one of its result effects, so both are held to the
-                // project's identifier grammar.
-                if step
-                    .action
-                    .as_deref()
-                    .is_none_or(|value| !config::governed_identifier(value))
-                    || step
-                        .result
-                        .as_deref()
-                        .is_none_or(|value| !config::governed_identifier(value))
-                {
-                    bail!("invoke steps require an explicit action and disclosed result alias");
+                // project's identifier grammar when they are decoded.
+                if step.action.is_none() || step.result.is_none() {
+                    refuse(
+                        &at,
+                        "breg.examples.step-members",
+                        "an invoke step must declare `action` and `result`",
+                        "Add `action` with the governed action's id and `result` with one of its disclosed result aliases.",
+                    );
                 }
             } else if step.action.is_some() || step.result.is_some() {
-                bail!("only invoke steps may name an action or result alias");
+                refuse(
+                    &at,
+                    "breg.examples.step-members",
+                    "only an invoke step may declare `action` or `result`",
+                    "Delete `action` and `result`, or set `operation` to invoke.",
+                );
             }
             if matches!(step.operation, Operation::Create | Operation::Invoke) {
-                if step.input.as_deref().is_none_or(|v| !config::identifier(v))
-                    || step
-                        .capture
-                        .as_deref()
-                        .is_none_or(|v| !config::identifier(v))
-                    || step.record.is_some()
-                {
-                    bail!("create and invoke steps require input and capture, and no record alias");
+                if step.input.is_none() || step.capture.is_none() || step.record.is_some() {
+                    refuse(
+                        &at,
+                        "breg.examples.step-members",
+                        "a create or invoke step must declare `input` and `capture`, and no `record`",
+                        "Name the payload with `input`, the returned record with `capture`, and delete `record`.",
+                    );
                 }
-            } else if step
-                .record
-                .as_deref()
-                .is_none_or(|v| !config::identifier(v))
-                || step.input.is_some()
-                || step.capture.is_some()
-            {
-                bail!("read and lifecycle steps require a record alias and no input or capture");
+            } else if step.record.is_none() || step.input.is_some() || step.capture.is_some() {
+                refuse(
+                    &at,
+                    "breg.examples.step-members",
+                    "a read or lifecycle step must declare `record`, and no `input` or `capture`",
+                    "Name the captured record with `record`, and delete `input` and `capture`.",
+                );
             }
             if scenario.id != "reviewed-change"
                 && !matches!(
@@ -259,7 +362,12 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
                     Operation::Create | Operation::Get | Operation::Invoke
                 )
             {
-                bail!("population examples permit only creates, governed invocations, and reads");
+                refuse(
+                    &format!("{at}/operation"),
+                    "breg.examples.population-operation",
+                    "a population scenario may only create, invoke, and get",
+                    "Use create, invoke, or get; the reviewed-change scenario is the one that submits and applies a request.",
+                );
             }
         }
         if scenario.id == "first-record"
@@ -267,32 +375,39 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
                 || scenario.steps[0].operation != Operation::Create
                 || scenario.steps[1].operation != Operation::Get)
         {
-            bail!("first-record must create one record and retrieve its returned UUID");
+            refuse(
+                &format!("{at}/steps"),
+                "breg.examples.fixed-scenario",
+                "first-record must create one record and then get it",
+                "Declare exactly two steps: a create step, then a get step that reads its capture.",
+            );
         }
-        if scenario.id == "reviewed-change" {
-            for (id, operation) in [
-                ("draft", Operation::Create),
-                ("submit", Operation::Submit),
-                ("inspect", Operation::Get),
-                ("apply", Operation::Apply),
-                ("history", Operation::History),
-            ] {
-                if !scenario
-                    .steps
-                    .iter()
-                    .any(|s| s.id == id && s.operation == operation)
-                {
-                    bail!(
-                        "reviewed-change requires draft, submit, inspect, apply and history steps"
-                    );
-                }
-            }
-            if scenario.steps.len() != 5 {
-                bail!("reviewed-change contains exactly five fixed steps");
-            }
+        if scenario.id == "reviewed-change"
+            && (scenario.steps.len() != 5
+                || [
+                    ("draft", Operation::Create),
+                    ("submit", Operation::Submit),
+                    ("inspect", Operation::Get),
+                    ("apply", Operation::Apply),
+                    ("history", Operation::History),
+                ]
+                .iter()
+                .any(|(id, operation)| {
+                    scenario
+                        .steps
+                        .get(id)
+                        .is_none_or(|step| step.operation != *operation)
+                }))
+        {
+            refuse(
+                &format!("{at}/steps"),
+                "breg.examples.fixed-scenario",
+                "reviewed-change must declare exactly the draft, submit, inspect, apply, and history steps",
+                "Declare the five steps draft (create), submit (submit), inspect (get), apply (apply), and history (history).",
+            );
         }
     }
-    Ok((catalogue, bytes))
+    problems
 }
 
 /// Captures carry their declared entity; metadata validates each reference field.
@@ -1446,7 +1561,7 @@ mod tests {
         let step = json!({"id":"register","operation":"invoke","entity":"entry",
             "client":"writer","accessProfile":"writer","input":"register","capture":"entry",
             "action":"register-entry","result":"entry"});
-        let valid = json!({"version":1,"scenarios":[{"id":"register-entries",
+        let valid = json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[{"id":"register-entries",
             "description":"Register configured entries","input":"examples/inputs.json","steps":[step]}]});
         let path = temp.path().join("examples/scenarios.json");
         fs::write(&path, serde_json::to_vec(&valid).unwrap()).unwrap();
@@ -1498,6 +1613,123 @@ mod tests {
         assert!(
             catalogue(&temp.path().canonicalize().unwrap()).is_err(),
             "custom population cannot hide review application"
+        );
+    }
+
+    /// The diagnostics a refused catalogue carries.
+    fn catalogue_refusal(document: &Value) -> Report {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("examples")).unwrap();
+        fs::write(
+            temp.path().join(CATALOGUE_FILE),
+            serde_json::to_vec_pretty(document).unwrap(),
+        )
+        .unwrap();
+        match catalogue(&temp.path().canonicalize().unwrap())
+            .expect_err("the catalogue is refused")
+            .downcast::<CatalogueRefused>()
+        {
+            Ok(refused) => refused.0,
+            Err(error) => panic!("not a document refusal: {error:#}"),
+        }
+    }
+
+    fn located(report: &Report) -> Vec<(&str, &str, Option<usize>)> {
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.as_str(),
+                    diagnostic.path.as_str(),
+                    diagnostic.source.as_ref().and_then(|source| source.line),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_catalogue_header_replaces_its_version_member() {
+        let report = catalogue_refusal(&json!({"version":1,"scenarios":[]}));
+        assert_eq!(
+            located(&report),
+            [("config.missing-envelope", "", Some(1))],
+            "{}",
+            report.render_human()
+        );
+        let rendered = report.render_human();
+        assert!(
+            rendered.contains(API_VERSION) && rendered.contains(KIND),
+            "{rendered}"
+        );
+        let report = catalogue_refusal(
+            &json!({"apiVersion":API_VERSION,"kind":KIND,"version":1,"scenarios":[]}),
+        );
+        let [diagnostic] = report.diagnostics() else {
+            panic!("{}", report.render_human());
+        };
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert_eq!(diagnostic.path, "/version");
+        assert!(diagnostic.suggested_action.contains("apiVersion"));
+    }
+
+    #[test]
+    fn catalogue_checks_report_every_problem_at_its_member() {
+        let create = json!({"id":"make","operation":"create","entity":"entry","client":"writer",
+            "accessProfile":"writer","input":"make","capture":"made"});
+        let mut invoke = create.clone();
+        invoke["id"] = json!("register");
+        invoke["operation"] = json!("invoke");
+        let mut apply = create.clone();
+        apply["id"] = json!("apply");
+        apply["operation"] = json!("apply");
+        let report = catalogue_refusal(&json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[
+            {"id":"population","description":"","input":"../outside.json",
+             "steps":[create, invoke, apply]}]}));
+        assert_eq!(
+            located(&report),
+            [
+                (
+                    "breg.examples.description-length",
+                    "/scenarios/0/description",
+                    Some(6)
+                ),
+                ("breg.examples.input-path", "/scenarios/0/input", Some(8)),
+                (
+                    "breg.examples.step-members",
+                    "/scenarios/0/steps/1",
+                    Some(19)
+                ),
+                (
+                    "breg.examples.step-members",
+                    "/scenarios/0/steps/2",
+                    Some(28)
+                ),
+                (
+                    "breg.examples.population-operation",
+                    "/scenarios/0/steps/2/operation",
+                    Some(35)
+                ),
+            ],
+            "{}",
+            report.render_human()
+        );
+        assert!(!report.render_human().contains("outside.json"));
+        // Repeated identifiers are refused by the reader's list type, at the
+        // second item's id.
+        let step = json!({"id":"make","operation":"get","entity":"entry","client":"writer",
+            "accessProfile":"writer","record":"made"});
+        let report = catalogue_refusal(&json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[
+            {"id":"population","description":"Read","input":"examples/in.json","steps":[step.clone(), step]}]}));
+        assert_eq!(
+            report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+                .collect::<Vec<_>>(),
+            [("config.duplicate-id", "/scenarios/0/steps/1/id")],
+            "{}",
+            report.render_human()
         );
     }
 
@@ -1904,9 +2136,11 @@ mod tests {
             ("apply", "editor", "apply_request"),
         ] {
             let mut scenario = review.clone();
-            let step = scenario.steps.iter_mut().find(|s| s.id == id).unwrap();
+            let mut steps = scenario.steps.into_vec();
+            let step = steps.iter_mut().find(|s| s.id == id).unwrap();
             step.client = profile.into();
             step.access_profile = profile.into();
+            scenario.steps = UniqueIdList::new(steps).unwrap();
             let input =
                 serde_json::from_slice(&read_source(&project.join(&scenario.input)).unwrap())
                     .unwrap();
@@ -2074,7 +2308,7 @@ mod tests {
              "claims":{"registry_principal":"synthetic-household-operator","registry_purpose":"household-administration","district":"south-district"},
              "testBindings":[{"journeyId":"link-only-target-authority-is-still-enforced","stepId":"create-south-service-center"}]}
         ]})).unwrap()).unwrap();
-        fs::write(project.join("examples/scenarios.json"), serde_json::to_vec(&json!({"version":1,"scenarios":[
+        fs::write(project.join("examples/scenarios.json"), serde_json::to_vec(&json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[
             {"id":"population","description":"Create action targets","input":"examples/population.json","steps":[
                 {"id":"household","operation":"create","entity":"household","client":"operator","accessProfile":"household-operator","input":"household","capture":"household"},
                 {"id":"center","operation":"create","entity":"service-center","client":"operator","accessProfile":"household-operator","input":"center","capture":"center"}

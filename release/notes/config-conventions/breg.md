@@ -1265,7 +1265,48 @@ refuses a `null` member (`config.null-value`) and a document over 1 MiB.
 
 A session an earlier `bregctl` started retained its clients in the old shape,
 and this `bregctl` refuses every command that reads them (`retained clients
-are invalid`), naming this fix. Before upgrading, run `bregctl dev stop --remove <project>` with the earlier
-`bregctl`, then remove `<project>/.breg/dev`, migrate `dev-clients.yaml`, and
-start again. The next start creates an empty database and fresh client keys;
+are invalid`), naming this fix. Before upgrading, run `bregctl dev stop
+--remove <project>` with the earlier `bregctl`, then remove
+`<project>/.breg/dev`, migrate `dev-clients.yaml`, and start again. The next start creates an empty database and fresh client keys;
 export a client again where another tool holds its pair.
+
+### BREAKING: example scenarios header (`examples/scenarios.json`)
+
+`bregctl examples list` and `bregctl examples run` read the catalogue
+through the shared reader. Migrate a catalogue by replacing its version
+member with the header:
+
+| Old | New |
+|---|---|
+| `"version": 1` | `"apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1"` and `"kind": "BRegExampleScenarios"` |
+
+Scenario and step identifiers, and the `entity`, `client`, `accessProfile`,
+`input`, `capture`, `record`, `action`, and `result` names, are local
+identifiers: they start with a lowercase letter and use lowercase letters,
+digits, hyphens, and underscores, up to 64 characters. A name that starts
+with a digit, which the previous parser accepted for everything but
+`action` and `result`, is refused; rename it, and the input keys and
+captures that use it.
+
+A catalogue with `version` and no header is refused with
+`config.missing-envelope`, whose fix names the header, and `version` beside
+the header with `config.removed-key`. The refusal is printed as one sentence
+(`bregctl examples refused the example scenarios.`) followed by every
+diagnostic with its position; with `--format json` the report's
+`diagnostics` carry the reader's shape unchanged. Retained example attempts
+bind the catalogue's digest, so an attempt started before the migration is
+not resumed; start a new one with `--new-attempt`.
+
+| Condition | Old | New |
+|---|---|---|
+| the document does not parse, or has an unknown, missing, malformed, or repeated member | `examples.failed` | the reader's `config.*` and `yaml.*` codes, including `config.duplicate-id` for a repeated scenario or step id |
+| fewer than 1 or more than 32 scenarios | `examples.failed` | `breg.examples.scenario-count` |
+| fewer than 1 or more than 100 steps in a scenario | `examples.failed` | `breg.examples.step-count` |
+| an empty description, or one over 1024 bytes | `examples.failed` | `breg.examples.description-length` |
+| an input outside `examples/` | `examples.failed` | `breg.examples.input-path` |
+| a step missing a member its operation needs, or carrying one it does not | `examples.failed` | `breg.examples.step-members` |
+| a population scenario that submits or applies | `examples.failed` | `breg.examples.population-operation` |
+| `first-record` or `reviewed-change` without its fixed steps | `examples.failed` | `breg.examples.fixed-scenario` |
+
+`examples.failed` remains for every refusal that is not about the
+catalogue.
