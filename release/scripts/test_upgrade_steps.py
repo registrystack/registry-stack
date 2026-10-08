@@ -419,5 +419,331 @@ class FragmentTest(unittest.TestCase):
             self.check("# P\n\n## Changes\n\nText.\n")
 
 
+
+FRAGMENT_NAMES = ("breg", "casework", "evidence", "messaging")
+
+
+def write(root: Path, name: str, text: str) -> Path:
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+class ReleaseCatalogTest(unittest.TestCase):
+    """The shipped catalog and the shipped release-note fragments agree."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.catalog = upgrade_steps.load_catalog()
+        cls.items = {
+            name: upgrade_steps.check_fragment(upgrade_steps.FRAGMENTS / f"{name}.md",
+                                               cls.catalog)
+            for name in FRAGMENT_NAMES}
+
+    def test_every_breaking_item_names_a_step_or_a_reserved_word(self) -> None:
+        for name, items in self.items.items():
+            with self.subTest(fragment=name):
+                self.assertTrue(items)
+                for item in items:
+                    self.assertTrue(item.ids, f"{name}.md:{item.line}")
+
+    def test_every_catalog_entry_is_cited_by_a_fragment(self) -> None:
+        cited = {step for items in self.items.values() for item in items for step in item.ids}
+        self.assertEqual(sorted(set(self.catalog) - cited), [])
+
+    def test_a_step_is_cited_only_from_its_own_product_fragment(self) -> None:
+        for name, items in self.items.items():
+            for item in items:
+                for step in item.ids:
+                    if step in self.catalog:
+                        self.assertEqual(self.catalog[step]["product"], name, step)
+
+    def test_a_step_without_a_known_edit_names_its_file_and_diagnostic(self) -> None:
+        unknown = [step for step in self.catalog.values() if step["kind"] == "unknown"]
+        self.assertEqual([step["id"] for step in unknown], ["breg-statistical-dataset-grants"])
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(Error, r"registry\.yaml.*config\.removed-key"):
+                upgrade_steps.apply_steps(["breg-statistical-dataset-grants"],
+                                          {"project": Path(directory)})
+
+
+class ReleaseStepsApplyTest(unittest.TestCase):
+    """Each shipped edit step turns the previous release's shape into the current one."""
+
+    def setUp(self) -> None:
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        self.root = Path(self._directory.name)
+        self.target = self.root / "target"
+        self.runtime = self.root / "runtime"
+        self.target.mkdir()
+        self.runtime.mkdir()
+
+    def apply(self, *ids: str) -> list[str]:
+        return upgrade_steps.apply_steps(
+            list(ids), {"project": self.root, "target": self.target, "runtime": self.runtime})
+
+    def load(self, name: str, root: Path | None = None):
+        return upgrade_steps.load_document((root or self.root) / name)
+
+    def test_casework_fixture_simulation_holiday_set_and_dev_clients(self) -> None:
+        write(self.root, "fixtures/a.yaml", """\
+apiVersion: registry.registrystack.org/casework-fixture/v1alpha1
+kind: CaseworkFixture
+name: standalone
+source: {id: records, requestEntity: person, reviewStage: review}
+expect: {queue: decisions}
+""")
+        write(self.root, "simulations/s.yaml", """\
+apiVersion: registry.registrystack.org/casework-simulation/v1alpha1
+kind: CaseworkSimulation
+subject: {id: r-1}
+expect: {ruleId: first, dueState: atRisk}
+""")
+        write(self.root, "simulations/holiday-sets/h-1.yaml", "name: h\\nrevision: 1\\n".replace("\\n", "\n"))
+        write(self.root, "dev-clients.yaml", "version: 1\nclients: []\n")
+        self.apply("casework-fixture-spelling", "casework-simulation-spelling",
+                   "casework-holiday-set-envelope", "casework-dev-clients-envelope")
+        fixture = self.load("fixtures/a.yaml")
+        self.assertEqual(list(fixture)[:2], ["apiVersion", "kind"])
+        self.assertEqual(fixture["apiVersion"],
+                         "id.registrystack.org/formats/casework/fixture/v1alpha1")
+        self.assertEqual(fixture["id"], "standalone")
+        self.assertNotIn("name", fixture)
+        self.assertEqual(fixture["request"], {"source": "records", "entity": "person"})
+        self.assertNotIn("source", fixture)
+        simulation = self.load("simulations/s.yaml")
+        self.assertEqual(simulation["subject"], {"recordId": "r-1"})
+        self.assertEqual(simulation["expect"], {"rule": "first", "dueState": "at-risk"})
+        holiday = self.load("simulations/holiday-sets/h-1.yaml")
+        self.assertEqual(holiday["kind"], "CaseworkHolidaySet")
+        clients = self.load("dev-clients.yaml")
+        self.assertEqual(clients["kind"], "CaseworkDevClients")
+        self.assertNotIn("version", clients)
+
+    def test_a_casework_fixture_with_no_source_block_still_migrates(self) -> None:
+        write(self.root, "fixtures/a.yaml", "name: x\nexpect: {queue: q}\n")
+        self.apply("casework-fixture-spelling")
+        self.assertEqual(self.load("fixtures/a.yaml")["id"], "x")
+
+    def test_evidence_project_question_fixture_and_target_governance(self) -> None:
+        write(self.root, "evidence-project.yaml", "version: 1\nproject: evidence-authoring\n")
+        write(self.root, "questions/q.yaml", "id: record-status\n")
+        write(self.root, "fixtures/f.yaml", "fixture: registry.evidence.reference.x/v1\ncommon: {}\n")
+        write(self.target, "governance.yaml", "version: 1\nauthentication: {}\n")
+        self.apply("evidence-project-envelope", "evidence-question-envelope",
+                   "evidence-fixture-envelope", "evidence-target-governance-envelope")
+        self.assertEqual(self.load("evidence-project.yaml"), {
+            "apiVersion": "id.registrystack.org/formats/evidence/authoring-project/v1alpha1",
+            "kind": "EvidenceAuthoringProject"})
+        self.assertEqual(self.load("questions/q.yaml")["kind"], "EvidenceQuestion")
+        fixture = self.load("fixtures/f.yaml")
+        self.assertEqual((fixture["kind"], fixture["common"]), ("EvidenceFixture", {}))
+        self.assertNotIn("fixture", fixture)
+        governance = self.load("governance.yaml", self.target)
+        self.assertEqual(governance["kind"], "EvidenceTargetGovernance")
+        self.assertNotIn("version", governance)
+
+    def test_breg_journeys_with_a_shared_mapping_and_a_batch(self) -> None:
+        write(self.root, "tests/journeys.yaml", """\
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: j
+    steps:
+      - id: create
+        claims: &claims {principal: p}
+        request: {operation: create, data: {a: 1}}
+        capture: made
+      - id: submit
+        claims: *claims
+        request:
+          operation: submit_request
+          recordRef: made
+          etagRef: made
+      - id: read
+        claims: *claims
+        request: {operation: read_path, data: {parent: {recordRef: made}}}
+      - id: batch
+        claims: *claims
+        request:
+          operation: batch
+          items:
+            - {operation: apply_request, recordRef: made}
+            - {operation: create, data: {centroid: {type: Point}}}
+""")
+        self.apply("breg-journeys")
+        journeys = self.load("tests/journeys.yaml")
+        self.assertEqual(journeys["apiVersion"], "id.registrystack.org/formats/breg/journeys/v1")
+        self.assertEqual(journeys["kind"], "BRegJourneys")
+        steps = journeys["journeys"][0]["steps"]
+        self.assertEqual(steps[0]["request"], {"type": "create", "data": {"a": 1}})
+        self.assertEqual(steps[1]["request"],
+                         {"type": "submit-request", "recordCapture": "made", "etagCapture": "made"})
+        self.assertEqual(steps[1]["claims"], {"principal": "p"})
+        self.assertEqual(steps[2]["request"]["type"], "read-path")
+        self.assertEqual(steps[2]["request"]["data"], {"parent": {"recordCapture": "made"}})
+        self.assertEqual(steps[3]["request"]["type"], "batch")
+        self.assertEqual(steps[3]["request"]["items"][0],
+                         {"type": "apply-request", "recordCapture": "made"})
+        self.assertEqual(steps[3]["request"]["items"][1]["data"], {"centroid": {"type": "Point"}})
+        text = (self.root / "tests/journeys.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("&", text)
+        self.assertNotIn("*claims", text)
+
+    def test_breg_example_inputs_credentials_selection_and_scenarios(self) -> None:
+        write(self.root, "examples/inputs/a.json", json.dumps({"x": {"recordRef": "made"}}))
+        write(self.root, "credentials.yaml", """\
+apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
+kind: SchemaTestCredentials
+bindings: []
+""")
+        write(self.root, "model/selection.yaml", """\
+apiVersion: registry.registrystack.org/breg-model-selection/v1alpha1
+kind: ModelSelection
+name: x
+""")
+        write(self.root, "examples/scenarios.json", json.dumps({"version": 1, "scenarios": []}))
+        self.apply("breg-example-inputs", "breg-schema-test-credentials", "breg-model-selection",
+                   "breg-example-scenarios")
+        self.assertEqual(self.load("examples/inputs/a.json"), {"x": {"recordCapture": "made"}})
+        self.assertEqual(self.load("credentials.yaml"), {
+            "apiVersion": "id.registrystack.org/formats/breg/schema-test-credentials/v1",
+            "kind": "BRegSchemaTestCredentials", "bindings": []})
+        self.assertEqual(self.load("model/selection.yaml")["kind"], "BRegModelSelection")
+        self.assertEqual(self.load("examples/scenarios.json"), {
+            "apiVersion": "id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+            "kind": "BRegExampleScenarios", "scenarios": []})
+
+    def test_breg_registry_period_and_unrestricted_members(self) -> None:
+        write(self.root, "registry.yaml", """\
+statisticalDatasets:
+  - id: d
+    period: {kind: flow, unit: month}
+accessProfiles:
+  - id: reader
+    requiredScopes: []
+    permissions:
+      - entity: facility
+        rowBoundaries: []
+        applyTargets:
+          - {entity: site, rowBoundaries: []}
+  - id: open
+    permissions: []
+  - id: scoped
+    requiredScopes: [read]
+    permissions:
+      - {entity: facility, rowBoundaries: [north]}
+""")
+        self.apply("breg-statistical-period", "breg-access-unrestricted")
+        registry = self.load("registry.yaml")
+        self.assertEqual(registry["statisticalDatasets"][0]["period"],
+                         {"type": "flow", "unit": "month"})
+        reader, open_, scoped = registry["accessProfiles"]
+        self.assertEqual(reader["requiredScopes"], "unrestricted")
+        self.assertEqual(reader["permissions"][0]["rowBoundaries"], "unrestricted")
+        self.assertEqual(reader["permissions"][0]["applyTargets"][0]["rowBoundaries"],
+                         "unrestricted")
+        self.assertEqual(open_["requiredScopes"], "unrestricted")
+        self.assertEqual(scoped["requiredScopes"], ["read"])
+        self.assertEqual(scoped["permissions"][0]["rowBoundaries"], ["north"])
+
+    def test_breg_runtime_allowed_clients(self) -> None:
+        write(self.runtime, "runtime.yaml", "authentication:\n  oidc:\n    allowedClients: []\n")
+        self.apply("breg-runtime-allowed-clients")
+        self.assertEqual(self.load("runtime.yaml", self.runtime)["authentication"]["oidc"],
+                         {"allowedClients": "unrestricted"})
+        write(self.runtime, "runtime.yaml", "authentication:\n  oidc:\n    issuer: x\n")
+        self.apply("breg-runtime-allowed-clients")
+        self.assertEqual(self.load("runtime.yaml", self.runtime)["authentication"]["oidc"],
+                         {"issuer": "x", "allowedClients": "unrestricted"})
+        write(self.runtime, "runtime.yaml", "authentication:\n  oidc:\n    allowedClients: [a]\n")
+        self.apply("breg-runtime-allowed-clients")
+        self.assertEqual(self.load("runtime.yaml", self.runtime)["authentication"]["oidc"],
+                         {"allowedClients": ["a"]})
+
+    def test_messaging_runtime_project_template_and_provider(self) -> None:
+        write(self.runtime, "runtime.yaml", """\
+apiVersion: registry.registrystack.org/messaging-runtime/v1alpha1
+kind: MessagingRuntime
+retention: {payloadDays: 7, recordDays: 30, submissionReceiptDays: 90}
+audit: {retainDays: 400}
+providers:
+  mail: {kind: smtp, attemptTimeoutSeconds: 10, authentication: {kind: password}}
+  hook:
+    kind: http
+    timeoutMilliseconds: 500
+    concurrencyLimit: 4
+    callbackVerifier: {kind: hmac}
+authentication: {oidc: {jwksSource: {kind: url}}}
+""")
+        write(self.root, "messaging.yaml", """\
+apiVersion: registry.registrystack.org/messaging-package/v1alpha1
+kind: MessagingPackage
+providers: [{id: mail, kind: smtp}]
+accessProfiles:
+  - {id: a, dailyLimit: 5, requiredScopes: []}
+  - {id: b}
+  - {id: c, requiredScopes: [send]}
+""")
+        write(self.root, "templates/welcome/1/template.yaml", "locales: [en]\n")
+        write(self.root, "providers/hook/provider.yaml", "capabilities: {concurrencyLimit: 4}\n")
+        self.apply("messaging-runtime-keys", "messaging-project-renames",
+                   "messaging-template-envelope", "messaging-provider-envelope",
+                   "messaging-provider-capabilities", "messaging-required-scopes")
+        runtime = self.load("runtime.yaml", self.runtime)
+        self.assertEqual(runtime["apiVersion"],
+                         "id.registrystack.org/formats/messaging/runtime/v1alpha1")
+        self.assertEqual(runtime["retention"], {"payloadRetentionDays": 7,
+                                                 "recordRetentionDays": 30,
+                                                 "submissionReceiptRetentionDays": 90})
+        self.assertEqual(runtime["audit"], {"retentionDays": 400})
+        self.assertEqual(runtime["providers"]["mail"], {
+            "type": "smtp", "attemptTimeoutMilliseconds": 10000,
+            "authentication": {"type": "password"}})
+        self.assertEqual(runtime["providers"]["hook"], {
+            "type": "http", "attemptTimeoutMilliseconds": 500, "maximumConcurrentRequests": 4,
+            "callbackVerifier": {"type": "hmac"}})
+        self.assertEqual(runtime["authentication"], {"oidc": {"jwksSource": {"kind": "url"}}})
+        project = self.load("messaging.yaml")
+        self.assertEqual(project["providers"], [{"id": "mail", "type": "smtp"}])
+        self.assertEqual([profile.get("requiredScopes") for profile in project["accessProfiles"]],
+                         ["unrestricted", "unrestricted", ["send"]])
+        self.assertEqual(project["accessProfiles"][0]["maximumMessagesPerDay"], 5)
+        self.assertEqual(self.load("templates/welcome/1/template.yaml")["kind"],
+                         "MessagingTemplate")
+        provider = self.load("providers/hook/provider.yaml")
+        self.assertEqual(provider["kind"], "MessagingProvider")
+        self.assertEqual(provider["capabilities"], {"maximumConcurrentRequests": 4})
+
+    def test_manual_steps_are_reported_with_their_file_and_never_applied(self) -> None:
+        manual = self.apply("breg-schema-test-receipt", "casework-dev-session-reset")
+        self.assertEqual(len(manual), 2)
+        self.assertIn("schema-test-receipt.json", manual[0])
+        self.assertIn("bregctl test", manual[0])
+        self.assertIn(".casework/dev", manual[1])
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["runtime", "target"])
+
+
+class RehearsalEnvelopeTieTest(unittest.TestCase):
+    """The rehearsal's own credentials envelope is the catalog's step."""
+
+    def test_the_rehearsal_envelope_is_the_credentials_step(self) -> None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "rehearse_upgrade_for_tie", SCRIPTS / "rehearse-upgrade.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["rehearse_upgrade_for_tie"] = module
+        spec.loader.exec_module(module)
+        envelope = module.BREG_CREDENTIALS_ENVELOPE
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write(root, "credentials.yaml", "\n".join(
+                f"{key}: {value}" for key, value in envelope["from"].items()) + "\nbindings: []\n")
+            upgrade_steps.apply_steps(["breg-schema-test-credentials"], {"project": root})
+            migrated = upgrade_steps.load_document(root / "credentials.yaml")
+        self.assertEqual({key: migrated[key] for key in ("apiVersion", "kind")}, envelope["to"])
+
+
 if __name__ == "__main__":
     unittest.main()

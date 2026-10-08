@@ -4,6 +4,7 @@ Every Registry Casework change the configuration conventions make, with the
 step that migrates a file or a script. The Casework `CHANGELOG.md` points here.
 
 ## BREAKING: `casework.yaml` is read by the shared configuration reader
+<!-- upgrade: casework-project-reader-refusals -->
 
 `caseworkctl` (every command that reads a project: `check`, `explain`,
 `test`, `simulate`, `package`, `source add`, and `dev`) and the `casework`
@@ -53,6 +54,7 @@ shares.
   schemas takes the regenerated ones.
 
 ## BREAKING: `casework.yaml` has a schema, and the reader holds its bounds
+<!-- upgrade: casework-project-bounds -->
 
 `casework.yaml` has a published JSON Schema,
 `https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json`,
@@ -97,6 +99,7 @@ The project check keeps the old codes for a project built in code, which the
 reader never sees; the table below gives the code a file now receives.
 
 ## BREAKING: `runtime.yaml` members are typed by the shared reader
+<!-- upgrade: casework-runtime-reader-refusals -->
 
 The `casework` runtime and every `caseworkctl` command that reads
 `runtime.yaml` (`plan`, `apply`, `status`, `doctor`, and `dev`) read its
@@ -137,6 +140,7 @@ diagnostic never repeats the value.
   Migration: none.
 
 ## BREAKING: a refused `runtime.yaml` is reported in full, and `caseworkctl check` reads it offline
+<!-- upgrade: no-file -->
 
 The `casework` runtime and every `caseworkctl` command that reads
 `runtime.yaml` report every problem in the file, each at its line and
@@ -186,6 +190,7 @@ Runtime file codes: `casework.runtime.allowed-clients-required`, `casework.runti
 Package codes: `casework.package.digest-mismatch`, `casework.package.file-changed`, `casework.package.invalid`, `casework.package.invalid-project`, `casework.package.retired-manifest`, `casework.package.source-description-mismatch`, `casework.package.unexpected-contents`, `casework.package.unreadable-project`.
 
 ## BREAKING: `caseworkctl check` and `test` report diagnostics, and `--deny-warnings` replaces `--deny-findings`
+<!-- upgrade: no-file -->
 
 `caseworkctl check` and `caseworkctl test` report what they find in the one
 diagnostic shape every Registry Stack check command shares, and exit as every
@@ -234,6 +239,7 @@ reported.
 | `artifact: casework_project` | `artifact: CaseworkProject` |
 
 ## BREAKING: every project refusal against its source descriptions is placed in `casework.yaml`
+<!-- upgrade: no-file -->
 
 `caseworkctl check`, `explain`, `simulate`, and `package` check a project
 against the source descriptions it imported. Each problem they find is its
@@ -284,6 +290,7 @@ project changes.
 | `--against-breg-package` with a missing or stale description | unchanged code, `casework.yaml:/sources/N/description` | unchanged code, `/sources/N/description` |
 
 ## BREAKING: fixtures, simulations, and holiday sets are read by the shared reader
+<!-- upgrade: casework-fixture-spelling, casework-fixture-target, casework-simulation-spelling, casework-holiday-set-envelope, casework-holiday-set-file-name -->
 
 `caseworkctl check`, `test`, and `simulate` read the files under
 `fixtures/`, `simulations/`, and `simulations/holiday-sets/` through the
@@ -369,6 +376,7 @@ matches its `code`.
 Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.display-too-large`, `casework.fixture.expectation-not-met`, `casework.fixture.no-subject`, `casework.fixture.request-expectation`, `casework.fixture.review-expectation`, `casework.fixture.two-subjects`, `casework.fixture.unknown-reference`, `casework.holiday-set.misnamed`, `casework.holiday-set.too-many-dates`, `casework.project.misplaced-file`, `casework.project.not-a-directory`, `casework.project.not-a-regular-file`, `casework.project.too-many-files`, `casework.project.unread-directory`, `casework.project.unreadable-file`, `casework.simulation.clock-expectation`, `casework.simulation.clock-failed`, `casework.simulation.clock-input`, `casework.simulation.expectation-not-met`, `casework.simulation.field-mismatch`, `casework.simulation.missing-holiday-set`, `casework.simulation.stage-mismatch`, `casework.simulation.unknown-field`, `casework.simulation.unknown-reference`, `casework.simulation.unprojected-field`, `casework.test.no-fixtures`.
 
 ## BREAKING: a project check reads a bounded number of files
+<!-- upgrade: casework-project-file-bounds -->
 
 - A project declares at most 64 sources. More is refused at `/sources` with
   `casework.source.too-many`. Migration: split the sources across Casework
@@ -389,6 +397,7 @@ Offline file codes: `casework.fixture.display-mismatch`, `casework.fixture.displ
   request declares no target. The report itself is unchanged.
 
 ## BREAKING: `source add` reports positioned warnings in `diagnostics`
+<!-- upgrade: no-file -->
 
 `caseworkctl source add --format json` reports the warnings it used to
 report as findings in the same `diagnostics` shape every other report uses.
@@ -413,6 +422,7 @@ Neither warning blocks the pairing, and their codes are unchanged:
   removed from every report schema.
 
 ## BREAKING: `dev-clients.yaml` is read by the shared reader
+<!-- upgrade: casework-dev-clients-envelope -->
 
 `dev-clients.yaml`, the local callers `caseworkctl dev` registers, carries
 the format envelope, is read through the shared configuration reader, and is
@@ -479,6 +489,7 @@ checked by `caseworkctl check`.
 Development clients codes: `casework.dev-clients.clients-out-of-range`, `casework.dev-clients.duplicate-access-profile`, `casework.dev-clients.duplicate-id`, `casework.dev-clients.duplicate-member`, `casework.dev-clients.duplicate-queue`, `casework.dev-clients.duplicate-scope`, `casework.dev-clients.duplicate-team`, `casework.dev-clients.invalid-access-profile`, `casework.dev-clients.invalid-claim-name`, `casework.dev-clients.invalid-claim-value`, `casework.dev-clients.invalid-id`, `casework.dev-clients.invalid-queue`, `casework.dev-clients.invalid-resource`, `casework.dev-clients.invalid-scope`, `casework.dev-clients.invalid-secret-file`, `casework.dev-clients.invalid-status-client`, `casework.dev-clients.invalid-task-authority-issuer`, `casework.dev-clients.invalid-task-exchange`, `casework.dev-clients.invalid-team`, `casework.dev-clients.member-role-mismatch`, `casework.dev-clients.missing-administrator`, `casework.dev-clients.missing-human-claim`, `casework.dev-clients.missing-integrations`, `casework.dev-clients.missing-principal-claim`, `casework.dev-clients.missing-required-scope`, `casework.dev-clients.missing-task-authority`, `casework.dev-clients.missing-task-exchange-client`, `casework.dev-clients.repeated-principal`, `casework.dev-clients.requester-human-claim`, `casework.dev-clients.requester-member`, `casework.dev-clients.reserved-claim`, `casework.dev-clients.reserved-id`, `casework.dev-clients.scopes-out-of-range`, `casework.dev-clients.service-client-human-claim`, `casework.dev-clients.source-bindings-mismatch`, `casework.dev-clients.staff-out-of-range`, `casework.dev-clients.too-many-claims`, `casework.dev-clients.too-many-integrations`, `casework.dev-clients.too-many-supervisors`, `casework.dev-clients.too-many-teams`, `casework.dev-clients.unknown-access-profile`, `casework.dev-clients.unknown-client`, `casework.dev-clients.unknown-queue`, `casework.dev-clients.unserved-queue`.
 
 ## BREAKING: the development session state is read by the shared reader
+<!-- upgrade: casework-dev-session-reset -->
 
 `.casework/dev/state.json`, the session state `caseworkctl dev` writes and
 reads back, carries the format envelope, is read through the shared
@@ -511,6 +522,7 @@ configuration reader, and is checked by `caseworkctl check`.
 Development state codes: `casework.dev-state.invalid-ownership`.
 
 ## BREAKING: `caseworkctl` report schema identifiers
+<!-- upgrade: no-file -->
 
 The 21 schemas in `products/casework/contracts/cli/`, one per
 `caseworkctl --format json` report `kind`, are published in the identifier

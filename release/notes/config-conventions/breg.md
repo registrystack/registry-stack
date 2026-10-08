@@ -7,6 +7,7 @@ Base Registry Engine: `registry.yaml`, `module.yaml`, `runtime.yaml`, and the
 package a `bregctl package` run seals around them.
 
 ### BREAKING: the shared reader reads `registry.yaml` and `module.yaml`
+<!-- upgrade: already-wrong -->
 
 `bregctl`, the package builder, and `breg` read a project and its modules
 through the shared Registry Stack reader. A file that was already outside the
@@ -81,6 +82,7 @@ types the reader decodes, and now say what it refuses:
   schema by its `$id` should name the new one.
 
 ### BREAKING: project URLs and module digests are typed by the shared reader
+<!-- upgrade: already-wrong -->
 
 The reader types the URL members of `registry.yaml` as `Url` (an absolute
 `http` or `https` URL with a host, no user information, and at most 2048
@@ -104,6 +106,7 @@ these values no longer loads; correct the source project and rebuild the
 package as described above.
 
 ### BREAKING: integer bounds in `registry.yaml` and `module.yaml` are refused when read
+<!-- upgrade: already-wrong -->
 
 Every integer member of the project and module formats now states its
 minimum and maximum in the published schemas, and the reader refuses a value
@@ -135,6 +138,7 @@ constraint's `minimum` and `maximum`, state the signed 64-bit range in the
 schema, the range the reader already enforced.
 
 ### BREAKING: a list that is a set refuses a repeated item
+<!-- upgrade: breg-delete-repeated-items -->
 
 A list member of `registry.yaml` and `module.yaml` whose order carries no
 meaning is a set. The reader used to collapse a repeated item silently; it now
@@ -160,6 +164,7 @@ what it meant before. The members are:
   `transitions`, and `toStates`.
 
 ### BREAKING: `runtime.yaml` is decoded by the shared reader
+<!-- upgrade: breg-runtime-refused-forms -->
 
 `breg` and every `bregctl` command that takes `--runtime-config` decode
 `runtime.yaml` through the shared runtime loader rather than a second
@@ -212,6 +217,7 @@ to the bound of the member it fills, and the environment is operator-held, as
 the file is.
 
 ### BREAKING: integer bounds in `runtime.yaml` are refused when read
+<!-- upgrade: already-wrong -->
 
 Every integer member of `runtime.yaml` is read with the minimum and maximum
 the published runtime schema already stated, so a value outside them is
@@ -240,6 +246,7 @@ the accepted spellings are unchanged, and every problem inside the chosen form
 is now reported at its own member, line, and column rather than at the block.
 
 ### BREAKING: `bregctl check` reports in the shared diagnostic shape
+<!-- upgrade: no-file -->
 
 `bregctl check` reads `registry.yaml` and every `module.yaml` through the
 shared reader and reports what it finds in the diagnostic shape every
@@ -268,6 +275,7 @@ position only; with it, the expressions are filled from the process
 environment, and a filled value is never repeated in a diagnostic.
 
 ### BREAKING: the package format is named `id.registrystack.org/formats/breg/package/v2`
+<!-- upgrade: breg-rebuild-package -->
 
 The `package.json` a `bregctl package` run writes declares the package format
 by its registered identifier and a kind (CFG-ENV-1, CFG-ENV-2). The rest of
@@ -318,6 +326,7 @@ this release's compiler; when the stricter reader refuses those sources, it
 reports `migration.rehearsal.baseline_unavailable`.
 
 ### BREAKING: a statistical dataset's period is tagged by `type`
+<!-- upgrade: breg-statistical-period -->
 
 Statistical datasets are experimental, so their members follow the
 conventions now (CFG-ID-7, CFG-ID-1) rather than at the stable move.
@@ -348,6 +357,7 @@ this release's reader, so a deployed package whose project still writes
 `migration.rehearsal.baseline_unavailable`.
 
 ### BREAKING: configuration diagnostic codes are named `breg.<area>.<condition>`
+<!-- upgrade: no-file -->
 
 Every code the Base Registry Engine reports for a problem in
 `registry.yaml`, a `module.yaml`, `runtime.yaml`, or a package is named
@@ -1034,6 +1044,7 @@ file now carries a Registry Stack header, is read by the shared reader, and
 is refused with the reader's codes and positions.
 
 ### BREAKING: fixture journeys version 1 (`tests/journeys.yaml`)
+<!-- upgrade: breg-journeys -->
 
 `bregctl test`, `bregctl package`, `bregctl dev`, and every fixture runner
 read the journeys file through the shared reader. Migrate a file with these
@@ -1070,6 +1081,7 @@ matched `test.journeys.refused` or a `path` of `tests/journeys.yaml` in that
 output must match the reader codes and read `source.file` instead.
 
 ### BREAKING: the record marker in example inputs is `recordCapture`
+<!-- upgrade: breg-example-inputs -->
 
 The `bregctl dev` example runner and the fixture runner share one logical
 record marker. An example input (`examples/inputs/*.json`) that names a
@@ -1079,6 +1091,7 @@ a message naming the new one. Migrate each input file by renaming the key;
 the capture name is unchanged.
 
 ### BREAKING: schema-test receipt version 2 header
+<!-- upgrade: breg-schema-test-receipt -->
 
 `bregctl test` writes `schema-test-receipt.json` with `"apiVersion":
 "id.registrystack.org/formats/breg/schema-test-receipt/v2"` and `"kind":
@@ -1099,6 +1112,7 @@ test` writes) and `breg.receipt.too-large` (the receipt is over 64 KiB). An
 unknown member is refused with `config.unknown-key` at its position.
 
 ### BREAKING: schema-test credentials version 1 header
+<!-- upgrade: breg-schema-test-credentials -->
 
 `bregctl test --credentials` reads the credentials file through the shared
 reader. Migrate a file by replacing its first two lines:
@@ -1131,6 +1145,7 @@ The diagnostics name the credentials file and the journey and step ids;
 they never repeat a token, a secret reference, or a secret name.
 
 ### BREAKING: data checkpoint and import state headers
+<!-- upgrade: breg-data-checkpoints -->
 
 `bregctl data import` and `bregctl data export` read their checkpoints, and
 `bregctl data import` its `.state` sidecar, through the shared reader. Each
@@ -1167,6 +1182,7 @@ wrote `"nextCursor": null`, which the shared reader refuses
 (`config.null-value`).
 
 ### BREAKING: model selection header
+<!-- upgrade: breg-model-selection -->
 
 `bregctl init --from publicschema` reads a selection (`--selection`, a
 shipped `--starter`, and the echo it writes to `model/selection.yaml`)
@@ -1196,6 +1212,7 @@ written. Every unknown key is reported, not only the first.
 `init.selection.unreadable` for one that cannot be read.
 
 ### BREAKING: development clients header and secret references (`dev-clients.yaml`)
+<!-- upgrade: breg-dev-clients -->
 
 `bregctl dev start` reads `dev-clients.yaml`, or the `--clients-file` it
 names, through the shared reader. Every member that named a secret file now
@@ -1254,6 +1271,7 @@ are invalid`), naming this fix. Before upgrading, run `bregctl dev stop
 export a client again where another tool holds its pair.
 
 ### BREAKING: example scenarios header (`examples/scenarios.json`)
+<!-- upgrade: breg-example-scenarios -->
 
 `bregctl examples list` and `bregctl examples run` read the catalogue
 through the shared reader. Migrate a catalogue by replacing its version
@@ -1295,6 +1313,7 @@ not resumed; start a new one with `--new-attempt`.
 catalogue.
 
 ### BREAKING: development session state header (`.breg/dev/state.json`)
+<!-- upgrade: breg-dev-session-reset -->
 
 `bregctl dev` writes its session state with
 `apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1` and
@@ -1311,6 +1330,7 @@ migration takes. A script that reads `state.json` finds `containerId`,
 have a value.
 
 ### BREAKING: source preparation record and journal headers (`.breg/dev/source-prepared-<client>.json`, `.breg/dev/source-transition.json`)
+<!-- upgrade: breg-dev-session-reset -->
 
 `bregctl dev prepare-source` writes the record that repeats an identical
 request with `apiVersion:
@@ -1332,6 +1352,7 @@ upgrading; otherwise run `bregctl dev stop --remove <project>`, remove
 `<project>/.breg/dev`, and start again.
 
 ### BREAKING: reviewed migration documents and the backup binding (`descriptor.json`, `rehearsal.json`, the `--backup` binding)
+<!-- upgrade: breg-reviewed-migrations -->
 
 `bregctl test`, `bregctl package`, `bregctl plan`, `bregctl apply`, and the
 runtime's package load read a reviewed migration's descriptor and rehearsal
@@ -1419,6 +1440,7 @@ runtime. The activation ledger keeps
 its own record of each backup it accepted and is unchanged.
 
 ### BREAKING: Evidence source export manifest header (`source-export.json`)
+<!-- upgrade: breg-evidence-source-export -->
 
 `bregctl generate evidence-source` writes `source-export.json` with an
 `apiVersion` and `kind` header first and a `digest` for each artifact, and
@@ -1451,6 +1473,7 @@ imported an export keeps its baseline; only the next import, diff, or update
 needs a regenerated export.
 
 ### BREAKING: a substitution expression is refused in a file `bregctl` reads as written
+<!-- upgrade: breg-tool-file-substitution -->
 
 Substitution (`${NAME}`, `${NAME:-fallback}`, `${NAME:?message}`) applies to
 the runtime configuration only. The fixture journeys, the schema-test
@@ -1492,6 +1515,7 @@ what a schema cannot express, such as a journey that names a route its
 project does not declare.
 
 ### BREAKING: `explain` output schema identifiers
+<!-- upgrade: no-file -->
 
 The nine `bregctl explain` output schemas under
 `products/breg/contracts/explain/` take their identifiers from the Registry
@@ -1528,6 +1552,7 @@ is security-sensitive: it removes the configuration and the runtime paths
 that admitted a caller without a verified token.
 
 ### BREAKING: anonymous access profiles are removed
+<!-- upgrade: breg-remove-anonymous -->
 
 `anonymous` is refused wherever an access profile was written, with
 `true` or `false`, as `config.removed-key` when the file is read. The
@@ -1613,6 +1638,7 @@ To migrate a registry that served anonymous callers:
    expected `404` from a request without a token to expect `401`.
 
 ### BREAKING: an access member says `unrestricted` or names what it restricts
+<!-- upgrade: breg-access-unrestricted, breg-access-requirements -->
 
 An empty list no longer means "no restriction" in an access profile. A
 member that grants reach takes the keyword `unrestricted` or a list of at
@@ -1686,6 +1712,7 @@ To migrate a registry project:
    are reachable by every caller of the narrower profile.
 
 ### BREAKING: the runtime file states which OAuth clients it accepts
+<!-- upgrade: breg-runtime-allowed-clients -->
 
 `authentication.oidc.allowedClients` in `runtime.yaml` is required. It takes
 the keyword `unrestricted`, to accept a token from every client of the
@@ -1729,6 +1756,7 @@ To migrate a runtime file:
 3. Run `bregctl check <project> --runtime-config runtime.yaml`.
 
 ### BREAKING: statistical dataset access is granted in profile permissions
+<!-- upgrade: breg-statistical-dataset-grants -->
 
 A statistical dataset no longer names the profiles that use it. Each access
 profile grants the dataset in its own `permissions`, beside its record
@@ -1845,6 +1873,7 @@ its paired review page. Both formats are experimental, so every
 normalization lands in this release.
 
 ### BREAKING: both runtime files take a new `apiVersion` and renamed keys
+<!-- upgrade: breg-service-runtime-keys -->
 
 `breg-mcp` and `breg-review` read `runtime.yaml` through the shared Registry
 Stack reader. The old `apiVersion` is refused as
@@ -1876,6 +1905,7 @@ alone; once that is replaced, it reports each old key at its line and column
 with its replacement, and the file is clean when the command exits 0.
 
 ### BREAKING: the shared reader refuses values outside the documented grammar
+<!-- upgrade: already-wrong -->
 
 A file that was already outside the documented grammar is now refused when it
 is read, and every refusal carries a code, a JSON Pointer path, a line, a
@@ -1892,6 +1922,7 @@ column, and the edit that fixes it. No refusal repeats a configured value.
 | a file over the reader's size bound | `yaml.too-large` (was `platform.runtime-config.size`) | Shrinking the file below the bound the message names. |
 
 ### BREAKING: members are typed by the shared reader
+<!-- upgrade: already-wrong -->
 
 Each member is read as the shared type its schema names, so a value outside
 that type is refused at the member, as `config.invalid-value`,
@@ -1945,6 +1976,7 @@ rather than after the whole file was decoded.
   Migration: lower a value above its maximum.
 
 ### BREAKING: `check` reads its file offline and reports in the shared shape
+<!-- upgrade: no-file -->
 
 `breg-mcp --runtime-config FILE check` and `breg-review --runtime-config
 FILE check` are the offline checks for their runtime files.

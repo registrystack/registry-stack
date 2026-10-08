@@ -7,6 +7,7 @@ runtime file and to the Evidence relying-party client's profile files, with
 the step that migrates a file or a script.
 
 ### BREAKING: the `evidence-oid4vci` runtime file has an envelope and a schema
+<!-- upgrade: evidence-oid4vci-envelope -->
 
 `evidence-oid4vci check`, `inspect`, and `serve` read the runtime file through
 the configuration reader every Registry Stack product shares. The file starts
@@ -34,6 +35,7 @@ with an `apiVersion` and a `kind`, and `version` is retired.
   `products/evidence/examples/oid4vci-runtime/runtime.yaml`.
 
 ### BREAKING: listeners are written as `bind`
+<!-- upgrade: evidence-oid4vci-listeners -->
 
 - Old: `listener: {address: 127.0.0.1, port: 8090}`. New:
   `listener: {bind: 127.0.0.1:8090}`. Migration: replace `address` and `port`
@@ -47,6 +49,7 @@ with an `apiVersion` and a `kind`, and `version` is retired.
   fix.
 
 ### BREAKING: the delivery client key is a secret reference
+<!-- upgrade: evidence-oid4vci-key-ref -->
 
 Security-relevant. `tokenClient.privateKeyFile` named a file path, relative
 paths resolved beside the runtime file. The key is now named by a secret
@@ -113,6 +116,7 @@ reference and resolved by the shared secret providers when `serve` or
   key and reads the Evidence metadata.
 
 ### BREAKING: offer restrictions are stated, not defaulted
+<!-- upgrade: evidence-oid4vci-offer-restrictions -->
 
 `offers.authorizedClients` and `offers.requiredScopes` are required, and each
 is either the word `unrestricted` or a nonempty list.
@@ -134,6 +138,7 @@ is either the word `unrestricted` or a nonempty list.
   that literal name. Write `unrestricted` in place of the list instead.
 
 ### BREAKING: values the reader now refuses
+<!-- upgrade: already-wrong -->
 
 Each of these files was read before. The reader refuses them at their
 position.
@@ -170,6 +175,7 @@ position.
   type or shape (`config.invalid-value`).
 
 ### BREAKING: `evidence-oid4vci check` reports in the shared diagnostic shape
+<!-- upgrade: no-file -->
 
 - `check --config <file>` prints every problem, each on standard error as
   `error[CODE] FILE:LINE:COLUMN /json/pointer` followed by the message and a
@@ -255,6 +261,7 @@ New codes with no old message: `evidence.oid4vci.sentinel-item` (warning),
 `config.substitution`, and `config.substitution-not-allowed`.
 
 ### BREAKING: the client profile and reviewed contracts have generated schemas
+<!-- upgrade: no-file -->
 
 The relying-party client (`registry-evidence-client`, its Node.js and Python
 bindings, and `evidencectl` commands that load a client profile) reads the
@@ -283,6 +290,7 @@ member (`registry.evidence-client-profile/v1`,
   `products/evidence/examples/client-contracts/evidence.contracts.json`.
 
 ### BREAKING: client profile and contracts values the reader now refuses
+<!-- upgrade: already-wrong -->
 
 - `null` as the value of an optional member is refused as
   `config.null-value`, where it read as absent. Migration: remove the member
@@ -326,6 +334,7 @@ Track: Evidence authoring tools (`evidencectl`, `registry-evidence-authoring`,
 `registry-language-server`).
 
 ### BREAKING changes
+<!-- upgrade: 1=evidence-project-envelope, evidence-question-envelope, evidence-access-policy-envelope, evidence-access-client-envelope, evidence-target-governance-envelope, evidence-target-settings-envelope, evidence-mock-plan-envelope; 2=no-file; 3=no-file; 4=evidence-authoring-reader-refusals; 5=evidence-authoring-reader-refusals; 6=no-file; 7=evidence-authoring-reader-refusals; 8=no-file; 9=no-file; 10=no-file -->
 
 1. **Every authored YAML document except a source and a selector opens with
    `apiVersion` and `kind`.** A document without them is refused with
@@ -479,6 +488,7 @@ bundle, the runtime file, code lists, fixtures, fact schemas, and the two
 verification policies).
 
 ### BREAKING changes
+<!-- upgrade: 1=no-file; 2=no-file; 3=evidence-bundle-reader-refusals; 4=evidence-bundle-reader-refusals; 5=evidence-fixture-envelope; 6=evidence-bundle-reader-refusals; 7=evidence-bundle-reader-refusals; 8=evidence-check-policy; 9=no-file -->
 
 Promised spellings are unchanged in this release; the section "Respellings
 held for the stable release" lists them.

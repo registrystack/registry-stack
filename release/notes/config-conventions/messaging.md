@@ -6,6 +6,7 @@ each normalization lands in this release rather than with the move of the
 promised formats to stable. The Messaging `CHANGELOG.md` points here.
 
 ## BREAKING: the runtime file's keys and apiVersion are renamed
+<!-- upgrade: messaging-runtime-keys -->
 
 The `messaging` runtime and every `messagingctl` command that reads a runtime
 file (`check`, `plan`, `apply`, `status`, `messages`, and `retention
@@ -45,6 +46,7 @@ and `messagingctl init` writes
 `runtime.example.yaml`.
 
 ## BREAKING: retention periods are named with the runtime file's keys everywhere
+<!-- upgrade: no-file -->
 
 The `messaging.runtime.started`, `messaging.retention.requested`, and
 `messaging.retention.erased` audit events, and the `messagingctl --format
@@ -55,6 +57,7 @@ Migration: update audit queries, dashboards, and scripts that read the old
 names; events written before the upgrade keep the old names.
 
 ## BREAKING: provider connection members are refused by the reader, at the member
+<!-- upgrade: already-wrong -->
 
 An `http` connection's `attemptTimeoutMilliseconds` (1 to 10000),
 `maximumResponseBytes` (1 to 1048576), and `maximumConcurrentRequests` (1 to
@@ -76,6 +79,7 @@ at that key, where the first one was reported for the block. Migration: none;
 those files were already refused.
 
 ## BREAKING: `messagingctl check --runtime-config` reports every refusal at its position
+<!-- upgrade: no-file -->
 
 - Each refusal is its own diagnostic with its own code (table below), a
   JSON Pointer `path` (`/package/expectedDigest`), and a `source` with the
@@ -148,6 +152,7 @@ the local identifiers the file declares.
 | the file, exit 3, when the runtime file cannot be read | `platform.runtime-config.unavailable` | the file |
 
 ## BREAKING: the project, template, and provider files carry the shared envelope
+<!-- upgrade: messaging-project-envelope, messaging-template-envelope, messaging-provider-envelope -->
 
 `messaging.yaml`, every `templates/<id>/<version>/template.yaml`, and every
 `providers/<id>/provider.yaml` are read by the shared reader under their own
@@ -179,6 +184,7 @@ new `apiVersion`. Migration: update the file, then reopen the folder or rerun
 `python3 editors/configure.py messaging DIRECTORY`.
 
 ## BREAKING: three authored members are renamed
+<!-- upgrade: messaging-project-renames, messaging-provider-capabilities -->
 
 Each old key is refused at its position as `config.removed-key`, and the
 message names its replacement. A required replacement that is absent is also
@@ -195,6 +201,7 @@ answers `429 rate-limit.exceeded` past it; the
 `messaging_limit_refusals_total` label is unchanged.
 
 ## BREAKING: authored members are typed and bounded when the file is read
+<!-- upgrade: messaging-required-scopes, messaging-authored-bounds -->
 
 Each member below is refused when the file is read, at its line and column,
 with the shared code (`config.invalid-value`, `config.out-of-range`,
@@ -228,6 +235,7 @@ write `requiredScopes: unrestricted` without a list, or list the items
 meant.
 
 ## BREAKING: `messagingctl check --project`, `package`, and the runtime report every finding at its file
+<!-- upgrade: no-file -->
 
 - A refused project or package prints the shared report, one diagnostic per
   finding, each with its code, JSON Pointer `path`, and a `source` naming the
@@ -252,6 +260,7 @@ meant.
   its package.
 
 ## BREAKING: every `messagingctl --format json` report names its format
+<!-- upgrade: no-file -->
 
 - Every JSON report names its format with `apiVersion` and `kind`, written
   after `ok`, `command`, and `status`:
@@ -288,6 +297,7 @@ Human output is unchanged.
 | `authentication.oidc.assertionIssuers: {}`, which applied no assertion-issuer rule | `config.invalid-value` at `/authentication/oidc/assertionIssuers` | Delete the member: omitting it applies no assertion-issuer rule. |
 
 ## BREAKING: Rust API
+<!-- upgrade: no-file -->
 
 - `registry-messaging-core`: `MessagingPackage` is `MessagingProject`, read
   with `MessagingProject::decode` through the shared reader;
