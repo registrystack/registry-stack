@@ -16,7 +16,7 @@ use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
 };
 use registry_platform_sqlite::{CapturedSnapshot, ErrorKind as SqliteErrorKind};
-use registry_platform_yaml::Report;
+use registry_platform_yaml::{Reader, Report};
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -1273,9 +1273,12 @@ fn reviewed_schema_paths<'a>(
             .iter()
             .filter(|(path, _)| path.starts_with("schemas/"))
             .filter_map(|(path, bytes)| {
-                let document = std::str::from_utf8(bytes)
+                // A schema that does not read is refused by its own load.
+                let document = Reader::new(path.as_str())
+                    .scan(bytes)
                     .ok()
-                    .and_then(|text| serde_norway::from_str::<JsonValue>(text).ok())?;
+                    .flatten()?
+                    .to_json_value();
                 (document.get("$id").and_then(JsonValue::as_str) == Some(identifier))
                     .then(|| path.clone())
             })
@@ -1716,10 +1719,14 @@ fn load_fact_schema(
     let bytes = files
         .get(path)
         .ok_or(invalid_artifact("missing fact schema"))?;
-    let text =
-        std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fact schema is not UTF-8"))?;
-    let schema: JsonValue = serde_norway::from_str(text)
-        .map_err(|_| invalid_artifact("fact schema YAML is invalid"))?;
+    // A fact schema is JSON Schema written in the shared YAML subset, so the
+    // reader positions any structural problem; the schema grammar itself is
+    // checked below.
+    let schema = Reader::new(path)
+        .scan(bytes)
+        .map_err(|report| BundleError::Refused(Box::new(report)))?
+        .ok_or(invalid_artifact("fact schema is empty"))?
+        .to_json_value();
     validate_closed_schema(&schema, role)?;
     JSONSchema::options()
         .with_draft(Draft::Draft202012)
@@ -3964,6 +3971,31 @@ mod tests {
                 "{profile} failed for an unexpected reason"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fact_schema_outside_the_yaml_subset_is_refused_at_its_line() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", directory.path());
+        let schema_path = directory.path().join("schemas/facts.schema.yaml");
+        let mut schema = fs::read_to_string(&schema_path).expect("fact schema reads");
+        schema.push_str("type: object\n");
+        fs::write(&schema_path, schema).expect("fact schema writes");
+        refresh_package_envelope(directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+
+        let error = Bundle::load(directory.path()).expect_err("duplicate key loaded");
+        let BundleError::Refused(report) = &error else {
+            panic!("fact schema failed for an unexpected reason: {error}");
+        };
+        let [diagnostic] = report.diagnostics() else {
+            panic!("expected one diagnostic");
+        };
+        assert_eq!(diagnostic.code, "yaml.duplicate-key");
+        let source = diagnostic.source.as_ref().expect("positioned diagnostic");
+        assert_eq!(source.file, "schemas/facts.schema.yaml");
+        assert_eq!(source.line, Some(6));
     }
 
     #[test]
