@@ -84,6 +84,16 @@ fn a_discovery_jwks_source_refuses_the_members_of_the_other_kinds() {
 }
 
 #[test]
+fn a_jwks_source_refuses_a_missing_or_unknown_kind() {
+    for text in ["uri: https://keys.example.test/jwks", "kind: remote"] {
+        assert!(
+            serde_norway::from_str::<JwksSource>(text).is_err(),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn jwks_source_has_three_kinds_and_defaults_to_discovery() {
     assert_eq!(JwksSource::default(), JwksSource::Discovery {});
     let uri: JwksSource =

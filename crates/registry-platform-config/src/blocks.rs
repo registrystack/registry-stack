@@ -301,8 +301,14 @@ impl DatabaseConfig {
 
 /// Where a runtime obtains the OIDC issuer's signing keys.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub enum JwksSource {
     /// Read `jwks_uri` from the issuer's OpenID Connect discovery document.
     // A struct variant, so `deny_unknown_fields` refuses a `uri` or a
@@ -321,6 +327,25 @@ pub enum JwksSource {
         #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
         document_ref: String,
     },
+}
+
+registry_platform_yaml::tagged_union!(JwksSource, tag = "kind");
+
+impl Serialize for JwksSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let (kind, member) = match self {
+            Self::Discovery {} => ("discovery", None),
+            Self::Uri { uri } => ("uri", Some(("uri", uri))),
+            Self::Static { document_ref } => ("static", Some(("documentRef", document_ref))),
+        };
+        let mut map = serializer.serialize_map(Some(1 + usize::from(member.is_some())))?;
+        map.serialize_entry("kind", kind)?;
+        if let Some((key, value)) = member {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
 }
 
 impl Default for JwksSource {

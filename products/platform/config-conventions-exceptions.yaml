@@ -701,13 +701,6 @@ exceptions:
   class: stable-move
   reason: value submitter_targets is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-8
-  format: breg/mcp-runtime
-  location: crates/registry-platform-config/src/blocks.rs#JwksSource
-  class: pending
-  wp: WP3
-  reason: JwksSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
 - rule: CFG-NAME-2
   format: breg/mcp-runtime
   location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
