@@ -111,7 +111,13 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
 allow-workspace = false
-deny = []
+# CFG-YAML-1: YAML is read only through `registry-platform-yaml`. The workspace
+# no longer depends on `serde_yaml_ng`, so its `clippy.toml` entries refuse
+# nothing until it returns; this ban refuses the return itself.
+# `products/platform/scripts/check-yaml-reader-boundary.sh` requires it.
+deny = [
+  { crate = "serde_yaml_ng", reason = "read YAML through registry_platform_yaml::Document::decode or RuntimeConfigLoader, and write it with serde_norway (CFG-YAML-1)" },
+]
 skip = []
 skip-tree = []
 

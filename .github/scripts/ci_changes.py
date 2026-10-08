@@ -515,6 +515,9 @@ LOCK_NATIVE_BUILD_HELPERS = frozenset(
         "vcpkg",
     }
 )
+# The YAML reader boundary probes these crates' entry points, so a locked
+# release of one runs it.
+LOCK_YAML_READERS = frozenset({"serde_norway", "serde_yaml_ng"})
 LOCK_NATIVE_PACKAGES = LOCK_NATIVE_BUILD_HELPERS | frozenset(
     {
         "aws-lc-rs",
@@ -782,12 +785,14 @@ class LockChange:
     ``members`` names the workspace members whose locked dependency closure
     changed, or is None when the change must select the complete matrix.
     ``native`` is true when the change can alter compiled or linked native
-    code, or when that cannot be ruled out.
+    code, or when that cannot be ruled out. ``packages`` names the locked
+    packages whose entries changed when ``members`` routes the change.
     """
 
     members: frozenset[str] | None
     native: bool
     reason: str
+    packages: frozenset[str] = frozenset()
 
 
 LockKey = tuple[str, str, str]
@@ -930,6 +935,7 @@ def lock_change(
         False,
         f"{len(changed)} locked package entries changed; "
         f"{len(affected)} workspace members affected",
+        frozenset(key[0] for key in changed),
     )
 
 
@@ -1127,6 +1133,9 @@ def classify(
     # the nightly sweep only, outside the merge verdict.
     platform_assurance = platform and (full_sweep or not pull_request)
     platform_coverage = platform and (full_sweep or main_push)
+    # The YAML reader boundary audits every Rust source, manifest, Cargo
+    # configuration, and clippy configuration, because a suppression or a
+    # crate-level clippy.toml anywhere can switch it off.
     platform_hygiene = complete or any(
         matches(
             path,
@@ -1135,9 +1144,19 @@ def classify(
             "products/platform/rustfmt.toml",
             "products/platform/scripts/*",
             "products/platform/templates/*",
+            "products/platform/config-formats.yaml",
+            "*.rs",
+            "*Cargo.toml",
+            "*clippy.toml",
+            "*.cargo/config",
+            "*.cargo/config.toml",
         )
         or path in {"clippy.toml", "deny.toml", "rustfmt.toml"}
         for path in paths
+    ) or (
+        lock_members is not None
+        and lock_change is not None
+        and bool(lock_change.packages & LOCK_YAML_READERS)
     )
     # Evidence fuzz smoke follows the platform fuzz policy: broad assurance
     # for the merge queue and the nightly sweep, deferred out of review.

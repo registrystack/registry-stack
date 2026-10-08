@@ -147,6 +147,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Platform hygiene alignment",
         "run: products/platform/scripts/check-hygiene-alignment.sh",
     ),
+    (
+        "YAML reader boundary",
+        "run: products/platform/scripts/check-yaml-reader-boundary.sh",
+    ),
+    (
+        "YAML reader boundary tests",
+        "run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py",
+    ),
     ("Runtime configuration conformance job", "config-conformance:"),
     (
         "Runtime configuration conformance path filter",

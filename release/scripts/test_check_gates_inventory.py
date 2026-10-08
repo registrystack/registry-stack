@@ -1512,6 +1512,21 @@ class GateInventoryTest(unittest.TestCase):
             ),
         )
 
+    def test_missing_yaml_reader_boundary_gates_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "run: products/platform/scripts/check-yaml-reader-boundary.sh",
+                "YAML reader boundary",
+            ),
+            (
+                "run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py",
+                "YAML reader boundary tests",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, "run: true # YAML reader boundary disabled")
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_missing_config_conformance_gate_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: products/platform/scripts/check-config-conformance.py --check-generated",

@@ -1762,6 +1762,32 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["platform"])
                 self.assertTrue(outputs["platform_hygiene"])
 
+    def test_yaml_reader_boundary_inputs_select_platform_hygiene(self) -> None:
+        for path in (
+            "crates/registry-casework/src/config.rs",
+            "crates/registry-breg/tests/documented_access.rs",
+            "crates/registry-casework/Cargo.toml",
+            "Cargo.toml",
+            "crates/registry-breg-mcp/clippy.toml",
+            "crates/registry-casework/.clippy.toml",
+            ".cargo/config.toml",
+            "crates/registry-casework/.cargo/config",
+            "products/platform/config-formats.yaml",
+            "products/platform/scripts/check-yaml-reader-boundary.sh",
+            "products/platform/scripts/check-yaml-reader-boundary.py",
+            "products/platform/scripts/test_check_yaml_reader_boundary.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["platform_hygiene"])
+
+    def test_documentation_alone_skips_platform_hygiene(self) -> None:
+        for path in (
+            "products/platform/README.md",
+            "docs/site/src/content/docs/index.mdx",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["platform_hygiene"])
+
     def test_shared_reader_changes_select_the_jobs_that_test_it(self) -> None:
         outputs = classify(
             self.workspace, ("crates/registry-platform-yaml/src/structure.rs",)
@@ -2839,6 +2865,15 @@ class LockfileSelectionTest(unittest.TestCase):
 
     def assert_full(self, outputs: dict[str, Any]) -> None:
         self.assertEqual(outputs["rust_packages"], sorted(self.workspace.package_names))
+
+    def test_lock_only_yaml_reader_bump_selects_platform_hygiene(self) -> None:
+        # A reader release can move an entry point, which clippy reports only as
+        # a warning; the boundary probes fail on it.
+        change = self.change(bump_lock_package(self.lock, "serde_norway", "0.9.99"))
+        self.assertIsNotNone(change.members, change.reason)
+        self.assertIn("serde_norway", change.packages)
+        outputs = classify(self.workspace, ("Cargo.lock",), lock_change=change)
+        self.assertTrue(outputs["platform_hygiene"])
 
     def test_lock_only_leaf_bump_selects_only_its_consumers(self) -> None:
         change = self.change(bump_lock_package(self.lock, "pdf-writer", "0.15.1"))

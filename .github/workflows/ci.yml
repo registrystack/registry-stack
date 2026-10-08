@@ -334,7 +334,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.platform_hygiene == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -342,8 +342,21 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Check shared Rust hygiene files
         run: products/platform/scripts/check-hygiene-alignment.sh
+
+      - name: Test the YAML reader boundary checks
+        run: python3 -m unittest products/platform/scripts/test_check_yaml_reader_boundary.py
+
+      - name: Enforce the YAML reader boundary
+        run: products/platform/scripts/check-yaml-reader-boundary.sh
 
   platform-fuzz:
     name: Platform fuzz smoke (${{ matrix.group }})

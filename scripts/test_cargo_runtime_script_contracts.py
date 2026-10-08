@@ -39,6 +39,7 @@ CONTRACTS = {
         "registry_cargo_build",
     ),
     "products/evidence/scripts/check-authoring-no-io.sh": ("CLIPPY_DRIVER_BIN",),
+    "products/platform/scripts/check-yaml-reader-boundary.sh": ("CLIPPY_DRIVER_BIN",),
     "products/breg/loadtest/up.sh": (
         "cargo-runtime-library-path.sh",
         "registry_cargo_build",
@@ -65,7 +66,7 @@ CONTRACTS = {
 
 class CargoRuntimeScriptContractTests(unittest.TestCase):
     def test_every_reported_gate_keeps_its_runtime_and_override_contract(self):
-        self.assertEqual(len(CONTRACTS), 16)
+        self.assertEqual(len(CONTRACTS), 17)
         for relative, markers in CONTRACTS.items():
             with self.subTest(script=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8")
