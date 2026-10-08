@@ -1324,7 +1324,9 @@ impl<'de> Deserialize<'de> for ActionHandlerSource {
                     }
                 }
                 let source = ActionHandlerSource {
-                    handler: HookHandlerSource::deserialize(
+                    // The trait method, not the inherent function the union's
+                    // remote derive leaves behind, which skips the tag rewrite.
+                    handler: <HookHandlerSource as Deserialize>::deserialize(
                         Value::Object(handler).into_deserializer(),
                     )
                     .map_err(A::Error::custom)?,

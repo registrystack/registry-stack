@@ -1939,13 +1939,6 @@ exceptions:
   class: stable-move
   reason: maxDuration holds a duration as text
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write an integer with the unit as the last word of the key'
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-platform-hooks/src/declaration.rs#HookHandlerSource
-  class: pending
-  wp: WP3
-  reason: HookHandlerSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
 - rule: CFG-SEC-1
   format: breg/project
   location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ManifestProjectionVocabularySource/properties/externalRef

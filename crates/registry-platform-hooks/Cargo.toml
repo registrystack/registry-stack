@@ -29,6 +29,7 @@ async-trait = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
 registry-platform-dispatch = { workspace = true, features = ["postgres"], optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
+registry-platform-yaml.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
