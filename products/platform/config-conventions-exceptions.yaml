@@ -4258,12 +4258,12 @@ exceptions:
   class: stable-move
   reason: maxTokenLifetimeSeconds is a refused spelling of 'Longest accepted token lifetime'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximumTokenLifetimeSeconds'
-- rule: CFG-NAME-5
+- rule: CFG-NAME-3
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawPoolBounds/properties/maxSize
   class: stable-move
-  reason: maxSize is a refused spelling of 'Largest accepted body or file'
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximum<Thing>Bytes'
+  reason: maxSize spells a bound with max, min, or Limit
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximumConnections'
 - rule: CFG-NAME-5
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawWasmExecutionConfig/properties/maxGuestMemoryBytes

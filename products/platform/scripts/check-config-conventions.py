@@ -1544,8 +1544,14 @@ class Lint:
                     return None
             return match
 
+        # A size inside a pool counts the pool's members (connections or
+        # workers), never bytes, so a row whose key counts bytes does not
+        # claim it; CFG-NAME-3 still asks for the maximum spelling.
+        pooled = any("pool" in name for name in ancestors)
         for row in self.convention.name5:
             if any(fits(item) for item in row.allowed):
+                continue
+            if pooled and row.allowed and all(item.text.endswith("Bytes") for item in row.allowed):
                 continue
             for item in row.refused:
                 match = fits(item)

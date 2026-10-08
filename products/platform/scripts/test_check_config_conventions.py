@@ -842,6 +842,21 @@ class NameTests(ConventionsTestCase):
         names = {key[2] for key in keys(report.findings) if key[0] == "CFG-NAME-5"}
         self.assertEqual(len(names), 2, names)
 
+    def test_cfg_name_5_leaves_a_pool_size_to_the_bound_rule(self) -> None:
+        self.queue()["maxSize"] = {"type": "integer", "minimum": 1, "maximum": 10}
+        self.queue()["pool"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"maxSize": {"type": "integer", "minimum": 1, "maximum": 10}},
+        }
+        report = self.repo.run()
+        plain = at(PROJECT_SCHEMA, "/$defs/Queue/properties/maxSize")
+        pooled = at(PROJECT_SCHEMA, "/$defs/Queue/properties/pool/properties/maxSize")
+        self.assertFinding(report, "CFG-NAME-5", P, plain)
+        self.assertFinding(report, "CFG-NAME-3", P, pooled)
+        names = {key[2] for key in keys(report.findings) if key[0] == "CFG-NAME-5"}
+        self.assertEqual(names, {plain}, names)
+
     def test_cfg_name_5_follows_the_convention_table(self) -> None:
         self.queue()["deliveryWindowHours"] = {"type": "integer", "minimum": 1, "maximum": 10}
         self.assertNoFinding(self.repo.run(), "CFG-NAME-5")
