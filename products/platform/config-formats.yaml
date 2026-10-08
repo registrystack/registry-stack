@@ -2963,7 +2963,7 @@ formats:
       function: read_codelist
       type: CodelistDocument
     check: evidence check --runtime-config {runtime}
-    example: none
+    example: products/evidence/fixtures/acceptance/professional-licence/codelists/registry-regions.yaml
     conformance:
       requiredText: none
       optionalText: none

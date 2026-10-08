@@ -61,8 +61,7 @@ properties:
           evidence-grade deployments require a canonical HTTPS origin. The local
           assurance profile also permits canonical HTTP on numeric 127.0.0.1 with
           an explicit non-zero port for supervised tutorials.
-        type: string
-        format: uri
+        $ref: '#/$defs/Url'
         maxLength: 512
       trustDomain:
         description: >-
@@ -105,7 +104,13 @@ properties:
       serviceId: {type: string, format: uri, maxLength: 512}
       title: {type: string, minLength: 1, maxLength: 4096, pattern: '^[^\s\u0000-\u001F\u007F-\u009F](?:[^\u0000-\u001F\u007F-\u009F]*[^\s\u0000-\u001F\u007F-\u009F])?$'}
       description: {type: string, minLength: 1, maxLength: 4096, pattern: '^[^\s\u0000-\u001F\u007F-\u009F](?:[^\u0000-\u001F\u007F-\u009F]*[^\s\u0000-\u001F\u007F-\u009F])?$'}
-      endpointUrl: {type: string, format: uri, maxLength: 512}
+      endpointUrl:
+        description: >-
+          Public URL Registry Discovery advertises for this Evidence service, with no query or
+          fragment. It requires HTTPS; the local assurance profile also permits HTTP on
+          localhost, 127.0.0.1, or [::1].
+        $ref: '#/$defs/Url'
+        maxLength: 512
       jurisdictions:
         type: array
         minItems: 1
@@ -424,6 +429,12 @@ allOf:
           contains:
             const: search-then-fetch-set
 $defs:
+  Url:
+    type: string
+    format: uri
+    maxLength: 2048
+    pattern: '^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$'
+    description: An absolute http or https URL with a host and no user information.
   local-id:
     type: string
     pattern: ^[a-z][a-z0-9._-]{0,127}$
@@ -518,7 +529,7 @@ $defs:
         description: >-
           Exact token issuer an inbound access token must declare, with path-based issuers
           supported; deployable bundles require HTTPS.
-        type: string
+        $ref: '#/$defs/Url'
         pattern: ^https?://
         maxLength: 512
       audience:
@@ -576,8 +587,10 @@ $defs:
             description: >-
               Fixed endpoint the verifier fetches issuer signing keys from; the endpoint may
               resolve to a public or private address, so DNS is pinned for each fetch, ambient
-              proxies are disabled, and cloud-metadata destinations remain prohibited.
-            type: string
+              proxies are disabled, and cloud-metadata destinations remain prohibited. It
+              requires HTTPS; the local assurance profile also permits HTTP on the exact
+              numeric 127.0.0.1 loopback origin with an explicit port.
+            $ref: '#/$defs/Url'
             pattern: ^https?://
             maxLength: 512
       tlsTrustProfile:
@@ -934,6 +947,7 @@ $defs:
           inside the range a port can hold. When `authentication.kind` is `none` the origin
           narrows further, to one exact numeric-loopback HTTP spelling carrying an explicit
           in-range port.
+        $ref: '#/$defs/Url'
         oneOf:
           - type: string
             pattern: >-
@@ -1041,6 +1055,7 @@ $defs:
           Fixed HTTPS origin the source's evidence-data requests target, with no path, query,
           fragment, user information, or runtime substitution. An HTTP numeric-loopback origin
           is accepted only when `sources.*.authentication.kind` is `none`.
+        $ref: '#/$defs/Url'
         oneOf:
           - type: string
             pattern: ^https://[^/?#]+$
@@ -2975,7 +2990,9 @@ $defs:
                 out of the disclosed supported values.
               type: boolean
             constraints:
-              type: object
+              description: >-
+                Closed bounds a derived value must satisfy before it is accepted into evidence;
+                the `allOf` branch below that matches the concept's `form` fixes their exact shape.
             sdJwtVc:
               description: >-
                 Optional per-concept projection that the concept declaration may set only

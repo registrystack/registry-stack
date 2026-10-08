@@ -6887,7 +6887,8 @@ mod tests {
         else {
             panic!("the fixture's first source is an HTTP source");
         };
-        *base_url = "https://registry.example.invalid/records".to_owned();
+        *base_url = registry_platform_yaml::Url::new("https://registry.example.invalid/records")
+            .expect("the shared URL type accepts the text");
         assert_eq!(
             compile_source_plans_with_runtime(
                 &invalid_config,

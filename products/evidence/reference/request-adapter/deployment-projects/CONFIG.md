@@ -21,6 +21,14 @@ policy.
 Unknown keys are rejected at every level. All names below are exact and
 case-sensitive unless the field explicitly says otherwise.
 
+Every URL member (`service.publicOrigin`, `publication.endpointUrl`,
+`authentication.oidc.issuer`, `authentication.oidc.jwksSource.uri`, and each
+source or source connection `baseUrl`) is an absolute `http` or `https` URL
+with a host, no user information, and at most 2048 characters, the shared URL
+type the schemas name `Url`. The narrower rules each member states below then
+apply. `package.expectedDigest` is the shared digest type `Digest`: `sha256:`
+followed by 64 lowercase hex digits.
+
 ## What an adopter normally edits
 
 Most adopters should need to edit only:

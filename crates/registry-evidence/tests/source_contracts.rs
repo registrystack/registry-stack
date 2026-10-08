@@ -38,7 +38,7 @@ use registry_evidence::source::{
 };
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
-use registry_platform_yaml::{BoundedU32, BoundedU64};
+use registry_platform_yaml::{BoundedU32, BoundedU64, Url};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -138,7 +138,7 @@ fn http_request_mut(source: &mut SourceConfig) -> &mut FixedRequest {
     request
 }
 
-fn base_url_mut(source: &mut SourceConfig) -> &mut String {
+fn base_url_mut(source: &mut SourceConfig) -> &mut Url {
     let SourceConfig::HttpJson { base_url, .. } = source else {
         panic!("{NOT_HTTP_JSON}");
     };
@@ -1283,7 +1283,7 @@ async fn path_binding_contract_rejects_empty_missing_and_extra_material_before_c
 
     let server = MockServer::start().await;
     let mut source = base;
-    *base_url_mut(&mut source) = server.uri();
+    *base_url_mut(&mut source) = Url::new(server.uri()).expect("the mock origin is a URL");
     let executor = SourceExecutor::new(&source, empty_secrets).expect("valid path plan compiles");
     let mut missing_field = selector("unused");
     missing_field.values.clear();
@@ -3102,7 +3102,9 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
     let (mismatch_address, mismatch_ca, mismatch_server) =
         spawn_private_ca_tls_server("localhost").await;
     let mut mismatch_source = source;
-    *base_url_mut(&mut mismatch_source) = format!("https://127.0.0.1:{}", mismatch_address.port());
+    *base_url_mut(&mut mismatch_source) =
+        Url::new(format!("https://127.0.0.1:{}", mismatch_address.port()))
+            .expect("the loopback origin is a URL");
     let mismatch_captured = BTreeMap::from([("private-pki".into(), mismatch_ca)]);
     let mismatch = SourceExecutor::new_with_selector_sets_and_tls(
         &mismatch_source,

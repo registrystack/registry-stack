@@ -40,8 +40,7 @@ properties:
         description: >-
           Optional `sha256:` digest of the package's `SHA256SUMS` file. When set, startup is
           refused unless the verified package found at `package.root` has exactly this digest.
-        type: string
-        pattern: ^sha256:[0-9a-f]{64}$
+        $ref: '#/$defs/Digest'
   listener:
     description: >-
       Groups the network binding and per-request admission limits for the process's evidence
@@ -399,6 +398,10 @@ properties:
       batch block, is refused at startup when the corresponding capability is absent from this
       list, before the deployment serves anything.
 $defs:
+  Digest:
+    type: string
+    pattern: ^sha256:[0-9a-f]{64}$
+    description: 'A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.'
   local-id:
     type: string
     pattern: ^[a-z][a-z0-9._-]{0,127}$

@@ -296,6 +296,18 @@ mod tests {
     }
 
     #[test]
+    fn the_registered_minimal_example_reads() {
+        let example = read_codelist(
+            "codelists/registry-regions.yaml",
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/professional-licence/codelists/registry-regions.yaml"
+            ),
+        )
+        .expect("the example config-formats.yaml registers reads");
+        assert!(matches!(example, Codelist::Codes { .. }));
+    }
+
+    #[test]
     fn refuses_each_rule_at_its_member_without_the_value() {
         let cases: &[(&str, String, &str, &str, usize)] = &[
             (

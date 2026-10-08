@@ -1645,7 +1645,7 @@ pub struct ServiceConfig {
     pub provider_id: String,
     pub trust_domain: String,
     /// Exact public resource-server origin used by RFC 9728 discovery.
-    pub public_origin: String,
+    pub public_origin: registry_platform_yaml::Url,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -1662,7 +1662,7 @@ pub struct PublicationConfig {
     pub service_id: String,
     pub title: String,
     pub description: String,
-    pub endpoint_url: String,
+    pub endpoint_url: registry_platform_yaml::Url,
     pub jurisdictions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher_id: Option<String>,
@@ -3173,7 +3173,7 @@ fn valid_artifact_path(value: &str) -> bool {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceConnectionConfig {
-    pub base_url: String,
+    pub base_url: registry_platform_yaml::Url,
     pub authentication: Box<SourceAuthentication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_trust_profile: Option<String>,
@@ -3247,7 +3247,7 @@ pub enum SourceConfig {
     /// One fixed HTTP request against a JSON API.
     #[serde(rename_all = "camelCase")]
     HttpJson {
-        base_url: String,
+        base_url: registry_platform_yaml::Url,
         /// Optional explicit resource owner. The resolved values stay fixed in
         /// this bundle and must equal the named connection's governed values.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6718,7 +6718,7 @@ mod tests {
         config.validate().expect("the resolved candidate validates");
         let before = config.clone();
         if let SourceConfig::HttpJson { base_url, .. } = &mut config.sources.0[0].1 {
-            *base_url = "https://another.example".to_owned();
+            *base_url = typed_url("https://another.example");
         }
         assert!(
             config.validate().is_err(),
@@ -6810,7 +6810,7 @@ mod tests {
         ))
         .expect("strict fixture validates");
         config.assurance_profile = AssuranceProfile::Production;
-        config.service.public_origin = "https://evidence.example.test".to_owned();
+        config.service.public_origin = typed_url("https://evidence.example.test");
         config.validate().expect("canonical HTTPS origin validates");
 
         for invalid in [
@@ -6821,13 +6821,18 @@ mod tests {
             "http://evidence.example.test",
             "http://127.0.0.1:8080",
         ] {
-            let mut candidate = config.clone();
-            candidate.service.public_origin = invalid.to_owned();
-            assert!(candidate.validate().is_err(), "accepted {invalid}");
+            assert!(
+                url_refused(invalid, |url| {
+                    let mut candidate = config.clone();
+                    candidate.service.public_origin = url;
+                    candidate.validate().is_err()
+                }),
+                "accepted {invalid}"
+            );
         }
 
         config.assurance_profile = AssuranceProfile::Local;
-        config.service.public_origin = "http://127.0.0.1:8080".to_owned();
+        config.service.public_origin = typed_url("http://127.0.0.1:8080");
         config
             .validate()
             .expect("the exact tutorial loopback origin validates locally");
@@ -6837,9 +6842,66 @@ mod tests {
             "http://127.0.0.2:8080",
             "http://[::1]:8080",
         ] {
-            let mut candidate = config.clone();
-            candidate.service.public_origin = invalid.to_owned();
-            assert!(candidate.validate().is_err(), "accepted {invalid}");
+            assert!(
+                url_refused(invalid, |url| {
+                    let mut candidate = config.clone();
+                    candidate.service.public_origin = url;
+                    candidate.validate().is_err()
+                }),
+                "accepted {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn bundle_urls_are_read_through_the_shared_url_type_the_schema_names() {
+        let validator = bundle_contract_validator();
+        for (from, to) in [
+            (
+                "publicOrigin: https://evidence.invalid,",
+                "publicOrigin: https://operator@evidence.invalid,",
+            ),
+            (
+                "endpointUrl: https://evidence.example.invalid,",
+                "endpointUrl: https://operator@evidence.example.invalid,",
+            ),
+            (
+                "    baseUrl: https://source.invalid\n",
+                "    baseUrl: https://operator@source.invalid\n",
+            ),
+            (
+                "    baseUrl: https://source.invalid\n",
+                "    baseUrl: source.invalid\n",
+            ),
+        ] {
+            let document = edited(acceptance_fixture(), from, to);
+            assert_eq!(decode_cause(&document), "config.invalid-value", "{to}");
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
+                "the schema accepted {to}"
+            );
+        }
+        // The shared OIDC block reads these two as text; validation holds
+        // them to the rule the schema's `Url` states.
+        for (from, to) in [
+            (
+                "    issuer: https://identity.invalid\n",
+                "    issuer: https://operator@identity.invalid\n",
+            ),
+            (
+                "      uri: https://identity.invalid/.well-known/jwks.json\n",
+                "      uri: https://operator@identity.invalid/.well-known/jwks.json\n",
+            ),
+        ] {
+            let document = edited(acceptance_fixture(), from, to);
+            assert!(
+                EvidenceConfig::parse_yaml(document.as_bytes()).is_err(),
+                "the reader accepted {to}"
+            );
+            assert!(
+                !validator.is_valid(&bundle_contract_instance(document.as_bytes())),
+                "the schema accepted {to}"
+            );
         }
     }
 
@@ -6898,6 +6960,21 @@ mod tests {
     // unnoticed.
     use crate::rhai_runtime::MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES;
 
+    /// Text as the shared URL type a bundle URL member is read into.
+    fn typed_url(text: &str) -> registry_platform_yaml::Url {
+        registry_platform_yaml::Url::new(text).expect("the shared URL type accepts the text")
+    }
+
+    /// Whether a bundle URL member holding `text` is refused: either the
+    /// shared URL type refuses it while the bundle is read, or `validated`
+    /// reports that validation refuses the typed value.
+    fn url_refused(
+        text: &str,
+        validated: impl FnOnce(registry_platform_yaml::Url) -> bool,
+    ) -> bool {
+        registry_platform_yaml::Url::new(text).map_or(true, validated)
+    }
+
     /// Borrow the base URL of a parsed fixture's first source.
     ///
     /// Every acceptance fixture these tests parse declares one `http-json`
@@ -6906,7 +6983,7 @@ mod tests {
     /// Every acceptance fixture these tests parse declares one `http-json`
     /// source, so a test that mutates HTTP request material names the
     /// transport through these four helpers rather than at each call.
-    fn http_base_url(config: &mut EvidenceConfig) -> &mut String {
+    fn http_base_url(config: &mut EvidenceConfig) -> &mut registry_platform_yaml::Url {
         match &mut config.sources.0[0].1 {
             SourceConfig::HttpJson { base_url, .. } => base_url,
             SourceConfig::SqliteExtract { .. } => panic!("{NOT_HTTP_JSON}"),
@@ -7221,7 +7298,7 @@ mod tests {
         ))
         .expect("strict fixture validates");
         let publication = config.publication.as_mut().expect("publication configured");
-        publication.endpoint_url = "http://evidence.example.invalid".to_owned();
+        publication.endpoint_url = typed_url("http://evidence.example.invalid");
         assert!(
             config.validate().is_err(),
             "a non-local deployment must reject cleartext publication"
@@ -7237,7 +7314,7 @@ mod tests {
                 .publication
                 .as_mut()
                 .expect("publication configured")
-                .endpoint_url = endpoint.to_owned();
+                .endpoint_url = typed_url(endpoint);
             config
                 .validate()
                 .unwrap_or_else(|_| panic!("local assurance rejected {endpoint}"));
@@ -7254,12 +7331,17 @@ mod tests {
             "http://127.0.0.1:8080/catalog .jsonld",
             "http://127.0.0.1:8080/catalog\u{0007}.jsonld",
         ] {
-            config
-                .publication
-                .as_mut()
-                .expect("publication configured")
-                .endpoint_url = endpoint.to_owned();
-            assert!(config.validate().is_err(), "accepted {endpoint:?}");
+            assert!(
+                url_refused(endpoint, |url| {
+                    config
+                        .publication
+                        .as_mut()
+                        .expect("publication configured")
+                        .endpoint_url = url;
+                    config.validate().is_err()
+                }),
+                "accepted {endpoint:?}"
+            );
         }
     }
 
@@ -7344,7 +7426,7 @@ mod tests {
                 let publication = config.publication.as_mut().expect("publication configured");
                 match field {
                     "serviceId" => publication.service_id.clone_from(value),
-                    "endpointUrl" => publication.endpoint_url.clone_from(value),
+                    "endpointUrl" => publication.endpoint_url = typed_url(value),
                     "jurisdictions" => publication.jurisdictions = vec![value.clone()],
                     "publisherId" => publication.publisher_id = Some(value.clone()),
                     "operatorId" => publication.operator_id = Some(value.clone()),
@@ -7618,7 +7700,7 @@ mod tests {
             "http://[::1]:65535",
         ] {
             let mut candidate = local.clone();
-            *http_base_url(&mut candidate) = origin.to_owned();
+            *http_base_url(&mut candidate) = typed_url(origin);
             candidate
                 .validate()
                 .unwrap_or_else(|_| panic!("local assurance rejected {origin}"));
@@ -7640,16 +7722,18 @@ mod tests {
             "http://user@127.0.0.1:18081",
             "http://192.168.1.2:18081",
         ] {
-            let mut candidate = local.clone();
-            *http_base_url(&mut candidate) = origin.to_owned();
             assert!(
-                candidate.validate().is_err(),
+                url_refused(origin, |url| {
+                    let mut candidate = local.clone();
+                    *http_base_url(&mut candidate) = url;
+                    candidate.validate().is_err()
+                }),
                 "local assurance accepted unauthenticated origin {origin}"
             );
         }
 
         let mut with_tls_profile = local.clone();
-        *http_base_url(&mut with_tls_profile) = "http://127.0.0.1:18081".to_owned();
+        *http_base_url(&mut with_tls_profile) = typed_url("http://127.0.0.1:18081");
         *http_tls_trust_profile(&mut with_tls_profile) = Some("unused-local-ca".to_owned());
         assert!(with_tls_profile.validate().is_err());
 
@@ -7659,7 +7743,7 @@ mod tests {
         ] {
             let mut candidate = local.clone();
             candidate.assurance_profile = profile;
-            *http_base_url(&mut candidate) = "http://127.0.0.1:18081".to_owned();
+            *http_base_url(&mut candidate) = typed_url("http://127.0.0.1:18081");
             assert!(
                 candidate.validate().is_err(),
                 "{profile:?} accepted an unauthenticated source"
