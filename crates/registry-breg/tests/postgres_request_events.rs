@@ -577,10 +577,10 @@ fn configured_events() -> BTreeMap<String, HookSource> {
         id: "request-submitted".to_owned(),
         phase: HookPhase::After,
         trigger: EventTrigger::RequestLifecycle,
-        projection: BTreeSet::from(["reason".to_owned()]),
+        projection: ["reason".to_owned()].into(),
         when: Some(EventConditionSource::RequestLifecycle {
-            transitions: BTreeSet::from(["submit".to_owned()]),
-            to_states: BTreeSet::from(["submitted".to_owned()]),
+            transitions: ["submit".to_owned()].into(),
+            to_states: ["submitted".to_owned()].into(),
         }),
         handler: None,
         principal: None,
@@ -602,8 +602,8 @@ fn compiled_lifecycle_registry_with_rejection() -> registry_breg::CompiledRegist
         .expect("fixture declares request entity");
     request.hooks[0].id = "request-applied".to_owned();
     request.hooks[0].when = Some(EventConditionSource::RequestLifecycle {
-        transitions: BTreeSet::from(["apply".to_owned()]),
-        to_states: BTreeSet::from(["applied".to_owned()]),
+        transitions: ["apply".to_owned()].into(),
+        to_states: ["applied".to_owned()].into(),
     });
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("rejection event fixture compiles")

@@ -18,6 +18,7 @@ use serde::{
 use serde_json::Value;
 
 use crate::diagnostics::{CompileFailure, Diagnostic};
+pub use crate::unique_set::UniqueSet;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -591,9 +592,9 @@ pub struct AccessLogSource {
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3_650)))]
     pub retention_days: u16,
     /// Verified intermediary client IDs allowed to forward original requester attribution.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
     #[cfg_attr(feature = "schema", schemars(length(max = 64)))]
-    pub trusted_intermediaries: BTreeSet<String>,
+    pub trusted_intermediaries: UniqueSet<String>,
     /// Access profiles whose entries become subject-visible only after a policy delay.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[cfg_attr(
@@ -797,7 +798,7 @@ pub enum MutationMode {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeControlSource {
     #[serde(default)]
-    pub required_for: BTreeSet<Operation>,
+    pub required_for: UniqueSet<Operation>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1042,7 +1043,7 @@ pub struct ChangeRequestEffectSource {
     #[serde(default)]
     pub set: BTreeMap<String, ChangeRequestValueSource>,
     #[serde(default)]
-    pub clear: BTreeSet<String>,
+    pub clear: UniqueSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1368,7 +1369,7 @@ pub struct ActionEffectSource {
     #[serde(default)]
     pub set: BTreeMap<String, ActionValueSource>,
     #[serde(default)]
-    pub clear: BTreeSet<String>,
+    pub clear: UniqueSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2922,33 +2923,33 @@ pub struct AccessProfileSource {
     pub anonymous: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub requester_clients: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub requester_clients: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_grant: Option<CompiledTaskGrantSource>,
     #[serde(default)]
     pub principal_claim: Option<String>,
     #[serde(default)]
     /// All listed scopes must be present in the verified token.
-    pub required_scopes: BTreeSet<String>,
+    pub required_scopes: UniqueSet<String>,
     #[serde(default)]
     /// The verified token's purpose must match one listed value. Empty means no purpose restriction.
-    pub required_purposes: BTreeSet<String>,
-    pub operations: BTreeSet<Operation>,
+    pub required_purposes: UniqueSet<String>,
+    pub operations: UniqueSet<Operation>,
     #[serde(default)]
-    pub readable_fields: BTreeSet<String>,
+    pub readable_fields: UniqueSet<String>,
     /// Readable change-request decision detail. Anonymous profiles never receive reason text.
     #[serde(
         default = "default_readable_request_fields",
         skip_serializing_if = "is_default_readable_request_fields"
     )]
-    pub readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
+    pub readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
     #[serde(default)]
-    pub writable_fields: BTreeSet<String>,
+    pub writable_fields: UniqueSet<String>,
     #[serde(default)]
-    pub filterable_fields: BTreeSet<String>,
+    pub filterable_fields: UniqueSet<String>,
     #[serde(default)]
-    pub sortable_fields: BTreeSet<String>,
+    pub sortable_fields: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_queries: Option<SpatialQueryPermissionSource>,
     /// Explicit row reach; an empty array intentionally permits all rows.
@@ -2969,8 +2970,8 @@ pub struct AccessProfileSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apply_targets: Vec<ApplyTargetPermissionSource>,
     /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub submitter_targets: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub submitter_targets: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2985,7 +2986,7 @@ pub struct AccessProfileSource {
 
 /// Fields of request decision metadata governed separately from stored record fields.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestMetadataFieldSource {
     ActorReference,
@@ -2993,18 +2994,18 @@ pub enum RequestMetadataFieldSource {
     ReviewState,
 }
 
-fn default_readable_request_fields() -> BTreeSet<RequestMetadataFieldSource> {
-    BTreeSet::from([RequestMetadataFieldSource::Reason])
+fn default_readable_request_fields<S: From<[RequestMetadataFieldSource; 1]>>() -> S {
+    S::from([RequestMetadataFieldSource::Reason])
 }
 
 pub(crate) fn is_default_readable_request_fields(
     fields: &BTreeSet<RequestMetadataFieldSource>,
 ) -> bool {
-    fields == &default_readable_request_fields()
+    fields == &default_readable_request_fields::<BTreeSet<_>>()
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
     Create,
@@ -3077,10 +3078,10 @@ pub struct MembershipBoundarySource {
 pub struct AccessRequirementsSource {
     /// Every profile must require all these scopes. Requirements never grant access.
     #[serde(default)]
-    pub required_scopes: BTreeSet<String>,
+    pub required_scopes: UniqueSet<String>,
     /// When nonempty, every profile must restrict purpose to a nonempty subset of these values. Empty imposes no purpose requirement.
     #[serde(default)]
-    pub allowed_purposes: BTreeSet<String>,
+    pub allowed_purposes: UniqueSet<String>,
     /// Every profile must include these exact field, verified-claim, and operator bindings.
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
@@ -3123,7 +3124,7 @@ pub struct HookSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<String>,
     /// Declared field identifiers to include in `values`. System event metadata is included separately.
-    pub projection: BTreeSet<String>,
+    pub projection: UniqueSet<String>,
     /// Governed, destination-neutral delivery. `destinationId` is a key in
     /// runtime `eventDestinations`; the project carries no URL or secret, and
     /// deployment configuration may tighten the bounds it binds but cannot
@@ -3152,7 +3153,7 @@ pub enum EventConditionSource {
     Fields {
         /// Fields whose values must change. Only valid with the patched trigger.
         #[serde(default)]
-        changed: BTreeSet<String>,
+        changed: UniqueSet<String>,
         /// Required values before the change. Valid with patched and tombstoned triggers.
         #[serde(default)]
         before_equals: BTreeMap<String, EventScalarValue>,
@@ -3162,9 +3163,9 @@ pub enum EventConditionSource {
     },
     RequestLifecycle {
         #[serde(default)]
-        transitions: BTreeSet<String>,
+        transitions: UniqueSet<String>,
         #[serde(default)]
-        to_states: BTreeSet<String>,
+        to_states: UniqueSet<String>,
     },
 }
 registry_platform_yaml::tagged_union!(EventConditionSource, tag = "kind");
@@ -3295,18 +3296,18 @@ pub struct ProjectAccessProfileSource {
     pub anonymous: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub requester_clients: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    pub requester_clients: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_grant: Option<TaskGrantSource>,
     #[serde(default)]
     pub principal_claim: Option<String>,
     #[serde(default)]
     /// All listed scopes must be present in the verified token.
-    pub required_scopes: BTreeSet<String>,
+    pub required_scopes: UniqueSet<String>,
     #[serde(default)]
     /// The verified token's purpose must match one listed value. Empty means no purpose restriction.
-    pub required_purposes: BTreeSet<String>,
+    pub required_purposes: UniqueSet<String>,
     #[serde(default)]
     pub permissions: Vec<AccessPermissionSource>,
 }
@@ -3333,7 +3334,7 @@ pub struct CompiledTaskGrantSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledTaskGrantPermissionSource {
     pub collection: String,
-    pub operations: BTreeSet<Operation>,
+    pub operations: UniqueSet<Operation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -3403,21 +3404,21 @@ struct RawAccessPermissionSource {
     entity: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     action: Option<String>,
-    operations: BTreeSet<Operation>,
+    operations: UniqueSet<Operation>,
     #[serde(default)]
-    readable_fields: BTreeSet<String>,
+    readable_fields: UniqueSet<String>,
     /// Readable change-request decision detail. Anonymous profiles never receive reason text.
     #[serde(
         default = "default_readable_request_fields",
         skip_serializing_if = "is_default_readable_request_fields"
     )]
-    readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
+    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
     #[serde(default)]
-    writable_fields: BTreeSet<String>,
+    writable_fields: UniqueSet<String>,
     #[serde(default)]
-    filterable_fields: BTreeSet<String>,
+    filterable_fields: UniqueSet<String>,
     #[serde(default)]
-    sortable_fields: BTreeSet<String>,
+    sortable_fields: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spatial_queries: Option<SpatialQueryPermissionSource>,
     #[serde(default)]
@@ -3435,14 +3436,14 @@ struct RawAccessPermissionSource {
     read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     apply_targets: Vec<ApplyTargetPermissionSource>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    submitter_targets: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    submitter_targets: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     targets: Vec<ActionTargetPermissionSource>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    results: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    results: UniqueSet<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     allow_count: bool,
     #[serde(default)]
@@ -3470,12 +3471,12 @@ impl<'de> Deserialize<'de> for AccessPermissionSource {
         Ok(Self {
             entity: raw.entity,
             action: raw.action,
-            operations: raw.operations,
-            readable_fields: raw.readable_fields,
-            readable_request_fields: raw.readable_request_fields,
-            writable_fields: raw.writable_fields,
-            filterable_fields: raw.filterable_fields,
-            sortable_fields: raw.sortable_fields,
+            operations: raw.operations.into_set(),
+            readable_fields: raw.readable_fields.into_set(),
+            readable_request_fields: raw.readable_request_fields.into_set(),
+            writable_fields: raw.writable_fields.into_set(),
+            filterable_fields: raw.filterable_fields.into_set(),
+            sortable_fields: raw.sortable_fields.into_set(),
             spatial_queries: raw.spatial_queries,
             row_boundaries: raw.row_boundaries.unwrap_or_default(),
             membership_boundaries: raw.membership_boundaries,
@@ -3484,10 +3485,10 @@ impl<'de> Deserialize<'de> for AccessPermissionSource {
             lookups: raw.lookups,
             read_paths: raw.read_paths,
             apply_targets: raw.apply_targets,
-            submitter_targets: raw.submitter_targets,
+            submitter_targets: raw.submitter_targets.into_set(),
             request_presence: raw.request_presence,
             targets: raw.targets,
-            results: raw.results,
+            results: raw.results.into_set(),
             allow_count: raw.allow_count,
             revision_access: raw.revision_access,
             provenance_fields: raw.provenance_fields,
@@ -3526,21 +3527,21 @@ enum AccessPermissionSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct EntityAccessPermissionSourceSchema {
     entity: String,
-    operations: BTreeSet<Operation>,
+    operations: UniqueSet<Operation>,
     #[serde(default)]
-    readable_fields: BTreeSet<String>,
+    readable_fields: UniqueSet<String>,
     /// Readable change-request decision detail. Anonymous profiles never receive reason text.
     #[serde(
         default = "default_readable_request_fields",
         skip_serializing_if = "is_default_readable_request_fields"
     )]
-    readable_request_fields: BTreeSet<RequestMetadataFieldSource>,
+    readable_request_fields: UniqueSet<RequestMetadataFieldSource>,
     #[serde(default)]
-    writable_fields: BTreeSet<String>,
+    writable_fields: UniqueSet<String>,
     #[serde(default)]
-    filterable_fields: BTreeSet<String>,
+    filterable_fields: UniqueSet<String>,
     #[serde(default)]
-    sortable_fields: BTreeSet<String>,
+    sortable_fields: UniqueSet<String>,
     #[serde(default)]
     spatial_queries: Option<SpatialQueryPermissionSource>,
     row_boundaries: Vec<RowBoundarySource>,
@@ -3558,8 +3559,8 @@ struct EntityAccessPermissionSourceSchema {
     read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default)]
     apply_targets: Vec<ApplyTargetPermissionSource>,
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    submitter_targets: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
+    submitter_targets: UniqueSet<String>,
     #[serde(default)]
     request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default)]
@@ -3576,11 +3577,11 @@ struct EntityAccessPermissionSourceSchema {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ActionAccessPermissionSourceSchema {
     action: String,
-    operations: BTreeSet<Operation>,
+    operations: UniqueSet<Operation>,
     #[serde(default)]
     targets: Vec<ActionTargetPermissionSource>,
     #[serde(default)]
-    results: BTreeSet<String>,
+    results: UniqueSet<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -3623,11 +3624,11 @@ pub enum LookupValueOrigin {
 pub struct ReadPathPermissionSource {
     pub path: String,
     #[serde(default)]
-    pub readable_fields: BTreeSet<String>,
+    pub readable_fields: UniqueSet<String>,
     #[serde(default)]
-    pub filterable_fields: BTreeSet<String>,
+    pub filterable_fields: UniqueSet<String>,
     #[serde(default)]
-    pub sortable_fields: BTreeSet<String>,
+    pub sortable_fields: UniqueSet<String>,
     #[serde(default)]
     pub allow_count: bool,
 }

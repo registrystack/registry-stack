@@ -441,7 +441,7 @@ fn authentication_profile(
                 entities.get(&permission.entity).map(|entity| {
                     crate::contract::CompiledTaskGrantPermissionSource {
                         collection: entity.route.clone(),
-                        operations: permission.operations.clone(),
+                        operations: permission.operations.clone().into(),
                     }
                 })
             })
@@ -461,12 +461,12 @@ fn authentication_profile(
         principal_claim: profile.principal_claim.clone(),
         required_scopes: profile.required_scopes.clone(),
         required_purposes: profile.required_purposes.clone(),
-        operations: BTreeSet::new(),
-        readable_fields: BTreeSet::new(),
-        readable_request_fields: BTreeSet::new(),
-        writable_fields: BTreeSet::new(),
-        filterable_fields: BTreeSet::new(),
-        sortable_fields: BTreeSet::new(),
+        operations: Default::default(),
+        readable_fields: Default::default(),
+        readable_request_fields: Default::default(),
+        writable_fields: Default::default(),
+        filterable_fields: Default::default(),
+        sortable_fields: Default::default(),
         spatial_queries: None,
         row_boundaries: Vec::new(),
         membership_boundaries: Vec::new(),
@@ -475,7 +475,7 @@ fn authentication_profile(
         lookups: Vec::new(),
         read_paths: Vec::new(),
         apply_targets: Vec::new(),
-        submitter_targets: BTreeSet::new(),
+        submitter_targets: Default::default(),
         request_presence: Vec::new(),
         allow_count: false,
         revision_access: false,

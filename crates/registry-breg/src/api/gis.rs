@@ -1159,7 +1159,8 @@ mod tests {
             ),
             readable_fields: entity.access_profiles[&operation.profile_id]
                 .readable_fields
-                .clone(),
+                .clone()
+                .into(),
             read_path: None,
         }
     }

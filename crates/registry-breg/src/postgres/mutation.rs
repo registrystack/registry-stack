@@ -2592,7 +2592,8 @@ fn plan_readable_fields(
             .access_profiles
             .get(profile_id)?
             .readable_fields
-            .clone(),
+            .clone()
+            .into(),
     )
 }
 

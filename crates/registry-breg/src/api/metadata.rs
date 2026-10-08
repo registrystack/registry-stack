@@ -82,7 +82,7 @@ fn operation(
     let readable_request_fields = if profile.anonymous || surface.entity.change_request.is_none() {
         BTreeSet::new()
     } else {
-        profile.readable_request_fields.clone()
+        profile.readable_request_fields.clone().into()
     };
     let query = surface
         .route

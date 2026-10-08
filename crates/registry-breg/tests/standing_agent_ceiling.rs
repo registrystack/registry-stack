@@ -148,7 +148,7 @@ fn standing_agent_may_read_and_author_change_request_drafts() {
     let registry = compile(&project()).expect("reads and draft authoring compile");
     let draft = &registry.entities()["correction"].access_profiles["assistant"];
     assert_eq!(
-        draft.operations,
+        *draft.operations,
         BTreeSet::from([
             Operation::Create,
             Operation::Get,

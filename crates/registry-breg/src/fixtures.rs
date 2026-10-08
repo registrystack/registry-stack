@@ -1240,7 +1240,7 @@ fn validate_claims(
     }
     if outcome == ExpectedOutcome::Success
         && (claims.principal.is_none()
-            || claims.scopes != profile.required_scopes
+            || claims.scopes != *profile.required_scopes
             || (!profile.required_purposes.is_empty() && claims.purpose.is_none())
             || boundary_claims
                 .iter()
@@ -1265,17 +1265,17 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
         default: grant.default,
         anonymous: grant.anonymous,
         actor_kind: grant.actor_kind,
-        requester_clients: grant.requester_clients.clone(),
+        requester_clients: grant.requester_clients.clone().into(),
         task_grant: None,
         principal_claim: grant.principal_claim.clone(),
-        required_scopes: grant.required_scopes.clone(),
-        required_purposes: grant.required_purposes.clone(),
-        operations: grant.operations.clone(),
-        readable_fields: BTreeSet::new(),
+        required_scopes: grant.required_scopes.clone().into(),
+        required_purposes: grant.required_purposes.clone().into(),
+        operations: grant.operations.clone().into(),
+        readable_fields: Default::default(),
         readable_request_fields: Default::default(),
-        writable_fields: BTreeSet::new(),
-        filterable_fields: BTreeSet::new(),
-        sortable_fields: BTreeSet::new(),
+        writable_fields: Default::default(),
+        filterable_fields: Default::default(),
+        sortable_fields: Default::default(),
         spatial_queries: None,
         row_boundaries: grant
             .targets
@@ -1288,7 +1288,7 @@ fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileS
         lookups: Vec::new(),
         read_paths: Vec::new(),
         apply_targets: Vec::new(),
-        submitter_targets: BTreeSet::new(),
+        submitter_targets: Default::default(),
         request_presence: Vec::new(),
         allow_count: false,
         revision_access: false,

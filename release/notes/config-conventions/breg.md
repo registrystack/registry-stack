@@ -122,6 +122,31 @@ A change-request or action-requirement `atLeast` or `atMost`, and an integer
 constraint's `minimum` and `maximum`, state the signed 64-bit range in the
 schema, the range the reader already enforced.
 
+### BREAKING: a list that is a set refuses a repeated item
+
+A list member of `registry.yaml` and `module.yaml` whose order carries no
+meaning is a set. The reader used to collapse a repeated item silently; it now
+refuses the repeat as `config.duplicate-item` at the repeated item, naming the
+index of the first occurrence. The published schemas already declared these
+lists `uniqueItems: true`. To migrate, delete the repeated item: the file then means
+what it meant before. The members are:
+
+- an access profile's `requesterClients`, `requiredScopes`, and
+  `requiredPurposes`, at project level and on an entity;
+- a permission's or an entity access profile's `operations`,
+  `readableFields`, `readableRequestFields`, `writableFields`,
+  `filterableFields`, `sortableFields`, and `submitterTargets`, and a
+  permission's `results`;
+- a read path's `readableFields`, `filterableFields`, and `sortableFields`;
+- a task grant permission's `operations`;
+- an entity's `accessRequirements.requiredScopes` and
+  `accessRequirements.allowedPurposes`;
+- an entity's `accessLog.trustedIntermediaries` and
+  `changeControl.requiredFor`;
+- an action effect's and a change-request effect's `clear`;
+- a hook's `projection`, and its `when` condition's `changed`,
+  `transitions`, and `toStates`.
+
 ### BREAKING: `runtime.yaml` is decoded by the shared reader
 
 `breg` and every `bregctl` command that takes `--runtime-config` decode

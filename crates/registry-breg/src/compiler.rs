@@ -1969,7 +1969,7 @@ pub(crate) fn expand_project_access(
                     entities.get(&permission.entity).map(|entity| {
                         crate::contract::CompiledTaskGrantPermissionSource {
                             collection: entity.route.clone(),
-                            operations: permission.operations.clone(),
+                            operations: permission.operations.clone().into(),
                         }
                     })
                 })
@@ -2044,12 +2044,12 @@ pub(crate) fn expand_project_access(
                 principal_claim: profile.principal_claim.clone(),
                 required_scopes: profile.required_scopes.clone(),
                 required_purposes: profile.required_purposes.clone(),
-                operations: grant.operations.clone(),
-                readable_fields: grant.readable_fields.clone(),
-                readable_request_fields: grant.readable_request_fields.clone(),
-                writable_fields: grant.writable_fields.clone(),
-                filterable_fields: grant.filterable_fields.clone(),
-                sortable_fields: grant.sortable_fields.clone(),
+                operations: grant.operations.clone().into(),
+                readable_fields: grant.readable_fields.clone().into(),
+                readable_request_fields: grant.readable_request_fields.clone().into(),
+                writable_fields: grant.writable_fields.clone().into(),
+                filterable_fields: grant.filterable_fields.clone().into(),
+                sortable_fields: grant.sortable_fields.clone().into(),
                 spatial_queries: grant.spatial_queries.clone(),
                 row_boundaries: grant.row_boundaries.clone(),
                 membership_boundaries: grant.membership_boundaries.clone(),
@@ -2058,7 +2058,7 @@ pub(crate) fn expand_project_access(
                 lookups: grant.lookups.clone(),
                 read_paths: grant.read_paths.clone(),
                 apply_targets: grant.apply_targets.clone(),
-                submitter_targets: grant.submitter_targets.clone(),
+                submitter_targets: grant.submitter_targets.clone().into(),
                 request_presence: grant.request_presence.clone(),
                 allow_count: grant.allow_count,
                 revision_access: grant.revision_access,
@@ -5938,7 +5938,7 @@ fn compile_entities(
                 read_paths,
                 change_control: source.change_control.clone().map(|change_control| {
                     CompiledChangeControl {
-                        required_for: change_control.required_for,
+                        required_for: change_control.required_for.into_set(),
                     }
                 }),
                 change_request: None,

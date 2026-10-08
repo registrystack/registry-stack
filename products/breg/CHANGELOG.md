@@ -49,6 +49,13 @@
   batch, attachment, statistical disclosure, or action evidence code. No
   value that compiled before is refused. The code table is in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: a list member of `registry.yaml` and `module.yaml` that is a set
+  (access profile scopes, purposes, clients, operations, and field lists,
+  read paths, access requirements, trusted intermediaries, change-control
+  operations, effect `clear` lists, and hook projections and conditions)
+  refuses a repeated item as `config.duplicate-item` instead of collapsing
+  it. Delete the repeat to migrate. The member list is in
+  `release/notes/config-conventions/breg.md`.
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded

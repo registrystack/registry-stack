@@ -29,6 +29,9 @@ use registry_manifest_core::{compile_manifest, AccessRights, FieldType, Metadata
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
 
+/// An edit a test applies to a fixture project before reading it.
+type ProjectEdit = Box<dyn Fn(&mut Value)>;
+
 fn asset_project() -> registry_breg::contract::RegistryProject {
     acceptance_project("asset-site-placement")
 }
@@ -3631,7 +3634,7 @@ fn project_access_profile_required_scopes_compile_into_each_grant() {
         .expect("project profile is compiled onto the grant");
     assert_eq!(
         profile.required_scopes,
-        BTreeSet::from(["registry:record:operate".to_owned()])
+        ["registry:record:operate".to_owned()].into()
     );
 }
 
@@ -3796,7 +3799,7 @@ fn project_urls_and_module_digests_are_read_as_url_and_digest() {
         distribution[member] = json!(written);
         json!([distribution])
     };
-    let cases: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+    let cases: Vec<(&str, ProjectEdit)> = vec![
         (
             "project.manifestProjection.catalog.baseUrl",
             Box::new(|source| {
@@ -3892,7 +3895,7 @@ fn integer_members_are_read_within_their_stated_bounds() {
                 .expect("the fixture has the member") = written.clone();
         }
     };
-    let cases: Vec<(&str, Box<dyn Fn(&mut Value)>, &str, &str)> = vec![
+    let cases: Vec<(&str, ProjectEdit, &str, &str)> = vec![
         (
             "asset-site-placement",
             Box::new(field(json!({"type": "string", "maxLength": 0}))),
@@ -4033,6 +4036,63 @@ fn integer_members_are_read_within_their_stated_bounds() {
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect::<Vec<_>>();
         assert_eq!(refused, vec![(code, path)], "{failure:?}");
+    }
+}
+
+#[test]
+fn a_set_written_as_a_list_refuses_a_repeated_item_when_the_project_is_read() {
+    let cases = [
+        (
+            "asset-site-placement",
+            "/accessProfiles/0/permissions/0/operations",
+            "project.accessProfiles[0].permissions[0].operations[5]",
+        ),
+        (
+            "asset-site-placement",
+            "/accessProfiles/0/permissions/0/readableFields",
+            "project.accessProfiles[0].permissions[0].readableFields[3]",
+        ),
+        (
+            "asset-site-placement",
+            "/accessProfiles/0/requiredPurposes",
+            "project.accessProfiles[0].requiredPurposes[1]",
+        ),
+        (
+            "person-registration-rhai",
+            "/entities/0/hooks/0/projection",
+            "project.entities[0].hooks[0].projection[1]",
+        ),
+    ];
+    for (project, pointer, path) in cases {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance")
+            .join(project)
+            .join("registry.yaml");
+        let mut source: Value =
+            serde_norway::from_slice(&fs::read(fixture).expect("the fixture is readable"))
+                .expect("the fixture is YAML");
+        let items = source
+            .pointer_mut(pointer)
+            .and_then(Value::as_array_mut)
+            .expect("the fixture has the list");
+        let repeated = items[0].clone();
+        items.push(repeated);
+        let failure = parse_project_yaml(
+            serde_norway::to_string(&source)
+                .expect("the project serializes")
+                .as_bytes(),
+        )
+        .expect_err("a repeated item is refused rather than collapsed");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            refused,
+            vec![("config.duplicate-item", path)],
+            "{failure:?}"
+        );
     }
 }
 

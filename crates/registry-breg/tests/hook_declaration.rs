@@ -128,7 +128,7 @@ fn a_hook_reads_as_a_shared_hook_declaration() {
             .expect("a Base Registry Engine hook is a shared hook declaration");
     assert_eq!(hook.id, shared.id);
     assert_eq!(hook.phase, shared.phase);
-    assert_eq!(hook.projection, shared.projection);
+    assert_eq!(hook.projection, shared.projection.into());
     assert_eq!(hook.handler.expect("handler declared"), shared.handler);
 }
 

@@ -4767,13 +4767,13 @@ fn selectable_fields_for_profile(
                     .iter()
                     .find(|grant| grant.path == read_path.id)
             })
-            .map(|grant| grant.readable_fields.clone())
+            .map(|grant| grant.readable_fields.as_set().clone())
             .unwrap_or_default();
     }
     spec.entity
         .access_profiles
         .get(profile_id)
-        .map(|profile| profile.readable_fields.clone())
+        .map(|profile| profile.readable_fields.as_set().clone())
         .unwrap_or_default()
 }
 

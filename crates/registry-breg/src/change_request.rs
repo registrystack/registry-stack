@@ -341,7 +341,7 @@ fn compile_planner(
             },
             operation: write.operation,
             set: BTreeMap::new(),
-            clear: BTreeSet::new(),
+            clear: Default::default(),
         };
         if compile_target(
             source_entity,
@@ -614,7 +614,7 @@ pub(crate) fn compile_change_requests(
                 plan.planner.is_none()
                     && plan.on_approved.mode
                         == crate::model::CompiledChangeRequestOnApprovedMode::Manual
-                    && referenced_entities == profile.submitter_targets
+                    && referenced_entities == *profile.submitter_targets
                     && references.iter().all(|(_, from_field)| {
                         // Admission reads each exact target identifier from the
                         // request record, so an absent value would only surface
