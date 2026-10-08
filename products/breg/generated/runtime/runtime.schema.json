@@ -38,6 +38,10 @@
         }
       ]
     },
+    "ClaimName": {
+      "description": "The name of one top-level claim of an access token. The reader accepts any\ntext; the runtime then refuses a name that is not a valid claim name, one\nthat repeats another contextual name, and one that is a registered or\nauthentication claim.",
+      "type": "string"
+    },
     "Classification": {
       "enum": [
         "public",
@@ -538,31 +542,31 @@
       "additionalProperties": false,
       "properties": {
         "actorKind": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "approver": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantBounds": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantClient": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantExp": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantId": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantResource": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "grantSourceIssuer": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         },
         "purpose": {
-          "type": "string"
+          "$ref": "#/$defs/ClaimName"
         }
       },
       "required": [

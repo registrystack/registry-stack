@@ -819,6 +819,43 @@ mod tests {
 
     #[cfg(feature = "runtime")]
     #[test]
+    fn runtime_schema_types_every_contextual_claim_name_as_a_claim_name() {
+        let value: Value =
+            serde_json::from_str(&runtime_schema_document()).expect("the schema is JSON");
+        let claim_name = value
+            .pointer("/$defs/ClaimName")
+            .expect("ClaimName is a named definition");
+        assert_eq!(claim_name.get("type"), Some(&Value::from("string")));
+        for constraint in ["format", "pattern", "minLength", "maxLength", "enum"] {
+            assert!(
+                claim_name.get(constraint).is_none(),
+                "the reader accepts any text, so ClaimName states no {constraint}"
+            );
+        }
+        for member in [
+            "actorKind",
+            "purpose",
+            "grantId",
+            "grantSourceIssuer",
+            "grantClient",
+            "grantResource",
+            "grantExp",
+            "grantBounds",
+            "approver",
+        ] {
+            assert_eq!(
+                value
+                    .pointer(&format!(
+                        "/$defs/RawContextualClaimNames/properties/{member}/$ref"
+                    ))
+                    .and_then(Value::as_str),
+                Some("#/$defs/ClaimName"),
+                "{member}"
+            );
+        }
+    }
+
+    #[test]
     fn runtime_schema_declares_the_published_dialect_identifier_and_title() {
         let document = runtime_schema_document();
         let value: Value = serde_json::from_str(&document).expect("the schema is JSON");

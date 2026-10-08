@@ -2355,13 +2355,6 @@ exceptions:
   class: stable-move
   reason: maxModuleBytes is a refused spelling of 'Largest accepted body or file'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximumModuleBytes'
-- rule: CFG-VAL-7
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawContextualClaimNames/properties/grantSourceIssuer
-  class: pending
-  wp: WP3
-  reason: grantSourceIssuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
 - rule: CFG-ENV-2
   format: casework/apply-report
   location: products/platform/config-formats.yaml#/current/apiVersion

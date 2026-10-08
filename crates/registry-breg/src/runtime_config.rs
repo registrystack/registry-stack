@@ -2958,30 +2958,39 @@ struct RawAuthorityClaimsConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawContextualClaimNames {
-    actor_kind: String,
-    purpose: String,
-    grant_id: String,
-    grant_source_issuer: String,
-    grant_client: String,
-    grant_resource: String,
-    grant_exp: String,
-    grant_bounds: String,
-    approver: String,
+    actor_kind: ClaimName,
+    purpose: ClaimName,
+    grant_id: ClaimName,
+    grant_source_issuer: ClaimName,
+    grant_client: ClaimName,
+    grant_resource: ClaimName,
+    grant_exp: ClaimName,
+    grant_bounds: ClaimName,
+    approver: ClaimName,
 }
+
+/// The name of one top-level claim of an access token. The reader accepts any
+/// text; the runtime then refuses a name that is not a valid claim name, one
+/// that repeats another contextual name, and one that is a registered or
+/// authentication claim.
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct ClaimName(String);
 
 impl Default for RawContextualClaimNames {
     fn default() -> Self {
         let names = ClaimNames::default();
         Self {
-            actor_kind: names.actor_kind,
-            purpose: names.purpose,
-            grant_id: names.grant_id,
-            grant_source_issuer: names.grant_source_issuer,
-            grant_client: names.grant_client,
-            grant_resource: names.grant_resource,
-            grant_exp: names.grant_exp,
-            grant_bounds: names.grant_bounds,
-            approver: names.approver,
+            actor_kind: ClaimName(names.actor_kind),
+            purpose: ClaimName(names.purpose),
+            grant_id: ClaimName(names.grant_id),
+            grant_source_issuer: ClaimName(names.grant_source_issuer),
+            grant_client: ClaimName(names.grant_client),
+            grant_resource: ClaimName(names.grant_resource),
+            grant_exp: ClaimName(names.grant_exp),
+            grant_bounds: ClaimName(names.grant_bounds),
+            approver: ClaimName(names.approver),
         }
     }
 }
@@ -2989,15 +2998,15 @@ impl Default for RawContextualClaimNames {
 impl From<RawContextualClaimNames> for ClaimNames {
     fn from(value: RawContextualClaimNames) -> Self {
         Self {
-            actor_kind: value.actor_kind,
-            purpose: value.purpose,
-            grant_id: value.grant_id,
-            grant_source_issuer: value.grant_source_issuer,
-            grant_client: value.grant_client,
-            grant_resource: value.grant_resource,
-            grant_exp: value.grant_exp,
-            grant_bounds: value.grant_bounds,
-            approver: value.approver,
+            actor_kind: value.actor_kind.0,
+            purpose: value.purpose.0,
+            grant_id: value.grant_id.0,
+            grant_source_issuer: value.grant_source_issuer.0,
+            grant_client: value.grant_client.0,
+            grant_resource: value.grant_resource.0,
+            grant_exp: value.grant_exp.0,
+            grant_bounds: value.grant_bounds.0,
+            approver: value.approver.0,
         }
     }
 }
