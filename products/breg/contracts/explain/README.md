@@ -75,6 +75,18 @@ identifier in the Registry Stack identifier catalog, named for the kind and
 the version, for example
 `https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha4.schema.json`.
 
+## `x-registry-passthrough`
+
+A schema node that carries `x-registry-passthrough: <reason>` marks a payload
+that `bregctl` writes as the engine holds it (a compiled-model value such as an
+access-route entry) and that this contract version neither describes nor
+promises. The value is a sentence saying why the node is opaque and which
+engine type its shape follows. The annotation is read by the configuration
+conventions lint, `products/platform/scripts/check-config-conventions.py`
+(CFG-SCHEMA-4), which accepts an open object only when it carries the keyword
+with a reason. JSON Schema validators ignore it, so it changes no validation
+result. A consumer must not rely on the shape under a marked node.
+
 ## Examples
 
 Each kind registers a minimal valid example in
