@@ -573,7 +573,14 @@ pub async fn check_source_revisions(adapters: &[&dyn SourceAdapter]) -> Result<(
 }
 
 pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
-    let config = RuntimeConfig::load(path)?;
+    let path = path.as_ref();
+    let config =
+        RuntimeConfig::load(path).map_err(|error| {
+            match crate::config::startup_report(path, &error) {
+                Some(report) => RuntimeError::ConfigurationRefused(report),
+                None => RuntimeError::Config(error),
+            }
+        })?;
     let package = config.load_package()?;
     let package_digest = package.digest().to_owned();
     tracing::info!(package_digest = %package_digest, "verified Casework package");
@@ -1470,6 +1477,10 @@ pub enum RuntimeError {
     Arguments,
     #[error(transparent)]
     Config(#[from] crate::RuntimeConfigError),
+    /// The runtime file refused at startup, with every finding at its
+    /// position in the file.
+    #[error("the Casework runtime configuration was refused")]
+    ConfigurationRefused(registry_platform_yaml::Report),
     #[error("the Casework project is invalid")]
     Project(#[from] registry_casework_core::ConfigLoadError),
     #[error(
@@ -1542,13 +1553,14 @@ pub enum RuntimeError {
 }
 
 impl RuntimeError {
-    /// The reader's report when startup refused the Casework project, so
-    /// `casework` prints its CFG-DIAG-2 lines unchanged after its own
-    /// one-sentence refusal.
+    /// The reader's report when startup refused the runtime file or the
+    /// Casework project, so `casework` prints its CFG-DIAG-2 lines unchanged
+    /// after its own one-sentence refusal.
     #[must_use]
     pub fn configuration_report(&self) -> Option<&registry_platform_yaml::Report> {
         match self {
-            Self::Project(registry_casework_core::ConfigLoadError::Refused(report))
+            Self::ConfigurationRefused(report)
+            | Self::Project(registry_casework_core::ConfigLoadError::Refused(report))
             | Self::Config(crate::RuntimeConfigError::Project(
                 registry_casework_core::ConfigLoadError::Refused(report),
             )) => Some(report),

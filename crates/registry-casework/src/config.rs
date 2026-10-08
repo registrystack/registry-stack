@@ -12,9 +12,10 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    is_sha256_label, sha256_uri, ConfigBlockError, PackageConfig, PackageDigestMismatch,
-    PackageError, PackageErrorKind, PackageLimits, RemovedKey, RuntimeConfigLoader,
-    RuntimeEnvelope, SecretReference, SecretResolver, VerifiedPackage, REMOVED_OIDC_JWKS_URI,
+    is_sha256_label, sha256_uri, ConfigBlockError, ConfigBlockErrorKind, PackageConfig,
+    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
+    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -25,6 +26,7 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
+use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
@@ -318,7 +320,10 @@ pub struct ReviewCompletionRuntimeConfig {
     pub bearer_token_ref: Option<String>,
     #[serde(default)]
     pub auth: Option<ReviewCompletionAuthConfig>,
-    #[serde(default = "default_review_completion_timeout_ms")]
+    #[serde(
+        default = "default_review_completion_timeout_ms",
+        deserialize_with = "registry_casework_core::typed::bounded_u64::<_, MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS, MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS>"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(range(
@@ -327,7 +332,10 @@ pub struct ReviewCompletionRuntimeConfig {
         ))
     )]
     pub timeout_milliseconds: u64,
-    #[serde(default = "default_review_completion_attempts")]
+    #[serde(
+        default = "default_review_completion_attempts",
+        deserialize_with = "registry_casework_core::typed::bounded_u32::<_, MINIMUM_REVIEW_COMPLETION_ATTEMPTS, MAXIMUM_REVIEW_COMPLETION_ATTEMPTS>"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(range(
@@ -336,7 +344,10 @@ pub struct ReviewCompletionRuntimeConfig {
         ))
     )]
     pub maximum_attempts: u32,
-    #[serde(default = "default_review_completion_retry_seconds")]
+    #[serde(
+        default = "default_review_completion_retry_seconds",
+        deserialize_with = "registry_casework_core::typed::bounded_u64::<_, MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS, MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS>"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(range(
@@ -723,92 +734,44 @@ impl RuntimeConfig {
         self.package.root.join(POLICY_FILE)
     }
 
+    /// Refuse the first rule this file breaks on its own, then verify the
+    /// package at `package.root` and refuse the first rule the file breaks
+    /// against the project that package holds.
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
-        if self.api_version != RUNTIME_CONFIG_API_VERSION {
-            return Err(RuntimeConfigError::InvalidApiVersion);
-        }
-        if self.kind != RUNTIME_CONFIG_KIND {
-            return Err(RuntimeConfigError::InvalidKind);
-        }
-        let Some(identity) = &self.identity else {
-            return Err(RuntimeConfigError::MissingIdentity);
-        };
-        if !valid_database_id(&identity.database_id) {
-            return Err(RuntimeConfigError::InvalidDatabaseId);
-        }
-        self.package.shared().check()?;
-        self.secret_providers.check()?;
-        self.audit.destination()?;
-        self.validate_secret_references()?;
-        if self
-            .package
-            .acknowledge_stranded_work
-            .as_deref()
-            .is_some_and(|acknowledged| !is_sha256_label(acknowledged))
-        {
-            return Err(RuntimeConfigError::InvalidStrandedWorkAcknowledgement);
-        }
+        first(self.findings(None))?;
         let package = self.capture_package_after_verification(|| {})?;
-        let project = package.project();
-        if !self.listener.is_valid() {
-            return Err(RuntimeConfigError::InvalidListener);
+        self.check_against_project(package.project())
+    }
+
+    /// Refuse the first rule this file breaks against `project`, the project
+    /// its package holds.
+    pub fn check_against_project(
+        &self,
+        project: &CaseworkProject,
+    ) -> Result<(), RuntimeConfigError> {
+        let mut findings = Vec::new();
+        for rule in PROJECT_RULES {
+            rule(self, project, &mut findings);
         }
-        if let Some(metrics_listener) = &self.metrics_listener {
-            metrics_listener.validate(&self.listener)?;
+        first(findings)
+    }
+
+    /// Every rule this file breaks, in the order startup applies them. The
+    /// rules about the project the file binds run when `project` is given.
+    /// Each finding names the member it concerns and never a configured
+    /// value.
+    #[must_use]
+    pub fn findings(&self, project: Option<&CaseworkProject>) -> Vec<RuntimeConfigError> {
+        let mut findings = Vec::new();
+        for rule in FILE_RULES {
+            rule(self, &mut findings);
         }
-        self.authentication.oidc.provider.check(
-            "authentication.oidc",
-            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
-        )?;
-        self.authentication
-            .oidc
-            .clients
-            .check("authentication.oidc")?;
-        // An empty client list admits every client the issuer verifies, so a
-        // deployment that simply forgot the field would accept a token minted
-        // for an unrelated application in the same realm. Development loopback
-        // keeps that convenience; a deployment behind an operator-controlled
-        // terminator must name the clients it admits.
-        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-            && self.authentication.oidc.clients.allowed_clients.is_empty()
-        {
-            return Err(RuntimeConfigError::AllowedClientsRequired);
+        if let Some(project) = project {
+            for rule in PROJECT_RULES {
+                rule(self, project, &mut findings);
+            }
         }
-        if self.authentication.oidc.scope_claim.is_empty()
-            || self.authentication.oidc.human_identity.claim.is_empty()
-            || self.authentication.oidc.human_identity.value.is_empty()
-            || self.authentication.oidc.human_identity.claim == self.authentication.oidc.scope_claim
-        {
-            return Err(RuntimeConfigError::InvalidOidc);
-        }
-        self.validate_project_bindings(project)?;
-        if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
-            return Err(RuntimeConfigError::InvalidDatabaseReference);
-        }
-        if self
-            .review_completion_destinations
-            .iter()
-            .any(|(id, destination)| {
-                id.is_empty()
-                    || !valid_review_completion_url(&destination.url)
-                    || !(MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS
-                        ..=MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS)
-                        .contains(&destination.timeout_milliseconds)
-                    || !(MINIMUM_REVIEW_COMPLETION_ATTEMPTS..=MAXIMUM_REVIEW_COMPLETION_ATTEMPTS)
-                        .contains(&destination.maximum_attempts)
-                    || !(MINIMUM_REVIEW_COMPLETION_RETRY_SECONDS
-                        ..=MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS)
-                        .contains(&destination.retry_seconds)
-            })
-        {
-            return Err(RuntimeConfigError::InvalidSourceBindings);
-        }
-        self.validate_source_bindings()?;
-        #[cfg(not(feature = "postgres-test"))]
-        if self.database.test_only_plaintext {
-            return Err(RuntimeConfigError::PlaintextDatabase);
-        }
-        Ok(())
+        findings
     }
 
     /// The operator-chosen database identity. Empty only on a document that
@@ -835,7 +798,7 @@ impl RuntimeConfig {
         after_verification: impl FnOnce(),
     ) -> Result<LoadedCaseworkPackage, RuntimeConfigError> {
         let package = self.capture_package_after_verification(after_verification)?;
-        self.validate_project_bindings(package.project())?;
+        self.check_against_project(package.project())?;
         Ok(package)
     }
 
@@ -870,100 +833,57 @@ impl RuntimeConfig {
         })
     }
 
-    fn validate_project_bindings(
-        &self,
-        project: &CaseworkProject,
-    ) -> Result<(), RuntimeConfigError> {
-        if project
-            .access_profiles
-            .iter()
-            .any(|profile| profile.principal_claim == self.authentication.oidc.human_identity.claim)
-        {
-            return Err(RuntimeConfigError::InvalidOidc);
+    fn check_envelope(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if self.api_version != RUNTIME_CONFIG_API_VERSION {
+            findings.push(RuntimeConfigError::InvalidApiVersion);
         }
-        if let Some(authority) = &self.task_authority {
-            if !registry_platform_httputil::valid_resource_uri(&authority.issuer)
-                || !registry_platform_httputil::valid_resource_uri(&authority.exchange_audience)
-                || self.authentication.oidc.clients.allowed_clients.is_empty()
-                || authority.status_clients.len() > 64
-                || authority.status_clients.iter().any(|(client, resource)| {
-                    !self
-                        .authentication
-                        .oidc
-                        .clients
-                        .allowed_clients
-                        .contains(client)
-                        || !registry_platform_httputil::valid_resource_uri(resource)
-                })
-                || project.task_templates.iter().any(|template| {
-                    template.agent.issuer != self.authentication.oidc.provider.issuer
-                        || !self
-                            .authentication
-                            .oidc
-                            .clients
-                            .allowed_clients
-                            .contains(&template.client)
-                        || !registry_platform_httputil::valid_resource_uri(&template.resource)
-                })
-            {
-                return Err(RuntimeConfigError::InvalidOidc);
-            }
-        } else if !project.task_templates.is_empty() {
-            return Err(RuntimeConfigError::InvalidOidc);
+        if self.kind != RUNTIME_CONFIG_KIND {
+            findings.push(RuntimeConfigError::InvalidKind);
         }
-
-        let declared_sources = project
-            .sources
-            .iter()
-            .map(|source| source.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let configured_sources = self
-            .sources
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
-            return Err(RuntimeConfigError::InvalidSourceBindings);
-        }
-        let source_context_kinds = project
-            .review_kinds
-            .iter()
-            .filter(|kind| {
-                kind.context_strategy == registry_casework_core::ReviewContextStrategy::Source
-            })
-            .map(|kind| kind.id.as_str())
-            .collect::<BTreeSet<_>>();
-        if project.review_producers.iter().any(|producer| {
-            producer
-                .kinds
-                .iter()
-                .any(|kind| source_context_kinds.contains(kind.as_str()))
-                && producer
-                    .source_namespaces
-                    .iter()
-                    .any(|namespace| !configured_sources.contains(namespace.as_str()))
-        }) {
-            return Err(RuntimeConfigError::InactiveReviewSourceNamespace);
-        }
-
-        let declared_destinations = project
-            .review_producers
-            .iter()
-            .filter_map(|producer| producer.completion.as_ref())
-            .map(|completion| completion.destination_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let configured_destinations = self
-            .review_completion_destinations
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        if !declared_destinations.is_subset(&configured_destinations) {
-            return Err(RuntimeConfigError::InvalidSourceBindings);
-        }
-        Ok(())
     }
 
-    fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
+    fn check_identity(&self, findings: &mut Vec<RuntimeConfigError>) {
+        match &self.identity {
+            None => findings.push(RuntimeConfigError::MissingIdentity),
+            Some(identity) if !valid_database_id(&identity.database_id) => {
+                findings.push(RuntimeConfigError::InvalidDatabaseId);
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn check_package_block(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if let Err(error) = self.package.shared().check() {
+            findings.push(error.into());
+        }
+        if self
+            .package
+            .acknowledge_stranded_work
+            .as_deref()
+            .is_some_and(|acknowledged| !is_sha256_label(acknowledged))
+        {
+            findings.push(RuntimeConfigError::InvalidStrandedWorkAcknowledgement);
+        }
+    }
+
+    fn check_secret_providers(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if let Err(error) = self.secret_providers.check() {
+            findings.push(error.into());
+        }
+    }
+
+    fn check_audit(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if let Err(error) = self.audit.destination() {
+            findings.push(error);
+        }
+    }
+
+    fn check_secret_references(&self, findings: &mut Vec<RuntimeConfigError>) {
+        // With no provider enabled every reference would be refused; the
+        // provider rule reports that once.
+        if self.secret_providers.check().is_err() {
+            return;
+        }
         let mut references: Vec<(String, &str)> = self
             .database
             .references()
@@ -980,26 +900,36 @@ impl RuntimeConfig {
                 document_ref,
             ));
         }
+        for (field, raw) in references {
+            if let Err(error) = self.secret_providers.check_reference(&field, raw) {
+                findings.push(error.into());
+            }
+        }
         for (source_id, binding) in &self.sources {
             for (member, reference) in [
                 ("clientIdRef", &binding.client_id_ref),
                 ("clientAssertionKeyRef", &binding.client_assertion_key_ref),
                 ("webhookSecretRef", &binding.webhook_secret_ref),
             ] {
-                references.push((format!("sources.{source_id}.{member}"), reference));
+                self.check_binding_reference(findings, &["sources", source_id, member], reference);
             }
             if let Some(reference) = &binding.trusted_root_certificates_ref {
-                references.push((
-                    format!("sources.{source_id}.trustedRootCertificatesRef"),
+                self.check_binding_reference(
+                    findings,
+                    &["sources", source_id, "trustedRootCertificatesRef"],
                     reference,
-                ));
+                );
             }
         }
         for (destination_id, destination) in &self.review_completion_destinations {
-            let path = format!("reviewCompletionDestinations.{destination_id}");
+            let at = ["reviewCompletionDestinations", destination_id.as_str()];
             match (&destination.bearer_token_ref, &destination.auth) {
                 (Some(reference), None) => {
-                    references.push((format!("{path}.bearerTokenRef"), reference));
+                    self.check_binding_reference(
+                        findings,
+                        &[at[0], at[1], "bearerTokenRef"],
+                        reference,
+                    );
                 }
                 (None, Some(auth)) => {
                     if auth
@@ -1007,23 +937,135 @@ impl RuntimeConfig {
                         .as_deref()
                         .is_some_and(|header| !valid_review_completion_header_name(header))
                     {
-                        return Err(RuntimeConfigError::InvalidReviewCompletionAuth {
-                            path: format!("{path}.auth.header"),
+                        let segments = [at[0], at[1], "auth", "header"];
+                        findings.push(RuntimeConfigError::InvalidReviewCompletionAuth {
+                            path: segments.join("."),
+                            pointer: pointer_to(&segments),
                         });
                     }
-                    references.push((format!("{path}.auth.secretRef"), &auth.secret_ref));
+                    self.check_binding_reference(
+                        findings,
+                        &[at[0], at[1], "auth", "secretRef"],
+                        &auth.secret_ref,
+                    );
                 }
                 _ => {
-                    return Err(RuntimeConfigError::InvalidReviewCompletionAuth {
-                        path: format!("{path}.auth"),
+                    let segments = [at[0], at[1], "auth"];
+                    findings.push(RuntimeConfigError::InvalidReviewCompletionAuth {
+                        path: segments.join("."),
+                        pointer: pointer_to(&segments),
                     });
                 }
             }
         }
-        for (field, raw) in references {
-            self.secret_providers.check_reference(&field, raw)?;
+    }
+
+    /// Check one secret reference of a member under a map keyed by an id the
+    /// operator chose, located structurally so a key holding `.` or `/`
+    /// still points at its member.
+    fn check_binding_reference(
+        &self,
+        findings: &mut Vec<RuntimeConfigError>,
+        segments: &[&str],
+        raw: &str,
+    ) {
+        if let Err(error) = self
+            .secret_providers
+            .check_reference(&segments.join("."), raw)
+        {
+            findings.push(RuntimeConfigError::BindingSecret {
+                pointer: pointer_to(segments),
+                error,
+            });
         }
-        Ok(())
+    }
+
+    fn check_listeners(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if !self.listener.is_valid() {
+            findings.push(RuntimeConfigError::InvalidListener);
+        }
+        if let Some(metrics_listener) = &self.metrics_listener {
+            if let Err(error) = metrics_listener.validate(&self.listener) {
+                findings.push(error);
+            }
+        }
+    }
+
+    fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
+        let oidc = &self.authentication.oidc;
+        if let Err(error) = oidc.provider.check(
+            "authentication.oidc",
+            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
+        ) {
+            findings.push(error.into());
+        }
+        if let Err(error) = oidc.clients.check("authentication.oidc") {
+            findings.push(error.into());
+        }
+        // An empty client list admits every client the issuer verifies, so a
+        // deployment that simply forgot the field would accept a token minted
+        // for an unrelated application in the same realm. Development loopback
+        // keeps that convenience; a deployment behind an operator-controlled
+        // terminator must name the clients it admits.
+        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
+            && oidc.clients.allowed_clients.is_empty()
+        {
+            findings.push(RuntimeConfigError::AllowedClientsRequired);
+        }
+        for (path, value) in [
+            ("authentication.oidc.scopeClaim", &oidc.scope_claim),
+            (
+                "authentication.oidc.humanIdentity.claim",
+                &oidc.human_identity.claim,
+            ),
+            (
+                "authentication.oidc.humanIdentity.value",
+                &oidc.human_identity.value,
+            ),
+        ] {
+            if value.is_empty() {
+                findings.push(RuntimeConfigError::InvalidOidcClaim {
+                    path,
+                    reason: "must not be empty",
+                });
+            }
+        }
+        if !oidc.scope_claim.is_empty() && oidc.human_identity.claim == oidc.scope_claim {
+            findings.push(RuntimeConfigError::InvalidOidcClaim {
+                path: "authentication.oidc.humanIdentity.claim",
+                reason: "must differ from authentication.oidc.scopeClaim",
+            });
+        }
+    }
+
+    fn check_database(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
+            findings.push(RuntimeConfigError::InvalidDatabaseReference);
+        }
+        #[cfg(not(feature = "postgres-test"))]
+        if self.database.test_only_plaintext {
+            findings.push(RuntimeConfigError::PlaintextDatabase);
+        }
+    }
+
+    fn check_review_completion_destinations(&self, findings: &mut Vec<RuntimeConfigError>) {
+        for (destination_id, destination) in &self.review_completion_destinations {
+            if destination_id.is_empty() {
+                findings.push(RuntimeConfigError::InvalidReviewCompletionDestination {
+                    path: "reviewCompletionDestinations".to_owned(),
+                    pointer: "/reviewCompletionDestinations".to_owned(),
+                    reason: "must not hold an empty destination id",
+                });
+            }
+            if !valid_review_completion_url(&destination.url) {
+                let segments = ["reviewCompletionDestinations", destination_id, "url"];
+                findings.push(RuntimeConfigError::InvalidReviewCompletionDestination {
+                    path: segments.join("."),
+                    pointer: pointer_to(&segments),
+                    reason: "must be an https URL with a host, or an http URL on 127.0.0.1 or [::1], without userinfo, query, or fragment",
+                });
+            }
+        }
     }
 
     /// Refuse a bound source that breaks one of the adapter's binding rules.
@@ -1031,16 +1073,186 @@ impl RuntimeConfig {
     /// adapter is built, so an operator sees the refusal without the runtime
     /// ever starting. The refusal names the member that broke the rule and
     /// the rule itself, never the configured value.
-    fn validate_source_bindings(&self) -> Result<(), RuntimeConfigError> {
+    fn check_source_bindings(&self, findings: &mut Vec<RuntimeConfigError>) {
         for (source_id, binding) in &self.sources {
-            registry_casework_breg::validate_binding_input(binding).map_err(|rule| {
-                RuntimeConfigError::InvalidSourceBinding {
-                    path: format!("sources.{source_id}.{}", rule.field()),
+            if let Err(rule) = registry_casework_breg::validate_binding_input(binding) {
+                let segments = ["sources", source_id.as_str(), rule.field()];
+                findings.push(RuntimeConfigError::InvalidSourceBinding {
+                    path: segments.join("."),
+                    pointer: pointer_to(&segments),
                     reason: rule.reason(),
-                }
-            })?;
+                });
+            }
         }
-        Ok(())
+    }
+
+    fn check_principal_claims(
+        &self,
+        project: &CaseworkProject,
+        findings: &mut Vec<RuntimeConfigError>,
+    ) {
+        if project
+            .access_profiles
+            .iter()
+            .any(|profile| profile.principal_claim == self.authentication.oidc.human_identity.claim)
+        {
+            findings.push(RuntimeConfigError::PrincipalClaimConflict);
+        }
+    }
+
+    fn check_task_authority(
+        &self,
+        project: &CaseworkProject,
+        findings: &mut Vec<RuntimeConfigError>,
+    ) {
+        use registry_platform_httputil::valid_resource_uri;
+        let allowed_clients = &self.authentication.oidc.clients.allowed_clients;
+        let Some(authority) = &self.task_authority else {
+            if !project.task_templates.is_empty() {
+                findings.push(task_authority_finding(
+                    &["taskAuthority"],
+                    "is required when casework.yaml declares taskTemplates",
+                    "Add a taskAuthority block naming issuer, exchangeAudience, signingKeyRef, and statusClients.",
+                ));
+            }
+            return;
+        };
+        for (member, value) in [
+            ("issuer", &authority.issuer),
+            ("exchangeAudience", &authority.exchange_audience),
+        ] {
+            if !valid_resource_uri(value) {
+                findings.push(task_authority_finding(
+                    &["taskAuthority", member],
+                    "must be an absolute URI without userinfo or a fragment",
+                    "Write the absolute URI the task grant names here.",
+                ));
+            }
+        }
+        if allowed_clients.is_empty() {
+            findings.push(task_authority_finding(
+                &["authentication", "oidc", "allowedClients"],
+                "must name every client taskAuthority admits",
+                "List in authentication.oidc.allowedClients every client taskAuthority.statusClients and casework.yaml taskTemplates[].client name.",
+            ));
+        }
+        if authority.status_clients.len() > MAXIMUM_STATUS_CLIENTS {
+            findings.push(task_authority_finding(
+                &["taskAuthority", "statusClients"],
+                "must map at most 64 clients",
+                "Remove status clients until at most 64 remain.",
+            ));
+        }
+        for (client, resource) in &authority.status_clients {
+            if !allowed_clients.is_empty() && !allowed_clients.contains(client) {
+                findings.push(task_authority_finding(
+                    &["taskAuthority", "statusClients", client],
+                    "must be a client authentication.oidc.allowedClients admits",
+                    "Add the client to authentication.oidc.allowedClients, or remove it from taskAuthority.statusClients.",
+                ));
+            }
+            if !valid_resource_uri(resource) {
+                findings.push(task_authority_finding(
+                    &["taskAuthority", "statusClients", client],
+                    "must map the client to an absolute resource URI without userinfo or a fragment",
+                    "Map the client to the absolute URI of the one resource it reads status from.",
+                ));
+            }
+        }
+        let templates = &project.task_templates;
+        if templates
+            .iter()
+            .any(|template| template.agent.issuer != self.authentication.oidc.provider.issuer)
+        {
+            findings.push(task_authority_finding(
+                &["authentication", "oidc", "issuer"],
+                "must be the issuer every casework.yaml taskTemplates[].agent.issuer names",
+                "Name the same issuer in authentication.oidc.issuer and in each taskTemplates[].agent.issuer.",
+            ));
+        }
+        if !allowed_clients.is_empty()
+            && templates
+                .iter()
+                .any(|template| !allowed_clients.contains(&template.client))
+        {
+            findings.push(task_authority_finding(
+                &["authentication", "oidc", "allowedClients"],
+                "must admit every client casework.yaml taskTemplates[].client names",
+                "Add each taskTemplates[].client to authentication.oidc.allowedClients.",
+            ));
+        }
+        if templates
+            .iter()
+            .any(|template| !valid_resource_uri(&template.resource))
+        {
+            findings.push(task_authority_finding(
+                &["taskAuthority"],
+                "cannot grant a casework.yaml taskTemplates[].resource that is not an absolute URI without userinfo or a fragment",
+                "Write each taskTemplates[].resource in casework.yaml as the absolute URI of the resource the grant is for.",
+            ));
+        }
+    }
+
+    fn check_source_set(&self, project: &CaseworkProject, findings: &mut Vec<RuntimeConfigError>) {
+        let declared_sources = project
+            .sources
+            .iter()
+            .map(|source| source.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let configured_sources = self
+            .sources
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
+            findings.push(RuntimeConfigError::InvalidSourceBindings);
+        }
+    }
+
+    fn check_review_source_namespaces(
+        &self,
+        project: &CaseworkProject,
+        findings: &mut Vec<RuntimeConfigError>,
+    ) {
+        let source_context_kinds = project
+            .review_kinds
+            .iter()
+            .filter(|kind| {
+                kind.context_strategy == registry_casework_core::ReviewContextStrategy::Source
+            })
+            .map(|kind| kind.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if project.review_producers.iter().any(|producer| {
+            producer
+                .kinds
+                .iter()
+                .any(|kind| source_context_kinds.contains(kind.as_str()))
+                && producer
+                    .source_namespaces
+                    .iter()
+                    .any(|namespace| !self.sources.contains_key(namespace))
+        }) {
+            findings.push(RuntimeConfigError::InactiveReviewSourceNamespace);
+        }
+    }
+
+    fn check_completion_destinations_configured(
+        &self,
+        project: &CaseworkProject,
+        findings: &mut Vec<RuntimeConfigError>,
+    ) {
+        if project
+            .review_producers
+            .iter()
+            .filter_map(|producer| producer.completion.as_ref())
+            .any(|completion| {
+                !self
+                    .review_completion_destinations
+                    .contains_key(&completion.destination_id)
+            })
+        {
+            findings.push(RuntimeConfigError::UnconfiguredReviewCompletionDestination);
+        }
     }
 
     pub async fn oidc_verifier(
@@ -1097,6 +1309,64 @@ impl RuntimeConfig {
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
         .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
         .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
+    }
+}
+
+/// A rule a runtime file must satisfy on its own; it records every finding.
+type FileRule = fn(&RuntimeConfig, &mut Vec<RuntimeConfigError>);
+/// A rule a runtime file must satisfy against the project it binds.
+type ProjectRule = fn(&RuntimeConfig, &CaseworkProject, &mut Vec<RuntimeConfigError>);
+
+/// The rules a runtime file satisfies on its own, in the order startup
+/// applies them.
+const FILE_RULES: &[FileRule] = &[
+    RuntimeConfig::check_envelope,
+    RuntimeConfig::check_identity,
+    RuntimeConfig::check_package_block,
+    RuntimeConfig::check_secret_providers,
+    RuntimeConfig::check_audit,
+    RuntimeConfig::check_secret_references,
+    RuntimeConfig::check_listeners,
+    RuntimeConfig::check_oidc,
+    RuntimeConfig::check_database,
+    RuntimeConfig::check_review_completion_destinations,
+    RuntimeConfig::check_source_bindings,
+];
+
+/// The rules a runtime file satisfies against the project it binds.
+const PROJECT_RULES: &[ProjectRule] = &[
+    RuntimeConfig::check_principal_claims,
+    RuntimeConfig::check_task_authority,
+    RuntimeConfig::check_source_set,
+    RuntimeConfig::check_review_source_namespaces,
+    RuntimeConfig::check_completion_destinations_configured,
+];
+
+/// The most status clients one task authority maps.
+const MAXIMUM_STATUS_CLIENTS: usize = 64;
+
+fn first(findings: Vec<RuntimeConfigError>) -> Result<(), RuntimeConfigError> {
+    findings.into_iter().next().map_or(Ok(()), Err)
+}
+
+/// The JSON Pointer of the member these key segments name.
+fn pointer_to(segments: &[&str]) -> String {
+    segments
+        .iter()
+        .map(|segment| format!("/{}", escape_pointer_segment(segment)))
+        .collect()
+}
+
+fn task_authority_finding(
+    segments: &[&str],
+    reason: &'static str,
+    action: &'static str,
+) -> RuntimeConfigError {
+    RuntimeConfigError::InvalidTaskAuthority {
+        path: segments.join("."),
+        pointer: pointer_to(segments),
+        reason,
+        action,
     }
 }
 
@@ -1159,6 +1429,172 @@ fn validate_project_source_description_bytes(
 
 fn is_unique_local(address: Ipv6Addr) -> bool {
     address.octets()[0] & 0xfe == 0xfc
+}
+
+/// What an offline check of one runtime file found (CFG-CHECK-1).
+#[derive(Debug, Default)]
+pub struct RuntimeCheck {
+    /// Every finding, each naming the file as the path was given and each
+    /// positioned at the member it concerns.
+    pub diagnostics: Vec<Diagnostic>,
+    /// The file could not be read at all, as opposed to read and refused.
+    pub unavailable: bool,
+}
+
+/// Check the runtime file at the absolute `path` as `casework serve` reads
+/// it, with no package, database, network, or secret material, and report
+/// every rule it breaks. The rules about the project the file binds run
+/// against `project` when one is given.
+///
+/// With `substitute` set, `${NAME}` expressions are filled from the process
+/// environment and every value is checked. Without it, each expression is
+/// checked by syntax and position only, and a rule that reads its value is
+/// left out.
+#[must_use]
+pub fn check_runtime(
+    path: &Path,
+    project: Option<&CaseworkProject>,
+    substitute: bool,
+) -> RuntimeCheck {
+    let check =
+        RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+    let mut diagnostics = check.diagnostics.clone();
+    if let Some(loaded) = &check.loaded {
+        diagnostics.extend(
+            loaded
+                .config
+                .findings(project)
+                .iter()
+                .filter(|finding| !reads_deferred_value(&check, finding))
+                .map(|finding| positioned(&check, finding)),
+        );
+    }
+    in_file_order(&mut diagnostics);
+    RuntimeCheck {
+        diagnostics,
+        unavailable: check.unavailable,
+    }
+}
+
+/// The report `casework serve` prints when it refuses the runtime file at
+/// `path` with `error`: the shared loader's diagnostics, or every rule the
+/// file breaks, each at its position. `None` for a refusal of the package or
+/// of a dependency, which its message alone describes.
+#[must_use]
+pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
+    if let RuntimeConfigError::Load(error) = error {
+        return Some(Report::new(error.diagnostics().to_vec()));
+    }
+    if !error.in_file() {
+        return None;
+    }
+    let check = RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, true, stand_in_for);
+    let config = &check.loaded.as_ref()?.config;
+    let package = config.capture_package_after_verification(|| {}).ok();
+    let mut diagnostics: Vec<Diagnostic> = config
+        .findings(package.as_ref().map(LoadedCaseworkPackage::project))
+        .iter()
+        .map(|finding| positioned(&check, finding))
+        .collect();
+    in_file_order(&mut diagnostics);
+    (!diagnostics.is_empty()).then(|| Report::new(diagnostics))
+}
+
+/// Order `diagnostics` as the shared reader orders its own: those without a
+/// line first, then by line and column, keeping the order in which equal
+/// positions were found.
+fn in_file_order(diagnostics: &mut [Diagnostic]) {
+    diagnostics.sort_by_key(|diagnostic| {
+        diagnostic
+            .source
+            .as_ref()
+            .and_then(|source| {
+                source
+                    .line
+                    .map(|line| (1, line, source.column.unwrap_or(0)))
+            })
+            .unwrap_or((0, 0, 0))
+    });
+}
+
+/// `finding` at the value of its member, or, for a member that is absent, at
+/// the nearest mapping above it that is present.
+fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &RuntimeConfigError) -> Diagnostic {
+    let pointer = finding.pointer();
+    let mut diagnostic = check.error_at(
+        RUNTIME_CONFIG_KIND,
+        finding.code(),
+        &pointer,
+        finding.to_string(),
+        finding.suggested_action(),
+    );
+    let mut located = pointer.as_str();
+    while diagnostic
+        .source
+        .as_ref()
+        .is_some_and(|source| source.line.is_none())
+        && !located.is_empty()
+    {
+        located = &located[..located.rfind('/').unwrap_or(0)];
+        diagnostic.source = check
+            .error_at(RUNTIME_CONFIG_KIND, "", located, "", "")
+            .source;
+    }
+    diagnostic
+}
+
+/// Whether `finding` reads the value of a member the check left as an
+/// expression, so the stand-in, not the operator's value, decided it.
+fn reads_deferred_value(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    finding: &RuntimeConfigError,
+) -> bool {
+    let reads: &[&str] = match finding {
+        RuntimeConfigError::InvalidListener => &["/listener"],
+        RuntimeConfigError::InvalidMetricsListener => &["/listener/bind"],
+        RuntimeConfigError::AllowedClientsRequired => &["/listener/tlsTermination"],
+        RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
+            &["/listener/tlsTermination"]
+        }
+        RuntimeConfigError::InvalidOidcClaim { .. } => &["/authentication/oidc/scopeClaim"],
+        RuntimeConfigError::RelativeOperatedPath(_)
+        | RuntimeConfigError::InvalidAuditDestination(_) => &["/audit"],
+        RuntimeConfigError::InvalidTaskAuthority { pointer, .. }
+            if pointer.starts_with("/taskAuthority/statusClients/") =>
+        {
+            &["/authentication/oidc/allowedClients"]
+        }
+        _ => &[],
+    };
+    check.defers_within(&finding.pointer())
+        || reads.iter().any(|pointer| check.defers_within(pointer))
+}
+
+/// A value for an expression the offline check does not substitute, chosen
+/// so the member it fills decodes and passes the rules about its value.
+fn stand_in_for(pointer: &str) -> &'static str {
+    let segments: Vec<&str> = pointer.split('/').skip(1).collect();
+    match segments.as_slice() {
+        ["listener", "bind"] => "127.0.0.1:8100",
+        ["listener", "tlsTermination"] => "development-loopback",
+        ["listener", "networkExposure"] => "private-address",
+        ["metricsListener", "bind"] => "127.0.0.1:9100",
+        ["audit", "destination"] => "file",
+        ["package", "root"] | ["audit", "path"] | ["secretProviders", "file", "root"] => {
+            "/deferred"
+        }
+        ["package", "expectedDigest" | "acknowledgeStrandedWork"] => {
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+        ["authentication", "oidc", "issuer"]
+        | ["authentication", "oidc", "jwksSource", "uri"]
+        | ["taskAuthority", "issuer" | "exchangeAudience"]
+        | ["taskAuthority", "statusClients", _]
+        | ["sources", _, "baseUrl" | "tokenEndpoint" | "clientAssertionAudience" | "resource"]
+        | ["reviewCompletionDestinations", _, "url"] => "https://deferred.invalid",
+        ["sources", _, "eventSource"] => "urn:registrystack:registry:deferred:instance:deferred",
+        _ => DEFAULT_STAND_IN,
+    }
 }
 
 #[cfg(test)]
@@ -1472,6 +1908,174 @@ reviewProducers:
         let error = RuntimeConfig::load(write_operator(root.path(), &document)).unwrap_err();
         assert_eq!(error.path(), "listener");
         assert!(error.to_string().contains("bind"), "{error}");
+    }
+
+    /// A runtime file that breaks several rules, each away from the others.
+    fn file_breaking_three_rules(root: &Path) -> PathBuf {
+        let package = root.join("package");
+        let mut document = operator_value(&package, "development-loopback");
+        document["identity"]["databaseId"] = serde_json::json!(" padded ");
+        document["listener"]["bind"] = serde_json::json!("10.0.0.5:8100");
+        document["reviewCompletionDestinations"] = serde_json::json!({
+            "outcomes": {
+                "url": "http://outcomes.example.test/complete",
+                "bearerTokenRef": "secret:env/OUTCOMES"
+            }
+        });
+        write_operator(root, &document)
+    }
+
+    #[test]
+    fn cfg_check_1_every_rule_a_runtime_file_breaks_is_reported_at_its_position() {
+        let root = canonical_tempdir();
+        let path = file_breaking_three_rules(root.path());
+        let check = check_runtime(&path, None, false);
+        assert!(!check.unavailable);
+        let found: Vec<(&str, &str)> = check
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "casework.runtime.invalid-database-id",
+                    "/identity/databaseId"
+                ),
+                ("casework.runtime.invalid-listener", "/listener/bind"),
+                (
+                    "casework.runtime.invalid-review-completion-destination",
+                    "/reviewCompletionDestinations/outcomes/url"
+                ),
+            ]
+        );
+        for diagnostic in &check.diagnostics {
+            let source = diagnostic.source.as_ref().expect("a positioned finding");
+            assert_eq!(source.file, path.display().to_string());
+            assert!(source.line.is_some(), "{diagnostic:?}");
+            assert!(!diagnostic.suggested_action.is_empty(), "{diagnostic:?}");
+            for value in ["padded", "10.0.0.5", "outcomes.example.test"] {
+                assert!(!diagnostic.message.contains(value), "{diagnostic:?}");
+                assert!(
+                    !diagnostic.suggested_action.contains(value),
+                    "{diagnostic:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cfg_check_1_runtime_findings_are_reported_in_file_order() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["listener"]["bind"] = serde_json::json!("10.0.0.5:8100");
+        document["secretProviders"]["file"]["root"] = serde_json::json!("secrets");
+        let path = write_operator(root.path(), &document);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let line_of = |key: &str| {
+            text.lines()
+                .position(|line| line.trim_start().starts_with(key))
+                .unwrap()
+        };
+        assert!(line_of("bind:") < line_of("root: secrets"));
+
+        let check = check_runtime(&path, None, false);
+        let error = RuntimeConfig::load(&path).unwrap_err();
+        let startup = startup_report(&path, &error).expect("a rule of the file");
+        for diagnostics in [check.diagnostics.as_slice(), startup.diagnostics()] {
+            let paths: Vec<&str> = diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.path.as_str())
+                .collect();
+            assert_eq!(paths, ["/listener/bind", "/secretProviders/file/root"]);
+        }
+    }
+
+    #[test]
+    fn cfg_check_1_an_absent_member_is_located_at_the_mapping_that_lacks_it() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document.as_object_mut().unwrap().remove("identity");
+        let path = write_operator(root.path(), &document);
+        let check = check_runtime(&path, None, false);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        let diagnostic = &check.diagnostics[0];
+        assert_eq!(diagnostic.code, "casework.runtime.missing-identity");
+        assert_eq!(diagnostic.path, "/identity");
+        assert_eq!(diagnostic.source.as_ref().unwrap().line, Some(1));
+    }
+
+    #[test]
+    fn cfg_check_1_a_rule_reading_a_deferred_expression_is_left_out() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["listener"]["bind"] = serde_json::json!("${CASEWORK_OFFLINE_CHECK_UNSET_BIND}");
+        // Beside the bind's stand-in this would occupy the API port; the
+        // rule reads the deferred bind, so the check leaves it out.
+        document["metricsListener"] = serde_json::json!({"bind": "127.0.0.1:8100"});
+        let path = write_operator(root.path(), &document);
+        let deferred = check_runtime(&path, None, false);
+        assert!(
+            deferred.diagnostics.is_empty(),
+            "{:?}",
+            deferred.diagnostics
+        );
+
+        let substituted = check_runtime(&path, None, true);
+        assert_eq!(substituted.diagnostics.len(), 1);
+        assert_eq!(substituted.diagnostics[0].code, "config.substitution");
+        assert_eq!(substituted.diagnostics[0].path, "/listener/bind");
+    }
+
+    #[test]
+    fn cfg_check_1_the_project_rules_run_against_the_given_project() {
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["sources"] = serde_json::json!({});
+        let path = write_operator(root.path(), &document);
+        assert!(check_runtime(&path, None, false).diagnostics.is_empty());
+
+        let project = CaseworkProject::read(POLICY_FILE, SOURCE_PROJECT.as_bytes())
+            .unwrap()
+            .value;
+        let check = check_runtime(&path, Some(&project), false);
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(
+            check.diagnostics[0].code,
+            "casework.runtime.source-bindings-mismatch"
+        );
+        assert_eq!(check.diagnostics[0].path, "/sources");
+        assert!(check.diagnostics[0].source.as_ref().unwrap().line.is_some());
+    }
+
+    #[test]
+    fn a_startup_refusal_reports_every_rule_the_runtime_file_breaks() {
+        let root = canonical_tempdir();
+        let path = file_breaking_three_rules(root.path());
+        let error = RuntimeConfig::load(&path).unwrap_err();
+        assert_eq!(error.code(), "casework.runtime.invalid-database-id");
+        let report = startup_report(&path, &error).expect("a rule of the file");
+        assert_eq!(report.error_count(), 3);
+        assert!(report.diagnostics().iter().all(|diagnostic| diagnostic
+            .source
+            .as_ref()
+            .unwrap()
+            .line
+            .is_some()));
+
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["listener"]["unknownOne"] = serde_json::json!(1);
+        document["audit"]["unknownTwo"] = serde_json::json!(2);
+        let path = write_operator(root.path(), &document);
+        let error = RuntimeConfig::load(&path).unwrap_err();
+        let report = startup_report(&path, &error).expect("a loader refusal");
+        let unknown: Vec<&str> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect();
+        assert_eq!(unknown, ["/audit/unknownTwo", "/listener/unknownOne"]);
     }
 
     #[test]
@@ -2149,7 +2753,7 @@ reviewProducers:
         let error = config
             .load_package()
             .expect_err("package B conflicts with the configured human identity claim");
-        assert!(matches!(error, RuntimeConfigError::InvalidOidc));
+        assert!(matches!(error, RuntimeConfigError::PrincipalClaimConflict));
     }
 
     #[test]
@@ -2646,7 +3250,7 @@ reviewProducers:
                 matches!(error, RuntimeConfigError::InvalidMetricsListener),
                 "{refused} beside {listener}: {error}"
             );
-            assert_eq!(error.path(), "metricsListener");
+            assert_eq!(error.path(), "metricsListener.bind");
         }
         assert!(load(
             Some(serde_json::json!({"bind": "10.0.0.5:8100"})),
@@ -3100,6 +3704,14 @@ pub enum RuntimeConfigError {
     Load(#[from] registry_platform_config::RuntimeConfigError),
     #[error(transparent)]
     Block(#[from] ConfigBlockError),
+    /// A secret reference of a member under a map keyed by an operator-chosen
+    /// id, located structurally.
+    #[error("{error}")]
+    BindingSecret {
+        pointer: String,
+        #[source]
+        error: ConfigBlockError,
+    },
     #[error("unsupported Casework runtime apiVersion; expected registry.registrystack.org/casework-runtime/v1alpha1")]
     InvalidApiVersion,
     #[error("unsupported Casework runtime kind; expected CaseworkRuntimeConfig")]
@@ -3155,30 +3767,58 @@ pub enum RuntimeConfigError {
         "metricsListener.bind must be a loopback or private address with a nonzero port that the API listener does not also occupy"
     )]
     InvalidMetricsListener,
-    #[error("authentication.oidc is invalid or conflicts with accessProfiles[].principalClaim")]
-    InvalidOidc,
+    #[error("{path} {reason}")]
+    InvalidOidcClaim {
+        path: &'static str,
+        reason: &'static str,
+    },
+    #[error(
+        "authentication.oidc.humanIdentity.claim must differ from every accessProfiles[].principalClaim in casework.yaml"
+    )]
+    PrincipalClaimConflict,
     #[error(
         "authentication.oidc.allowedClients must name every client the deployment admits under operator-controlled-upstream; an empty list admits every client the issuer verifies"
     )]
     AllowedClientsRequired,
+    #[error("{path} {reason}")]
+    InvalidTaskAuthority {
+        path: String,
+        pointer: String,
+        reason: &'static str,
+        action: &'static str,
+    },
     #[error(
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
     InvalidDatabaseReference,
     #[error("{0}")]
     InvalidAuditDestination(#[source] AuditDestinationError),
-    #[error("sources must exactly match the source ids declared by package.root/casework.yaml")]
+    #[error("sources must bind exactly the source ids casework.yaml declares")]
     InvalidSourceBindings,
     #[error(
         "each source namespace admitted for source-context review work must have an activated source adapter"
     )]
     InactiveReviewSourceNamespace,
     #[error("{path} is not valid in a Casework source binding: {reason}")]
-    InvalidSourceBinding { path: String, reason: &'static str },
+    InvalidSourceBinding {
+        path: String,
+        pointer: String,
+        reason: &'static str,
+    },
     #[error(
         "{path} must name exactly one completion secret, in a header the runtime does not reserve"
     )]
-    InvalidReviewCompletionAuth { path: String },
+    InvalidReviewCompletionAuth { path: String, pointer: String },
+    #[error("{path} {reason}")]
+    InvalidReviewCompletionDestination {
+        path: String,
+        pointer: String,
+        reason: &'static str,
+    },
+    #[error(
+        "reviewCompletionDestinations must configure every destination casework.yaml reviewProducers[].completion.destinationId names"
+    )]
+    UnconfiguredReviewCompletionDestination,
     #[error("plaintext PostgreSQL is test-only")]
     PlaintextDatabase,
     #[error("the OIDC issuer could not be initialized")]
@@ -3187,40 +3827,36 @@ pub enum RuntimeConfigError {
     OidcJwksSecret(String),
 }
 
+/// The fix for a rebuilt package, named by every package refusal.
+const REBUILD_PACKAGE: &str =
+    "Rebuild the package with `caseworkctl package`, then point package.root at it.";
+
 impl RuntimeConfigError {
     #[must_use]
     pub fn path(&self) -> &str {
         match self {
             Self::Load(error) => error.field(),
-            Self::Block(error) => error.field(),
+            Self::Block(error) | Self::BindingSecret { error, .. } => error.field(),
             Self::InvalidApiVersion => "apiVersion",
             Self::InvalidKind => "kind",
             Self::MissingIdentity | Self::InvalidDatabaseId => "identity.databaseId",
             Self::RelativeOperatedPath(path) => path,
-            Self::InvalidReviewCompletionAuth { path } => path,
-            Self::InvalidSourceBinding { path, .. } => path,
-            Self::InvalidOidc | Self::Oidc => "authentication.oidc",
+            Self::InvalidReviewCompletionAuth { path, .. }
+            | Self::InvalidReviewCompletionDestination { path, .. }
+            | Self::InvalidTaskAuthority { path, .. }
+            | Self::InvalidSourceBinding { path, .. } => path,
+            Self::InvalidOidcClaim { path, .. } => path,
+            Self::PrincipalClaimConflict => "authentication.oidc.humanIdentity.claim",
+            Self::Oidc => "authentication.oidc",
             Self::AllowedClientsRequired => "authentication.oidc.allowedClients",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
-            Self::InvalidListener => "listener",
-            Self::InvalidMetricsListener => "metricsListener",
-            Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
-            Self::InvalidAuditDestination(error) => match error {
-                AuditDestinationError::MissingPath | AuditDestinationError::RelativePath => {
-                    "audit.path"
-                }
-                AuditDestinationError::FileOnlyField { field: "path" } => "audit.path",
-                AuditDestinationError::FileOnlyField {
-                    field: "rotateBytes",
-                }
-                | AuditDestinationError::RotateBytesOutOfRange { .. } => "audit.rotateBytes",
-                AuditDestinationError::FileOnlyField {
-                    field: "retainDays",
-                }
-                | AuditDestinationError::RetainDaysOutOfRange { .. } => "audit.retainDays",
-                _ => "audit",
-            },
+            Self::InvalidListener => "listener.bind",
+            Self::InvalidMetricsListener => "metricsListener.bind",
+            Self::InvalidDatabaseReference => "database",
+            Self::PlaintextDatabase => "database.testOnlyPlaintext",
+            Self::InvalidAuditDestination(error) => audit_field(error),
             Self::InvalidSourceBindings | Self::SourceDescription => "sources",
+            Self::UnconfiguredReviewCompletionDestination => "reviewCompletionDestinations",
             Self::InactiveReviewSourceNamespace => "package.root/casework.yaml",
             Self::Project(_) => "package.root/casework.yaml",
             Self::PolicyUnreadable => "package.root/casework.yaml",
@@ -3232,5 +3868,275 @@ impl RuntimeConfigError {
             Self::InvalidStrandedWorkAcknowledgement => "package.acknowledgeStrandedWork",
             Self::Invalid => "/",
         }
+    }
+
+    /// The JSON Pointer, in the runtime file, of the member this refusal
+    /// concerns. A member that is absent is located by the mapping that
+    /// lacks it when the refusal is positioned.
+    #[must_use]
+    pub fn pointer(&self) -> String {
+        match self {
+            Self::Load(error) => error.deciding_diagnostic().path.clone(),
+            Self::BindingSecret { pointer, .. }
+            | Self::InvalidReviewCompletionAuth { pointer, .. }
+            | Self::InvalidReviewCompletionDestination { pointer, .. }
+            | Self::InvalidTaskAuthority { pointer, .. }
+            | Self::InvalidSourceBinding { pointer, .. } => pointer.clone(),
+            Self::MissingIdentity => "/identity".to_owned(),
+            Self::InactiveReviewSourceNamespace => "/sources".to_owned(),
+            Self::Project(_)
+            | Self::PolicyUnreadable
+            | Self::Package(_)
+            | Self::PackageContents { .. }
+            | Self::PackageFileChanged { .. }
+            | Self::RetiredPackageManifest
+            | Self::SourceDescription => "/package/root".to_owned(),
+            Self::Invalid => String::new(),
+            _ => pointer_to(&self.path().split('.').collect::<Vec<_>>()),
+        }
+    }
+
+    /// The diagnostic code of this refusal.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Load(error) => &error.deciding_diagnostic().code,
+            Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).0,
+            Self::InvalidApiVersion => "casework.runtime.unsupported-api-version",
+            Self::InvalidKind => "casework.runtime.wrong-kind",
+            Self::MissingIdentity => "casework.runtime.missing-identity",
+            Self::InvalidDatabaseId => "casework.runtime.invalid-database-id",
+            Self::RelativeOperatedPath(_) => "casework.runtime.relative-path",
+            Self::Project(_) => "casework.package.invalid-project",
+            Self::PolicyUnreadable => "casework.package.unreadable-project",
+            Self::Package(_) => "casework.package.invalid",
+            Self::PackageDigest(_) => "casework.package.digest-mismatch",
+            Self::PackageContents { .. } => "casework.package.unexpected-contents",
+            Self::PackageFileChanged { .. } => "casework.package.file-changed",
+            Self::RetiredPackageManifest => "casework.package.retired-manifest",
+            Self::InvalidStrandedWorkAcknowledgement => {
+                "casework.runtime.invalid-stranded-work-acknowledgement"
+            }
+            Self::SourceDescription => "casework.package.source-description-mismatch",
+            Self::Invalid => "casework.runtime.invalid",
+            Self::InvalidListener => "casework.runtime.invalid-listener",
+            Self::InvalidMetricsListener => "casework.runtime.invalid-metrics-listener",
+            Self::InvalidOidcClaim { .. } => "casework.runtime.invalid-oidc-claim",
+            Self::PrincipalClaimConflict => "casework.runtime.principal-claim-conflict",
+            Self::AllowedClientsRequired => "casework.runtime.allowed-clients-required",
+            Self::InvalidTaskAuthority { .. } => "casework.runtime.invalid-task-authority",
+            Self::InvalidDatabaseReference => "casework.runtime.invalid-database-reference",
+            Self::InvalidAuditDestination(_) => "casework.runtime.invalid-audit",
+            Self::InvalidSourceBindings => "casework.runtime.source-bindings-mismatch",
+            Self::InactiveReviewSourceNamespace => {
+                "casework.runtime.inactive-review-source-namespace"
+            }
+            Self::InvalidSourceBinding { .. } => "casework.runtime.invalid-source-binding",
+            Self::InvalidReviewCompletionAuth { .. } => {
+                "casework.runtime.invalid-review-completion-auth"
+            }
+            Self::InvalidReviewCompletionDestination { .. } => {
+                "casework.runtime.invalid-review-completion-destination"
+            }
+            Self::UnconfiguredReviewCompletionDestination => {
+                "casework.runtime.unconfigured-review-completion-destination"
+            }
+            Self::PlaintextDatabase => "casework.runtime.plaintext-database",
+            Self::Oidc => "casework.runtime-dependency.unavailable",
+            Self::OidcJwksSecret(_) => "casework.runtime.unreadable-jwks-secret",
+        }
+    }
+
+    /// What the operator does to clear this refusal.
+    #[must_use]
+    pub fn suggested_action(&self) -> String {
+        let action = match self {
+            Self::Load(error) => return error.deciding_diagnostic().suggested_action.clone(),
+            Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).1,
+            Self::InvalidApiVersion => {
+                "Write apiVersion: registry.registrystack.org/casework-runtime/v1alpha1."
+            }
+            Self::InvalidKind => "Write kind: CaseworkRuntimeConfig.",
+            Self::MissingIdentity => {
+                "Add `identity: {databaseId: casework-production}` with a logical id chosen for this deployment."
+            }
+            Self::InvalidDatabaseId => {
+                "Write identity.databaseId as at most 256 bytes without surrounding whitespace or control characters."
+            }
+            Self::RelativeOperatedPath(path) => {
+                return format!("Write {path} as an absolute path.");
+            }
+            Self::Project(_) => {
+                "Correct casework.yaml as `caseworkctl check` reports, then rebuild the package with `caseworkctl package`."
+            }
+            Self::PolicyUnreadable
+            | Self::Package(_)
+            | Self::PackageContents { .. }
+            | Self::PackageFileChanged { .. }
+            | Self::RetiredPackageManifest => REBUILD_PACKAGE,
+            Self::PackageDigest(_) => {
+                "Set package.expectedDigest to the digest `caseworkctl package` reported for the package at package.root, or remove it."
+            }
+            Self::InvalidStrandedWorkAcknowledgement => {
+                "Write package.acknowledgeStrandedWork as the sha256: package digest `caseworkctl doctor` names, or remove it."
+            }
+            Self::SourceDescription => {
+                "Import the source description again with `caseworkctl source add`, then rebuild the package with `caseworkctl package`."
+            }
+            Self::Invalid => "Correct the runtime configuration as the message describes.",
+            Self::InvalidListener => {
+                "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
+            }
+            Self::InvalidMetricsListener => {
+                "Bind metricsListener to a loopback or private address with a nonzero port the API listener does not use."
+            }
+            Self::InvalidOidcClaim { .. } => {
+                "Name a non-empty claim distinct from authentication.oidc.scopeClaim, or remove the member to use its default."
+            }
+            Self::PrincipalClaimConflict => {
+                "Name a humanIdentity.claim that no accessProfiles[].principalClaim in casework.yaml uses."
+            }
+            Self::AllowedClientsRequired => {
+                "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry."
+            }
+            Self::InvalidTaskAuthority { action, .. } => action,
+            Self::InvalidDatabaseReference => {
+                "Write database.runtimeUrlRef and database.migrationUrlRef as secret references."
+            }
+            Self::InvalidAuditDestination(error) => audit_action(error),
+            Self::InvalidSourceBindings => {
+                "Bind under sources exactly the source ids casework.yaml declares under sources[].id."
+            }
+            Self::InactiveReviewSourceNamespace => {
+                "Bind under sources every namespace casework.yaml reviewProducers[].sourceNamespaces admits for a source-context review kind."
+            }
+            Self::InvalidSourceBinding { .. } => {
+                "Correct the member so it meets the binding rule the message names."
+            }
+            Self::InvalidReviewCompletionAuth { .. } => {
+                "Configure exactly one of bearerTokenRef and auth.secretRef, and name in auth.header only a header the runtime does not reserve."
+            }
+            Self::InvalidReviewCompletionDestination { .. } => {
+                "Give the destination a non-empty id and an https URL with a host, or an http URL on 127.0.0.1 or [::1] for local development."
+            }
+            Self::UnconfiguredReviewCompletionDestination => {
+                "Add a reviewCompletionDestinations entry for each destination casework.yaml reviewProducers[].completion.destinationId names."
+            }
+            Self::PlaintextDatabase => {
+                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
+            }
+            Self::Oidc => {
+                "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
+            }
+            Self::OidcJwksSecret(_) => {
+                "Make the secret authentication.oidc.jwksSource.documentRef names readable and hold a JWKS document."
+            }
+        };
+        action.to_owned()
+    }
+
+    /// Whether this refusal is a rule the runtime file itself breaks, which
+    /// an offline check reports at its position in the file. A refusal of
+    /// the package, of an unreachable dependency, or one the shared loader
+    /// already positioned is not.
+    #[must_use]
+    pub fn in_file(&self) -> bool {
+        !matches!(
+            self,
+            Self::Load(_)
+                | Self::Project(_)
+                | Self::PolicyUnreadable
+                | Self::Package(_)
+                | Self::PackageDigest(_)
+                | Self::PackageContents { .. }
+                | Self::PackageFileChanged { .. }
+                | Self::RetiredPackageManifest
+                | Self::SourceDescription
+                | Self::Invalid
+                | Self::Oidc
+                | Self::OidcJwksSecret(_)
+        )
+    }
+}
+
+fn audit_field(error: &AuditDestinationError) -> &'static str {
+    match error {
+        AuditDestinationError::FileOnlyField {
+            field: "rotateBytes",
+        }
+        | AuditDestinationError::RotateBytesOutOfRange { .. } => "audit.rotateBytes",
+        AuditDestinationError::FileOnlyField {
+            field: "retainDays",
+        }
+        | AuditDestinationError::RetainDaysOutOfRange { .. } => "audit.retainDays",
+        AuditDestinationError::InvalidProcessRole
+        | AuditDestinationError::ProcessRoleOverlapsStream => "audit",
+        _ => "audit.path",
+    }
+}
+
+fn audit_action(error: &AuditDestinationError) -> &'static str {
+    match error {
+        AuditDestinationError::MissingPath => {
+            "Add audit.path, the absolute path of the active audit file, or set audit.destination: stdout."
+        }
+        AuditDestinationError::RelativePath | AuditDestinationError::InvalidPathComponent => {
+            "Write audit.path as an absolute path without `.` or `..` segments."
+        }
+        AuditDestinationError::NoFileName
+        | AuditDestinationError::FileNameTooLong { .. }
+        | AuditDestinationError::PathNamesReservedCompanion { .. } => {
+            "End audit.path in a file name within the bound, without a suffix the audit writer reserves."
+        }
+        AuditDestinationError::FileOnlyField { .. } => {
+            "Remove the member, or set audit.destination: file."
+        }
+        AuditDestinationError::RotateBytesOutOfRange { .. }
+        | AuditDestinationError::RetainDaysOutOfRange { .. } => {
+            "Write a value within the range the message names, or remove the member to use its default."
+        }
+        _ => "Correct the audit block as the message describes.",
+    }
+}
+
+/// The code and fix of a shared block refusal.
+fn block_finding(error: &ConfigBlockError) -> (&'static str, &'static str) {
+    match error.kind() {
+        ConfigBlockErrorKind::RelativePath => (
+            "casework.runtime.relative-path",
+            "Write the path as an absolute path without `.` or `..` segments.",
+        ),
+        ConfigBlockErrorKind::NoSecretProvider => (
+            "casework.runtime.no-secret-provider",
+            "Enable secretProviders.file, secretProviders.environment, or both.",
+        ),
+        ConfigBlockErrorKind::InvalidSecretReference => (
+            "casework.runtime.invalid-secret-reference",
+            "Write the reference as secret:env/NAME or secret:file/name.",
+        ),
+        ConfigBlockErrorKind::SecretProviderDisabled => (
+            "casework.runtime.secret-provider-disabled",
+            "Enable the provider the reference names under secretProviders, or reference an enabled one.",
+        ),
+        ConfigBlockErrorKind::Empty => (
+            "casework.runtime.empty-value",
+            "Give the member a value.",
+        ),
+        ConfigBlockErrorKind::InvalidDigest => (
+            "casework.runtime.invalid-digest",
+            "Write the sha256: digest `caseworkctl package` reported, or remove the member.",
+        ),
+        ConfigBlockErrorKind::InvalidUri => (
+            "casework.runtime.invalid-uri",
+            "Write an absolute https URL without credentials, query, or fragment.",
+        ),
+        ConfigBlockErrorKind::InvalidAudience => (
+            "casework.runtime.invalid-audience",
+            "Write the audience as non-empty text without control characters, within the bound the message names.",
+        ),
+        ConfigBlockErrorKind::InvalidAssertionIssuers => (
+            "casework.runtime.invalid-assertion-issuers",
+            "Keep assertionIssuers within the bounds the message names, with non-empty clients and issuers and no issuer repeated for one client.",
+        ),
     }
 }

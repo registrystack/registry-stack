@@ -1235,7 +1235,7 @@ formats:
       file: crates/registry-casework/src/config.rs
       function: load
       type: RuntimeConfig
-    check: none
+    check: caseworkctl check {project} --runtime-config {file}
     example: products/casework/examples/payment-review/runtime.example.yaml
     conformance:
       requiredText: /authentication/oidc/audience

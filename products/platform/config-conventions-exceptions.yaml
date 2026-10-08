@@ -3659,13 +3659,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: casework/fixture
-  location: crates/registry-caseworkctl/src/project.rs#load_yaml()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-1
   format: casework/holiday-set
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -4202,13 +4195,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-CHECK-1
-  format: casework/runtime
-  location: products/platform/config-formats.yaml#/check
-  class: pending
-  wp: WP7
-  reason: a read format with no offline check command
-  resolution: Add an offline check command
 - rule: CFG-EMPTY-2
   format: casework/runtime
   location: products/casework/generated/runtime/runtime.schema.json#/$defs/OidcConfig/properties/assertionIssuers

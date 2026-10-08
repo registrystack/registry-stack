@@ -15,6 +15,7 @@ use registry_platform_config::{
     plan_package, sha256_uri, write_package, SecretError, SecretProvider, SecretReference,
     SecretResolver,
 };
+use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
@@ -366,6 +367,122 @@ impl std::fmt::Display for DeniedFindings {
 }
 
 impl std::error::Error for DeniedFindings {}
+
+/// A refused runtime file, with every diagnostic its check reported, and
+/// for `check --runtime-config` those of the project beside them.
+#[derive(Debug)]
+pub(super) struct RuntimeConfigRefusal {
+    pub report: Report,
+    /// The runtime file could not be read at all.
+    pub unavailable: bool,
+}
+
+impl std::fmt::Display for RuntimeConfigRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "the Casework runtime configuration was refused")
+    }
+}
+
+impl std::error::Error for RuntimeConfigRefusal {}
+
+/// Add to `checked`, the project check's outcome, the check of the runtime
+/// file at `runtime_config` as `casework serve` reads it, offline and against
+/// the project when it loads. Diagnostics name the file as it was given.
+pub(super) fn check_runtime_config(
+    project: &Path,
+    runtime_config: &Path,
+    environment: bool,
+    checked: Result<Value>,
+) -> Result<Value> {
+    let policy = load_and_check_policy(project).ok();
+    let given = runtime_config.display().to_string();
+    let absolute = absolute_lexical(runtime_config)
+        .context("resolving the --runtime-config path against the working directory")?;
+    let runtime = registry_casework::check_runtime(&absolute, policy.as_ref(), environment);
+    let absolute = absolute.display().to_string();
+    let named = |mut diagnostic: Diagnostic| {
+        if let Some(source) = &mut diagnostic.source {
+            if source.file == absolute {
+                source.file.clone_from(&given);
+            }
+        }
+        for related in &mut diagnostic.related {
+            if related.file == absolute {
+                related.file.clone_from(&given);
+            }
+        }
+        diagnostic
+    };
+    let mut report = Report::new(runtime.diagnostics.into_iter().map(named).collect());
+    report.set_files_checked(1);
+    if !report.has_errors() {
+        let mut checked = checked?;
+        checked["runtimeConfig"] = json!(given);
+        if let (Some(findings), Value::Array(warnings)) =
+            (checked["findings"].as_array_mut(), report.to_json_value())
+        {
+            findings.extend(warnings);
+        }
+        return Ok(checked);
+    }
+    let refused = match checked {
+        Ok(_) => report,
+        Err(error) => match crate::configuration_report(&error) {
+            Some(project) => {
+                let mut project = project.clone();
+                if project.files_checked().is_none() {
+                    project.set_files_checked(1);
+                }
+                project.extend(report);
+                project
+            }
+            None => return Err(error),
+        },
+    };
+    Err(RuntimeConfigRefusal {
+        report: refused,
+        unavailable: runtime.unavailable,
+    }
+    .into())
+}
+
+/// Read the runtime file at `path` as `casework serve` does. A refusal of the
+/// file itself carries every rule it breaks, each at its position, exactly as
+/// the runtime prints them at startup.
+fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
+    RuntimeConfig::load(path).map_err(|error| {
+        let unavailable = matches!(
+            &error,
+            registry_casework::RuntimeConfigError::Load(load)
+                if load.kind() == registry_platform_config::RuntimeConfigErrorKind::Unavailable
+        );
+        match registry_casework::startup_report(path, &error) {
+            Some(report) => RuntimeConfigRefusal {
+                report,
+                unavailable,
+            }
+            .into(),
+            None => anyhow::Error::new(error).context("loading Casework runtime configuration"),
+        }
+    })
+}
+
+/// `path` made absolute against the working directory, with `.` and `..`
+/// resolved by name, as the runtime loader requires.
+fn absolute_lexical(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let mut normal = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other),
+        }
+    }
+    Ok(normal)
+}
 
 fn missing_source_findings(project: &Path, policy: &CaseworkProject) -> Vec<Value> {
     policy
@@ -1064,8 +1181,7 @@ fn load_doctor_package(config: &RuntimeConfig) -> Result<registry_casework::Load
 }
 
 pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
-    let config =
-        RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
+    let config = load_runtime_config(runtime_config)?;
     let runtime_config =
         fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
     let package_root = fs::canonicalize(&config.package.root)
@@ -1349,8 +1465,7 @@ struct ActivationInputs {
 
 impl ActivationInputs {
     fn load(runtime_config: &Path) -> Result<Self> {
-        let config = RuntimeConfig::load(runtime_config)
-            .context("loading Casework runtime configuration")?;
+        let config = load_runtime_config(runtime_config)?;
         let runtime_config =
             fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
         let package = config
@@ -1480,8 +1595,7 @@ pub(super) fn apply(
 }
 
 pub(super) fn status(runtime_config: &Path) -> Result<Value> {
-    let config =
-        RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
+    let config = load_runtime_config(runtime_config)?;
     let runtime_config =
         fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
@@ -1646,8 +1760,7 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
         fs::canonicalize(project).context("resolving Casework development workspace")?;
     let runtime_config = fs::canonicalize(runtime_config_path(&workspace, requested))
         .context("resolving Casework runtime configuration")?;
-    let mut config =
-        RuntimeConfig::load(&runtime_config).context("loading Casework runtime configuration")?;
+    let mut config = load_runtime_config(&runtime_config)?;
     let package_root = fs::canonicalize(&config.package.root)
         .context("resolving the configured Casework package root")?;
     config.package.root = package_root;
@@ -1837,7 +1950,7 @@ fn async_runtime() -> Result<tokio::runtime::Runtime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_platform_config::{verify_package, ConfigBlockErrorKind, SUM_FILE};
+    use registry_platform_config::{verify_package, SUM_FILE};
 
     /// Package the authored project where the generated runtime example
     /// selects it, as `caseworkctl package . --output .casework/package` does.
@@ -2555,19 +2668,17 @@ mod tests {
             fs::write(&runtime_config, valid.replace(authored, malformed)).unwrap();
 
             let error = doctor(&runtime_config).unwrap_err();
-            let runtime_error = error
-                .chain()
-                .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
-            assert!(
-                matches!(
-                    runtime_error,
-                    Some(registry_casework::RuntimeConfigError::Block(block))
-                        if block.kind() == ConfigBlockErrorKind::InvalidSecretReference
-                            && block.field() == setting
-                ),
-                "{error:#}"
-            );
-            let refusal = format!("{error:#}");
+            let report = crate::configuration_report(&error).expect("a positioned report");
+            let [diagnostic] = report.diagnostics() else {
+                panic!("one diagnostic: {report}")
+            };
+            assert_eq!(diagnostic.code, "casework.runtime.invalid-secret-reference");
+            assert_eq!(diagnostic.path, format!("/{}", setting.replace('.', "/")));
+            assert!(diagnostic
+                .source
+                .as_ref()
+                .is_some_and(|source| source.line.is_some()));
+            let refusal = report.render_human();
             assert!(
                 refusal.contains(&format!("{setting} must be an exact secret")),
                 "{refusal}"
@@ -2593,16 +2704,17 @@ mod tests {
         fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
 
         let error = doctor(&runtime_config).unwrap_err();
-        let runtime_error = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
-        assert!(
-            matches!(
-                runtime_error,
-                Some(registry_casework::RuntimeConfigError::InvalidReviewCompletionAuth { path })
-                    if path == "reviewCompletionDestinations.receiver.auth.header"
-            ),
-            "{error:#}"
+        let report = crate::configuration_report(&error).expect("a positioned report");
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic: {report}")
+        };
+        assert_eq!(
+            diagnostic.code,
+            "casework.runtime.invalid-review-completion-auth"
+        );
+        assert_eq!(
+            diagnostic.path,
+            "/reviewCompletionDestinations/receiver/auth/header"
         );
     }
 

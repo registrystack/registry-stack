@@ -160,6 +160,14 @@ struct CheckArgs {
     /// bregctl binary of the same release that verifies the package.
     #[arg(long, env = "BREGCTL_BIN", default_value = "bregctl")]
     bregctl_bin: PathBuf,
+    /// Runtime configuration to check offline against PROJECT, as casework
+    /// serve reads it, with no package, database, network, or secret material.
+    #[arg(long, value_name = "FILE")]
+    runtime_config: Option<PathBuf>,
+    /// Fill the runtime file's ${NAME} expressions from this process's
+    /// environment and check the values they produce.
+    #[arg(long, requires = "runtime_config")]
+    environment: bool,
 }
 
 #[derive(Debug, Args)]
@@ -475,8 +483,9 @@ where
         ),
         Err(error) => {
             if let Some(report) = configuration_report(&error) {
-                write_configuration_report(report, format, report_kind, stdout, stderr);
-                return ExitCode::from(DOMAIN_REFUSAL_EXIT);
+                let exit = configuration_exit(&error);
+                write_configuration_report(report, format, report_kind, exit, stdout, stderr);
+                return ExitCode::from(exit);
             }
             if let Some((exit, diagnostics)) = activation_failure(&error) {
                 write_failure(
@@ -746,35 +755,35 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         (
             "filesystem",
             "filesystem".to_owned(),
-            "Correct the path or permissions, then retry.",
-        )
-    } else if runtime_dependency_unavailable {
-        (
-            "runtime_dependency",
-            "runtime.yaml:/authentication/oidc".to_owned(),
-            "Restore access to the configured OIDC issuer or mounted JWKS, then retry.",
+            "Correct the path or permissions, then retry.".to_owned(),
         )
     } else if let Some(runtime) = runtime_error {
-        runtime_diagnostic_location(runtime)
+        (
+            if runtime_dependency_unavailable {
+                "runtime_dependency"
+            } else {
+                "runtime_configuration"
+            },
+            format!("runtime.yaml:{}", runtime.pointer()),
+            runtime.suggested_action(),
+        )
     } else if matches!(kind, CommandKind::Authoring) {
         (
             "authoring_input",
             "authoring".to_owned(),
-            "Correct the authored input named by the refusal, then retry.",
+            "Correct the authored input named by the refusal, then retry.".to_owned(),
         )
     } else {
         (
             "runtime_dependency",
             "runtime".to_owned(),
-            "Correct the unavailable runtime dependency, then retry.",
+            "Correct the unavailable runtime dependency, then retry.".to_owned(),
         )
     };
     let code = if io_failure {
         "caseworkctl.io-failure"
-    } else if runtime_dependency_unavailable {
-        "casework.runtime-dependency.unavailable"
-    } else if runtime_error.is_some() {
-        "casework.runtime-configuration.invalid"
+    } else if let Some(runtime) = runtime_error {
+        runtime.code()
     } else if domain {
         "caseworkctl.refused"
     } else {
@@ -1047,39 +1056,6 @@ fn activation_refusal_diagnostics(refusals: &[registry_casework::ActivationRefus
         .collect()
 }
 
-fn runtime_diagnostic_location(error: &RuntimeConfigError) -> (&'static str, String, &'static str) {
-    let removed_key = match error {
-        RuntimeConfigError::Load(load) if load.kind() == RuntimeConfigErrorKind::RemovedKey => {
-            Some(load.field())
-        }
-        _ => None,
-    };
-    let path = if let Some(field) = removed_key {
-        format!("runtime.yaml:/{}", field.replace('.', "/"))
-    } else if error.path() == "/" {
-        "runtime.yaml".to_owned()
-    } else {
-        format!("runtime.yaml:/{}", error.path().trim_start_matches('/'))
-    };
-    if matches!(error, RuntimeConfigError::AllowedClientsRequired) {
-        return (
-            "runtime_configuration",
-            path,
-            "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry.",
-        );
-    }
-    let action = match removed_key {
-        Some("authentication.oidc.principalClaim") => {
-            "Remove authentication.oidc.principalClaim and configure accessProfiles[].principalClaim in casework.yaml."
-        }
-        Some("authentication.oidc.jwksUri") => {
-            "Replace authentication.oidc.jwksUri with authentication.oidc.jwksSource, kind: uri, and the same https URL as uri."
-        }
-        _ => "Correct the named runtime configuration field, then retry.",
-    };
-    ("runtime_configuration", path, action)
-}
-
 fn diagnostic(code: &str, path: &str, message: String, suggested_action: &str) -> Value {
     json!({
         "severity": "error",
@@ -1138,12 +1114,30 @@ fn write_failure(
 
 /// The reader's report when a command refused a configuration file.
 fn configuration_report(error: &anyhow::Error) -> Option<&Report> {
-    error
-        .chain()
-        .find_map(|cause| match cause.downcast_ref::<ConfigLoadError>() {
+    error.chain().find_map(|cause| {
+        if let Some(refusal) = cause.downcast_ref::<project::RuntimeConfigRefusal>() {
+            return Some(&refusal.report);
+        }
+        match cause.downcast_ref::<ConfigLoadError>() {
             Some(ConfigLoadError::Refused(report)) => Some(report),
             _ => cause.downcast_ref::<Report>(),
-        })
+        }
+    })
+}
+
+/// The exit code of a configuration refusal: an operational failure when the
+/// runtime file could not be read at all, and otherwise a domain refusal.
+fn configuration_exit(error: &anyhow::Error) -> u8 {
+    let unavailable = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<project::RuntimeConfigRefusal>()
+            .is_some_and(|refusal| refusal.unavailable)
+    });
+    if unavailable {
+        OPERATIONAL_FAILURE_EXIT
+    } else {
+        DOMAIN_REFUSAL_EXIT
+    }
 }
 
 /// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
@@ -1153,6 +1147,7 @@ fn write_configuration_report(
     report: &Report,
     format: OutputFormat,
     report_kind: &'static str,
+    exit: u8,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) {
@@ -1160,7 +1155,7 @@ fn write_configuration_report(
         let envelope = json_report(
             report_kind,
             json!({"ok": false, "diagnostics": report.to_json_value()}),
-            DOMAIN_REFUSAL_EXIT,
+            exit,
         );
         let _ = report::write(&envelope, stdout);
     } else {
@@ -1233,7 +1228,17 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Source(args) => match args.command {
             SourceCommand::Add(args) => source_add::run(&args),
         },
-        Command::Check(args) => project::check(&args.project, args.production, args.deny_findings)
+        Command::Check(args) => {
+            let checked = project::check(&args.project, args.production, args.deny_findings);
+            match &args.runtime_config {
+                Some(runtime_config) => project::check_runtime_config(
+                    &args.project,
+                    runtime_config,
+                    args.environment,
+                    checked,
+                ),
+                None => checked,
+            }
             .and_then(|report| match &args.against_breg_package {
                 Some(package) => breg_package::compare(
                     &args.project,
@@ -1243,7 +1248,8 @@ fn run(cli: Cli) -> Result<Value> {
                     report,
                 ),
                 None => Ok(report),
-            }),
+            })
+        }
         Command::Explain(args) => project::explain(&args.project),
         Command::Lifecycle => lifecycle::lifecycle(),
         Command::Package(args) => match args.output {
@@ -1304,7 +1310,6 @@ fn run(cli: Cli) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_casework::RuntimeConfig;
     use std::fs;
 
     #[test]
@@ -1748,6 +1753,203 @@ mod tests {
         assert!(!stderr.contains("QUEUE_LABEL"), "{stderr}");
     }
 
+    fn check_runtime_config(
+        project: &std::path::Path,
+        runtime_config: &std::path::Path,
+        extra: &[&str],
+    ) -> (ExitCode, String, String) {
+        let mut arguments = vec![
+            OsString::from("caseworkctl"),
+            OsString::from("check"),
+            project.as_os_str().to_owned(),
+            OsString::from("--runtime-config"),
+            runtime_config.as_os_str().to_owned(),
+        ];
+        arguments.extend(extra.iter().map(OsString::from));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(arguments, &mut stdout, &mut stderr);
+        (
+            exit,
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
+        )
+    }
+
+    /// The standalone template's runtime example with `edit` applied, beside
+    /// the project, and its edited text.
+    fn edited_runtime_example(
+        project: &std::path::Path,
+        name: &str,
+        edit: impl FnOnce(&str) -> String,
+    ) -> (PathBuf, String) {
+        let original = std::fs::read_to_string(project.join("runtime.example.yaml")).unwrap();
+        let edited = edit(&original);
+        assert_ne!(edited, original);
+        let path = project.join(name);
+        std::fs::write(&path, &edited).unwrap();
+        (path, edited)
+    }
+
+    #[test]
+    fn check_reads_the_runtime_example_offline_against_the_project() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+
+        let (exit, stdout, stderr) =
+            check_runtime_config(&project, &runtime_config, &["--format=json"]);
+
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["ok"], true);
+        assert_eq!(
+            report["runtimeConfig"],
+            runtime_config.display().to_string()
+        );
+        assert_eq!(report["databaseAccess"], false);
+        assert_eq!(report["networkAccess"], false);
+    }
+
+    #[test]
+    fn check_reports_every_rule_a_runtime_file_breaks_at_its_position() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let (runtime_config, edited) = edited_runtime_example(&project, "runtime.yaml", |text| {
+            text.replace("databaseId: casework-example", "databaseId: \" padded \"")
+                .replace("bind: 127.0.0.1:8100", "bind: 10.0.0.5:8100")
+        });
+        let file = runtime_config.display().to_string();
+        let identity = line_of(&edited, "  databaseId: \" padded \"");
+        let bind = line_of(&edited, "  bind: 10.0.0.5:8100");
+
+        let (exit, stdout, stderr) = check_runtime_config(&project, &runtime_config, &[]);
+
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stdout.is_empty(), "{stdout}");
+        let lines = stderr.lines().collect::<Vec<_>>();
+        assert_eq!(
+            lines[0],
+            format!(
+                "error[casework.runtime.invalid-database-id] {file}:{identity}:15 /identity/databaseId"
+            )
+        );
+        assert_eq!(
+            lines[3],
+            format!("error[casework.runtime.invalid-listener] {file}:{bind}:9 /listener/bind")
+        );
+        assert_eq!(lines.last(), Some(&"2 errors, 0 warnings in 1 file"));
+        assert!(!stderr.contains("padded"), "{stderr}");
+        assert!(!stderr.contains("10.0.0.5"), "{stderr}");
+
+        let (exit, stdout, _) = check_runtime_config(&project, &runtime_config, &["--format=json"]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["status"], "domain-refusal");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 2, "{report:#}");
+        assert_eq!(diagnostics[0]["artifact"], "CaseworkRuntimeConfig");
+        assert_eq!(
+            diagnostics[0]["source"],
+            json!({"file": file, "line": identity, "column": 15})
+        );
+    }
+
+    #[test]
+    fn check_reports_the_project_and_runtime_refusals_together() {
+        let root = crate::canonical_tempdir();
+        let (project, policy_path, _) = edited_standalone(root.path(), |text| {
+            text.replace(
+                "    label: Decisions awaiting review\n",
+                "    label: \"${QUEUE_LABEL}\"\n",
+            )
+        });
+        let (runtime_config, _) = edited_runtime_example(&project, "runtime.yaml", |text| {
+            text.replace("databaseId: casework-example", "databaseId: \" padded \"")
+        });
+
+        let (exit, stdout, stderr) = check_runtime_config(&project, &runtime_config, &[]);
+
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(
+            stderr.starts_with(&format!(
+                "error[config.substitution-not-allowed] {}:",
+                policy_path.display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "error[casework.runtime.invalid-database-id] {}:",
+                runtime_config.display()
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.ends_with("2 errors, 0 warnings in 2 files\n"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn check_leaves_a_deferred_runtime_value_out_unless_asked_to_substitute() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let (runtime_config, edited) = edited_runtime_example(&project, "runtime.yaml", |text| {
+            text.replace(
+                "bind: 127.0.0.1:8100",
+                "bind: ${CASEWORKCTL_CHECK_TEST_UNSET_BIND}",
+            )
+        });
+        let bind = line_of(&edited, "  bind: ${CASEWORKCTL_CHECK_TEST_UNSET_BIND}");
+
+        let (exit, stdout, stderr) = check_runtime_config(&project, &runtime_config, &[]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
+
+        let (exit, stdout, stderr) =
+            check_runtime_config(&project, &runtime_config, &["--environment"]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{stdout}");
+        assert!(
+            stderr.starts_with(&format!(
+                "error[config.substitution] {}:{bind}:9 /listener/bind\n",
+                runtime_config.display()
+            )),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn check_names_a_runtime_file_it_cannot_read_as_an_operational_failure() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("standalone");
+        project::init(&project, "standalone-decision").unwrap();
+        let missing = project.join("missing-runtime.yaml");
+
+        let (exit, stdout, _) = check_runtime_config(&project, &missing, &["--format=json"]);
+
+        assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["status"], "operational-failure");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "platform.runtime-config.unavailable"
+        );
+    }
+
+    #[test]
+    fn check_substitutes_the_environment_only_for_a_runtime_file() {
+        let error = Cli::try_parse_from(["caseworkctl", "check", "/tmp/project", "--environment"])
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
     /// The check prints the reader's report unchanged: every semantic
     /// finding at its position, with the place it relates to.
     #[test]
@@ -1821,16 +2023,11 @@ mod tests {
         assert!(stderr.is_empty());
         let report: Value = serde_json::from_slice(&stdout).unwrap();
         let diagnostic = &report["diagnostics"][0];
-        for field in [
-            "severity",
-            "code",
-            "artifact",
-            "path",
-            "message",
-            "suggestedAction",
-        ] {
+        for field in ["severity", "code", "path", "message", "suggestedAction"] {
             assert!(diagnostic.get(field).is_some(), "missing {field}");
         }
+        assert_eq!(diagnostic["code"], "platform.runtime-config.unavailable");
+        assert_eq!(report["status"], "operational-failure");
 
         stdout.clear();
         let exit = main_entry_from(
@@ -1845,7 +2042,8 @@ mod tests {
         );
         assert_eq!(exit, ExitCode::from(3));
         assert!(stdout.is_empty());
-        assert!(String::from_utf8_lossy(&stderr).starts_with("error[caseworkctl.io-failure]"));
+        assert!(String::from_utf8_lossy(&stderr)
+            .starts_with("error[platform.runtime-config.unavailable]"));
     }
 
     #[test]
@@ -1909,12 +2107,12 @@ mod tests {
         for (removed, path, replacement) in [
             (
                 "principalClaim: sub",
-                "runtime.yaml:/authentication/oidc/principalClaim",
+                "/authentication/oidc/principalClaim",
                 "accessProfiles[].principalClaim",
             ),
             (
                 "jwksUri: https://issuer.example/jwks",
-                "runtime.yaml:/authentication/oidc/jwksUri",
+                "/authentication/oidc/jwksUri",
                 "authentication.oidc.jwksSource",
             ),
         ] {
@@ -1927,11 +2125,32 @@ mod tests {
                 ),
             )
             .unwrap();
-            let error = anyhow::Error::new(RuntimeConfig::load(&runtime_config).unwrap_err());
-            let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
-            assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-            assert_eq!(diagnostic["code"], "casework.runtime-configuration.invalid");
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = main_entry_from(
+                [
+                    OsString::from("caseworkctl"),
+                    OsString::from("--format=json"),
+                    OsString::from("doctor"),
+                    OsString::from("--runtime-config"),
+                    runtime_config.clone().into_os_string(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            );
+            assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+            let report: Value = serde_json::from_slice(&stdout).unwrap();
+            let diagnostic = report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|diagnostic| diagnostic["code"] == "config.removed-key")
+                .expect("the removed key is reported");
             assert_eq!(diagnostic["path"], path);
+            assert_eq!(
+                diagnostic["source"]["file"],
+                runtime_config.display().to_string()
+            );
             assert!(
                 diagnostic["suggestedAction"]
                     .as_str()
@@ -1948,10 +2167,13 @@ mod tests {
         let (exit, diagnostic) = classify_failure(CommandKind::Operational, &error);
 
         assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
-        assert_eq!(diagnostic["code"], "casework.runtime-configuration.invalid");
+        assert_eq!(
+            diagnostic["code"],
+            "casework.runtime.allowed-clients-required"
+        );
         assert_eq!(
             diagnostic["path"],
-            "runtime.yaml:/authentication.oidc.allowedClients"
+            "runtime.yaml:/authentication/oidc/allowedClients"
         );
         assert!(
             diagnostic["suggestedAction"]

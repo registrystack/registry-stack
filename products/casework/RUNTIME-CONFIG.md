@@ -15,6 +15,14 @@ URL, or digest that is not written in its form is refused at its position with
 `config.invalid-value`, and a number outside its bounds with
 `config.out-of-range`, without repeating the value.
 
+`caseworkctl check PROJECT --runtime-config FILE` reads the file the same
+way, offline and against the authored project, without the package, the
+database, the issuer, a source, or a secret. It reports every problem in the
+file at its position, as the runtime does when it refuses the file at
+startup. A `${VAR}` expression, and every rule that reads its value, is left
+unchecked unless `--environment` fills the expressions from the current
+environment.
+
 String values in `runtime.yaml` may take a deployment value from the
 environment when the runtime starts: `${VAR}` requires `VAR`, `${VAR:-default}`
 falls back to `default`, and `${VAR:?message}` refuses to start with `message`

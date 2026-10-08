@@ -136,6 +136,55 @@ diagnostic never repeats the value.
   reported, each at its position, where the first was reported alone.
   Migration: none.
 
+## BREAKING: a refused `runtime.yaml` is reported in full, and `caseworkctl check` reads it offline
+
+The `casework` runtime and every `caseworkctl` command that reads
+`runtime.yaml` report every problem in the file, each at its line and
+column, where they reported the first problem alone. The diagnostics never
+repeat a value from the file.
+
+- `casework serve` prints `casework: the Casework runtime configuration was
+  refused` and then the reader's lines on standard error, each in the form
+  `error[CODE] FILE:LINE:COLUMN /path` with the message and a `next:` line,
+  in file order, and a closing count of errors and warnings. It printed one
+  sentence naming the first problem. Migration: a log rule that matched
+  `the Casework runtime configuration is invalid` or `is not valid YAML`
+  matches the new sentence.
+- `caseworkctl plan`, `apply`, `status`, `doctor`, and `dev` refuse the
+  runtime file with one diagnostic per problem, each with its own code, a
+  JSON pointer `path` into the file (`/listener/bind`), and the file as given
+  in `source.file`. They reported one diagnostic with the code
+  `casework.runtime-configuration.invalid` and a file-prefixed path
+  (`runtime.yaml:/listener/bind`). A refusal that is not about the file's
+  contents, such as a package that does not match its `SHA256SUMS`, keeps
+  one diagnostic with a `runtime.yaml:/...` path, under its own
+  `casework.package.*` code. Migration: match the exit status (1 for a
+  refused file) or the code families `yaml.`, `config.`, `platform.`, and
+  `casework.`, and read `source` for the position.
+- A runtime file that cannot be read is
+  `platform.runtime-config.unavailable` with exit status 3, where it was
+  `caseworkctl.io-failure` with the same exit status. Migration: match the
+  new code.
+- `caseworkctl check PROJECT --runtime-config FILE` checks a runtime file
+  offline against the authored project, as `casework serve` reads it,
+  without the package, the database, the issuer, a source, or a secret. A
+  `${NAME}` expression, and every rule that reads its value, is left
+  unchecked; `--environment` fills the expressions from the current
+  environment and checks the values they produce. A refusal lists the
+  project's diagnostics and the runtime file's together. A passing check
+  reports the file in `runtimeConfig` and adds its warnings to `findings`.
+  `CheckReport.schema.json` allows `runtimeConfig`.
+
+| Old code | New code |
+|---|---|
+| `casework.runtime-configuration.invalid` for a problem in the file | the problem's own code: a reader code (`yaml.*`, `config.*`, `platform.runtime-config.*`) or a `casework.runtime.*` code listed below |
+| `casework.runtime-configuration.invalid` for a package refusal | a `casework.package.*` code listed below |
+| `caseworkctl.io-failure` for a runtime file that cannot be read | `platform.runtime-config.unavailable` |
+
+Runtime file codes: `casework.runtime.allowed-clients-required`, `casework.runtime.empty-value`, `casework.runtime.inactive-review-source-namespace`, `casework.runtime.invalid-assertion-issuers`, `casework.runtime.invalid-audience`, `casework.runtime.invalid-audit`, `casework.runtime.invalid-database-id`, `casework.runtime.invalid-database-reference`, `casework.runtime.invalid-digest`, `casework.runtime.invalid-listener`, `casework.runtime.invalid-metrics-listener`, `casework.runtime.invalid-oidc-claim`, `casework.runtime.invalid-review-completion-auth`, `casework.runtime.invalid-review-completion-destination`, `casework.runtime.invalid-secret-reference`, `casework.runtime.invalid-source-binding`, `casework.runtime.invalid-stranded-work-acknowledgement`, `casework.runtime.invalid-task-authority`, `casework.runtime.invalid-uri`, `casework.runtime.missing-identity`, `casework.runtime.no-secret-provider`, `casework.runtime.plaintext-database`, `casework.runtime.principal-claim-conflict`, `casework.runtime.relative-path`, `casework.runtime.secret-provider-disabled`, `casework.runtime.source-bindings-mismatch`, `casework.runtime.unconfigured-review-completion-destination`, `casework.runtime.unreadable-jwks-secret`, `casework.runtime.unsupported-api-version`, `casework.runtime.wrong-kind`.
+
+Package codes: `casework.package.digest-mismatch`, `casework.package.file-changed`, `casework.package.invalid`, `casework.package.invalid-project`, `casework.package.retired-manifest`, `casework.package.source-description-mismatch`, `casework.package.unexpected-contents`, `casework.package.unreadable-project`.
+
 ## Diagnostic codes
 
 | Old code | New code |

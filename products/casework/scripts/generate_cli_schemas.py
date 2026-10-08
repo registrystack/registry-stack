@@ -140,6 +140,7 @@ REPORTS = {
             "findings": FINDINGS,
             "networkAccess": {"const": False},
             "databaseAccess": {"const": False},
+            "runtimeConfig": STRING,
             "bregPackage": {
                 "type": "object",
                 "additionalProperties": False,

@@ -23,6 +23,18 @@
   rotation bound with `config.out-of-range`. `taskAuthority.issuer` must be an
   absolute `http` or `https` URL. Migration steps are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: a refused `runtime.yaml` is reported in full: `casework serve`
+  prints every problem in the file at its line and column after one
+  sentence, and `caseworkctl plan`, `apply`, `status`, `doctor`, and `dev`
+  report one positioned diagnostic per problem, each with its own code,
+  where they reported `casework.runtime-configuration.invalid` for the first
+  problem alone. A runtime file that cannot be read is
+  `platform.runtime-config.unavailable`, where it was
+  `caseworkctl.io-failure`. `caseworkctl check PROJECT --runtime-config FILE`
+  checks a runtime file offline against the project, and `--environment`
+  checks the values its `${NAME}` expressions take from the current
+  environment. Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

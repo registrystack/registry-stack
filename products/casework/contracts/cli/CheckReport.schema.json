@@ -60,6 +60,9 @@
         "databaseAccess": {
           "const": false
         },
+        "runtimeConfig": {
+          "type": "string"
+        },
         "bregPackage": {
           "type": "object",
           "additionalProperties": false,
