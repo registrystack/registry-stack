@@ -316,7 +316,7 @@ impl<'de> Deserialize<'de> for DataLiteral {
             fn visit_f64<E: de::Error>(self, value: f64) -> Result<DataLiteral, E> {
                 serde_json::Number::from_f64(value)
                     .map(DataLiteral::Number)
-                    .ok_or_else(|| de::Error::custom(Invalid::expected(EXPECT_DATA_LITERAL, "")))
+                    .ok_or_else(|| Invalid::expected(EXPECT_DATA_LITERAL, "").into_error())
             }
 
             fn visit_str<E: de::Error>(self, value: &str) -> Result<DataLiteral, E> {

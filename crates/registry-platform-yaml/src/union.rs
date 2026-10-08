@@ -230,13 +230,13 @@ pub mod __private {
     /// serde's derived enum reads.
     pub fn tagged_to_external<E: de::Error>(value: Value, tag: &'static str) -> Result<Value, E> {
         let Value::Object(mut members) = value else {
-            return Err(E::custom(Invalid::expected("a mapping", "")));
+            return Err(Invalid::expected("a mapping", "").into_error());
         };
         let Some(name) = members.remove(tag) else {
             return Err(E::missing_field(tag));
         };
         let Value::String(name) = name else {
-            return Err(E::custom(Invalid::expected("text naming the form", "")));
+            return Err(Invalid::expected("text naming the form", "").into_error());
         };
         let mut external = serde_json::Map::new();
         external.insert(name, Value::Object(members));
