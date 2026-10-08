@@ -2470,7 +2470,7 @@ formats:
     check: discoveryctl check --runtime-config {file}
     example: products/discovery/fixtures/project/runtime.yaml
     conformance:
-      requiredText: /logLevel
+      requiredText: /package/root
       optionalText: none
       integer: /limits/maximumRequestBytes
       boolean: none
