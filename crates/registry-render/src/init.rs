@@ -144,9 +144,8 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
         if LocalId::new(locale.as_str()).is_err() {
             return Err(RenderProblem::new(
                 ProblemKind::InvalidArgument,
-                format!(
-                    "label locale {locale:?} must be a local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `-`, or `_`"
-                ),
+                "each --labels locale must be a local identifier: a lowercase letter, then up \
+                 to 63 lowercase letters, digits, `-`, or `_`",
             ));
         }
         // A repeat would scaffold one label file twice and list the locale
@@ -154,7 +153,7 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
         if !seen.insert(locale) {
             return Err(RenderProblem::new(
                 ProblemKind::InvalidArgument,
-                format!("label locale {locale:?} is listed more than once"),
+                "a --labels locale is listed more than once; list each locale once",
             ));
         }
     }

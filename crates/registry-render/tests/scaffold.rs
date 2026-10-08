@@ -134,6 +134,30 @@ fn a_locale_listed_twice_is_refused_before_anything_is_written() {
 }
 
 #[test]
+fn a_refused_locale_is_described_without_repeating_it() {
+    for labels in ["en,Planted-Locale", "plantedlocale,plantedlocale"] {
+        let dir = tempdir();
+        let init = run(&["init", dir.to_str().unwrap(), "--labels", labels]);
+        let stdout = String::from_utf8_lossy(&init.stdout);
+        let stderr = String::from_utf8_lossy(&init.stderr);
+        assert_eq!(
+            init.status.code(),
+            Some(registry_render::ProblemKind::InvalidArgument.exit_code()),
+            "stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("--labels"),
+            "the refusal names the option: {stderr}"
+        );
+        assert!(
+            !stdout.to_lowercase().contains("planted")
+                && !stderr.to_lowercase().contains("planted"),
+            "the refusal never repeats the argument: {stdout}{stderr}"
+        );
+    }
+}
+
+#[test]
 fn watch_and_emit_envelope_are_refused_together() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
