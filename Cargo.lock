@@ -5731,6 +5731,7 @@ dependencies = [
 name = "registry-linkml"
 version = "0.40.0"
 dependencies = [
+ "registry-platform-yaml",
  "serde",
  "serde_json",
  "serde_norway",
