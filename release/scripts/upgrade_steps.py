@@ -46,7 +46,7 @@ CATALOG_KIND = "ReleaseUpgradeSteps"
 # `no-file` marks an item that changes behavior or output, not a file an
 # operator edits.
 RESERVED = ("already-wrong", "no-file")
-ROOTS = ("project", "target")
+ROOTS = ("project", "target", "runtime")
 STEP_ID = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 MARKER = re.compile(r"^<!-- upgrade: (.*) -->$")
 
@@ -271,7 +271,7 @@ def _validate_step(entry: Any) -> dict[str, Any]:
         raise StepError(f"{step_id}: a {kind} step takes no {', '.join(extra)}")
     root = entry.get("root", "project")
     if root not in ROOTS:
-        raise StepError(f"{step_id}: root '{root}' is not project or target")
+        raise StepError(f"{step_id}: root '{root}' is not project, target or runtime")
     _check_file(step_id, entry["file"])
     if kind == "edit":
         if not isinstance(entry["edits"], list) or not entry["edits"]:

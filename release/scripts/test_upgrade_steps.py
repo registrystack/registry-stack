@@ -304,6 +304,13 @@ class ApplyTest(unittest.TestCase):
             upgrade_steps.apply_steps(["sample-target"], {"project": self.project},
                                       self.catalog)
 
+    def test_a_runtime_root_is_accepted_and_an_unlisted_root_is_refused(self) -> None:
+        runtime = self.catalog["sample-target"]
+        entry = {k: v for k, v in runtime.items() if k != "root"} | {"root": "runtime"}
+        self.assertEqual(upgrade_steps._validate_step(entry)["root"], "runtime")
+        with self.assertRaisesRegex(Error, "root 'elsewhere' is not project, target or runtime"):
+            upgrade_steps._validate_step(dict(entry, root="elsewhere"))
+
     def test_a_file_outside_its_root_is_refused(self) -> None:
         escaped = dict(self.catalog["sample-target"], file="../governance.yaml")
         with self.assertRaisesRegex(Error, "sample-target.*outside"):
