@@ -1,5 +1,5 @@
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://registrystack.org/schemas/evidence/bundle-v1.json
+$id: https://id.registrystack.org/schemas/evidence/bundle/bundle.v1.schema.json
 title: Evidence governed package configuration Version 1
 type: object
 additionalProperties: false
