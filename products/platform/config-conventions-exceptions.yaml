@@ -131,41 +131,6 @@ exceptions:
   class: stable-move
   reason: maxDuration holds a duration as text
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write an integer with the unit as the last word of the key'
-- rule: CFG-SCHEMA-4
-  format: breg/access-explanation
-  location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/actions
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/access-explanation
-  location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/claimContract
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/access-explanation
-  location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/entities/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/access-explanation
-  location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/routes/properties/entries/items
-  class: pending
-  wp: WP6
-  reason: the object accepts unknown members
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/access-explanation
-  location: products/breg/contracts/explain/AccessExplanation.schema.json#/properties/rowReach/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: breg/access-preview
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -190,13 +155,6 @@ exceptions:
   class: stable-move
   reason: value not_evaluated is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-4
-  format: breg/access-preview
-  location: products/breg/contracts/explain/AccessPreview.schema.json#/properties/effectiveProfile
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: breg/actions-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -311,34 +269,6 @@ exceptions:
   class: stable-move
   reason: stem retention uses Seconds here and Days in 2 other places
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to retentionDays, or move every use of the stem to one unit'
-- rule: CFG-SCHEMA-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/$defs/fieldType
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/evidence/properties/capabilities/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/handler/properties/limits
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/actions-explanation
-  location: products/breg/contracts/explain/ActionsExplanation.schema.json#/properties/actions/items/properties/handler/properties/possibleWrites/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-SCHEMA-6
   format: breg/backup-binding
   location: editors/configure.py#/SCHEMAS/breg
@@ -442,20 +372,6 @@ exceptions:
   class: protocol-constant
   reason: POST is written as HTTP methods (RFC 9110) defines it
   resolution: Permanent.
-- rule: CFG-SCHEMA-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/application
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/change-requests-explanation
-  location: products/breg/contracts/explain/ChangeRequestsExplanation.schema.json#/properties/requests/items/properties/onApproved
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-1
   format: breg/ctl-report
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -494,13 +410,6 @@ exceptions:
   class: stable-move
   reason: kind is EventsExplanation
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename the kind to BRegEventsExplanation'
-- rule: CFG-SCHEMA-4
-  format: breg/events-explanation
-  location: products/breg/contracts/explain/EventsExplanation.schema.json#/properties/deliveries/items
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-CHECK-1
   format: breg/evidence-source-export
   location: products/platform/config-formats.yaml#/check
@@ -896,34 +805,6 @@ exceptions:
   class: stable-move
   reason: id is not typed as $defs/LocalId
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-SCHEMA-4
-  format: breg/model-explanation
-  location: products/breg/contracts/explain/ModelExplanation.schema.json#/properties/entities
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/model-explanation
-  location: products/breg/contracts/explain/ModelExplanation.schema.json#/properties/manifestProjection
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/model-explanation
-  location: products/breg/contracts/explain/ModelExplanation.schema.json#/properties/package
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-SCHEMA-4
-  format: breg/model-explanation
-  location: products/breg/contracts/explain/ModelExplanation.schema.json#/properties/physicalNames
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-EMPTY-1
   format: breg/module
   location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionRequirementSource/properties/equals
@@ -2636,13 +2517,6 @@ exceptions:
   class: stable-move
   reason: maxFilterPayloadBytes is a refused spelling of 'Largest accepted body or file'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximumFilterPayloadBytes'
-- rule: CFG-SCHEMA-4
-  format: breg/queries-explanation
-  location: products/breg/contracts/explain/QueriesExplanation.schema.json#/$defs/fieldType
-  class: pending
-  wp: WP6
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: breg/routes-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -2721,13 +2595,6 @@ exceptions:
   class: stable-move
   reason: value submit_request is not lowercase kebab-case
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value in kebab-case, or mark a member-name enum'
-- rule: CFG-SCHEMA-4
-  format: breg/routes-explanation
-  location: products/breg/contracts/explain/RoutesExplanation.schema.json#/properties/routes/items/oneOf/0
-  class: pending
-  wp: WP6
-  reason: the object accepts unknown members
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-ENV-2
   format: breg/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion

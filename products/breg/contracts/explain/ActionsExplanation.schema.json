@@ -9,7 +9,8 @@
   "$defs": {
     "fieldType": {
       "type": "object",
-      "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version."
+      "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the compiled field type as the engine holds it; its shape follows FieldTypeSource and is outside this contract version."
     },
     "fieldRef": {
       "type": "object",
@@ -295,7 +296,7 @@
               "possibleWrites": {
                 "type": "array",
                 "description": "Passthrough of the compiled handler's possible writes. Shape follows the compiled model and is outside this contract version.",
-                "items": { "type": "object" }
+                "items": { "type": "object", "x-registry-passthrough": "bregctl writes each possible handler write as the compiled model holds it; its shape and is outside this contract version." }
               },
               "refusals": {
                 "type": "array",
@@ -322,7 +323,8 @@
               "rhaiVersion": { "type": "string" },
               "limits": {
                 "type": "object",
-                "description": "Passthrough of the compiled handler's limits. Shape follows the compiled model and is outside this contract version."
+                "description": "Passthrough of the compiled handler's limits. Shape follows the compiled model and is outside this contract version.",
+                "x-registry-passthrough": "bregctl writes the compiled handler limits as the engine holds them; their shape follows CompiledActionHandlerLimits and is outside this contract version."
               },
               "moduleSha256": { "type": "string" },
               "compatibility": {
@@ -357,7 +359,7 @@
               "capabilities": {
                 "type": "array",
                 "description": "Passthrough of the action's declared Evidence capabilities. Shape follows the compiled model and is outside this contract version.",
-                "items": { "type": "object" }
+                "items": { "type": "object", "x-registry-passthrough": "bregctl writes each declared Evidence capability as the compiled model holds it; its shape and is outside this contract version." }
               },
               "maximumCalls": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "maximumCallsPerCapability": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },

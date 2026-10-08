@@ -51,19 +51,23 @@
     },
     "entities": {
       "type": "object",
-      "description": "Compiled entity table, keyed by entity id. Passthrough of the compiled model; shape follows CompiledEntity and is outside this contract version."
+      "description": "Compiled entity table, keyed by entity id. Passthrough of the compiled model; shape follows CompiledEntity and is outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the compiled entity table as the engine holds it; its shape follows CompiledEntity and is outside this contract version."
     },
     "physicalNames": {
       "type": "object",
-      "description": "Compiled physical-name mapping. Passthrough of the compiled model; shape follows the runtime's physical-name projection and is outside this contract version."
+      "description": "Compiled physical-name mapping. Passthrough of the compiled model; shape follows the runtime's physical-name projection and is outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the runtime's physical-name projection as it stands; its shape and is outside this contract version."
     },
     "package": {
       "type": ["object", "null"],
-      "description": "Compiled package identity, or null when the project declares no package. Passthrough of the compiled model; shape follows the runtime's package projection and is outside this contract version."
+      "description": "Compiled package identity, or null when the project declares no package. Passthrough of the compiled model; shape follows the runtime's package projection and is outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the runtime's package projection as it stands; its shape and is outside this contract version."
     },
     "manifestProjection": {
       "type": ["object", "null"],
-      "description": "Registry Manifest projection of this registry, or null when the project declares none. Passthrough of the compiled model; shape follows the runtime's manifest projection and is outside this contract version."
+      "description": "Registry Manifest projection of this registry, or null when the project declares none. Passthrough of the compiled model; shape follows the runtime's manifest projection and is outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the runtime's Registry Manifest projection as it stands; its shape and is outside this contract version."
     }
   }
 ,

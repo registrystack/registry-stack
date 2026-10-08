@@ -34,7 +34,8 @@
     "rowValuesDisclosed": { "type": "boolean" },
     "effectiveProfile": {
       "type": ["object", "null"],
-      "description": "Passthrough of the compiled access profile the scenario resolved to, or null when no profile matched. Shape follows AccessProfileSource and is outside this contract version."
+      "description": "Passthrough of the compiled access profile the scenario resolved to, or null when no profile matched. Shape follows AccessProfileSource and is outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the resolved access profile as the engine holds it; its shape follows AccessProfileSource and is outside this contract version."
     },
     "recipients": {
       "type": "array",

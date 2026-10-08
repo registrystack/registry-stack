@@ -225,11 +225,13 @@
           },
           "onApproved": {
             "type": "object",
-            "description": "Passthrough of the compiled change request's on-approved application mode. Outside this contract version."
+            "description": "Passthrough of the compiled change request's on-approved application mode. Outside this contract version.",
+            "x-registry-passthrough": "bregctl writes the change request's on-approved mode as the compiled model holds it; its shape and is outside this contract version."
           },
           "application": {
             "type": "object",
-            "description": "Passthrough of the compiled change request's application settings. Outside this contract version."
+            "description": "Passthrough of the compiled change request's application settings. Outside this contract version.",
+            "x-registry-passthrough": "bregctl writes the change request's application settings as the compiled model holds them; their shape and is outside this contract version."
           },
           "effects": {
             "type": "array",

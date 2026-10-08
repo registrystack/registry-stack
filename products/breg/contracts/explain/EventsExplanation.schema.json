@@ -16,7 +16,7 @@
     "deliveries": {
       "type": "array",
       "description": "Passthrough of the compiled event delivery inventory. Shape follows CompiledEventDelivery and is outside this contract version.",
-      "items": { "type": "object" }
+      "items": { "type": "object", "x-registry-passthrough": "bregctl writes each compiled event delivery as the engine holds it; its shape follows CompiledEventDelivery and is outside this contract version." }
     }
   }
 }

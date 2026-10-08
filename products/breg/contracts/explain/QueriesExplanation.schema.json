@@ -9,7 +9,8 @@
   "$defs": {
     "fieldType": {
       "type": "object",
-      "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version."
+      "description": "Passthrough of the compiled field type. Shape follows FieldTypeSource and is outside this contract version.",
+      "x-registry-passthrough": "bregctl writes the compiled field type as the engine holds it; its shape follows FieldTypeSource and is outside this contract version."
     },
     "fieldSummary": {
       "type": "object",

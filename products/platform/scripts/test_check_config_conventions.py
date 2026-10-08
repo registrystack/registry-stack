@@ -1202,6 +1202,36 @@ class SchemaTests(ConventionsTestCase):
         queue["allOf"] = [{"properties": {"priority": {"type": "integer", "minimum": 1, "maximum": 9}}}]
         self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-4")
 
+    def test_cfg_schema_4_accepts_a_passthrough_with_a_reason(self) -> None:
+        self.repo.report["properties"]["details"] = {
+            "type": "object",
+            "x-registry-passthrough": "The compiled model the command serializes as it stands.",
+        }
+        self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-4")
+
+    def test_cfg_schema_4_accepts_a_passthrough_in_an_unpromised_format(self) -> None:
+        self.repo.fmt()["stability"] = "experimental"
+        queue = self.repo.project["$defs"]["Queue"]
+        del queue["additionalProperties"]
+        queue["x-registry-passthrough"] = "Queue options a later version describes."
+        self.assertNoFinding(self.repo.run(), "CFG-SCHEMA-4")
+
+    def test_cfg_schema_4_refuses_a_passthrough_without_a_reason(self) -> None:
+        self.repo.report["properties"]["details"] = {"type": "object", "x-registry-passthrough": " "}
+        report = self.repo.run()
+        self.assertFinding(report, "CFG-SCHEMA-4", R, at(REPORT_SCHEMA, "/properties/details"))
+        finding = next(item for item in report.findings if item.location == at(REPORT_SCHEMA, "/properties/details"))
+        self.assertIn("x-registry-passthrough", finding.message)
+
+    def test_cfg_schema_4_refuses_a_passthrough_in_a_promised_format_its_product_reads(self) -> None:
+        queue = self.repo.project["$defs"]["Queue"]
+        del queue["additionalProperties"]
+        queue["x-registry-passthrough"] = "Queue options a later version describes."
+        report = self.repo.run()
+        self.assertFinding(report, "CFG-SCHEMA-4", P, at(PROJECT_SCHEMA, "/$defs/Queue"))
+        finding = next(item for item in report.findings if item.location == at(PROJECT_SCHEMA, "/$defs/Queue"))
+        self.assertIn("promised", finding.message)
+
     def test_cfg_schema_4_exempts_conditional_branches(self) -> None:
         self.repo.project["$defs"]["Queue"]["if"] = {"properties": {"mode": {"const": "first-come"}}}
         self.repo.project["$defs"]["Queue"]["then"] = {"required": ["enabled"]}

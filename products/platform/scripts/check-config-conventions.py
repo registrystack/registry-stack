@@ -145,6 +145,9 @@ SHARED_BLOCKS = (
 VALUE_TYPES = ("Url", "Digest", "LocalId", "ExternalId", "SecretReference")
 FOREIGN = "x-registry-foreign"
 MEMBER_NAMES = "x-registry-member-names"
+# A node that passes through a payload its format does not describe or promise
+# carries this keyword, whose value is the reason sentence (CFG-SCHEMA-4).
+PASSTHROUGH = "x-registry-passthrough"
 HEADER_MEMBERS = frozenset(
     {"apiVersion", "kind", "schema", "$schema", "schemaVersion", "schema_version",
      "version", "formatVersion", "fixture"}
@@ -1719,7 +1722,10 @@ class Lint:
                     find("CFG-QTY-4", visit, f"an integer without a stated {' and '.join(missing)}{detail}",
                          "Read it with BoundedU32/BoundedU64 and state both bounds")
             closing = self.closing_problem(document, visit)
-            if closing and not embedded:
+            passthrough = self.passthrough_problem(entry, node)
+            if passthrough:
+                find("CFG-SCHEMA-4", visit, passthrough[0], passthrough[1])
+            elif closing and not embedded and PASSTHROUGH not in node:
                 find("CFG-SCHEMA-4", visit, closing, "Close the object (additionalProperties or unevaluatedProperties: false)")
         if entry is not None:
             self.schema5(fid, entry, path, document)
@@ -1777,6 +1783,20 @@ class Lint:
                 problem = empty_form(parts)
                 if problem:
                     return f"the unrestricted sentinel sits beside {problem}"
+        return None
+
+    def passthrough_problem(self, entry: dict | None, node: dict) -> tuple[str, str] | None:
+        if PASSTHROUGH not in node:
+            return None
+        reason = node[PASSTHROUGH]
+        if not isinstance(reason, str) or not reason.strip():
+            return (f"an {PASSTHROUGH} annotation with no reason",
+                    f"Give {PASSTHROUGH} a sentence saying why the node passes its payload through")
+        # A promised format its product reads refuses unknown members in the
+        # same position (CFG-SCHEMA-8), so it has no payload to pass through.
+        if entry is not None and entry.get("stability") == "promised" and entry.get("reader") != "none":
+            return (f"an {PASSTHROUGH} annotation in a promised format its product reads",
+                    f"Describe and close the object, and remove {PASSTHROUGH}")
         return None
 
     def closing_problem(self, root: dict, visit: Visit) -> str | None:

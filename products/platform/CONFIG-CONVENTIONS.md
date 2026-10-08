@@ -743,6 +743,13 @@ are spread across `allOf`, `oneOf`, `anyOf`, or `$ref`. An id-keyed mapping
 declares `propertyNames` and `additionalProperties: <item schema>`. A
 subschema under `if`, `then`, `else`, `not`, `dependentSchemas`, or an
 applicator branch that only constrains members declared elsewhere is exempt.
+A node that passes through a payload the format neither describes nor
+promises (a value the product writes as its engine holds it) may stay open
+when it carries `x-registry-passthrough: <reason>`, a sentence saying why.
+The convention lint refuses the annotation with an empty reason, and in a
+promised format its product reads, since that reader refuses unknown keys in
+the same position; a promised output format may carry it, and the annotated
+node's content is outside the format's promise.
 The reader refuses unknown keys in the same positions (CFG-SCHEMA-8).
 
 **CFG-SCHEMA-5 (MUST). Shared blocks have one definition.** The platform
