@@ -32,7 +32,8 @@ def prepare_spatial(fixture: Path, project: Path):
         for old, new in (("service-sites:map.read", "service-sites:map:read"), ("service-sites:directory.read", "service-sites:directory:read"), ("service-sites:site.read", "service-sites:site:read")):
             text = text.replace(old, new)
         child.write_text(text, encoding="utf-8")
-    (project/'dev-clients.yaml').write_text('''version: 1
+    (project/'dev-clients.yaml').write_text('''apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [service-site-admin]

@@ -824,20 +824,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/dev-clients
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1'
-- rule: CFG-ENV-1
-  format: breg/dev-clients
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegDevClients'
 - rule: CFG-SCHEMA-2
   format: breg/dev-clients
   location: products/platform/config-formats.yaml#/schema
@@ -852,13 +838,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: breg/dev-clients
-  location: crates/registry-bregctl/src/dev/config.rs#clients()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/dev-prepared-source
   location: products/platform/config-formats.yaml#/check

@@ -18,6 +18,7 @@ mod tests;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
+pub(crate) use config::ClientsRefused;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -265,7 +266,6 @@ struct State {
     /// own when the open commits but its identifier never reaches
     /// `seed_import_authorities`.
     seed_import_intents: BTreeMap<String, chrono::DateTime<chrono::Utc>>,
-    outputs: Vec<CredentialOutput>,
     /// Installed prerequisites this session resolved, keyed by command name.
     binaries: BTreeMap<String, Binary>,
     /// Why the detached supervisor stopped, recorded so the terminal that
@@ -293,15 +293,6 @@ enum Status {
     Stopping,
     Stopped,
     Failed,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CredentialOutput {
-    path: PathBuf,
-    client: String,
-    key: bool,
-    digest: String,
 }
 
 impl State {
@@ -355,15 +346,7 @@ impl State {
         )
     }
     fn report(&self) -> Result<Value> {
-        let clients: Clients = serde_json::from_slice(&private::read(
-            &self.root().join("clients.json"),
-            MAX_BYTES,
-        )?)
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "retained clients are invalid; inspect the owned state before reusing credentials"
-            )
-        })?;
+        let clients = retained_clients(&self.root())?;
         Ok(
             json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":self.root().join("state.json"),"runtimeConfig":self.root().join("runtime.yaml"),
@@ -374,8 +357,8 @@ impl State {
             "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
             "audience":self.audience(),"packageDigest":self.package_digest,"packageSequence":self.sequence,"activationPending":!self.activated,
             "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,"scopes":client.scopes,
-                "clientIdFile":client.client_id_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("client-id")),
-                "assertionKeyFile":client.assertion_key_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("assertion-key.jwk"))})).collect::<Vec<_>>()}),
+                "clientIdFile":self.root().join("credentials").join(&client.id).join("client-id"),
+                "assertionKeyFile":self.root().join("credentials").join(&client.id).join("assertion-key.jwk")})).collect::<Vec<_>>()}),
         )
     }
 }
@@ -428,8 +411,7 @@ fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
         bail!("the local development session must be ready before requesting a token");
     }
     // Resolve admission before opening any caller-derived credential path.
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = retained_clients(&root)?;
     if !clients
         .clients
         .iter()
@@ -489,6 +471,17 @@ fn clients_file(
             }
         }
     }
+}
+
+/// The clients a session retained when it started.
+fn retained_clients(root: &Path) -> Result<Clients> {
+    config::retained(&private::read(&root.join("clients.json"), MAX_BYTES)?).map_err(|_| {
+        anyhow::anyhow!(
+            "retained clients are invalid; inspect the owned state before reusing credentials, \
+             or, if an earlier bregctl started this session, run bregctl dev stop --remove with \
+             that bregctl, then remove .breg/dev and start again"
+        )
+    })
 }
 
 fn read_state(root: &Path) -> Result<State> {
@@ -886,7 +879,7 @@ fn start(args: StartArgs) -> Result<Value> {
     let client_bytes =
         crate::read_bounded_source_file(&clients_file, "dev.clients", "clients", MAX_BYTES)
             .map_err(|_| anyhow::anyhow!("clients file must be one bounded ordinary file"))?;
-    let clients = config::clients(&client_bytes)?;
+    let clients = config::clients(&clients_file.display().to_string(), &client_bytes)?;
     let CapturedSource {
         files,
         digest,
@@ -930,7 +923,6 @@ fn start(args: StartArgs) -> Result<Value> {
         private::validate_tree(&root.join("secrets"))?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
             borrowed_owner(&state)?;
-            verify_outputs(&state)?;
             return state.report();
         }
         // A live owner lock is conclusive even when its control socket is not ready.
@@ -1002,7 +994,6 @@ fn start(args: StartArgs) -> Result<Value> {
             seeded: BTreeSet::new(),
             seed_import_authorities: BTreeMap::new(),
             seed_import_intents: BTreeMap::new(),
-            outputs: vec![],
             binaries: BTreeMap::new(),
             failure: None,
         };
@@ -1041,7 +1032,6 @@ fn start(args: StartArgs) -> Result<Value> {
     if state.sequence > 1 && state.container_id.is_none() {
         bail!("the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session");
     }
-    verify_outputs(&state)?;
     let breg = executable("breg", args.breg_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
     // Identify the prerequisites before the session stops a container or
@@ -1138,16 +1128,6 @@ fn initialize(
     clients: &Clients,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
-    for client in &clients.clients {
-        for path in [&client.client_id_file, &client.assertion_key_file]
-            .into_iter()
-            .flatten()
-        {
-            if fs::symlink_metadata(path).is_ok() {
-                bail!("credential output already exists; choose fresh pair paths, preserving existing credentials");
-            }
-        }
-    }
     let stage = root
         .parent()
         .context("dev parent missing")?
@@ -1171,30 +1151,9 @@ fn initialize(
         if original.issuer_project.is_none() && original.purpose_port.is_some() {
             purpose::prepare(&stage)?;
         }
-        let mut state = original.clone();
-        for client in &clients.clients {
-            for (destination, key) in [
-                (&client.client_id_file, false),
-                (&client.assertion_key_file, true),
-            ] {
-                if let Some(path) = destination {
-                    let source = stage.join("credentials").join(&client.id).join(if key {
-                        "assertion-key.jwk"
-                    } else {
-                        "client-id"
-                    });
-                    state.outputs.push(CredentialOutput {
-                        path: path.clone(),
-                        client: client.id.clone(),
-                        key,
-                        digest: config::hash(&private::read(&source, MAX_BYTES)?),
-                    });
-                }
-            }
-        }
         private::create(
             &stage.join("state.json"),
-            &serde_json::to_vec_pretty(&state)?,
+            &serde_json::to_vec_pretty(original)?,
         )?;
         fs::rename(&stage, root)?;
         Ok(())
@@ -1203,34 +1162,6 @@ fn initialize(
         fs::remove_dir_all(&stage).context("cannot clean owned incomplete initialization")?;
     }
     result
-}
-
-fn verify_outputs(state: &State) -> Result<()> {
-    for output in &state.outputs {
-        let source = state
-            .root()
-            .join("credentials")
-            .join(&output.client)
-            .join(if output.key {
-                "assertion-key.jwk"
-            } else {
-                "client-id"
-            });
-        let bytes = Zeroizing::new(private::read(&source, MAX_BYTES)?);
-        if config::hash(&bytes) != output.digest {
-            bail!(
-                "owned credential changed; preserve state and inspect the private credential pair"
-            );
-        }
-        if fs::symlink_metadata(&output.path).is_ok() {
-            if config::hash(&private::read(&output.path, MAX_BYTES)?) != output.digest {
-                bail!("credential output conflicts with retained ownership; no credentials were replaced");
-            }
-        } else {
-            private::create(&output.path, &bytes)?;
-        }
-    }
-    Ok(())
 }
 
 fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<Value> {
@@ -1424,8 +1355,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
     ] {
         signal_hook::flag::register(signal, Arc::clone(&terminate))?;
     }
-    let clients: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let clients = retained_clients(&root)?;
     let mut children = Children::default();
     let result = (|| {
         ensure_active(&terminate)?;
@@ -2384,10 +2314,7 @@ fn tokens(state: &State, clients: &Clients) -> Result<()> {
 /// assertion key never leaves the session's private credentials tree, and the
 /// credential is stored owner-only for the seeding and rehearsal steps.
 fn token(state: &State, id: &str) -> Result<()> {
-    let client: Clients = serde_json::from_slice(&private::read(
-        &state.root().join("clients.json"),
-        MAX_BYTES,
-    )?)?;
+    let client = retained_clients(&state.root())?;
     let scopes = client
         .clients
         .iter()
@@ -2407,10 +2334,7 @@ fn token_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()>
 }
 
 async fn token_async(state: &State, id: &str) -> Result<()> {
-    let client: Clients = serde_json::from_slice(&private::read(
-        &state.root().join("clients.json"),
-        MAX_BYTES,
-    )?)?;
+    let client = retained_clients(&state.root())?;
     let scopes = client
         .clients
         .iter()

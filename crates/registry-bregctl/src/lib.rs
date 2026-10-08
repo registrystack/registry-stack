@@ -2295,17 +2295,29 @@ where
         Command::Dev(args) => {
             return match dev::run(args) {
                 Ok(report) => write_dev_success(&report, format, stdout, stderr),
-                Err(error) => write_failure(
-                    &source_failure(
-                        "dev",
-                        diagnostic("dev.failed", "dev", &format!("{error:#}")),
-                        DiagnosticArtifact::CommandArguments,
-                        SuggestedAction::CorrectCommandUsage,
+                Err(error) => match error.downcast::<dev::ClientsRefused>() {
+                    Ok(refused) => write_refusal(
+                        &Refusal::Document(DocumentRefusal {
+                            command: "dev",
+                            subject: "the development clients",
+                            report: refused.0,
+                        }),
+                        format,
+                        stdout,
+                        stderr,
                     ),
-                    format,
-                    stdout,
-                    stderr,
-                ),
+                    Err(error) => write_failure(
+                        &source_failure(
+                            "dev",
+                            diagnostic("dev.failed", "dev", &format!("{error:#}")),
+                            DiagnosticArtifact::CommandArguments,
+                            SuggestedAction::CorrectCommandUsage,
+                        ),
+                        format,
+                        stdout,
+                        stderr,
+                    ),
+                },
             };
         }
         Command::DevSupervisor(args) => {
@@ -9030,7 +9042,8 @@ const INIT_DEV_CLIENTS: &[u8] =
 # products/breg/DEV.md documents the closed binding format.
 # `dev` generates a fresh private key per client under `.breg/dev/credentials/`;
 # nothing here is a credential, and none of it belongs in a deployment.
-version: 1
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [operator]

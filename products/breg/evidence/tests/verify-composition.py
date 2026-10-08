@@ -261,7 +261,7 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     assert source["accessProfiles"] == ["evidence-source"]
     assert source["scopes"] == ["registry:evidence:lookup"]
     assert source["claims"]["registry_purpose"] == "evidence-source-read"
-    assert "clientIdFile" not in source and "assertionKeyFile" not in source
+    assert "assertionKeyRef" not in source
     assert len({client["claims"]["registry_principal"] for client in clients}) == len(clients)
     run(binaries["evidencectl"], "new", project, "--starter", INPUTS / "default-starter",
         "--profile", "local", environment=environment)

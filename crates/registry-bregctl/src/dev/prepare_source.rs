@@ -59,8 +59,32 @@ struct Transition {
     originals: BTreeMap<PathBuf, Vec<u8>>,
     replacements: BTreeMap<PathBuf, Vec<u8>>,
     client: config::Client,
+    #[serde(with = "retained_clients")]
     clients: Clients,
     prepared: PreparedSource,
+}
+
+/// The clients a transition installs, written as the full retained document
+/// and read back through the same reader as `.breg/dev/clients.json`.
+mod retained_clients {
+    use super::{config, Clients};
+    use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        clients: &Clients,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        clients.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Clients, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let bytes = serde_json::to_vec(&value).map_err(D::Error::custom)?;
+        config::retained(&bytes)
+            .map_err(|_| D::Error::custom("the transition's clients are invalid"))
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -158,7 +182,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let bytes =
         crate::read_bounded_source_file(&state.clients_file, "dev.clients", "clients", MAX_BYTES)
             .map_err(|_| anyhow::anyhow!("clients file is missing or unsafe"))?;
-    let clients = config::clients(&bytes)?;
+    let clients = config::clients(&state.clients_file.display().to_string(), &bytes)?;
     let client_scopes: Vec<&String> = clients
         .clients
         .iter()
@@ -226,7 +250,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     if !args.all_records && args.row_field.is_none() {
         bail!("select --all-records or an explicit --row-field, --row-claim and --row-value-file binding");
     }
-    let mut clients = config::clients(&bytes)?;
+    let mut clients = config::clients(&state.clients_file.display().to_string(), &bytes)?;
     if clients
         .clients
         .iter()
@@ -345,13 +369,11 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         scopes: vec![scope],
         claims,
         test_bindings: Vec::new(),
-        client_id_file: None,
-        assertion_key_file: None,
-        assertion_key_input_file: None,
+        assertion_key_ref: None,
     };
     clients.clients.push(client.clone());
     let client_bytes = yaml_with_comments(&serde_json::to_value(&clients)?, &bytes)?;
-    config::clients(&client_bytes)?;
+    config::clients(&state.clients_file.display().to_string(), &client_bytes)?;
     let candidate = root.join(format!(".source-preview-{}", uuid::Uuid::new_v4()));
     private::directory(&candidate)?;
     let result = (|| {
@@ -814,8 +836,8 @@ mod tests {
         let root = state.root();
         private::directory(&root.join("build")).unwrap();
         private::directory(&root.join("build/package")).unwrap();
-        let clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         config::runtime(&root, &state, &clients, false).unwrap();
         let mut selected = args(&state);
@@ -877,8 +899,8 @@ mod tests {
         let root = state.root();
         private::directory(&root.join("build")).unwrap();
         private::directory(&root.join("build/package")).unwrap();
-        let old_clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let old_clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         config::runtime(&root, &state, &old_clients, false).unwrap();
         let operator_path = root.join("credentials/operator/assertion-key.jwk");
@@ -911,8 +933,8 @@ mod tests {
             &private::read(&root.join("source-prepared-source-reader.json"), MAX_BYTES).unwrap(),
         )
         .unwrap();
-        let clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         let replacements = originals
             .keys()
@@ -1213,8 +1235,8 @@ mod tests {
         let root = state.root();
         private::directory(&root.join("build")).unwrap();
         private::directory(&root.join("build/package")).unwrap();
-        let clients: Clients =
-            serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
+        let clients =
+            config::retained(&private::read(&root.join("clients.json"), MAX_BYTES).unwrap())
                 .unwrap();
         config::runtime(&root, &state, &clients, false).unwrap();
         let mut apply = selected();
@@ -1279,5 +1301,40 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("--all-records"));
+    }
+
+    #[test]
+    fn a_transition_reads_its_clients_through_the_shared_reader() {
+        let (_temporary, _state, clients, _) = super::super::tests::fixture();
+        let transition = Transition {
+            prior_digest: "a".repeat(64),
+            target_digest: "b".repeat(64),
+            sequence: 2,
+            originals: BTreeMap::new(),
+            replacements: BTreeMap::new(),
+            client: clients.clients[0].clone(),
+            clients: clients.clone(),
+            prepared: PreparedSource {
+                request_digest: "c".repeat(64),
+                report: json!({}),
+            },
+        };
+        let written = serde_json::to_value(&transition).unwrap();
+        assert_eq!(written["clients"]["kind"], "BRegDevClients");
+        let read: Transition = serde_json::from_value(written.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&read.clients).unwrap(),
+            serde_json::to_value(&clients).unwrap()
+        );
+        let mut earlier = written;
+        earlier["clients"]["version"] = json!(1);
+        let refusal = serde_json::from_value::<Transition>(earlier)
+            .err()
+            .expect("an earlier clients document is refused")
+            .to_string();
+        assert!(
+            refusal.contains("the transition's clients are invalid"),
+            "{refusal}"
+        );
     }
 }

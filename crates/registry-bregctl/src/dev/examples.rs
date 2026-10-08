@@ -541,7 +541,7 @@ fn run_example(args: RunArgs) -> Result<Value> {
     if super::capture(&project, &client_bytes)?.digest != state.source_digest {
         bail!("governed source changed since dev start; restore the captured source or use the documented migration/restart workflow");
     }
-    let clients = config::clients(&client_bytes)?;
+    let clients = config::clients(&state.clients_file.display().to_string(), &client_bytes)?;
     let (catalogue, bytes) = catalogue(&project)?;
     let scenario = catalogue
         .scenarios
@@ -1881,7 +1881,11 @@ mod tests {
         let canonical = project.canonicalize().unwrap();
         let project = canonical.as_path();
         let state = super::super::read_state(&canonical.join(".breg/dev")).unwrap();
-        let clients = config::clients(&fs::read(&state.clients_file).unwrap()).unwrap();
+        let clients = config::clients(
+            &state.clients_file.display().to_string(),
+            &fs::read(&state.clients_file).unwrap(),
+        )
+        .unwrap();
         let (catalogue, _) = catalogue(project).unwrap();
         let directory = state.root().join("examples");
         let retained_before = fs::read_dir(&directory).unwrap().count();
@@ -2059,7 +2063,7 @@ mod tests {
         )
         .unwrap();
         fs::create_dir(project.join("examples")).unwrap();
-        fs::write(project.join("dev-clients.yaml"), serde_json::to_vec(&json!({"version":1,"clients":[
+        fs::write(project.join("dev-clients.yaml"), serde_json::to_vec(&json!({"apiVersion":"id.registrystack.org/formats/breg/dev-clients/v1alpha1","kind":"BRegDevClients","clients":[
             {"id":"operator","accessProfiles":["household-operator"],"scopes":["registry:household:operate"],
              "claims":{"registry_principal":"synthetic-household-operator","registry_purpose":"household-administration","district":"north-district"}},
             {"id":"registrar","accessProfiles":["contact-registrar"],"scopes":["registry:contact:register"],

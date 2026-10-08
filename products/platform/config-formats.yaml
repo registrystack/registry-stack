@@ -545,10 +545,11 @@ formats:
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'version: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+      kind: BRegDevClients
+      checkedBy:
+        file: crates/registry-bregctl/src/dev/config.rs
+        symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
       kind: BRegDevClients
@@ -563,7 +564,7 @@ formats:
     conformance:
       requiredText: /clients/0/id
       optionalText: none
-      integer: /version
+      integer: none
       boolean: none
     securityMembers: []
     restrictingMembers: []

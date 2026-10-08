@@ -1211,3 +1211,61 @@ written. Every unknown key is reported, not only the first.
 
 `init.selection.size` remains for a `--selection` file over 256 KiB, and
 `init.selection.unreadable` for one that cannot be read.
+
+### BREAKING: development clients header and secret references (`dev-clients.yaml`)
+
+`bregctl dev start` reads `dev-clients.yaml`, or the `--clients-file` it
+names, through the shared reader. Every member that named a secret file now
+holds a secret reference, and the file declares the providers that resolve
+them. Migrate a file with these edits:
+
+| Old | New |
+|---|---|
+| `version: 1` | `apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1` and, on the next line, `kind: BRegDevClients` |
+| `clients[].assertionKeyInputFile` | `clients[].assertionKeyRef` |
+| `eventDestinations.<id>.hmacKeyFile` | `eventDestinations.<id>.hmacSha256KeyRef` |
+| `evidenceProviders.<id>.tokenFile` | `evidenceProviders.<id>.tokenRef` |
+| `evidenceProviders.<id>.trustedJwksFile` | `evidenceProviders.<id>.trustedJwksRef` |
+| `evidenceProviders.<id>.caBundleFile` | `evidenceProviders.<id>.caBundleRef` |
+| `evidenceProviders.<id>.privateKeyJwt.privateKeyFile` | `evidenceProviders.<id>.privateKeyJwt.privateKeyRef` |
+| `reviewAuthorities.<id>.completionTokenFile` | `reviewAuthorities.<id>.completionTokenRef` |
+| `issuer.interactiveApplications[].clientSecretFile` | `issuer.interactiveApplications[].clientSecretRef` |
+| `issuer.syntheticUsers[].passwordFile` | `issuer.syntheticUsers[].passwordRef` |
+| `clients[].clientIdFile` and `clients[].assertionKeyFile` | removed; after the session starts, run `bregctl dev export-client <project> --client <id> --client-id-file <file> --assertion-key-file <file>` |
+| a member set to `null`, such as `caBundleFile: null` or `audience: null` | the member left out |
+
+Each `*Ref` member holds `secret:file/<name>` or `secret:env/<NAME>`. Move
+each file a `*File` member named into one owner-only directory and declare it
+as the file provider's absolute root, or declare the environment provider and
+name a variable of the `bregctl dev start` process:
+
+```yaml
+secretProviders:
+  file: {root: /absolute/owner-only/dev-secrets}
+  environment: {}
+```
+
+A referenced file must be a regular file you own, with mode 0400 or 0600 and
+a single link, directly below the root; a referenced value must be non-empty,
+contain no NUL byte, and fit its member's limit. `bregctl dev` no longer writes
+a credential outside `.breg/dev`: `export-client` is the one way a client pair
+leaves the session.
+
+A file with `version: 1` and no header is refused with
+`config.missing-envelope`, whose fix names the header. Once the header is
+current, every old member is refused with `config.removed-key` at its
+position, naming its replacement, and every unknown member with
+`config.unknown-key`, not only the first. The refusal is printed as one
+sentence (`bregctl dev refused the development clients.`) followed by the
+reader's diagnostics; with `--format json` the report's `diagnostics` carry
+the reader's shape (`source: {file, line, column}`) unchanged. A reference
+that cannot be resolved is refused by member name with its fix; the refusal
+never repeats the value, the file name, or the variable name. The reader also
+refuses a `null` member (`config.null-value`) and a document over 1 MiB.
+
+A session an earlier `bregctl` started retained its clients in the old shape,
+and this `bregctl` refuses every command that reads them (`retained clients
+are invalid`), naming this fix. Before upgrading, run `bregctl dev stop --remove <project>` with the earlier
+`bregctl`, then remove `<project>/.breg/dev`, migrate `dev-clients.yaml`, and
+start again. The next start creates an empty database and fresh client keys;
+export a client again where another tool holds its pair.

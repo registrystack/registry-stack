@@ -5,20 +5,102 @@ use super::{private, State, DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
+use registry_platform_config::{SecretProvidersConfig, SecretReference};
+use registry_platform_yaml::{
+    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::Path,
 };
 use zeroize::Zeroizing;
+
+pub(super) const API_VERSION: &str = "id.registrystack.org/formats/breg/dev-clients/v1alpha1";
+pub(super) const KIND: &str = "BRegDevClients";
+
+/// The development clients file `bregctl dev start` reads, and the copy a
+/// session retains as `.breg/dev/clients.json`.
+pub(super) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(API_VERSION)],
+        retired_api_versions: &[],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/version",
+            replacement: "Delete `version`; the apiVersion header names the format version.",
+        },
+        RemovedKey {
+            pointer: "/clients/*/clientIdFile",
+            replacement: "Delete it; copy a client's credential pair with `bregctl dev export-client` once the session has started.",
+        },
+        RemovedKey {
+            pointer: "/clients/*/assertionKeyFile",
+            replacement: "Delete it; copy a client's credential pair with `bregctl dev export-client` once the session has started.",
+        },
+        RemovedKey {
+            pointer: "/clients/*/assertionKeyInputFile",
+            replacement: "Use `assertionKeyRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/eventDestinations/*/hmacKeyFile",
+            replacement: "Use `hmacSha256KeyRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/evidenceProviders/*/tokenFile",
+            replacement: "Use `tokenRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/evidenceProviders/*/trustedJwksFile",
+            replacement: "Use `trustedJwksRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/evidenceProviders/*/caBundleFile",
+            replacement: "Use `caBundleRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/evidenceProviders/*/privateKeyJwt/privateKeyFile",
+            replacement: "Use `privateKeyRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/reviewAuthorities/*/completionTokenFile",
+            replacement: "Use `completionTokenRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/issuer/interactiveApplications/*/clientSecretFile",
+            replacement: "Use `clientSecretRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+        RemovedKey {
+            pointer: "/issuer/syntheticUsers/*/passwordFile",
+            replacement: "Use `passwordRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
+        },
+    ],
+};
+
+fn api_version() -> String {
+    API_VERSION.to_owned()
+}
+
+fn kind() -> String {
+    KIND.to_owned()
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Clients {
-    pub version: u8,
+    #[serde(skip_deserializing, default = "api_version")]
+    pub api_version: String,
+    #[serde(skip_deserializing, default = "kind")]
+    pub kind: String,
+    /// The providers that resolve this file's secret references. Required
+    /// once any member names a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_providers: Option<SecretProvidersConfig>,
     pub clients: Vec<Client>,
     #[serde(default)]
     pub seed: Vec<Seed>,
@@ -43,7 +125,7 @@ pub(super) struct Clients {
 pub(super) struct LocalEventDestination {
     pub origin: String,
     pub path: String,
-    pub hmac_key_file: PathBuf,
+    pub hmac_sha256_key_ref: SecretReference,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -51,12 +133,15 @@ pub(super) struct LocalEventDestination {
 pub(super) struct LocalEvidenceProvider {
     pub base_url: String,
     pub trust_binding_id: String,
-    pub token_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_ref: Option<SecretReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key_jwt: Option<LocalEvidencePrivateKeyJwt>,
-    pub trusted_jwks_file: PathBuf,
+    pub trusted_jwks_ref: SecretReference,
     #[serde(default)]
     pub revoked_key_ids: Vec<String>,
-    pub ca_bundle_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_bundle_ref: Option<SecretReference>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -64,7 +149,7 @@ pub(super) struct LocalEvidenceProvider {
 pub(super) struct LocalEvidencePrivateKeyJwt {
     pub token_endpoint: String,
     pub client_id: String,
-    pub private_key_file: PathBuf,
+    pub private_key_ref: SecretReference,
     pub assertion_audience: String,
     pub resource: String,
     pub scopes: Vec<String>,
@@ -81,7 +166,9 @@ pub(super) struct LocalReviewAuthority {
     /// Logical client from this same closed file. Its generated key is copied
     /// into the private runtime secret tree and is never written to this file.
     pub client: String,
-    pub completion_token_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_token_ref: Option<SecretReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_recipient: Option<String>,
 }
 
@@ -153,9 +240,10 @@ pub(super) enum IssuerConnectionMapping {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct BrowserApplication {
     pub id: String,
-    pub client_secret_file: PathBuf,
+    pub client_secret_ref: SecretReference,
     pub origin: String,
     pub redirect_uris: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
     /// Explicit permissions granted to this application, per resource audience.
     #[serde(default)]
@@ -168,7 +256,7 @@ pub(super) struct BrowserApplication {
 pub(super) struct BrowserUser {
     pub username: String,
     pub email: String,
-    pub password_file: PathBuf,
+    pub password_ref: SecretReference,
     pub attributes: BTreeMap<String, String>,
     /// Explicit permissions granted to this user, per resource audience.
     #[serde(default)]
@@ -179,6 +267,7 @@ pub(super) struct BrowserUser {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalPermissionGrant {
     /// Omit for the owner BREG resource; otherwise use a declared audience.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
     pub scopes: Vec<String>,
 }
@@ -206,12 +295,10 @@ pub(super) struct Client {
     /// credentials for maintained local journeys.
     #[serde(default)]
     pub test_bindings: Vec<TestBinding>,
-    pub client_id_file: Option<PathBuf>,
-    pub assertion_key_file: Option<PathBuf>,
-    /// Existing owner-only ES256 assertion key, for a client whose key is
-    /// already governed by another local tool such as Evidence access.
+    /// Existing ES256 assertion key, for a client whose key is already
+    /// governed by another local tool such as Evidence access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assertion_key_input_file: Option<PathBuf>,
+    pub assertion_key_ref: Option<SecretReference>,
 }
 
 /// The purposes one logical local client may request in a schema-test step.
@@ -262,6 +349,58 @@ pub(super) fn client_token_claims(client: &Client) -> BTreeMap<String, Value> {
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+const ASSERTION_KEY_BYTES: usize = 16 * 1024;
+const CLIENT_SECRET_BYTES: usize = 1024;
+const PASSWORD_BYTES: usize = 1024;
+const HMAC_KEY_BYTES: usize = 1024;
+const COMPLETION_TOKEN_BYTES: usize = 4096;
+const EVIDENCE_TOKEN_BYTES: usize = 16 * 1024;
+const EVIDENCE_DOCUMENT_BYTES: usize = 64 * 1024;
+
+/// One secret an Evidence provider references: the member naming it, the
+/// reference, its bound, and the private file the session copies it to.
+struct EvidenceSecret<'a> {
+    member: String,
+    reference: &'a SecretReference,
+    maximum: usize,
+    copy: String,
+}
+
+/// Every secret one Evidence provider references.
+fn evidence_secrets<'a>(id: &str, provider: &'a LocalEvidenceProvider) -> Vec<EvidenceSecret<'a>> {
+    let mut secrets = vec![EvidenceSecret {
+        member: format!("evidenceProviders.{id}.trustedJwksRef"),
+        reference: &provider.trusted_jwks_ref,
+        maximum: EVIDENCE_DOCUMENT_BYTES,
+        copy: format!("evidence-jwks-{id}"),
+    }];
+    if let Some(reference) = &provider.token_ref {
+        secrets.push(EvidenceSecret {
+            member: format!("evidenceProviders.{id}.tokenRef"),
+            reference,
+            maximum: EVIDENCE_TOKEN_BYTES,
+            copy: format!("evidence-token-{id}"),
+        });
+    }
+    if let Some(credentials) = &provider.private_key_jwt {
+        secrets.push(EvidenceSecret {
+            member: format!("evidenceProviders.{id}.privateKeyJwt.privateKeyRef"),
+            reference: &credentials.private_key_ref,
+            maximum: EVIDENCE_DOCUMENT_BYTES,
+            copy: format!("evidence-client-key-{id}"),
+        });
+    }
+    if let Some(reference) = &provider.ca_bundle_ref {
+        secrets.push(EvidenceSecret {
+            member: format!("evidenceProviders.{id}.caBundleRef"),
+            reference,
+            maximum: EVIDENCE_DOCUMENT_BYTES,
+            copy: format!("evidence-ca-{id}"),
+        });
+    }
+    secrets
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -355,21 +494,91 @@ fn valid_grants(clients: &Clients, grants: &[LocalPermissionGrant]) -> bool {
             == grants.len()
 }
 
-pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
-    let clients: Clients = serde_norway::from_slice(bytes).map_err(|_| {
-        anyhow::anyhow!("clients file must match the closed local clients v1 format")
+/// A development clients file the shared reader refused. `bregctl dev`
+/// prints its diagnostics unchanged (CFG-DIAG-1, CFG-DIAG-2).
+#[derive(Debug)]
+pub(crate) struct ClientsRefused(pub Report);
+
+impl std::fmt::Display for ClientsRefused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0.render_human())
+    }
+}
+
+impl std::error::Error for ClientsRefused {}
+
+/// Decode a development clients document through the shared reader, without
+/// the semantic checks or secret resolution `clients` adds.
+pub(super) fn decode(file: &str, bytes: &[u8]) -> Result<Clients, Report> {
+    Reader::new(file)
+        .decode::<Clients>(bytes, &Expect::one(&DEV_CLIENTS_FORMAT))
+        .map(|decoded| decoded.value)
+}
+
+/// The clients a session retains in `.breg/dev/clients.json`, written by this
+/// `bregctl` when the session started. Secrets are not resolved again.
+pub(super) fn retained(bytes: &[u8]) -> Result<Clients, Report> {
+    decode(".breg/dev/clients.json", bytes)
+}
+
+/// Resolve one secret the clients file references, bounded to `maximum`
+/// bytes. A refusal names the member and never the reference or the value
+/// (CFG-SEC-3).
+fn resolve_secret(
+    clients: &Clients,
+    member: &str,
+    reference: &SecretReference,
+    maximum: usize,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let Some(providers) = &clients.secret_providers else {
+        bail!(
+            "{member} names a secret, but the clients file declares no secretProviders; \
+             declare secretProviders.file with an absolute root, secretProviders.environment, or both"
+        );
+    };
+    let resolver = providers.resolver().map_err(|_| {
+        anyhow::anyhow!(
+            "secretProviders cannot resolve {member}; \
+             declare secretProviders.file with an absolute root, secretProviders.environment, or both"
+        )
     })?;
-    if clients.version != 1
-        || clients.clients.is_empty()
-        || clients.clients.len() > 32
-        || clients.seed.len() > 100
-    {
-        bail!("local clients v1 requires 1..32 explicit clients and at most 100 seed records");
+    let secret = resolver.resolve_reference(reference).map_err(|error| {
+        let fix = match error {
+            registry_platform_config::SecretError::ProviderDisabled => {
+                "declare the provider the reference names under secretProviders"
+            }
+            registry_platform_config::SecretError::Unavailable => {
+                "create the file under secretProviders.file.root, or set the environment variable the reference names"
+            }
+            registry_platform_config::SecretError::UnsafeFile => {
+                "make it a regular file you own, with mode 0400 or 0600 and a single link"
+            }
+            registry_platform_config::SecretError::InvalidValue => {
+                "store a non-empty value without NUL bytes, at most 64 KiB"
+            }
+            _ => "check the reference and the provider that resolves it",
+        };
+        anyhow::anyhow!("{member} could not be resolved: {error}; {fix}")
+    })?;
+    if secret.len() > maximum {
+        bail!("{member} is larger than its {maximum}-byte limit; store the expected secret under this reference");
+    }
+    Ok(Zeroizing::new(secret.expose_secret().to_vec()))
+}
+
+pub(super) fn clients(file: &str, bytes: &[u8]) -> Result<Clients> {
+    let clients = decode(file, bytes).map_err(ClientsRefused)?;
+    if let Some(providers) = &clients.secret_providers {
+        providers.check().map_err(|error| {
+            anyhow::anyhow!("{error}; declare secretProviders.file with an absolute root, secretProviders.environment, or both")
+        })?;
+    }
+    if clients.clients.is_empty() || clients.clients.len() > 32 || clients.seed.len() > 100 {
+        bail!("local clients require 1..32 explicit clients and at most 100 seed records");
     }
     let mut ids = BTreeSet::new();
     let mut profile_defaults = BTreeSet::new();
     let mut test_bindings = BTreeSet::new();
-    let mut outputs = BTreeSet::new();
     for client in &clients.clients {
         let mut client_profiles = BTreeSet::new();
         if client.id == "issuer"
@@ -417,34 +626,13 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             bail!("local client scopes or claims exceed their bounds");
         }
         client_purposes(client)?;
-        match (&client.client_id_file, &client.assertion_key_file) {
-            (None, None) => (),
-            (Some(id), Some(key)) if id != key => {
-                for path in [id, key] {
-                    if !path.is_absolute()
-                        || path
-                            .components()
-                            .any(|c| matches!(c, std::path::Component::ParentDir))
-                        || !outputs.insert(path)
-                    {
-                        bail!("credential pair outputs must be distinct absolute paths");
-                    }
-                    let parent = path
-                        .parent()
-                        .context("credential output requires a parent")?;
-                    private::check(parent, true)?;
-                    if fs::canonicalize(parent)? != parent {
-                        bail!("credential output parent must be canonical");
-                    }
-                }
-            }
-            _ => bail!("declare both clientIdFile and assertionKeyFile or neither"),
-        }
-        if let Some(path) = &client.assertion_key_input_file {
-            if !path.is_absolute() {
-                bail!("assertionKeyInputFile must be absolute");
-            }
-            private::check(path, false)?;
+        if let Some(reference) = &client.assertion_key_ref {
+            resolve_secret(
+                &clients,
+                &format!("clients.{}.assertionKeyRef", client.id),
+                reference,
+                ASSERTION_KEY_BYTES,
+            )?;
         }
     }
     // Every multi-purpose client shares the one generated first-party purpose
@@ -524,22 +712,28 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             bail!("local review authorities need bounded IDs, exact loopback endpoints, producer bindings, recovery windows, and declared clients");
         }
         match (
-            &authority.completion_token_file,
+            &authority.completion_token_ref,
             &authority.completion_recipient,
         ) {
             (None, None) => (),
-            (Some(file), Some(recipient))
+            (Some(reference), Some(recipient))
                 if !recipient.trim().is_empty()
                     && recipient.len() <= 128
                     && !recipient.chars().any(char::is_control) =>
             {
-                private::check(file, false)?;
-                let token = Zeroizing::new(private::read(file, 4096)?);
-                if token.is_empty() || !token.iter().all(|byte| byte.is_ascii_graphic()) {
+                let token = resolve_secret(
+                    &clients,
+                    &format!("reviewAuthorities.{id}.completionTokenRef"),
+                    reference,
+                    COMPLETION_TOKEN_BYTES,
+                )?;
+                if !token.iter().all(|byte| byte.is_ascii_graphic()) {
                     bail!("local review completion tokens must be bounded visible ASCII");
                 }
             }
-            _ => bail!("local review completion token and recipient must be declared together"),
+            _ => bail!(
+                "local review completionTokenRef and completionRecipient must be declared together"
+            ),
         }
     }
     if clients.review_executors.len() > 8 {
@@ -588,14 +782,11 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         {
             bail!("local Evidence providers need bounded IDs, trust bindings, and exact loopback origins");
         }
-        if provider.token_file.is_some() == provider.private_key_jwt.is_some() {
-            bail!("local Evidence providers require exactly one tokenFile or privateKeyJwt");
+        if provider.token_ref.is_some() == provider.private_key_jwt.is_some() {
+            bail!("local Evidence providers require exactly one tokenRef or privateKeyJwt");
         }
-        for file in std::iter::once(&provider.trusted_jwks_file)
-            .chain(provider.token_file.iter())
-            .chain(provider.ca_bundle_file.iter())
-        {
-            private::check(file, false)?;
+        for secret in evidence_secrets(id, provider) {
+            resolve_secret(&clients, &secret.member, secret.reference, secret.maximum)?;
         }
         if let Some(credentials) = &provider.private_key_jwt {
             let endpoint = reqwest::Url::parse(&credentials.token_endpoint)
@@ -627,7 +818,6 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             {
                 bail!("local Evidence privateKeyJwt requires exact loopback token endpoint, client, audience, resource and scopes");
             }
-            private::check(&credentials.private_key_file, false)?;
         }
     }
     for (id, destination) in &clients.event_destinations {
@@ -661,7 +851,6 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         {
             bail!("local event destinations need bounded IDs, exact loopback origins, and absolute paths");
         }
-        private::check(&destination.hmac_key_file, false)?;
     }
     let mut resource_ids = BTreeSet::new();
     for resource in &clients.issuer.resources {
@@ -756,7 +945,12 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         {
             bail!("browser applications need distinct IDs and exact declared resource permissions");
         }
-        private::check(&app.client_secret_file, false)?;
+        resolve_secret(
+            &clients,
+            &format!("issuer.interactiveApplications.{}.clientSecretRef", app.id),
+            &app.client_secret_ref,
+            CLIENT_SECRET_BYTES,
+        )?;
     }
     for id in &clients.issuer.browser_clients {
         if !identifier(id) || !app_ids.insert(id) || ids.contains(id) {
@@ -771,19 +965,22 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if !valid_grants(&clients, &user.grants) {
             bail!("synthetic user grants need distinct declared resources and exact permissions");
         }
-        private::check(&user.password_file, false)?;
+        resolve_secret(
+            &clients,
+            &format!("issuer.syntheticUsers.{}.passwordRef", user.username),
+            &user.password_ref,
+            PASSWORD_BYTES,
+        )?;
     }
     for (id, destination) in &clients.event_destinations {
-        let key = Zeroizing::new(private::read(&destination.hmac_key_file, 1024)?);
+        let key = resolve_secret(
+            &clients,
+            &format!("eventDestinations.{id}.hmacSha256KeyRef"),
+            &destination.hmac_sha256_key_ref,
+            HMAC_KEY_BYTES,
+        )?;
         if key.len() < 32 {
             bail!("local event destination {id} needs at least 32 HMAC key bytes");
-        }
-        // The runtime resolves this key through the shared file secret
-        // provider, which refuses any value carrying a NUL byte. A randomly
-        // generated key holds one often enough to matter, so it is refused
-        // where the operator named the file rather than at a failed start.
-        if key.contains(&0) {
-            bail!("local event destination {id} needs NUL-free HMAC key bytes");
         }
     }
     let mut seeds = BTreeSet::new();
@@ -842,11 +1039,11 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     let owner_clients: Option<Clients> = borrowed
         .as_ref()
         .map(|owner| {
-            serde_json::from_slice(&private::read(
+            retained(&private::read(
                 &owner.root().join("clients.json"),
                 MAX_BYTES,
             )?)
-            .context("shared issuer owner has invalid retained clients")
+            .map_err(|_| anyhow::anyhow!("shared issuer owner has invalid retained clients"))
         })
         .transpose()?;
     if !clients.issuer.browser_clients.is_empty() {
@@ -892,8 +1089,14 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
                 &private::read(&source.join("public.jwk"), 4096)?,
             )?;
         } else {
-            if let Some(input) = &client.assertion_key_input_file {
-                import_keypair(&directory, input, &client.id)?;
+            if let Some(reference) = &client.assertion_key_ref {
+                let key = resolve_secret(
+                    clients,
+                    &format!("clients.{}.assertionKeyRef", client.id),
+                    reference,
+                    ASSERTION_KEY_BYTES,
+                )?;
+                import_keypair(&directory, &key, &client.id)?;
             } else {
                 keypair(&directory)?;
             }
@@ -906,7 +1109,12 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         private::directory(&root.join("issuer/secrets"))?;
     }
     for app in &clients.issuer.interactive_applications {
-        let secret = Zeroizing::new(private::read(&app.client_secret_file, 1024)?);
+        let secret = resolve_secret(
+            clients,
+            &format!("issuer.interactiveApplications.{}.clientSecretRef", app.id),
+            &app.client_secret_ref,
+            CLIENT_SECRET_BYTES,
+        )?;
         private::create(
             &root
                 .join("issuer/secrets")
@@ -915,7 +1123,12 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         )?;
     }
     for user in &clients.issuer.synthetic_users {
-        let password = Zeroizing::new(private::read(&user.password_file, 1024)?);
+        let password = resolve_secret(
+            clients,
+            &format!("issuer.syntheticUsers.{}.passwordRef", user.username),
+            &user.password_ref,
+            PASSWORD_BYTES,
+        )?;
         private::create(
             &root
                 .join("issuer/secrets")
@@ -924,35 +1137,18 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         )?;
     }
     for (id, destination) in &clients.event_destinations {
-        let key = Zeroizing::new(private::read(&destination.hmac_key_file, 1024)?);
+        let key = resolve_secret(
+            clients,
+            &format!("eventDestinations.{id}.hmacSha256KeyRef"),
+            &destination.hmac_sha256_key_ref,
+            HMAC_KEY_BYTES,
+        )?;
         private::create(&root.join("secrets").join(format!("webhook-{id}")), &key)?;
     }
     for (id, provider) in &clients.evidence_providers {
-        let mut files = vec![(
-            &provider.trusted_jwks_file,
-            format!("evidence-jwks-{id}"),
-            64 * 1024,
-        )];
-        if let Some(source) = &provider.token_file {
-            files.push((source, format!("evidence-token-{id}"), 16 * 1024));
-        }
-        if let Some(credentials) = &provider.private_key_jwt {
-            files.push((
-                &credentials.private_key_file,
-                format!("evidence-client-key-{id}"),
-                64 * 1024,
-            ));
-        }
-        for (source, name, maximum) in files {
-            let bytes = Zeroizing::new(private::read(source, maximum)?);
-            private::create(&root.join("secrets").join(name), &bytes)?;
-        }
-        if let Some(source) = &provider.ca_bundle_file {
-            let bytes = Zeroizing::new(private::read(source, 64 * 1024)?);
-            private::create(
-                &root.join("secrets").join(format!("evidence-ca-{id}")),
-                &bytes,
-            )?;
+        for secret in evidence_secrets(id, provider) {
+            let bytes = resolve_secret(clients, &secret.member, secret.reference, secret.maximum)?;
+            private::create(&root.join("secrets").join(&secret.copy), &bytes)?;
         }
     }
     for (id, authority) in &clients.review_authorities {
@@ -972,8 +1168,13 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             let bytes = Zeroizing::new(private::read(&source, maximum)?);
             private::create(&root.join("secrets").join(name), &bytes)?;
         }
-        if let Some(source) = &authority.completion_token_file {
-            let bytes = Zeroizing::new(private::read(source, 4096)?);
+        if let Some(reference) = &authority.completion_token_ref {
+            let bytes = resolve_secret(
+                clients,
+                &format!("reviewAuthorities.{id}.completionTokenRef"),
+                reference,
+                COMPLETION_TOKEN_BYTES,
+            )?;
             private::create(
                 &root
                     .join("secrets")
@@ -1133,15 +1334,14 @@ pub(super) fn check_borrowed_browser_clients(
     Ok(())
 }
 
-fn import_keypair(directory: &Path, input: &Path, id: &str) -> Result<()> {
+fn import_keypair(directory: &Path, key: &[u8], id: &str) -> Result<()> {
     private::directory(directory)?;
-    let key = Zeroizing::new(private::read(input, 16 * 1024)?);
-    super::export_client::validate_pair(id.as_bytes(), &key, id)?;
-    let private: Value = serde_json::from_slice(&key)?;
+    super::export_client::validate_pair(id.as_bytes(), key, id)?;
+    let private: Value = serde_json::from_slice(key)?;
     // Every token this client obtains is a private_key_jwt assertion, whose
     // header needs a usable key identifier. A key without one imports and
     // registers cleanly and then fails at the first token request, so it is
-    // refused where the operator named the file.
+    // refused where the operator named the key.
     if !private["kid"]
         .as_str()
         .is_some_and(|kid| !kid.trim().is_empty() && kid.len() <= 256)
@@ -1152,7 +1352,7 @@ fn import_keypair(directory: &Path, input: &Path, id: &str) -> Result<()> {
         "kty": private["kty"], "crv": private["crv"], "alg": private["alg"],
         "kid": private["kid"], "x": private["x"], "y": private["y"]
     });
-    private::create(&directory.join("assertion-key.jwk"), &key)?;
+    private::create(&directory.join("assertion-key.jwk"), key)?;
     private::create(&directory.join("public.jwk"), &serde_json::to_vec(&public)?)
 }
 
@@ -1473,11 +1673,11 @@ pub(super) fn assertion_issuers(
         .issuer_project
         .as_ref()
         .map(|project| -> Result<Clients> {
-            serde_json::from_slice(&private::read(
+            retained(&private::read(
                 &project.join(".breg/dev/clients.json"),
                 MAX_BYTES,
             )?)
-            .context("shared issuer owner has invalid retained clients")
+            .map_err(|_| anyhow::anyhow!("shared issuer owner has invalid retained clients"))
         })
         .transpose()?;
     let authority_clients = owner.as_ref().unwrap_or(clients);
@@ -1575,7 +1775,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
             "trustBindingId":provider.trust_binding_id,
-            "tokenRef":provider.token_file.as_ref().map(|_| format!("secret:file/evidence-token-{id}")),
+            "tokenRef":provider.token_ref.as_ref().map(|_| format!("secret:file/evidence-token-{id}")),
             "privateKeyJwt":provider.private_key_jwt.as_ref().map(|credentials| json!({
                 "tokenEndpoint":credentials.token_endpoint,
                 "clientId":credentials.client_id,
@@ -1586,7 +1786,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             })),
             "trustedJwksRef":format!("secret:file/evidence-jwks-{id}"),
             "revokedKeyIds":provider.revoked_key_ids,
-            "caBundleRef":provider.ca_bundle_file.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
+            "caBundleRef":provider.ca_bundle_ref.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
         }))).collect::<BTreeMap<_,_>>(),
         "reviewAuthorities":local_review_authorities(state, clients),
         "reviewExecutors":review_executors

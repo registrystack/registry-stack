@@ -804,7 +804,8 @@ fn installed_dev_receives_retries_replays_and_retains_authored_events() {
     let clients = parent.join("clients.yaml");
     write(
         &clients,
-        br#"version: 1
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [operator]
@@ -1226,7 +1227,8 @@ journeys:
     let clients = parent.join("clients.yaml");
     write(
         &clients,
-        br#"version: 1
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: officer
     accessProfiles: [operator, record-reader]
@@ -1411,7 +1413,8 @@ fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
     let clients = parent.join("clients.yaml");
     write(
         &clients,
-        br#"version: 1
+        br#"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
 clients:
   - id: operator
     accessProfiles: [operator]
@@ -2207,6 +2210,70 @@ fn dev_start_port_refusals_name_the_port_flag_and_role_in_both_formats() {
             "a human refusal stays off stdout"
         );
     }
+}
+
+#[test]
+fn dev_start_prints_the_reader_diagnostics_for_a_refused_clients_file_in_both_formats() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::tempdir().expect("a temporary directory");
+    // `init` refuses a destination behind a symbolic link, and a platform's
+    // temporary root often is one.
+    let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
+    let project = parent.join("registry");
+    let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
+    assert!(initialized.status.success(), "{initialized:?}");
+    let clients = project.join("dev-clients.yaml");
+    write(
+        &clients,
+        b"apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims: {registry_principal: generic-registry-operator}
+    assertionKeyInputFile: /private/operator-key
+",
+    );
+    let start = ["dev", "start", project.to_str().unwrap()];
+
+    let json = plain_bregctl(binary, true, &start);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    assert!(json.stderr.is_empty(), "{json:?}");
+    let report: Value = serde_json::from_slice(&json.stdout).expect("a JSON refusal");
+    assert_eq!(report["ok"], false, "{report}");
+    assert_eq!(report["command"], "dev", "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "config.removed-key");
+    assert_eq!(diagnostics[0]["path"], "/clients/0/assertionKeyInputFile");
+    assert_eq!(diagnostics[0]["source"]["file"], clients.to_str().unwrap());
+    assert_eq!(diagnostics[0]["source"]["line"], 8);
+    assert!(
+        diagnostics[0]["suggestedAction"]
+            .as_str()
+            .is_some_and(|action| action.contains("assertionKeyRef")),
+        "{report}"
+    );
+
+    let human = plain_bregctl(binary, false, &start);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(human.stdout.is_empty(), "{human:?}");
+    let rendered = String::from_utf8(human.stderr).expect("refusal is UTF-8");
+    assert!(
+        rendered.starts_with("bregctl dev refused the development clients.\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("config.removed-key"), "{rendered}");
+    assert!(rendered.contains("assertionKeyRef"), "{rendered}");
+    let machine = String::from_utf8_lossy(&json.stdout).into_owned();
+    for output in [&rendered, &machine] {
+        assert!(!output.contains("/private/operator-key"), "{output}");
+    }
+    assert!(
+        !project.join(".breg/dev").exists(),
+        "a refused clients file starts nothing"
+    );
 }
 
 #[test]

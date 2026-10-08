@@ -678,7 +678,7 @@ def prepare_dev(root: Path, fixture: Path, fixture_kind: str, webhook: bool = Fa
         if "testBindings" in declaration:
             client["testBindings"] = declaration["testBindings"]
         clients.append(client)
-    (project / "dev-clients.yaml").write_text(json.dumps({"version": 1, "clients": clients}, indent=2) + "\n", encoding="utf-8")
+    (project / "dev-clients.yaml").write_text(json.dumps({"apiVersion": "id.registrystack.org/formats/breg/dev-clients/v1alpha1", "kind": "BRegDevClients", "clients": clients}, indent=2) + "\n", encoding="utf-8")
 
 def bind_webhook_module(
     root: Path,

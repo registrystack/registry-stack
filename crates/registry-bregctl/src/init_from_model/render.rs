@@ -646,7 +646,11 @@ fn dev_clients(plan: &Plan) -> String {
          fresh private key per client under `.breg/dev/credentials/`; nothing here is a \
          credential, and none of it belongs in a deployment.",
     );
-    yaml.line(0, "version: 1");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1",
+    );
+    yaml.line(0, "kind: BRegDevClients");
     yaml.line(0, "clients:");
     yaml.entry(1, "- id", OPERATOR_PROFILE);
     yaml.line(2, &format!("accessProfiles: [{OPERATOR_PROFILE}]"));
@@ -1987,7 +1991,11 @@ mod tests {
         assert!(header.contains("testBindings"), "{header}");
         assert!(header.contains("'Explicit teaching clients'"), "{header}");
         let clients = yaml(&files, "dev-clients.yaml");
-        assert_eq!(clients["version"], 1);
+        assert_eq!(
+            clients["apiVersion"],
+            "id.registrystack.org/formats/breg/dev-clients/v1alpha1"
+        );
+        assert_eq!(clients["kind"], "BRegDevClients");
         let clients = clients["clients"].as_array().expect("clients");
         assert_eq!(clients.len(), 2);
         assert_eq!(clients[0]["accessProfiles"][0], OPERATOR_PROFILE);

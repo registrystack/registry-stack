@@ -103,8 +103,8 @@ deployable bundle. `evidencectl dev start` additionally creates session-scoped P
 caller and holder keys and starts the pinned local issuer so the local happy path needs no key ceremony.
 For a composed local issuer, first author explicit Evidence access policies and
 active access clients, then register those exact clients in a Base Registry Engine (BReg) dev issuer
-owner with `assertionKeyInputFile` pointing to each Evidence client's private
-key. Map each client to `urn:registrystack:evidence:local:gateway` with
+owner with `assertionKeyRef`, a secret reference to each Evidence client's
+private key. Map each client to `urn:registrystack:evidence:local:gateway` with
 `evidence:invoke` and the exact `registry_actor_kind`, `evidence_tags`, and
 `evidence_audience` claims. Start the BReg owner, then run
 `evidencectl dev start ./evidence --issuer-project ./issuer-owner`. Evidence
