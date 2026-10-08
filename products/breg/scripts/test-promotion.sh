@@ -802,7 +802,7 @@ import json
 import sys
 initial, successor = (json.loads(line) for line in open(sys.argv[1], encoding="utf-8").read().splitlines())
 binding = json.load(open(sys.argv[3], encoding="utf-8"))
-if initial != [] or [(reference["bindingPath"], reference["sha256"]) for reference in successor] != [(sys.argv[2], binding["sha256"])]:
+if initial != [] or [(reference["bindingPath"], reference["sha256"]) for reference in successor] != [(sys.argv[2], binding["digest"])]:
     raise SystemExit("the ledger does not record the successor's backup binding")
 PY
   url="http://${listener_of[$environment]}/"
