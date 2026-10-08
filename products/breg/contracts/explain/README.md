@@ -66,6 +66,29 @@ identifier in the Registry Stack identifier catalog, named for the kind and
 the version, for example
 `https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha3.schema.json`.
 
+## Examples
+
+Each kind registers a minimal valid example in
+`products/platform/config-formats.yaml`: the `explanation` that `bregctl`
+writes for the `products/breg/examples/access-review` project, or with no
+project for `lifecycle`, committed under
+`products/breg/examples/formats/explain/`. `explain_contract.rs` validates
+each against its schema and fails when one differs from what the command
+writes now. Rewrite them from the repository root with:
+
+```bash
+project=products/breg/examples/access-review
+examples=products/breg/examples/formats/explain
+for subject in model access actions change-requests events queries routes; do
+  bregctl --format json explain "$subject" "$project" |
+    jq .explanation >"$examples/$subject-explanation.json"
+done
+bregctl --format json explain access "$project" --scenario "$project/allowed.json" |
+  jq .explanation >"$examples/access-preview.json"
+bregctl --format json explain lifecycle |
+  jq .explanation >"$examples/lifecycle-explanation.json"
+```
+
 ## What is pinned, what is opaque, and why
 
 A key is **pinned** (named in `required`, typed, `additionalProperties:

@@ -868,7 +868,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/access-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -898,7 +898,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/access-preview.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -928,7 +928,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/actions-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -958,7 +958,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/change-requests-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -988,7 +988,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/events-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1018,7 +1018,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/lifecycle-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1048,7 +1048,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/model-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1078,7 +1078,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/queries-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []
@@ -1108,7 +1108,7 @@ formats:
       file: crates/registry-bregctl/src/lib.rs
       symbol: EXPLAIN_API_VERSION
     check: none
-    example: none
+    example: products/breg/examples/formats/explain/routes-explanation.json
     conformance: none
     securityMembers: []
     restrictingMembers: []

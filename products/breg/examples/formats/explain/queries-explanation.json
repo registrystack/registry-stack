@@ -1,0 +1,139 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "kind": "QueriesExplanation",
+  "operations": [
+    {
+      "allowCount": false,
+      "apiFields": [
+        {
+          "apiName": "code",
+          "field": "code",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "district",
+          "field": "district",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        },
+        {
+          "apiName": "label",
+          "field": "label",
+          "fieldType": {
+            "maxLength": 100,
+            "minLength": 0,
+            "type": "string"
+          },
+          "sourceKind": "stored"
+        }
+      ],
+      "bounds": {
+        "maxFilterDepth": 16,
+        "maxFilterNodes": 128,
+        "maxFilterPayloadBytes": 16384,
+        "maxFilterPredicates": 32,
+        "maxInValues": 100,
+        "maxPageSize": 100,
+        "maxSelectedFields": 128,
+        "maxTop": 100
+      },
+      "entity": "record",
+      "filterable": [
+        {
+          "apiName": "code",
+          "examples": [
+            "$filter=code eq 'example'",
+            "$filter=code in ('example','sample')",
+            "$filter=code eq null",
+            "$filter=code ne null",
+            "$filter=startswith(code,'example')",
+            "$filter=contains(code,'example')"
+          ],
+          "field": "code",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "operators": [
+            "equals",
+            "in",
+            "is_null",
+            "is_not_null",
+            "prefix",
+            "contains"
+          ],
+          "wireOperators": [
+            "contains",
+            "eq",
+            "eq null",
+            "in",
+            "ne",
+            "ne null",
+            "startswith"
+          ]
+        },
+        {
+          "apiName": "district",
+          "examples": [
+            "$filter=district eq 'example'",
+            "$filter=district in ('example','sample')",
+            "$filter=district eq null",
+            "$filter=district ne null",
+            "$filter=startswith(district,'example')",
+            "$filter=contains(district,'example')"
+          ],
+          "field": "district",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "operators": [
+            "equals",
+            "in",
+            "is_null",
+            "is_not_null",
+            "prefix",
+            "contains"
+          ],
+          "wireOperators": [
+            "contains",
+            "eq",
+            "eq null",
+            "in",
+            "ne",
+            "ne null",
+            "startswith"
+          ]
+        }
+      ],
+      "id": "records.record.district-reader.list",
+      "kind": "list",
+      "profile": "district-reader",
+      "readPath": null,
+      "routeId": "records.record.list",
+      "selectors": [],
+      "sortable": [],
+      "wire": {
+        "accessProfile": "accessProfile",
+        "asOf": "asOf",
+        "count": "$count",
+        "cursor": "$skiptoken",
+        "filter": "$filter",
+        "orderBy": "$orderby",
+        "pageSize": "$top",
+        "select": "$select"
+      }
+    }
+  ]
+}

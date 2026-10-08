@@ -1,0 +1,48 @@
+{
+  "admitted": true,
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "authorityIssued": false,
+  "credentialsVerified": false,
+  "effectiveProfile": {
+    "allowDataExport": false,
+    "anonymous": false,
+    "default": false,
+    "filterableFields": [
+      "code",
+      "district"
+    ],
+    "id": "district-reader",
+    "operations": [
+      "get",
+      "list"
+    ],
+    "principalClaim": "registry_principal",
+    "readableFields": [
+      "code",
+      "district",
+      "label"
+    ],
+    "requiredPurposes": [
+      "record-administration"
+    ],
+    "requiredScopes": [
+      "record:read"
+    ],
+    "revisionAccess": false,
+    "rowBoundaries": [
+      {
+        "claim": "assigned_districts",
+        "field": "district",
+        "operator": "in"
+      }
+    ],
+    "sortableFields": [],
+    "writableFields": []
+  },
+  "kind": "AccessPreview",
+  "mode": "offline_synthetic",
+  "reason": "profile_requirements_satisfied",
+  "recipients": [],
+  "recordAccess": "not_evaluated",
+  "rowValuesDisclosed": false
+}

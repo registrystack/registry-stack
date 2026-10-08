@@ -1,0 +1,278 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "entities": {
+    "record": {
+      "accessProfiles": {
+        "district-reader": {
+          "allowDataExport": false,
+          "anonymous": false,
+          "default": false,
+          "filterableFields": [
+            "code",
+            "district"
+          ],
+          "id": "district-reader",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "principalClaim": "registry_principal",
+          "readableFields": [
+            "code",
+            "district",
+            "label"
+          ],
+          "requiredPurposes": [
+            "record-administration"
+          ],
+          "requiredScopes": [
+            "record:read"
+          ],
+          "revisionAccess": false,
+          "rowBoundaries": [
+            {
+              "claim": "assigned_districts",
+              "field": "district",
+              "operator": "in"
+            }
+          ],
+          "sortableFields": [],
+          "writableFields": []
+        }
+      },
+      "accessRequirements": {
+        "allowedPurposes": [
+          "record-administration"
+        ],
+        "requiredScopes": [
+          "record:read"
+        ],
+        "rowBoundaries": [
+          {
+            "claim": "assigned_districts",
+            "field": "district",
+            "operator": "in"
+          }
+        ]
+      },
+      "canonicalId": {
+        "apiName": "id",
+        "classification": "internal",
+        "fieldType": {
+          "type": "uuid"
+        },
+        "id": "id",
+        "sqlName": "id"
+      },
+      "classification": "internal",
+      "constraints": {},
+      "derivedFields": {},
+      "derivedRelations": {},
+      "fields": {
+        "code": {
+          "classification": "internal",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "id": "code",
+          "physicalName": "breg_f_record_code_d6316a917ebd2776",
+          "required": true
+        },
+        "district": {
+          "classification": "internal",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "id": "district",
+          "physicalName": "breg_f_record_district_e1691bd7efd4bcab",
+          "required": true
+        },
+        "label": {
+          "classification": "internal",
+          "fieldType": {
+            "maxLength": 100,
+            "minLength": 0,
+            "type": "string"
+          },
+          "id": "label",
+          "physicalName": "breg_f_record_label_afd0f60652254ede",
+          "required": true
+        }
+      },
+      "hooks": {},
+      "id": "record",
+      "indexes": {
+        "by-code": [
+          "code"
+        ],
+        "by-district": [
+          "district"
+        ]
+      },
+      "mutationMode": "mutable",
+      "physicalTable": "breg_e_record_da7a7e7c2436c900",
+      "primaryDataset": "access-review",
+      "readPaths": {},
+      "route": "records",
+      "selectorProfiles": {},
+      "sourceRelation": {
+        "entityId": "record",
+        "sqlName": "record",
+        "storedFields": [
+          "code",
+          "label",
+          "district"
+        ]
+      },
+      "storedFields": [
+        {
+          "apiName": "code",
+          "classification": "internal",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "id": "code",
+          "physicalName": "breg_f_record_code_d6316a917ebd2776",
+          "required": true,
+          "sqlName": "code"
+        },
+        {
+          "apiName": "label",
+          "classification": "internal",
+          "fieldType": {
+            "maxLength": 100,
+            "minLength": 0,
+            "type": "string"
+          },
+          "id": "label",
+          "physicalName": "breg_f_record_label_afd0f60652254ede",
+          "required": true,
+          "sqlName": "label"
+        },
+        {
+          "apiName": "district",
+          "classification": "internal",
+          "fieldType": {
+            "maxLength": 32,
+            "minLength": 0,
+            "type": "string"
+          },
+          "id": "district",
+          "physicalName": "breg_f_record_district_e1691bd7efd4bcab",
+          "required": true,
+          "sqlName": "district"
+        }
+      ],
+      "tombstone": false
+    }
+  },
+  "kind": "ModelExplanation",
+  "manifestProjection": {
+    "accessProfile": "district-reader",
+    "canonicalBaseIri": "https://registry.example.com",
+    "catalog": {
+      "applicationProfiles": [],
+      "baseUrl": "https://registry.example.com",
+      "conformsTo": [],
+      "publisher": {
+        "id": "access-review-authority",
+        "name": "Example institution"
+      },
+      "standards": {},
+      "title": "Access review example"
+    },
+    "classificationCeiling": "internal",
+    "dataServices": {
+      "access-review-data-service": {
+        "iri": "https://registry.example.com/data-services/access-review-data-service",
+        "servesDatasets": [
+          "access-review"
+        ],
+        "source": {
+          "endpointUrl": "https://registry.example.com",
+          "id": "access-review-data-service",
+          "servesDatasets": [
+            "access-review"
+          ],
+          "title": "Access review example"
+        }
+      }
+    },
+    "datasets": {
+      "access-review": {
+        "effectiveAccessProfile": "district-reader",
+        "effectiveClassificationCeiling": "internal",
+        "entities": [
+          "record"
+        ],
+        "iri": "https://registry.example.com/datasets/access-review",
+        "source": {
+          "applicableLegislation": [],
+          "conformsTo": [],
+          "id": "access-review",
+          "owner": "Example institution",
+          "status": "active",
+          "title": "Access review records"
+        }
+      }
+    },
+    "distributions": {},
+    "entities": [],
+    "entityDatasets": {
+      "record": "access-review"
+    },
+    "primaryAuthority": {
+      "id": "access-review-authority",
+      "iri": "https://registry.example.com/authorities/access-review-authority",
+      "name": "Example institution"
+    },
+    "publicService": {
+      "competentAuthority": "access-review-authority",
+      "dataServices": [
+        "access-review-data-service"
+      ],
+      "iri": "https://registry.example.com/public-services/access-review-service",
+      "produces": [
+        "access-review"
+      ],
+      "source": {
+        "id": "access-review-service",
+        "title": "Access review example"
+      }
+    },
+    "vocabularies": []
+  },
+  "moduleClosure": [],
+  "moduleOrder": [],
+  "package": {
+    "sourceRevision": "access-review-example-1"
+  },
+  "physicalNames": {
+    "entities": {
+      "record": {
+        "constraints": {},
+        "fields": {
+          "code": "breg_f_record_code_d6316a917ebd2776",
+          "district": "breg_f_record_district_e1691bd7efd4bcab",
+          "label": "breg_f_record_label_afd0f60652254ede"
+        },
+        "indexes": {
+          "by-code": "breg_i_record_by_code_02c8e40a5a2d481b",
+          "by-district": "breg_i_record_by_district_26995c6b7d8b1a0c"
+        },
+        "policies": {
+          "district-reader": "breg_p_record_district_reader_6a839879cc936514"
+        },
+        "table": "breg_e_record_da7a7e7c2436c900"
+      }
+    }
+  },
+  "registryId": "access-review",
+  "version": "0.1.0"
+}

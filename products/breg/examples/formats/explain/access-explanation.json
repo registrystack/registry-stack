@@ -1,0 +1,140 @@
+{
+  "actions": {
+    "access": [],
+    "actions": [],
+    "routes": []
+  },
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "claimContract": {
+    "directClaims": {
+      "assigned_districts": {
+        "fieldType": {
+          "maxLength": 32,
+          "minLength": 0,
+          "type": "string"
+        },
+        "multiValue": true,
+        "uses": [
+          {
+            "entityId": "record",
+            "fieldId": "district",
+            "profileId": "district-reader",
+            "surface": "entities/record/profiles/district-reader"
+          }
+        ]
+      }
+    },
+    "principalClaims": [
+      "registry_principal"
+    ],
+    "purposeRequired": true
+  },
+  "claimContractError": null,
+  "consent": null,
+  "entities": [
+    {
+      "classification": "internal",
+      "entity": "record",
+      "profiles": [
+        {
+          "allowDataExport": false,
+          "anonymous": false,
+          "default": false,
+          "filterableFields": [
+            "code",
+            "district"
+          ],
+          "id": "district-reader",
+          "operations": [
+            "get",
+            "list"
+          ],
+          "principalClaim": "registry_principal",
+          "readableFields": [
+            "code",
+            "district",
+            "label"
+          ],
+          "requiredPurposes": [
+            "record-administration"
+          ],
+          "requiredScopes": [
+            "record:read"
+          ],
+          "revisionAccess": false,
+          "rowBoundaries": [
+            {
+              "claim": "assigned_districts",
+              "field": "district",
+              "operator": "in"
+            }
+          ],
+          "sortableFields": [],
+          "writableFields": []
+        }
+      ],
+      "requirements": {
+        "allowedPurposes": [
+          "record-administration"
+        ],
+        "requiredScopes": [
+          "record:read"
+        ],
+        "rowBoundaries": [
+          {
+            "claim": "assigned_districts",
+            "field": "district",
+            "operator": "in"
+          }
+        ]
+      }
+    }
+  ],
+  "evaluation": "configuration inspection only; credentials and record access are not evaluated",
+  "kind": "AccessExplanation",
+  "missingClaims": "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",
+  "profileSelection": "one profile per request; selecting its name never grants authority and profiles are not merged",
+  "purposeMatching": "one allowed purpose must match; empty means unrestricted",
+  "relationshipMatching": "relationship paths use the root profile row boundaries and the path's target field permissions; target direct profiles do not apply",
+  "routes": {
+    "entries": [
+      {
+        "defaultProfileId": "district-reader",
+        "entityId": "record",
+        "operation": "get",
+        "profileIds": [
+          "district-reader"
+        ],
+        "routeId": "records.record.get"
+      },
+      {
+        "defaultProfileId": "district-reader",
+        "entityId": "record",
+        "operation": "list",
+        "profileIds": [
+          "district-reader"
+        ],
+        "routeId": "records.record.list"
+      }
+    ]
+  },
+  "rowMatching": "all claim-bound and current membership row predicates must hold; explicit empty rowBoundaries mean no claim-bound row restriction; requestVisibility owner additionally limits request reads",
+  "rowReach": [
+    {
+      "entity": "record",
+      "ownerOnlyRequestReads": false,
+      "profile": "district-reader",
+      "rowBoundaries": [
+        {
+          "claim": "assigned_districts",
+          "field": "district",
+          "operator": "in"
+        }
+      ],
+      "rows": "claim_bound",
+      "sourcePath": "entities[id=record].accessProfiles[id=district-reader].rowBoundaries",
+      "surface": "entity"
+    }
+  ],
+  "scopeMatching": "all required scopes must be present"
+}

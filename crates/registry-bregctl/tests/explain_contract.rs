@@ -781,3 +781,75 @@ fn explain_refuses_a_missing_project_for_every_other_subject() {
         );
     }
 }
+
+/// Each kind's minimal valid example, registered in
+/// `products/platform/config-formats.yaml`, is a committed `explanation`
+/// that `bregctl` writes for the access-review example project (with no
+/// project for `lifecycle`). An example that drifts from the command's output
+/// fails here; the README beside the schemas gives the commands that rewrite
+/// every example.
+#[test]
+fn committed_examples_are_what_explain_writes() {
+    let project = fixture_path("products/breg/examples/access-review");
+    let written = [
+        (
+            "model-explanation.json",
+            "ModelExplanation",
+            explain("model", &project),
+        ),
+        (
+            "access-explanation.json",
+            "AccessExplanation",
+            explain("access", &project),
+        ),
+        (
+            "access-preview.json",
+            "AccessPreview",
+            explain_with_scenario(&project, &project.join("allowed.json")),
+        ),
+        (
+            "actions-explanation.json",
+            "ActionsExplanation",
+            explain("actions", &project),
+        ),
+        (
+            "change-requests-explanation.json",
+            "ChangeRequestsExplanation",
+            explain("change-requests", &project),
+        ),
+        (
+            "events-explanation.json",
+            "EventsExplanation",
+            explain("events", &project),
+        ),
+        (
+            "queries-explanation.json",
+            "QueriesExplanation",
+            explain("queries", &project),
+        ),
+        (
+            "routes-explanation.json",
+            "RoutesExplanation",
+            explain("routes", &project),
+        ),
+        (
+            "lifecycle-explanation.json",
+            "LifecycleExplanation",
+            explain_lifecycle_report()["explanation"].clone(),
+        ),
+    ];
+    let examples = repo_root().join("products/breg/examples/formats/explain");
+    for (file, kind, explanation) in written {
+        let path = examples.join(file);
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("example {path:?} reads: {error}"));
+        let committed: Value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|error| panic!("example {path:?} parses: {error}"));
+        assert_matches_contract(file, kind, &committed);
+        assert!(
+            committed == explanation,
+            "{path:?} is not what `bregctl explain` writes now; rewrite the examples with the \
+             commands in products/breg/contracts/explain/README.md"
+        );
+    }
+}

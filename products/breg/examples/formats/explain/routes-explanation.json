@@ -1,0 +1,31 @@
+{
+  "apiVersion": "registry.registrystack.org/breg-explain/v1alpha3",
+  "kind": "RoutesExplanation",
+  "routes": [
+    {
+      "accessProfiles": [
+        "district-reader"
+      ],
+      "defaultAccessProfile": "district-reader",
+      "entityId": "record",
+      "id": "records.record.list",
+      "kind": "entity",
+      "method": "GET",
+      "operation": "list",
+      "path": "/v1/records/records",
+      "queryKind": "list"
+    },
+    {
+      "accessProfiles": [
+        "district-reader"
+      ],
+      "defaultAccessProfile": "district-reader",
+      "entityId": "record",
+      "id": "records.record.get",
+      "kind": "entity",
+      "method": "GET",
+      "operation": "get",
+      "path": "/v1/records/records/{record_id}"
+    }
+  ]
+}
