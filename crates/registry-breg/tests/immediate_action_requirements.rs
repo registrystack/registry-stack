@@ -4,7 +4,7 @@
 mod support;
 
 use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::parse_project_json;
+use registry_breg::contract::{parse_project_json, parse_project_yaml};
 use serde_json::{json, Value};
 
 fn compile(
@@ -106,11 +106,6 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
             json!("unknown-value-canary"),
             "action.requires.value_invalid",
         ),
-        (
-            "equals",
-            json!({"nested": "private-value-canary"}),
-            "action.requires.value_invalid",
-        ),
         ("equals", Value::Null, "action.requires.value_invalid"),
         (
             "input",
@@ -136,6 +131,18 @@ fn action_requirements_reject_unknown_fields_values_and_unbound_inputs() {
     let mut source = support::project();
     source["actions"][0]["requires"][0]["script"] = json!("true");
     assert!(parse_project_json(&serde_json::to_vec(&source).unwrap()).is_err());
+
+    // An equality literal is a record value (CFG-EMPTY-1): the reader refuses
+    // a mapping where it is written, without echoing it.
+    let mut source = support::project();
+    source["actions"][0]["requires"][0]["equals"] = json!({"nested": "private-value-canary"});
+    let failure = parse_project_yaml(&serde_json::to_vec(&source).unwrap()).unwrap_err();
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one refusal: {failure:?}");
+    };
+    assert_eq!(diagnostic.code, "config.invalid-type");
+    assert_eq!(diagnostic.path, "project.actions[0].requires[0].equals");
+    assert!(!format!("{failure:?}").contains("canary"));
 }
 
 #[test]
@@ -251,6 +258,12 @@ fn equality_inputs_must_be_required_and_explicit_null_is_preserved() {
     let mut source = support::project();
     source["entities"][0]["fields"][0]["required"] = json!(false);
     source["actions"][0]["requires"][0]["equals"] = Value::Null;
+    // The shared reader reads `null` here as a comparison literal (CFG-EMPTY-1).
+    let bytes = serde_json::to_vec(&source).unwrap();
+    assert_eq!(
+        parse_project_yaml(&bytes).expect("the reader accepts a null equality literal"),
+        parse_project_json(&bytes).unwrap()
+    );
     let registry = compile(source.clone()).unwrap();
     assert_eq!(
         registry.actions().actions[0].requires[0].equals,

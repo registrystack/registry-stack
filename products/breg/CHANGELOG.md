@@ -8,7 +8,10 @@
   merge key, or tag is refused, and source refusals carry the reader's codes
   in place of `source.yaml.invalid` and `source.environment_expression`. A
   package whose sealed sources carry such a shape must be rebuilt from a
-  corrected source. Migration steps and the code table are in
+  corrected source. A comparison literal (`equals`, `afterEquals`,
+  `beforeEquals`) still accepts `null` as a record value; a list or a mapping
+  there is refused by the reader as `config.invalid-type` rather than at
+  compile time. Migration steps and the code table are in
   `release/notes/config-conventions/breg.md`.
 - BREAKING: `runtime.yaml` is decoded by the shared reader. `breg` and every
   `bregctl` command that reads it report every problem in the file with the

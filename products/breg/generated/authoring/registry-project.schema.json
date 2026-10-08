@@ -600,7 +600,9 @@
     "ActionRequirementSource": {
       "additionalProperties": false,
       "properties": {
-        "equals": true,
+        "equals": {
+          "$ref": "#/$defs/DataLiteral"
+        },
         "equalsInput": {
           "type": [
             "string",
@@ -1238,7 +1240,9 @@
             }
           ]
         },
-        "equals": true,
+        "equals": {
+          "$ref": "#/$defs/DataLiteral"
+        },
         "equalsFromRequestField": {
           "type": [
             "string",
@@ -1843,6 +1847,15 @@
         "precision"
       ],
       "type": "object"
+    },
+    "DataLiteral": {
+      "description": "A record value: null, a boolean, a number, or text.",
+      "type": [
+        "null",
+        "boolean",
+        "number",
+        "string"
+      ]
     },
     "DateFieldKindSchema": {
       "enum": [
@@ -2612,14 +2625,14 @@
       "type": "object"
     },
     "EventConditionSource": {
-      "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language.",
+      "description": "Closed Version 1 event selection language.\n\nA tagged shape leaves room for a later, separately governed rule ABI\nwithout turning fields into an ad hoc expression language. The shared\nreader's union helper decodes it, so an error inside a variant keeps its\nposition and a `null` comparison literal is read as a value (CFG-SCHEMA-8,\nCFG-EMPTY-1).",
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
             "afterEquals": {
               "additionalProperties": {
-                "$ref": "#/$defs/EventScalarValue"
+                "$ref": "#/$defs/DataLiteral"
               },
               "default": {},
               "description": "Required values after the change. Valid with created and patched triggers.",
@@ -2627,7 +2640,7 @@
             },
             "beforeEquals": {
               "additionalProperties": {
-                "$ref": "#/$defs/EventScalarValue"
+                "$ref": "#/$defs/DataLiteral"
               },
               "default": {},
               "description": "Required values before the change. Valid with patched and tombstoned triggers.",
@@ -2682,23 +2695,6 @@
           "type": "object"
         }
       ]
-    },
-    "EventScalarValue": {
-      "anyOf": [
-        {
-          "type": "null"
-        },
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "number"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "description": "A comparison literal in the closed field-condition language.\n\nObjects and arrays are refused during source parsing. The compiler then\nvalidates each scalar against the declared Registry field type."
     },
     "EventTrigger": {
       "enum": [

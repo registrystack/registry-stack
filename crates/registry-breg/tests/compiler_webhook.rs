@@ -5,8 +5,9 @@ use registry_breg::compiler::{
     REQUEST_LIFECYCLE_TRANSITIONS,
 };
 use registry_breg::contract::{
-    parse_module_json, parse_project_json, Classification, EventTrigger, ModuleLockSource,
-    RegistryModule, RegistryProject, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    parse_module_json, parse_project_json, parse_project_yaml, Classification, EventTrigger,
+    ModuleLockSource, RegistryModule, RegistryProject, WebhookAuthenticationProfile,
+    WebhookDeadLetterMode,
 };
 use registry_breg::diagnostics::CompileFailure;
 use registry_breg::model::{CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile};
@@ -878,6 +879,12 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
         "afterEquals": {"region": "north"}
     });
     compile(&patched).expect("patched events support all Version 1 field predicates");
+    // The shared reader reads `null` here as a comparison literal (CFG-EMPTY-1).
+    assert_eq!(
+        parse_project_yaml(&serde_json::to_vec(&patched).expect("test project serializes"))
+            .expect("the reader accepts a null comparison literal"),
+        parse_project(&patched)
+    );
 
     let mut empty = project_value();
     empty["entities"][0]["hooks"][0]["when"] = json!({"kind": "fields"});
@@ -925,6 +932,15 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     )
     .expect_err("comparison values are scalar or null");
     assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
+    let failure = parse_project_yaml(
+        &serde_json::to_vec(&structured).expect("structured predicate source serializes"),
+    )
+    .expect_err("the reader refuses a mapping as a comparison literal");
+    assert_eq!(failure.diagnostics()[0].code, "config.invalid-type");
+    assert_eq!(
+        failure.diagnostics()[0].path,
+        "project.entities[0].hooks[0].when.afterEquals.region"
+    );
 }
 
 #[test]

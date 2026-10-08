@@ -7,8 +7,8 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_config::contains_environment_expression;
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal, ScalarHook, ScalarSite,
-    Severity,
+    ApiVersion, DataLiteral, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
+    ScalarHook, ScalarSite, Severity,
 };
 pub use registry_platform_yaml::{Decoded, Report};
 use serde::{
@@ -884,9 +884,10 @@ pub struct ChangeRequestPredicateSource {
     pub field: String,
     #[serde(
         default,
-        deserialize_with = "present_json_value",
+        deserialize_with = "present_data_literal",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "DataLiteral"))]
     pub equals: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_from_request_field: Option<String>,
@@ -1249,9 +1250,10 @@ pub struct ActionRequirementSource {
     pub field: String,
     #[serde(
         default,
-        deserialize_with = "present_json_value",
+        deserialize_with = "present_data_literal",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "DataLiteral"))]
     pub equals: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_input: Option<String>,
@@ -2986,15 +2988,19 @@ pub struct HookSource {
 /// Closed Version 1 event selection language.
 ///
 /// A tagged shape leaves room for a later, separately governed rule ABI
-/// without turning fields into an ad hoc expression language.
+/// without turning fields into an ad hoc expression language. The shared
+/// reader's union helper decodes it, so an error inside a variant keeps its
+/// position and a `null` comparison literal is read as a value (CFG-SCHEMA-8,
+/// CFG-EMPTY-1).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 #[serde(
+    remote = "Self",
     deny_unknown_fields,
-    tag = "kind",
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub enum EventConditionSource {
     Fields {
         /// Fields whose values must change. Only valid with the patched trigger.
@@ -3014,19 +3020,107 @@ pub enum EventConditionSource {
         to_states: BTreeSet<String>,
     },
 }
+registry_platform_yaml::tagged_union!(EventConditionSource, tag = "kind");
+
+/// The serialized form of [`EventConditionSource`], kept byte-identical to
+/// the shape module digests are computed over.
+#[derive(Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+enum EventConditionWire<'a> {
+    Fields {
+        changed: &'a BTreeSet<String>,
+        before_equals: &'a BTreeMap<String, EventScalarValue>,
+        after_equals: &'a BTreeMap<String, EventScalarValue>,
+    },
+    RequestLifecycle {
+        transitions: &'a BTreeSet<String>,
+        to_states: &'a BTreeSet<String>,
+    },
+}
+
+impl Serialize for EventConditionSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Fields {
+                changed,
+                before_equals,
+                after_equals,
+            } => EventConditionWire::Fields {
+                changed,
+                before_equals,
+                after_equals,
+            },
+            Self::RequestLifecycle {
+                transitions,
+                to_states,
+            } => EventConditionWire::RequestLifecycle {
+                transitions,
+                to_states,
+            },
+        }
+        .serialize(serializer)
+    }
+}
 
 /// A comparison literal in the closed field-condition language.
 ///
-/// Objects and arrays are refused during source parsing. The compiler then
-/// validates each scalar against the declared Registry field type.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+/// It is read as the shared reader's [`DataLiteral`], the one position where
+/// `null` is a value (CFG-EMPTY-1). Objects and arrays are refused during
+/// source parsing. The compiler then validates each scalar against the
+/// declared Registry field type.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EventScalarValue {
     Null,
     Boolean(bool),
     Number(serde_json::Number),
     String(String),
+}
+
+impl From<DataLiteral> for EventScalarValue {
+    fn from(literal: DataLiteral) -> Self {
+        match literal {
+            DataLiteral::Null => EventScalarValue::Null,
+            DataLiteral::Boolean(value) => EventScalarValue::Boolean(value),
+            DataLiteral::Number(value) => EventScalarValue::Number(value),
+            DataLiteral::String(value) => EventScalarValue::String(value),
+        }
+    }
+}
+
+impl Serialize for EventScalarValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            EventScalarValue::Null => serializer.serialize_unit(),
+            EventScalarValue::Boolean(value) => serializer.serialize_bool(*value),
+            EventScalarValue::Number(value) => value.serialize(serializer),
+            EventScalarValue::String(value) => serializer.serialize_str(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EventScalarValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        DataLiteral::deserialize(deserializer).map(EventScalarValue::from)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for EventScalarValue {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        DataLiteral::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<DataLiteral>()
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -3721,4 +3815,20 @@ pub(crate) fn present_json_value<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Value>, D::Error> {
     Value::deserialize(deserializer).map(Some)
+}
+
+// An omitted equality differs from an explicit `null` one: the literal is read
+// as a `DataLiteral`, the one position where `null` is a value (CFG-EMPTY-1),
+// and a list or a mapping is refused.
+pub(crate) fn present_data_literal<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    DataLiteral::deserialize(deserializer).map(|literal| {
+        Some(match literal {
+            DataLiteral::Null => Value::Null,
+            DataLiteral::Boolean(value) => Value::Bool(value),
+            DataLiteral::Number(value) => Value::Number(value),
+            DataLiteral::String(value) => Value::String(value),
+        })
+    })
 }

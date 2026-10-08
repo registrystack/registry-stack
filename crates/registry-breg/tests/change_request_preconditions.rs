@@ -2,7 +2,7 @@
 
 use registry_breg::{
     compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_json, ModuleAssetSource},
+    contract::{parse_project_json, parse_project_yaml, ModuleAssetSource},
     model::{
         CompiledChangeRequestEvidenceExpected, CompiledChangeRequestPredicateExpected,
         CompiledChangeRequestSelector,
@@ -512,6 +512,12 @@ fn request_predicates_distinguish_explicit_null_from_an_absent_equality() {
         .as_array_mut()
         .unwrap()
         .push(json!({"field":"optional-note", "equals":null}));
+    // The shared reader reads `null` here as a comparison literal (CFG-EMPTY-1).
+    let bytes = serde_json::to_vec(&source).unwrap();
+    assert_eq!(
+        parse_project_yaml(&bytes).expect("the reader accepts a null equality literal"),
+        parse_project_json(&bytes).unwrap()
+    );
     let registry = compile(source.clone()).unwrap();
     let preconditions = &registry.entities()["release-request"]
         .change_request

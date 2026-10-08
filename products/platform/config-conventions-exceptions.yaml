@@ -2078,6 +2078,30 @@ exceptions:
   wp: WP6
   reason: schema embeds a foreign document without the marker
   resolution: 'Mark the member with x-registry-foreign: json-schema-2020-12 or openapi-3.1'
+- rule: CFG-EMPTY-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ActionRequirementSource/properties/equals
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
+- rule: CFG-EMPTY-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/ChangeRequestPredicateSource/properties/equals
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
+- rule: CFG-EMPTY-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/EventConditionSource/oneOf/0/properties/afterEquals/additionalProperties
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
+- rule: CFG-EMPTY-1
+  format: breg/module
+  location: products/breg/generated/authoring/registry-module.schema.json#/$defs/EventConditionSource/oneOf/0/properties/beforeEquals/additionalProperties
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
 - rule: CFG-EMPTY-4
   format: breg/module
   location: products/breg/generated/authoring/registry-module.schema.json#/$defs/BooleanFieldSourceSchema/properties/apiName
@@ -3536,6 +3560,30 @@ exceptions:
   wp: WP6
   reason: schema embeds a foreign document without the marker
   resolution: 'Mark the member with x-registry-foreign: json-schema-2020-12 or openapi-3.1'
+- rule: CFG-EMPTY-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionRequirementSource/properties/equals
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
+- rule: CFG-EMPTY-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ChangeRequestPredicateSource/properties/equals
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
+- rule: CFG-EMPTY-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/EventConditionSource/oneOf/0/properties/afterEquals/additionalProperties
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
+- rule: CFG-EMPTY-1
+  format: breg/project
+  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/EventConditionSource/oneOf/0/properties/beforeEquals/additionalProperties
+  class: stable-move
+  reason: a comparison literal accepts null as a record value through $defs/DataLiteral
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): State an unset record value explicitly (F13) and stop accepting null through DataLiteral'
 - rule: CFG-EMPTY-2
   format: breg/project
   location: products/breg/generated/authoring/registry-project.schema.json#/$defs/AccessRequirementsSource/properties/requiredScopes
@@ -5038,20 +5086,6 @@ exceptions:
   wp: WP3
   reason: ConstraintSource derives serde's tag
   resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#EventConditionSource
-  class: pending
-  wp: WP3
-  reason: EventConditionSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/project
-  location: crates/registry-breg/src/contract.rs#EventScalarValue
-  class: pending
-  wp: WP3
-  reason: EventScalarValue derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
 - rule: CFG-SCHEMA-8
   format: breg/project
   location: crates/registry-breg/src/contract.rs#ManifestProjectionTextSource

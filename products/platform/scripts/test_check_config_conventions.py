@@ -1038,6 +1038,17 @@ class EmptyTests(ConventionsTestCase):
             at(PROJECT_SCHEMA, "/$defs/AccessProfile/properties/requiredScopes"),
         )
 
+    def test_cfg_empty_1_reports_a_member_that_accepts_null_through_data_literal(self) -> None:
+        self.repo.project["$defs"]["DataLiteral"] = {"type": ["null", "boolean", "number", "string"]}
+        self.repo.project["properties"]["afterEquals"] = {
+            "type": "object",
+            "propertyNames": {"$ref": "#/$defs/LocalId"},
+            "additionalProperties": {"$ref": "#/$defs/DataLiteral"},
+        }
+        report = self.repo.run()
+        self.assertFinding(report, "CFG-EMPTY-1", P, at(PROJECT_SCHEMA, "/properties/afterEquals/additionalProperties"))
+        self.assertNotIn(("CFG-EMPTY-1", P, at(PROJECT_SCHEMA, "/$defs/DataLiteral")), keys(report.findings))
+
     def test_cfg_empty_4_reports_a_null_default(self) -> None:
         self.repo.project["properties"]["description"]["default"] = None
         self.assertFinding(self.repo.run(), "CFG-EMPTY-4", P, at(PROJECT_SCHEMA, "/properties/description"))

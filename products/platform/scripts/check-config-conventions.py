@@ -1683,6 +1683,11 @@ class Lint:
             sentinel = self.sentinel_problem(document, node)
             if sentinel:
                 find("CFG-EMPTY-2", visit, sentinel, "Declare minItems: 1 (or minProperties: 1) beside the unrestricted sentinel")
+            if refs_to(node, "DataLiteral"):
+                # The one place null is a value; the register records it until
+                # the format states unset values explicitly.
+                find("CFG-EMPTY-1", visit, "accepts null as a record value through $defs/DataLiteral",
+                     "State unset values explicitly; until then record a stable-move entry")
             if "default" in node:
                 if node["default"] is None:
                     find("CFG-EMPTY-4", visit, "default: null", "Remove the default and describe what omitting the member means")

@@ -15,7 +15,7 @@ Pointer path, a line, a column, and the edit that fixes it.
 
 | A file that writes | is refused as | Migrate by |
 |---|---|---|
-| `null`, `~`, or a key with no value | `config.null-value` | Deleting the key; an optional member is written by leaving it out. |
+| `null`, `~`, or a key with no value, anywhere but a comparison literal | `config.null-value` | Deleting the key; an optional member is written by leaving it out. |
 | an unquoted number where text is expected, such as `version: 1` or `version: 1.5` under `registry`, in a module, or in a module lock | `config.expected-string` | Quoting the value: `version: "1"`. A dotted version such as `0.1.0` is already text. |
 | an unquoted value that looks like a number but is not a plain decimal: a leading zero (`0123`), a bare point (`.5`, `5.`), a base prefix (`0x1F`, `0o17`, `0b101`), `.inf`, or `.nan` | `yaml.ambiguous-number` | Quoting the value when it is text, or writing the plain decimal when it is a number. |
 | a YAML anchor (`&name`), alias (`*name`), merge key (`<<`), or tag (`!tag`) | `yaml.anchor`, `yaml.alias`, `yaml.merge-key`, `yaml.tag` | Writing the shared value out in full at every place that used the alias. |
@@ -28,6 +28,15 @@ refused; they are now reported with the reader's codes (`yaml.duplicate-key`,
 first, and an unknown key names the closest accepted key when one is near.
 A tool that matched `source.yaml.invalid` or `source.environment_expression`
 in `bregctl --format json` output must match the reader codes instead.
+
+A comparison literal is a record value, and `null` is one: an action
+requirement's `equals`, a change-request predicate's `equals`, and a value
+under a hook condition's `afterEquals` or `beforeEquals` still accept `null`,
+and it still means "the stored value is null". A list or a mapping written
+there was refused when the project compiled, as `action.requires.value_invalid`,
+`change_request.preconditions.predicate_value_invalid`, or
+`source.shape.invalid`; the reader now refuses it as `config.invalid-type` at
+the literal, and the published schemas type the literal as `DataLiteral`.
 
 A package rederives its project from the `source/registry.yaml` and module
 files it seals, at `bregctl package` and every time `breg` or `bregctl` loads
