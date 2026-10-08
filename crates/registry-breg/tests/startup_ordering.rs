@@ -23,7 +23,8 @@ const SOURCE_REVISION: &str = "compiler-source-revision";
 const SHARED_PACKAGE_TAMPER: &str = "the package at package.root does not match its SHA256SUMS; \
 changed: openapi/openapi.json; rebuild the package with `bregctl package` and deploy the whole \
 directory";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: neutral-record-list
     steps:
@@ -31,7 +32,7 @@ journeys:
         entity: neutral-record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

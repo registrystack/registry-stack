@@ -348,7 +348,9 @@ const VERIFY_RUNTIME_DATABASE_SECRET_CANARY: &str = "VERIFY_RUNTIME_DATABASE_SEC
 const VERIFY_MIGRATION_DATABASE_SECRET_CANARY: &str =
     "VERIFY_MIGRATION_DATABASE_SECRET_IS_NOT_OPENED";
 const SCHEMA_TEST_AUTHORED_SOURCE_CEILING_BYTES: usize = 1024 * 1024;
-const PACKAGE_FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const PACKAGE_FIXTURE_JOURNEYS: &[u8] =
+    br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: package-record-list
     steps:
@@ -356,10 +358,11 @@ journeys:
         entity: record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
-const DATA_FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const DATA_FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: data-record-list
     steps:
@@ -367,7 +370,7 @@ journeys:
         entity: record
         accessProfile: operator
         claims: {principal: data-operator}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 
@@ -1050,7 +1053,7 @@ fn init_creates_a_domain_neutral_project_that_checks_immediately() {
     assert!(journeys.contains("accessProfile: operator"));
     assert!(journeys.contains("scopes: [registry:generic:operate]"));
     assert!(journeys.contains("purpose: registry-operations"));
-    assert!(journeys.contains("{recordRef: example-group}"));
+    assert!(journeys.contains("{recordCapture: example-group}"));
     assert!(journeys.contains("status: active"));
     assert!(registry.contains("type: reference"));
     assert!(registry.contains("type: vocabulary-code"));
@@ -1974,7 +1977,7 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     let journeys =
         fs::read_to_string(destination.join("tests/journeys.yaml")).expect("derived journeys read");
     assert!(journeys.contains("scopes: [registry:household-registry:operate]"));
-    assert!(journeys.contains("person: {recordRef: example-person}"));
+    assert!(journeys.contains("person: {recordCapture: example-person}"));
     assert!(!journeys.contains("token"));
     let selection =
         fs::read_to_string(destination.join("model/selection.yaml")).expect("selection echo reads");
@@ -4224,7 +4227,8 @@ fn refused_fixture_journeys_name_the_journey_file_and_the_refusal() {
     .expect("credential fixture writes");
     fs::write(
         project.path().join("tests/journeys.yaml"),
-        br#"apiVersion: registry.registrystack.org/breg-journeys/v0
+        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v0
+kind: BRegJourneys
 journeys:
   - id: package-record-list
     steps:
@@ -4232,7 +4236,7 @@ journeys:
         entity: record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#,
     )
@@ -4244,12 +4248,30 @@ journeys:
     let rendered = String::from_utf8(result.stdout.clone()).expect("refusal JSON is UTF-8");
     let report: Value = serde_json::from_str(&rendered).expect("refusal JSON parses");
     assert_eq!(result.status.code(), Some(1), "{rendered}");
-    assert_eq!(report["diagnostics"][0]["code"], "test.journeys.refused");
-    assert_eq!(report["diagnostics"][0]["path"], "tests/journeys.yaml");
-    let message = report["diagnostics"][0]["message"]
+    assert_eq!(report["command"], "test");
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics are a list");
+    assert_eq!(diagnostics.len(), 1, "{rendered}");
+    assert_eq!(diagnostics[0]["code"], "config.unsupported-api-version");
+    assert_eq!(diagnostics[0]["artifact"], "BRegJourneys");
+    assert_eq!(diagnostics[0]["path"], "/apiVersion");
+    assert_eq!(
+        diagnostics[0]["source"]["file"],
+        project
+            .path()
+            .join("tests/journeys.yaml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(diagnostics[0]["source"]["line"], 1);
+    let message = diagnostics[0]["message"]
         .as_str()
         .expect("journey message is a string");
-    assert!(message.to_lowercase().contains("version"), "{message}");
+    assert!(
+        message.contains("id.registrystack.org/formats/breg/journeys/v1"),
+        "{message}"
+    );
     assert!(!output.exists());
 }
 

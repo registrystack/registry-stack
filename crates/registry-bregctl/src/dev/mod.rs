@@ -677,37 +677,27 @@ fn receiver_port(state: &State) -> Result<u16> {
 /// tells the author which profile the clients file still lacks while the fix
 /// is one edit away.
 fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
-    let journeys: Value = serde_norway::from_slice(journeys)
-        .context("tests/journeys.yaml must parse before local development starts")?;
+    let steps = registry_breg::fixtures::journey_step_profiles(journeys).map_err(|error| {
+        anyhow::anyhow!("tests/journeys.yaml must be read before local development starts: {error}")
+    })?;
     let mut used = BTreeSet::new();
-    for journey in journeys["journeys"]
-        .as_array()
-        .context("journeys must contain an array")?
-    {
-        for step in journey["steps"]
-            .as_array()
-            .context("journey steps must be an array")?
-        {
-            let journey_id = journey["id"].as_str().context("journey requires an id")?;
-            let step_id = step["id"].as_str().context("journey step requires an id")?;
-            let profile = step["accessProfile"]
-                .as_str()
-                .context("journey step requires an access profile")?;
-            if let Some(client) = exact_journey_client(clients, journey_id, step_id, profile)? {
-                used.insert((journey_id.to_owned(), step_id.to_owned()));
-                let _ = client;
-                continue;
-            }
-            if step["claims"]
-                .as_object()
-                .is_some_and(|claims| claims.is_empty())
-            {
-                continue;
-            }
-            let client = journey_client(clients, journey_id, step_id, profile)?;
-            if !client.test_bindings.is_empty() {
-                used.insert((journey_id.to_owned(), step_id.to_owned()));
-            }
+    for step in &steps {
+        let (journey_id, step_id, profile) = (
+            step.journey_id.as_str(),
+            step.step_id.as_str(),
+            step.access_profile.as_str(),
+        );
+        if let Some(client) = exact_journey_client(clients, journey_id, step_id, profile)? {
+            used.insert((journey_id.to_owned(), step_id.to_owned()));
+            let _ = client;
+            continue;
+        }
+        if step.anonymous {
+            continue;
+        }
+        let client = journey_client(clients, journey_id, step_id, profile)?;
+        if !client.test_bindings.is_empty() {
+            used.insert((journey_id.to_owned(), step_id.to_owned()));
         }
     }
     for client in &clients.clients {
@@ -2590,45 +2580,37 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         initialization.as_bytes(),
         None,
     )?;
-    let journeys: Value = serde_norway::from_slice(&private::read(
+    let steps = registry_breg::fixtures::journey_step_profiles(&private::read(
         &root.join("project/tests/journeys.yaml"),
         MAX_BYTES,
-    )?)?;
+    )?)
+    .map_err(|error| {
+        anyhow::anyhow!("tests/journeys.yaml must be read before rehearsal: {error}")
+    })?;
     let mut bindings = Vec::new();
     let mut rehearsal_tokens = BTreeSet::new();
-    for journey in journeys["journeys"]
-        .as_array()
-        .context("journeys must contain an array")?
-    {
-        for step in journey["steps"]
-            .as_array()
-            .context("journey steps must be an array")?
-        {
-            let profile = step["accessProfile"]
-                .as_str()
-                .context("journey step requires an access profile")?;
-            let journey_id = journey["id"].as_str().context("journey requires an id")?;
-            let step_id = step["id"].as_str().context("journey step requires an id")?;
-            let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
-            let credential = if let Some(client) = explicit {
-                let token = rehearsal_token(client, step)?;
-                let token_ref = token.output_id.clone();
-                rehearsal_tokens.insert(token);
-                json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
-            } else if step["claims"]
-                .as_object()
-                .is_some_and(|claims| claims.is_empty())
-            {
-                json!({"type":"anonymous"})
-            } else {
-                let client = journey_client(clients, journey_id, step_id, profile)?;
-                let token = rehearsal_token(client, step)?;
-                let token_ref = token.output_id.clone();
-                rehearsal_tokens.insert(token);
-                json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
-            };
-            bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
-        }
+    for step in &steps {
+        let (journey_id, step_id, profile) = (
+            step.journey_id.as_str(),
+            step.step_id.as_str(),
+            step.access_profile.as_str(),
+        );
+        let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
+        let credential = if let Some(client) = explicit {
+            let token = rehearsal_token(client, step)?;
+            let token_ref = token.output_id.clone();
+            rehearsal_tokens.insert(token);
+            json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
+        } else if step.anonymous {
+            json!({"type":"anonymous"})
+        } else {
+            let client = journey_client(clients, journey_id, step_id, profile)?;
+            let token = rehearsal_token(client, step)?;
+            let token_ref = token.output_id.clone();
+            rehearsal_tokens.insert(token);
+            json!({"type":"bearer","tokenRef":format!("secret:file/{token_ref}-token")})
+        };
+        bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2745,30 +2727,18 @@ struct RehearsalToken {
     output_id: String,
 }
 
-fn rehearsal_token(client: &config::Client, step: &Value) -> Result<RehearsalToken> {
-    let scopes = step["claims"]["scopes"]
-        .as_array()
-        .context("an authenticated journey step must declare scopes")?
-        .iter()
-        .map(|scope| {
-            scope
-                .as_str()
-                .map(str::to_owned)
-                .context("journey scopes must be strings")
-        })
-        .collect::<Result<Vec<_>>>()?;
+fn rehearsal_token(
+    client: &config::Client,
+    step: &registry_breg::fixtures::JourneyStepProfile,
+) -> Result<RehearsalToken> {
+    let scopes = step
+        .scopes
+        .clone()
+        .context("an authenticated journey step must declare scopes")?;
     if scopes.iter().any(|scope| !client.scopes.contains(scope)) {
         bail!("journey scopes exceed the bound local client's registered scopes");
     }
-    let purpose = step["claims"]
-        .get("purpose")
-        .map(|purpose| {
-            purpose
-                .as_str()
-                .map(str::to_owned)
-                .context("journey purpose must be a string")
-        })
-        .transpose()?;
+    let purpose = step.purpose.clone();
     let purposes = config::client_purposes(client)?;
     if !purposes.iter().any(|declared| declared == &purpose) {
         bail!("journey purpose exceeds the bound local client's declared purposes");

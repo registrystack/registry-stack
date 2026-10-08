@@ -1,7 +1,7 @@
 {
   "change": {
     "record": {
-      "recordRef": "first-record"
+      "recordCapture": "first-record"
     },
     "lotNumber": "LOT-2026-100",
     "reason": "Correct the transcribed synthetic lot number against the custodian record.",

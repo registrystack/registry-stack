@@ -1,15 +1,16 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: placement-correction-request-flow
     steps:
       - id: create-asset
         entity: asset-item
         accessProfile: asset-operator
-        claims: &operator_claims
+        claims:
           principal: asset-operator
           purpose: asset-management
         request:
-          operation: create
+          type: create
           data: {asset-code: pump-001, label: Pump 001, asset-class: equipment}
         expect:
           outcome: success
@@ -19,9 +20,11 @@ journeys:
       - id: create-original-site
         entity: asset-site
         accessProfile: asset-operator
-        claims: *operator_claims
+        claims:
+          principal: asset-operator
+          purpose: asset-management
         request:
-          operation: create
+          type: create
           data: {site-code: north-yard, label: North Yard}
         expect:
           outcome: success
@@ -31,9 +34,11 @@ journeys:
       - id: create-corrected-site
         entity: asset-site
         accessProfile: asset-operator
-        claims: *operator_claims
+        claims:
+          principal: asset-operator
+          purpose: asset-management
         request:
-          operation: create
+          type: create
           data: {site-code: south-yard, label: South Yard}
         expect:
           outcome: success
@@ -43,10 +48,12 @@ journeys:
       - id: create-placement
         entity: asset-placement
         accessProfile: asset-operator
-        claims: *operator_claims
+        claims:
+          principal: asset-operator
+          purpose: asset-management
         request:
-          operation: create
-          data: {asset: {recordRef: asset}, site: {recordRef: original-site}, valid-from: "2026-01-01"}
+          type: create
+          data: {asset: {recordCapture: asset}, site: {recordCapture: original-site}, valid-from: "2026-01-01"}
         expect:
           outcome: success
           status: 201
@@ -55,23 +62,29 @@ journeys:
       - id: submitter-lists-placement-options
         entity: asset-placement
         accessProfile: correction-submitter
-        claims: &submitter_claims
+        claims:
           principal: correction-submitter
           scopes: [registry:corrections:submit]
           purpose: asset-correction
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: submitter-lists-site-options
         entity: asset-site
         accessProfile: correction-submitter
-        claims: *submitter_claims
-        request: {operation: list}
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 2}
       - id: submitter-reads-placement-asset-label
         entity: asset-item
         accessProfile: correction-submitter
-        claims: *submitter_claims
-        request: {operation: get, recordRef: asset}
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request: {type: get, recordCapture: asset}
         expect:
           outcome: success
           status: 200
@@ -79,10 +92,13 @@ journeys:
       - id: create-correction-request
         entity: placement-correction-request
         accessProfile: correction-submitter
-        claims: *submitter_claims
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
         request:
-          operation: create
-          data: {placement: {recordRef: placement}, proposed-site: {recordRef: corrected-site}, reason: site correction after field audit}
+          type: create
+          data: {placement: {recordCapture: placement}, proposed-site: {recordCapture: corrected-site}, reason: site correction after field audit}
         expect:
           outcome: success
           status: 201
@@ -91,17 +107,23 @@ journeys:
       - id: submitter-lists-own-requests
         entity: placement-correction-request
         accessProfile: correction-submitter
-        claims: *submitter_claims
-        request: {operation: list}
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: edit-correction-request
         entity: placement-correction-request
         accessProfile: correction-submitter
-        claims: *submitter_claims
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
         request:
-          operation: patch
-          recordRef: correction-request
-          etagRef: correction-request
+          type: patch
+          recordCapture: correction-request
+          etagCapture: correction-request
           changes:
             - {field: reason, value: site correction after supervisor field audit}
         expect:
@@ -112,8 +134,11 @@ journeys:
       - id: get-before-submit
         entity: placement-correction-request
         accessProfile: correction-submitter
-        claims: *submitter_claims
-        request: {operation: get, recordRef: edited-correction-request}
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request: {type: get, recordCapture: edited-correction-request}
         expect:
           outcome: success
           status: 200
@@ -122,17 +147,20 @@ journeys:
       - id: submit-correction-request
         entity: placement-correction-request
         accessProfile: correction-submitter
-        claims: *submitter_claims
-        request: {operation: submit_request, recordRef: correction-before-submit, etagRef: correction-before-submit}
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request: {type: submit-request, recordCapture: correction-before-submit, etagCapture: correction-before-submit}
         expect: {outcome: success, status: 200}
       - id: external-review-reader-sees-submission
         entity: placement-correction-request
         accessProfile: correction-reviewer
-        claims: &reviewer_claims
+        claims:
           principal: correction-reviewer
           scopes: [registry:corrections:review]
           purpose: asset-correction-review
-        request: {operation: get, recordRef: correction-request}
+        request: {type: get, recordCapture: correction-request}
         expect:
           outcome: success
           status: 200
@@ -140,13 +168,19 @@ journeys:
       - id: submitter-reads-submitted-request
         entity: placement-correction-request
         accessProfile: correction-submitter
-        claims: *submitter_claims
-        request: {operation: get, recordRef: correction-request}
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request: {type: get, recordCapture: correction-request}
         expect: {outcome: success, status: 200}
         capture: submitted-correction
       - id: submitter-cancels-external-review
         entity: placement-correction-request
         accessProfile: correction-submitter
-        claims: *submitter_claims
-        request: {operation: cancel_request, recordRef: submitted-correction, etagRef: submitted-correction}
+        claims:
+          principal: correction-submitter
+          scopes: [registry:corrections:submit]
+          purpose: asset-correction
+        request: {type: cancel-request, recordCapture: submitted-correction, etagCapture: submitted-correction}
         expect: {outcome: success, status: 200}

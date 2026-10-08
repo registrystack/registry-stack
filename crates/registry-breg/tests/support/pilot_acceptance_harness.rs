@@ -562,7 +562,8 @@ fn fixture_journey_bytes(registry: &CompiledRegistry) -> Vec<u8> {
         Value::Object(claims)
     };
     serde_norway::to_string(&json!({
-        "apiVersion": "registry.registrystack.org/breg-journeys/v1",
+        "apiVersion": "id.registrystack.org/formats/breg/journeys/v1",
+        "kind": "BRegJourneys",
         "journeys": [{
             "id": "pilot-package-list",
             "steps": [{
@@ -570,7 +571,7 @@ fn fixture_journey_bytes(registry: &CompiledRegistry) -> Vec<u8> {
                 "entity": entity_id,
                 "accessProfile": profile_id,
                 "claims": claims,
-                "request": {"operation": "list"},
+                "request": {"type": "list"},
                 "expect": {"outcome": "success", "status": 200, "count": 0}
             }]
         }]

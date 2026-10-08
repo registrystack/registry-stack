@@ -29,7 +29,8 @@ use sha2::{Digest, Sha256};
 
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: asset-list
     steps:
@@ -37,7 +38,7 @@ journeys:
         entity: asset
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 const PRIOR_REVISION: &str =

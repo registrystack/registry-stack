@@ -1038,3 +1038,59 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `temporal.scope_fields.deprecated_mismatch` | `breg.temporal.scope-fields-deprecated-mismatch` |
 | `vocabulary.id.duplicate` | `breg.vocabulary.id-duplicate` |
 | `vocabulary.values.invalid` | `breg.vocabulary.values-invalid` |
+
+## BReg tool and output formats
+
+This section covers the files `bregctl` reads and writes beside a registry
+project: the fixture journeys, the schema-test credentials and receipt, the
+development client and state files, the example scenarios, the data import
+and export checkpoints, the migration descriptor and rehearsal receipt, the
+backup binding, the model selection, the Evidence source export, and the
+`--format json` reports and `explain` outputs. None of them is a promised
+format; each now carries a Registry Stack header, is read by the shared
+reader, and is refused with the reader's codes and positions.
+
+### BREAKING: fixture journeys version 1 (`tests/journeys.yaml`)
+
+`bregctl test`, `bregctl package`, `bregctl dev`, and every fixture runner
+read the journeys file through the shared reader. Migrate a file with these
+edits:
+
+| Old | New |
+|---|---|
+| `apiVersion: registry.registrystack.org/breg-journeys/v1` | `apiVersion: id.registrystack.org/formats/breg/journeys/v1` and, on the next line, `kind: BRegJourneys` |
+| `operation: <form>` in a request or a batch item | `type: <form>`, in kebab case: `read-path`, `target-conditions`, `submit-request`, `revise-request`, `cancel-request`, `apply-request` (the one-word forms `import`, `create`, `get`, `list`, `query`, `lookup`, `patch`, `batch`, `invoke` are unchanged) |
+| `recordRef`, `etagRef`, `proposalVersionRef`, `effectDigestRef` in a request | `recordCapture`, `etagCapture`, `proposalVersionCapture`, `effectDigestCapture` |
+| `conditionRef` in a request precondition | `conditionCapture` |
+| `{recordRef: <capture>}` inside request data | `{recordCapture: <capture>}` |
+| a YAML anchor (`&claims`) and its aliases (`*claims`) | the shared mapping written out in full at every step that used the alias |
+
+A file with the old header and no `kind` is refused with
+`config.missing-envelope`, whose fix names the new header. Once the header
+is current, every old key is refused with `config.removed-key` at its
+position, naming its replacement, and the old header written beside `kind:
+BRegJourneys` is refused with `config.retired-api-version`. Unknown keys
+were already refused, first one only; every one is now reported
+(`config.unknown-key`), with the closest accepted key. The reader also
+refuses what the previous parser let through: `null` for an optional member
+(`config.null-value`; leave the member out), an ambiguous number such as
+`status: 0200` (`yaml.ambiguous-number`; write `200`), and a repeated entry
+in `scopes` or a request's `select`, which was silently collapsed
+(`config.duplicate-item`; delete the repeat).
+
+`bregctl test` and `bregctl package` print a refused journeys file as one
+sentence (`bregctl test refused the fixture journeys.`) followed by the
+reader's diagnostics, each with its code, file, line, column, JSON Pointer
+path, and fix; with `--format json` the report's `diagnostics` carry the
+reader's shape (`source: {file, line, column}`) unchanged. A tool that
+matched `test.journeys.refused` or a `path` of `tests/journeys.yaml` in that
+output must match the reader codes and read `source.file` instead.
+
+### BREAKING: the record marker in example inputs is `recordCapture`
+
+The `bregctl dev` example runner and the fixture runner share one logical
+record marker. An example input (`examples/inputs/*.json`) that names a
+record an earlier step captured writes `{"recordCapture": "<capture>"}`
+where it wrote `{"recordRef": "<capture>"}`. The old marker is refused with
+a message naming the new one. Migrate each input file by renaming the key;
+the capture name is unchanged.

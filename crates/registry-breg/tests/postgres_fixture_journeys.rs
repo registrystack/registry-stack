@@ -94,36 +94,43 @@ const QUICKSTART_INSTANCE_ID: &str = "generic_registry_local";
 // not overlap within this integration-test process.
 static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-const IMPORT_JOURNEY_SOURCE: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const IMPORT_JOURNEY_SOURCE: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: import-reference-data
     steps:
       - id: import-widget
         entity: widget
         accessProfile: operator
-        claims: &operator_claims
+        claims:
           principal: fixture-operator
           purpose: case-management
           directClaims: {jurisdiction: zone-a}
         request:
-          operation: import
+          type: import
           items:
             - {jurisdiction: zone-a, label: imported, note: reference, quantity: 1}
         expect: {outcome: success, status: 200}
       - id: list-imported-widget
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: list}
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
   - id: refuse-import-outside-boundary
     steps:
       - id: import-other-jurisdiction
         entity: widget
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
         request:
-          operation: import
+          type: import
           items:
             - {jurisdiction: zone-b, label: refused, note: reference, quantity: 1}
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}

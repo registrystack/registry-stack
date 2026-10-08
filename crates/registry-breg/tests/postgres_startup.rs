@@ -53,7 +53,8 @@ use tower::ServiceExt as _;
 const INSTANCE: &str = "startup-instance";
 const DATABASE: &str = "startup-database";
 const SOURCE_REVISION: &str = "startup-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: neutral-record-list
     steps:
@@ -61,7 +62,7 @@ journeys:
         entity: neutral-record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

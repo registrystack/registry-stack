@@ -1287,13 +1287,13 @@ mod tests {
             },
         )]);
         assert_eq!(
-            resolve(&json!({"recordRef":"parent"}), &captures, 0).unwrap(),
+            resolve(&json!({"recordCapture":"parent"}), &captures, 0).unwrap(),
             json!(captures["parent"].id)
         );
         for value in [
-            json!({"recordRef":"missing"}),
-            json!({"recordRef":"parent","extra":true}),
-            json!({"recordRef":false}),
+            json!({"recordCapture":"missing"}),
+            json!({"recordCapture":"parent","extra":true}),
+            json!({"recordCapture":false}),
         ] {
             assert!(resolve(&value, &captures, 0).is_err());
         }
@@ -1918,8 +1918,8 @@ mod tests {
             .find(|s| s.id == "starter-data")
             .unwrap();
         for notes in [
-            json!({"related":{"recordRef":"department"}}),
-            json!({"items":[{"recordRef":"department"}]}),
+            json!({"related":{"recordCapture":"department"}}),
+            json!({"items":[{"recordCapture":"department"}]}),
         ] {
             let mut input: Value =
                 serde_json::from_slice(&read_source(&project.join(&samples.input)).unwrap())
@@ -2084,7 +2084,7 @@ mod tests {
             "household":{"householdCode":"SYN-HOUSEHOLD","householdName":"Synthetic household","district":"north-district"},
             "center":{"centerCode":"SYN-CENTER","label":"Synthetic center","district":"north-district"}
         })).unwrap()).unwrap();
-        let input = json!({"contact":{"householdId":{"recordRef":"household"},"serviceCenterId":{"recordRef":"center"},
+        let input = json!({"contact":{"householdId":{"recordCapture":"household"},"serviceCenterId":{"recordCapture":"center"},
             "personCode":"SYN-PERSON","contactName":"Synthetic contact","district":"north-district"}});
         fs::write(
             project.join("examples/contact.json"),
@@ -2123,7 +2123,7 @@ mod tests {
         let population = child(&owned.project, "population", None, None).unwrap();
         let parent = population["attempt"].as_str().unwrap().parse().unwrap();
         let mut wrong_input = input;
-        wrong_input["contact"]["householdId"] = json!({"recordRef":"center"});
+        wrong_input["contact"]["householdId"] = json!({"recordCapture":"center"});
         let wrong_path = owned.project.join("wrong.json");
         fs::write(&wrong_path, serde_json::to_vec(&wrong_input).unwrap()).unwrap();
         let mut args = test_args(&owned.project, "contact");
@@ -2282,7 +2282,7 @@ mod tests {
         fs::write(&sample_path, serde_json::to_vec(&sample_input).unwrap()).unwrap();
         let sample_bytes = fs::read(&sample_path).unwrap();
         let mut invalid: Value = serde_json::from_slice(&sample_bytes).unwrap();
-        invalid["hill-link"]["institutionFrom"] = json!({"recordRef":"river-link"});
+        invalid["hill-link"]["institutionFrom"] = json!({"recordCapture":"river-link"});
         fs::write(&sample_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
         assert!(format!(
             "{:#}",

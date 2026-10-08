@@ -45,7 +45,8 @@ use uuid::Uuid;
 const INSTANCE: &str = "spatial-migration-instance";
 const DATABASE: &str = "spatial-migration-database";
 const SOURCE_REVISION: &str = "spatial-migration-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: site-list
     steps:
@@ -53,7 +54,7 @@ journeys:
         entity: site
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 const SITE_RECORD: &str = "00000000-0000-4000-8000-000000000101";

@@ -1172,41 +1172,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/journeys
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegJourneys'
-- rule: CFG-ENV-2
-  format: breg/journeys
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/breg-journeys/v1
-  resolution: Read and write id.registrystack.org/formats/breg/journeys/v1; refuse the old value with config.retired-api-version
-- rule: CFG-ID-6
-  format: breg/journeys
-  location: crates/registry-breg/src/fixtures.rs#ActionSource/Query/select
-  class: pending
-  wp: WP3
-  reason: ActionSource/Query/select decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
-- rule: CFG-ID-6
-  format: breg/journeys
-  location: crates/registry-breg/src/fixtures.rs#ActionSource/ReadPath/select
-  class: pending
-  wp: WP3
-  reason: ActionSource/ReadPath/select decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
-- rule: CFG-ID-6
-  format: breg/journeys
-  location: crates/registry-breg/src/fixtures.rs#ClaimsSource/scopes
-  class: pending
-  wp: WP3
-  reason: ClaimsSource/scopes decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
 - rule: CFG-SCHEMA-2
   format: breg/journeys
   location: products/platform/config-formats.yaml#/schema
@@ -1221,34 +1186,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-8
-  format: breg/journeys
-  location: crates/registry-breg/src/fixtures.rs#ActionSource
-  class: pending
-  wp: WP3
-  reason: ActionSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/journeys
-  location: crates/registry-breg/src/fixtures.rs#BatchItemSource
-  class: pending
-  wp: WP3
-  reason: BatchItemSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
-- rule: CFG-SCHEMA-8
-  format: breg/journeys
-  location: crates/registry-breg/src/fixtures.rs#DirectClaimSource
-  class: pending
-  wp: WP3
-  reason: DirectClaimSource derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
-- rule: CFG-YAML-1
-  format: breg/journeys
-  location: crates/registry-breg/src/fixtures.rs#validate_fixture_journeys()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-ENV-2
   format: breg/lifecycle-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion

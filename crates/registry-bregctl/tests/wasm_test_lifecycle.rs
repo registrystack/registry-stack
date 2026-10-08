@@ -334,7 +334,8 @@ accessProfiles:
 }
 
 fn journey_source() -> &'static str {
-    r#"apiVersion: registry.registrystack.org/breg-journeys/v1
+    r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: wasm-fixed-output
     steps:
@@ -346,7 +347,7 @@ journeys:
           scopes: [registry:wasm-fixture:invoke]
           purpose: fixture-assurance
         request:
-          operation: invoke
+          type: invoke
           idempotencyKey: wasm-fixed-output
           input: {request: ignored-by-fixed-output}
         expect: {outcome: success, status: 200}

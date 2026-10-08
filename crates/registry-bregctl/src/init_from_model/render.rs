@@ -709,7 +709,7 @@ fn fixture_id(prefix: &str, name: &str) -> String {
 }
 
 /// The capture id a create step for `entity_id` registers, and the id a
-/// later step's `recordRef` names to read the same record back.
+/// later step's `recordCapture` names to read the same record back.
 fn capture_id(entity_id: &str) -> String {
     fixture_id("example-", entity_id)
 }
@@ -746,10 +746,13 @@ fn journeys(plan: &Plan) -> String {
          earlier journey. A selection large enough to exceed one journey's step bound is split \
          across journeys named `first-records`, `first-records-2`, and so on.",
     );
-    yaml.line(0, "apiVersion: registry.registrystack.org/breg-journeys/v1");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/breg/journeys/v1",
+    );
+    yaml.line(0, "kind: BRegJourneys");
     yaml.line(0, "journeys:");
 
-    let mut operator_claims_declared = false;
     let mut journey_index = 1usize;
     let mut steps_in_journey = 0usize;
     let mut created: BTreeSet<&str> = BTreeSet::new();
@@ -767,9 +770,9 @@ fn journeys(plan: &Plan) -> String {
         yaml.line(3, &format!("- id: {}", fixture_id("create-", &entity.id)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
-        operator_claims(&mut yaml, plan, &mut operator_claims_declared);
+        operator_claims(&mut yaml, plan);
         yaml.line(4, "request:");
-        yaml.line(5, "operation: create");
+        yaml.line(5, "type: create");
         yaml.line(5, "data:");
         for field in entity.all_fields() {
             let Some(value) = example_value(plan, field, &identifier_value, &created) else {
@@ -792,11 +795,11 @@ fn journeys(plan: &Plan) -> String {
         yaml.line(3, &format!("- id: {}", fixture_id("get-", &entity.id)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
-        yaml.line(4, "claims: *operator_claims");
+        operator_claims(&mut yaml, plan);
         yaml.line(
             4,
             &format!(
-                "request: {{operation: get, recordRef: {}}}",
+                "request: {{type: get, recordCapture: {}}}",
                 scalar(&capture)
             ),
         );
@@ -811,14 +814,13 @@ fn journeys(plan: &Plan) -> String {
         yaml.line(3, &format!("- id: {}", fixture_id("list-", &entity.route)));
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", OPERATOR_PROFILE);
-        yaml.line(4, "claims: *operator_claims");
-        yaml.line(4, "request: {operation: list}");
+        operator_claims(&mut yaml, plan);
+        yaml.line(4, "request: {type: list}");
         yaml.line(4, "expect: {outcome: success, status: 200, count: 1}");
         created.insert(entity.id.as_str());
         steps_in_journey += ENTITY_JOURNEY_STEPS;
     }
 
-    let mut reader_claims_declared = false;
     for entity in reader_entities(plan) {
         if steps_in_journey + 1 > FIXTURE_MAX_STEPS_PER_JOURNEY {
             journey_index += 1;
@@ -834,32 +836,22 @@ fn journeys(plan: &Plan) -> String {
         );
         yaml.entry(4, "entity", &entity.id);
         yaml.entry(4, "accessProfile", READER_PROFILE);
-        if reader_claims_declared {
-            yaml.line(4, "claims: *reader_claims");
-        } else {
-            yaml.line(4, "claims: &reader_claims");
-            yaml.entry(5, "principal", &reader_principal(plan));
-            yaml.line(5, &format!("scopes: [{}]", scalar(&read_scope(plan))));
-            yaml.line(5, "purpose: registry-reporting");
-            reader_claims_declared = true;
-        }
-        yaml.line(4, "request: {operation: list}");
+        yaml.line(4, "claims:");
+        yaml.entry(5, "principal", &reader_principal(plan));
+        yaml.line(5, &format!("scopes: [{}]", scalar(&read_scope(plan))));
+        yaml.line(5, "purpose: registry-reporting");
+        yaml.line(4, "request: {type: list}");
         yaml.line(4, "expect: {outcome: success, status: 200, count: 1}");
         steps_in_journey += 1;
     }
     yaml.finish()
 }
 
-fn operator_claims(yaml: &mut Yaml, plan: &Plan, declared: &mut bool) {
-    if *declared {
-        yaml.line(4, "claims: *operator_claims");
-        return;
-    }
-    yaml.line(4, "claims: &operator_claims");
+fn operator_claims(yaml: &mut Yaml, plan: &Plan) {
+    yaml.line(4, "claims:");
     yaml.entry(5, "principal", &operator_principal(plan));
     yaml.line(5, &format!("scopes: [{}]", scalar(&operate_scope(plan))));
     yaml.line(5, "purpose: registry-operations");
-    *declared = true;
 }
 
 /// The entities in an order that places a reference's target before the
@@ -922,7 +914,7 @@ fn example_value(
             if !created.contains(target.as_str()) {
                 return None;
             }
-            format!("{{recordRef: {}}}", scalar(&capture_id(target)))
+            format!("{{recordCapture: {}}}", scalar(&capture_id(target)))
         }
         FieldKind::Structured { schema, .. } => {
             serde_json::to_string(&example_structured(schema)).expect("a value serializes")
@@ -1794,12 +1786,12 @@ mod tests {
             if let Some(capture) = step["capture"].as_str() {
                 assert!(!capture.contains('_'), "{capture}");
             }
-            if let Some(record_ref) = step["request"]["recordRef"].as_str() {
+            if let Some(record_ref) = step["request"]["recordCapture"].as_str() {
                 assert!(!record_ref.contains('_'), "{record_ref}");
             }
             if let Some(data) = step["request"]["data"].as_object() {
                 for value in data.values() {
-                    if let Some(record_ref) = value.get("recordRef").and_then(Value::as_str) {
+                    if let Some(record_ref) = value.get("recordCapture").and_then(Value::as_str) {
                         assert!(!record_ref.contains('_'), "{record_ref}");
                     }
                 }
@@ -2029,7 +2021,7 @@ mod tests {
             .find(|step| step["id"] == "create-group-membership")
             .expect("membership create");
         assert_eq!(
-            membership["request"]["data"]["person"]["recordRef"],
+            membership["request"]["data"]["person"]["recordCapture"],
             "example-person"
         );
         assert!(steps

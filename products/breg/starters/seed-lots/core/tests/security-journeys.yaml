@@ -1,4 +1,5 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: starter-model-policy
     steps:
@@ -11,7 +12,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-VARIETY-A
             varietyDenomination: Example Amber
@@ -28,7 +29,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-VARIETY-B
             varietyDenomination: Example Blue
@@ -45,14 +46,14 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-LOT-SOURCE
             lotNumber: SYN-2026-001
             quantityKg: '100.000'
             producedOn: '2026-01-15'
             variety:
-              recordRef: variety-a
+              recordCapture: variety-a
         expect:
           outcome: success
           status: 201
@@ -66,16 +67,16 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-LOT-DERIVED
             lotNumber: SYN-2026-002
             quantityKg: '25.000'
             producedOn: '2026-01-20'
             variety:
-              recordRef: variety-a
+              recordCapture: variety-a
             sourceLot:
-              recordRef: source
+              recordCapture: source
         expect:
           outcome: success
           status: 201
@@ -89,13 +90,13 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: SYNTHETIC-LOT-OTHER
             lotNumber: SYN-2026-003
             quantityKg: '50.000'
             variety:
-              recordRef: variety-b
+              recordCapture: variety-b
         expect:
           outcome: success
           status: 201
@@ -109,7 +110,7 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: JOURNEY-FIRST-001
             lotNumber: LOT-2026-010
@@ -126,7 +127,7 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             localIdentifier: DENIED-001
             lotNumber: LOT-DENIED
@@ -143,8 +144,8 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: first-record
+          type: get
+          recordCapture: first-record
         expect:
           outcome: refusal
           status: 404
@@ -158,10 +159,10 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: create
+          type: create
           data:
             record:
-              recordRef: first-record
+              recordCapture: first-record
             reason: Synthetic spelling correction
             supportingReference: SYNTHETIC-SUPPORT-001
             lotNumber: LOT-2026-100
@@ -177,8 +178,8 @@ journeys:
           scopes: []
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: refusal
           status: 404
@@ -192,8 +193,8 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -207,9 +208,9 @@ journeys:
             - starter:editor
           purpose: starter-learning
         request:
-          operation: submit_request
-          etagRef: before-submit
-          recordRef: before-submit
+          type: submit-request
+          etagCapture: before-submit
+          recordCapture: before-submit
         expect:
           outcome: success
           status: 200
@@ -222,8 +223,8 @@ journeys:
             - starter:reviewer
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: draft
+          type: get
+          recordCapture: draft
         expect:
           outcome: success
           status: 200
@@ -237,8 +238,8 @@ journeys:
             - starter:reader
           purpose: starter-learning
         request:
-          operation: get
-          recordRef: first-record
+          type: get
+          recordCapture: first-record
         expect:
           outcome: success
           status: 200

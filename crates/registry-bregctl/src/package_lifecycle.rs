@@ -8,7 +8,7 @@ use std::io::Read;
 use std::path::Path;
 
 use registry_breg::fixtures::{
-    validate_fixture_journeys, validate_schema_test_receipt_for_package,
+    validate_fixture_journeys, validate_schema_test_receipt_for_package, FixtureError,
 };
 use registry_breg::package::{
     PackageError, PackageFileRole, PreparedPackage, FIXTURE_JOURNEYS_PATH,
@@ -45,6 +45,8 @@ pub(crate) enum PackageLifecycleError {
     TestReceiptRefused {
         message: String,
     },
+    /// The shared reader refused the candidate's fixture journeys.
+    Journeys(registry_platform_yaml::Report),
     /// The receipt bytes are not a strict canonical receipt document.
     TestReceiptInvalid {
         message: String,
@@ -129,11 +131,13 @@ pub(crate) fn validate_test_receipt(
         .ok_or_else(|| PackageLifecycleError::TestReceiptRefused {
             message: format!("the candidate carries no {FIXTURE_JOURNEYS_PATH}"),
         })?;
-    let suite = validate_fixture_journeys(journeys, prepared.registry()).map_err(|error| {
-        PackageLifecycleError::TestReceiptRefused {
-            message: format!("the packaged journey suite was refused: {error}"),
-        }
-    })?;
+    let suite =
+        validate_fixture_journeys(journeys, prepared.registry()).map_err(|error| match error {
+            FixtureError::JourneyDocument(report) => PackageLifecycleError::Journeys(report),
+            error => PackageLifecycleError::TestReceiptRefused {
+                message: format!("the packaged journey suite was refused: {error}"),
+            },
+        })?;
     if let Err(error) = validate_schema_test_receipt_for_package(&bytes, prepared, &suite) {
         return Err(explain_receipt_binding(fields, prepared, &suite, error));
     }

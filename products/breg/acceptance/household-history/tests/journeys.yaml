@@ -1,16 +1,17 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: household-history-caller-surfaces
     steps:
       - id: create-initial-membership
         entity: membership-record
         accessProfile: registry-operator
-        claims: &registry_operator_claims
+        claims:
           principal: synthetic-history-operator
           purpose: history-maintenance
           scopes: [history-maintain]
         request:
-          operation: create
+          type: create
           data:
             subject: household-schema-001
             group: A
@@ -29,8 +30,11 @@ journeys:
       - id: get-initial-membership
         entity: membership-record
         accessProfile: registry-operator
-        claims: *registry_operator_claims
-        request: {operation: get, recordRef: initial-membership}
+        claims:
+          principal: synthetic-history-operator
+          purpose: history-maintenance
+          scopes: [history-maintain]
+        request: {type: get, recordCapture: initial-membership}
         expect:
           outcome: success
           status: 200
@@ -43,11 +47,11 @@ journeys:
       - id: consumer-lists-initial-membership
         entity: membership-record
         accessProfile: eligibility-consumer
-        claims: &eligibility_consumer_claims
+        claims:
           principal: synthetic-eligibility-consumer
           purpose: eligibility-evaluation
           scopes: [eligibility-read]
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: consumer-without-purpose-cannot-list-memberships
         entity: membership-record
@@ -55,7 +59,7 @@ journeys:
         claims:
           principal: synthetic-eligibility-consumer
           scopes: [eligibility-read]
-        request: {operation: list}
+        request: {type: list}
         expect:
           outcome: refusal
           status: 404

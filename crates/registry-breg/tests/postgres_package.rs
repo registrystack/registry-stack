@@ -66,7 +66,8 @@ use uuid::Uuid;
 const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: package-read
     steps:
@@ -74,7 +75,7 @@ journeys:
         entity: neutral-record
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

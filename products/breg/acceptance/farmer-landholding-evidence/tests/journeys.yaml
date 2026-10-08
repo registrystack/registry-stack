@@ -1,19 +1,20 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
 - id: farmer-evidence-registration
   steps:
   - id: register-category
     action: register-landholding
     accessProfile: landholding-registrar
-    claims: &id001
+    claims:
       principal: synthetic-landholding-registrar
       scopes:
       - registry:landholding:register
       purpose: land-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: schema-landholding-001
-      input: &id002
+      input:
         farmerPrefix: ' TH '
         farmerNumber: ' 00042 '
         parcelCode: SCHEMA-P-001
@@ -32,8 +33,8 @@ journeys:
       - registry:landholding:read
       purpose: land-registration-audit
     request:
-      operation: get
-      recordRef: registered-landholding
+      type: get
+      recordCapture: registered-landholding
     expect:
       outcome: success
       status: 200
@@ -44,20 +45,32 @@ journeys:
   - id: replay
     action: register-landholding
     accessProfile: landholding-registrar
-    claims: *id001
+    claims:
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: schema-landholding-001
-      input: *id002
+      input:
+        farmerPrefix: ' TH '
+        farmerNumber: ' 00042 '
+        parcelCode: SCHEMA-P-001
+        includeCategory: true
     expect:
       outcome: success
       status: 200
   - id: blank
     action: register-landholding
     accessProfile: landholding-registrar
-    claims: *id001
+    claims:
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: schema-blank
       input:
         farmerPrefix: ' TH '
@@ -72,9 +85,13 @@ journeys:
   - id: inactive
     action: register-landholding
     accessProfile: landholding-registrar
-    claims: *id001
+    claims:
+      principal: synthetic-landholding-registrar
+      scopes:
+      - registry:landholding:register
+      purpose: land-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: schema-inactive
       input:
         farmerPrefix: ' TH '

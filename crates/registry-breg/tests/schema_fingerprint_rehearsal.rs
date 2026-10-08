@@ -24,7 +24,8 @@ const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";
 const DATABASE: &str = "rehearsal-database";
 const SOURCE_REVISION: &str = "rehearsal-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys: []
 "#;
 

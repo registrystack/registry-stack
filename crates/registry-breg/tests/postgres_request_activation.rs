@@ -50,7 +50,8 @@ const INSTANCE_ID: &str = "change-request-activation-instance";
 const DATABASE_ID: &str = "change-request-activation-database";
 const SOURCE_REVISION: &str = "change-request-activation-source";
 const TENANT: &str = "tenant-a";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: activation-request-list
     steps:
@@ -58,7 +59,7 @@ journeys:
         entity: correction-request
         accessProfile: submitter
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 

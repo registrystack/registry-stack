@@ -1,15 +1,16 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: asset-and-site-caller-surfaces
     steps:
       - id: create-asset
         entity: asset-item
         accessProfile: asset-operator
-        claims: &asset_operator_claims
+        claims:
           principal: synthetic-asset-operator
           purpose: asset-management
         request:
-          operation: create
+          type: create
           data:
             asset-code: ASSET-SYNTH-001
             label: Synthetic water pump
@@ -25,12 +26,12 @@ journeys:
       - id: planner-gets-asset
         entity: asset-item
         accessProfile: site-planner
-        claims: &site_planner_claims
+        claims:
           principal: synthetic-site-planner
           purpose: site-planning
         request:
-          operation: get
-          recordRef: first-asset
+          type: get
+          recordCapture: first-asset
         expect:
           outcome: success
           status: 200
@@ -40,9 +41,11 @@ journeys:
       - id: planner-lists-assets
         entity: asset-item
         accessProfile: site-planner
-        claims: *site_planner_claims
+        claims:
+          principal: synthetic-site-planner
+          purpose: site-planning
         request:
-          operation: list
+          type: list
         expect:
           outcome: success
           status: 200
@@ -50,11 +53,13 @@ journeys:
       - id: operator-renames-asset
         entity: asset-item
         accessProfile: asset-operator
-        claims: *asset_operator_claims
+        claims:
+          principal: synthetic-asset-operator
+          purpose: asset-management
         request:
-          operation: patch
-          recordRef: first-asset
-          etagRef: first-asset
+          type: patch
+          recordCapture: first-asset
+          etagCapture: first-asset
           changes:
             - field: label
               value: Synthetic irrigation pump
@@ -69,9 +74,11 @@ journeys:
       - id: create-site
         entity: asset-site
         accessProfile: asset-operator
-        claims: *asset_operator_claims
+        claims:
+          principal: synthetic-asset-operator
+          purpose: asset-management
         request:
-          operation: create
+          type: create
           data:
             site-code: SITE-SYNTH-001
             label: Synthetic northern depot
@@ -85,10 +92,12 @@ journeys:
       - id: planner-gets-site
         entity: asset-site
         accessProfile: site-planner
-        claims: *site_planner_claims
+        claims:
+          principal: synthetic-site-planner
+          purpose: site-planning
         request:
-          operation: get
-          recordRef: first-site
+          type: get
+          recordCapture: first-site
         expect:
           outcome: success
           status: 200
@@ -98,9 +107,11 @@ journeys:
       - id: planner-lists-sites
         entity: asset-site
         accessProfile: site-planner
-        claims: *site_planner_claims
+        claims:
+          principal: synthetic-site-planner
+          purpose: site-planning
         request:
-          operation: list
+          type: list
         expect:
           outcome: success
           status: 200
@@ -111,8 +122,8 @@ journeys:
         claims:
           principal: synthetic-site-planner
         request:
-          operation: get
-          recordRef: renamed-asset
+          type: get
+          recordCapture: renamed-asset
         expect:
           outcome: refusal
           status: 404

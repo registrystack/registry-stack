@@ -1,7 +1,7 @@
 {
   "change": {
     "record": {
-      "recordRef": "first-record"
+      "recordCapture": "first-record"
     },
     "name": "My First Holding",
     "reason": "Correct a synthetic spelling mistake.",

@@ -59,7 +59,8 @@ const DATABASE_ID: &str = "immediate-action-activation-database";
 const ENVIRONMENT: &str = "production";
 const SOURCE_REVISION: &str = "immediate-action-activation-source";
 const HOUSEHOLD_ID: &str = "00000000-0000-4000-8000-000000000100";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys: []
 "#;
 const ACTION_RESULTS_PRIMARY_KEY: &str = "registry_immediate_action_results_pkey";

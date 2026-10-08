@@ -390,6 +390,12 @@ def _replace_once(source: str, expected: str, replacement: str, description: str
     return source.replace(expected, replacement, 1)
 
 
+def _replace_every(source: str, expected: str, replacement: str, description: str) -> str:
+    if expected not in source:
+        raise DemoError(description)
+    return source.replace(expected, replacement)
+
+
 def reserve_ports(count: int = 3) -> tuple[int, ...]:
     if count not in (3, 4):
         raise DemoError("the demo reserves either three or four ports")
@@ -473,23 +479,23 @@ def _local_project(
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &asset_operator_claims\n"
+            "        claims:\n"
             "          principal: synthetic-asset-operator\n"
             "          purpose: asset-management\n",
-            "        claims: &asset_operator_claims\n"
+            "        claims:\n"
             "          principal: synthetic-asset-operator\n"
             f"          scopes: [{ASSET_OPERATOR_SCOPE}]\n"
             "          purpose: asset-management\n",
             "asset-site fixture no longer has the expected operator journey claims",
         )
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &site_planner_claims\n"
+            "        claims:\n"
             "          principal: synthetic-site-planner\n"
             "          purpose: site-planning\n",
-            "        claims: &site_planner_claims\n"
+            "        claims:\n"
             "          principal: synthetic-site-planner\n"
             f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
             "          purpose: site-planning\n",
@@ -499,8 +505,8 @@ def _local_project(
             "        claims:\n"
             "          principal: synthetic-site-planner\n"
             "        request:\n"
-            "          operation: get\n"
-            "          recordRef: renamed-asset\n"
+            "          type: get\n"
+            "          recordCapture: renamed-asset\n"
         )
         journeys = _replace_once(
             journeys,
@@ -509,8 +515,8 @@ def _local_project(
             "          principal: synthetic-site-planner\n"
             f"          scopes: [{ASSET_PLANNER_SCOPE}]\n"
             "        request:\n"
-            "          operation: get\n"
-            "          recordRef: renamed-asset\n",
+            "          type: get\n"
+            "          recordCapture: renamed-asset\n",
             "asset-site fixture no longer has the expected no-purpose planner step",
         )
         journeys_path.write_text(journeys, encoding="utf-8")
@@ -531,12 +537,12 @@ def _local_project(
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &operator_claims\n"
+            "        claims:\n"
             "          principal: asset-operator\n"
             "          purpose: asset-management\n",
-            "        claims: &operator_claims\n"
+            "        claims:\n"
             "          principal: asset-operator\n"
             f"          scopes: [{ASSET_OPERATOR_SCOPE}]\n"
             "          purpose: asset-management\n",
@@ -565,18 +571,7 @@ def _local_project(
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
-            journeys,
-            "        claims: &north_operator_claims\n"
-            "          principal: synthetic-facility-operator\n"
-            "          purpose: facility-registry\n",
-            "        claims: &north_operator_claims\n"
-            "          principal: synthetic-facility-operator\n"
-            f"          scopes: [{FACILITY_OPERATOR_SCOPE}]\n"
-            "          purpose: facility-registry\n",
-            "facility fixture no longer has the expected north operator journey claims",
-        )
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
             "        claims:\n"
             "          principal: synthetic-facility-operator\n"
@@ -585,7 +580,7 @@ def _local_project(
             "          principal: synthetic-facility-operator\n"
             f"          scopes: [{FACILITY_OPERATOR_SCOPE}]\n"
             "          purpose: facility-registry\n",
-            "facility fixture no longer has the expected south operator journey claims",
+            "facility fixture no longer has the expected operator journey claims",
         )
         journeys_path.write_text(journeys, encoding="utf-8")
     elif fixture_kind == "inspection":
@@ -598,12 +593,12 @@ def _local_project(
         )
         journeys_path = target / "tests/journeys.yaml"
         journeys = journeys_path.read_text(encoding="utf-8")
-        journeys = _replace_once(
+        journeys = _replace_every(
             journeys,
-            "        claims: &inspection_inspector_claims\n"
+            "        claims:\n"
             "          principal: synthetic-inspection-inspector\n"
             "          purpose: facility-inspection\n",
-            "        claims: &inspection_inspector_claims\n"
+            "        claims:\n"
             "          principal: synthetic-inspection-inspector\n"
             f"          scopes: [{INSPECTION_INSPECTOR_SCOPE}]\n"
             "          purpose: facility-inspection\n",

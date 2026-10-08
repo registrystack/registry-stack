@@ -328,11 +328,11 @@ formats:
     audience: authored
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/breg-journeys/v1
-      kind: none
+      apiVersion: id.registrystack.org/formats/breg/journeys/v1
+      kind: BRegJourneys
       checkedBy:
         file: crates/registry-breg/src/fixtures.rs
-        symbol: JOURNEY_API_VERSION
+        symbol: JOURNEYS_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/journeys/v1
       kind: BRegJourneys

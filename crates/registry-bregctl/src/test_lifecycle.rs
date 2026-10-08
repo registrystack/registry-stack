@@ -17,7 +17,6 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 use registry_breg::startup;
 use serde::Deserialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -71,7 +70,7 @@ pub(crate) enum TestLifecycleError {
     ReviewFingerprint { declared: String, measured: String },
     Rehearsal(Box<MigrationRehearsalError>),
     Journeys { message: String },
-    JourneySyntax { path: String, message: &'static str },
+    JourneyDocument(registry_platform_yaml::Report),
     JourneyStep { path: String, message: String },
     Credentials { path: String, message: String },
     Database,
@@ -171,14 +170,13 @@ pub(crate) fn run(
         request.candidate.registry(),
     ) {
         Ok(suite) => suite,
+        Err(registry_breg::fixtures::FixtureError::JourneyDocument(report)) => {
+            return Err(TestLifecycleError::JourneyDocument(report));
+        }
         Err(error) => {
-            return Err(
-                diagnose_fixture_journey_shape(request.candidate.fixture_journeys()).unwrap_or(
-                    TestLifecycleError::Journeys {
-                        message: error.to_string(),
-                    },
-                ),
-            );
+            return Err(TestLifecycleError::Journeys {
+                message: error.to_string(),
+            });
         }
     };
     let credentials = load_credentials(request.credentials, &config, &suite)?;
@@ -275,33 +273,6 @@ pub(crate) fn measure(
         registry_revision: prepared.registry().revision().to_owned(),
         schema_fingerprint,
     })
-}
-
-fn diagnose_fixture_journey_shape(bytes: &[u8]) -> Option<TestLifecycleError> {
-    let value: Value = serde_norway::from_slice(bytes).ok()?;
-    let journeys = value.get("journeys")?.as_array()?;
-    for (journey_index, journey) in journeys.iter().enumerate() {
-        let steps = journey.get("steps")?.as_array()?;
-        for (step_index, step) in steps.iter().enumerate() {
-            let request = step.get("request")?.as_object()?;
-            if request.get("operation").and_then(Value::as_str) != Some("revise_request") {
-                continue;
-            }
-            if request.contains_key("data") {
-                return Some(TestLifecycleError::JourneySyntax {
-                    path: format!("journeys[{journey_index}].steps[{step_index}].request.data"),
-                    message: "revise_request fixture steps require rebase directly under request; remove the data wrapper",
-                });
-            }
-            if !request.get("rebase").is_some_and(Value::is_boolean) {
-                return Some(TestLifecycleError::JourneySyntax {
-                    path: format!("journeys[{journey_index}].steps[{step_index}].request.rebase"),
-                    message: "revise_request fixture steps require a boolean rebase field",
-                });
-            }
-        }
-    }
-    None
 }
 
 fn load_test_runtime_config(path: &Path) -> Result<RuntimeConfig, TestLifecycleError> {
@@ -1002,47 +973,110 @@ mod tests {
         assert!(!report.to_string().contains("recreate"));
     }
 
-    #[test]
-    fn revise_request_data_body_reports_field_path() {
-        let source = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
-journeys:
-  - id: stale-flow
-    steps:
-      - id: rebase-primary-request
-        request:
-          operation: revise_request
-          data: {rebase: true}
-"#;
-
-        let error = diagnose_fixture_journey_shape(source).expect("specific diagnostic");
-        match error {
-            TestLifecycleError::JourneySyntax { path, message } => {
-                assert_eq!(path, "journeys[0].steps[0].request.data");
-                assert!(message.contains("remove the data wrapper"));
-            }
-            other => panic!("unexpected diagnostic: {other:?}"),
+    /// The shared reader's refusal of a journeys document, as `bregctl test`
+    /// receives it for a project at `/project`.
+    fn journey_refusal(source: &[u8]) -> crate::DocumentRefusal {
+        let Err(FixtureError::JourneyDocument(report)) =
+            registry_breg::fixtures::journey_step_profiles(source)
+        else {
+            panic!("the reader refuses the journeys document");
+        };
+        crate::DocumentRefusal {
+            command: "test",
+            subject: "the fixture journeys",
+            report: crate::report_in_project(report, Path::new("/project")),
         }
     }
 
+    fn written(refusal: &crate::DocumentRefusal, format: crate::OutputFormat) -> (u8, String) {
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = crate::write_document_failure(refusal, format, &mut stdout, &mut stderr);
+        let text = if format == crate::OutputFormat::Json {
+            assert!(stderr.is_empty());
+            stdout
+        } else {
+            assert!(stdout.is_empty());
+            stderr
+        };
+        let code = if code == std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT) {
+            crate::DOMAIN_REFUSAL_EXIT
+        } else {
+            u8::MAX
+        };
+        (code, String::from_utf8(text).expect("output is UTF-8"))
+    }
+
     #[test]
-    fn revise_request_missing_rebase_reports_field_path() {
-        let source = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+    fn revise_request_data_body_prints_the_reader_diagnostic_with_its_position() {
+        let source = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: stale-flow
     steps:
       - id: rebase-primary-request
+        accessProfile: requester
         request:
-          operation: revise_request
+          type: revise-request
+          recordCapture: request
+          etagCapture: request
+          data: {rebase: true}
+        expect: {outcome: success, status: 200}
 "#;
 
-        let error = diagnose_fixture_journey_shape(source).expect("specific diagnostic");
-        match error {
-            TestLifecycleError::JourneySyntax { path, message } => {
-                assert_eq!(path, "journeys[0].steps[0].request.rebase");
-                assert!(message.contains("boolean rebase"));
-            }
-            other => panic!("unexpected diagnostic: {other:?}"),
-        }
+        let (code, human) = written(&journey_refusal(source), crate::OutputFormat::Human);
+
+        assert_eq!(code, crate::DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            human,
+            "bregctl test refused the fixture journeys.
+error[config.missing-key] /project/tests/journeys.yaml:8:9 /journeys/0/steps/0/request
+  the required member `rebase` is missing
+  next: Add `rebase`.
+error[config.unknown-key] /project/tests/journeys.yaml:12:11 /journeys/0/steps/0/request/data
+  `data` is not a member of this mapping
+  next: Remove `data`; the accepted keys are `type`, `recordCapture`, `etagCapture`, `rebase`.
+2 errors, 0 warnings in 1 file
+"
+        );
+    }
+
+    #[test]
+    fn revise_request_missing_rebase_reports_the_reader_shape_in_json() {
+        let source = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: stale-flow
+    steps:
+      - id: rebase-primary-request
+        accessProfile: requester
+        request:
+          type: revise-request
+          recordCapture: request
+          etagCapture: request
+        expect: {outcome: success, status: 200}
+"#;
+
+        let (code, json) = written(&journey_refusal(source), crate::OutputFormat::Json);
+        let report: serde_json::Value = serde_json::from_str(&json).expect("JSON report");
+
+        assert_eq!(code, crate::DOMAIN_REFUSAL_EXIT);
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["command"], "test");
+        let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+        assert_eq!(diagnostics.len(), 1, "{json}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic["severity"], "error");
+        assert_eq!(diagnostic["code"], "config.missing-key");
+        assert_eq!(diagnostic["artifact"], "BRegJourneys");
+        assert_eq!(diagnostic["path"], "/journeys/0/steps/0/request");
+        assert!(
+            diagnostic["message"].as_str().unwrap().contains("rebase"),
+            "{json}"
+        );
+        assert_eq!(
+            diagnostic["source"],
+            serde_json::json!({"file": "/project/tests/journeys.yaml", "line": 8, "column": 9})
+        );
     }
 
     /// Deterministic ancestor-swap regressions for the receipt and credentials

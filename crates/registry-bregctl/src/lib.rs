@@ -1494,6 +1494,66 @@ struct FailureReport {
     diagnostics: Vec<ToolDiagnostic>,
 }
 
+/// A command refusal. A document the shared reader refused keeps the
+/// reader's diagnostics unchanged (CFG-DIAG-1, CFG-DIAG-2); every other
+/// refusal is the command's own report.
+enum Refusal {
+    Tool(FailureReport),
+    Document(DocumentRefusal),
+}
+
+/// A document the shared reader refused while a command read it.
+struct DocumentRefusal {
+    command: &'static str,
+    /// What the command refused, read as "bregctl <command> refused <subject>."
+    subject: &'static str,
+    report: registry_platform_yaml::Report,
+}
+
+impl From<FailureReport> for Refusal {
+    fn from(report: FailureReport) -> Refusal {
+        Refusal::Tool(report)
+    }
+}
+
+/// The ctl report envelope around reader diagnostics, carried unchanged.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentFailureReport<'a> {
+    ok: bool,
+    command: &'static str,
+    diagnostics: &'a [registry_platform_yaml::Diagnostic],
+}
+
+/// Name a file the command found inside a project by the project path the
+/// operator gave joined with the file's path inside it (CFG-DIAG-1).
+fn report_in_project(
+    report: registry_platform_yaml::Report,
+    project: &Path,
+) -> registry_platform_yaml::Report {
+    let files_checked = report.files_checked();
+    let in_project = |file: &str| project.join(file).display().to_string();
+    let mut rebased = registry_platform_yaml::Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                if let Some(source) = &mut diagnostic.source {
+                    source.file = in_project(&source.file);
+                }
+                for related in &mut diagnostic.related {
+                    related.file = in_project(&related.file);
+                }
+                diagnostic
+            })
+            .collect(),
+    );
+    if let Some(files) = files_checked {
+        rebased.set_files_checked(files);
+    }
+    rebased
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FieldEncryptionKeygenSuccessReport<'a> {
@@ -2313,7 +2373,7 @@ where
         Command::Package(args) => {
             return match package(&args) {
                 Ok(report) => write_package_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Test(args) if args.fingerprint_only => {
@@ -2325,7 +2385,7 @@ where
         Command::Test(args) => {
             return match test(&args) {
                 Ok(report) => write_schema_test_success(&report, format, stdout, stderr),
-                Err(failure) => write_failure(&failure, format, stdout, stderr),
+                Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Apply(args) => {
@@ -4718,7 +4778,7 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     })
 }
 
-fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
+fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
     // The receipt names the fingerprint its rehearsal reached, so an operator who
     // does not restate it still packages against that exact managed catalogue.
     let schema_fingerprint = match &args.schema_fingerprint {
@@ -4727,12 +4787,21 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
             .map_err(package_lifecycle_failure)?,
     };
     let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package")?;
-    let receipt = package_lifecycle::validate_test_receipt(
+    let receipt = match package_lifecycle::validate_test_receipt(
         &args.test_receipt,
         &prepared,
         args.schema_fingerprint.as_deref(),
-    )
-    .map_err(package_lifecycle_failure)?;
+    ) {
+        Ok(receipt) => receipt,
+        Err(PackageLifecycleError::Journeys(report)) => {
+            return Err(Refusal::Document(DocumentRefusal {
+                command: "package",
+                subject: "the packaged fixture journeys",
+                report: report_in_project(report, &args.candidate.project),
+            }));
+        }
+        Err(error) => return Err(package_lifecycle_failure(error).into()),
+    };
     let outcome = package_lifecycle::run(prepared, receipt, &args.output, args.revision.as_deref())
         .map_err(package_lifecycle_failure)?;
     Ok(PackageSuccessReport {
@@ -4746,19 +4815,28 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, FailureReport> {
     })
 }
 
-fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, FailureReport> {
+fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
     let (Some(credentials), Some(output)) = (&args.credentials, &args.output) else {
         unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
     };
     let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
     let candidate = capture_candidate(&args.candidate, "test", true)?;
-    let outcome = test_lifecycle::run(TestLifecycleRequest {
+    let outcome = match test_lifecycle::run(TestLifecycleRequest {
         candidate,
         runtime_config: &args.runtime_config,
         credentials,
         output,
-    })
-    .map_err(test_lifecycle_failure)?;
+    }) {
+        Ok(outcome) => outcome,
+        Err(TestLifecycleError::JourneyDocument(report)) => {
+            return Err(Refusal::Document(DocumentRefusal {
+                command: "test",
+                subject: "the fixture journeys",
+                report: report_in_project(report, &args.candidate.project),
+            }));
+        }
+        Err(error) => return Err(test_lifecycle_failure(error).into()),
+    };
     Ok(SchemaTestSuccessReport {
         ok: true,
         command: "test",
@@ -5258,6 +5336,13 @@ fn package_lifecycle_failure(error: PackageLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestReceipt,
             SuggestedAction::SupplySchemaTestReceipt,
         ),
+        PackageLifecycleError::Journeys(_) => package_failure(
+            "package.test_receipt.refused",
+            "testReceipt",
+            "the packaged journey suite was refused",
+            DiagnosticArtifact::SchemaTestReceipt,
+            SuggestedAction::SupplySchemaTestReceipt,
+        ),
         PackageLifecycleError::TestReceiptInvalid { message } => package_failure(
             "package.test_receipt.invalid",
             "testReceipt",
@@ -5390,17 +5475,6 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         TestLifecycleError::RuntimeConfig(error) => {
             return runtime_config_failure("test", error);
         }
-        TestLifecycleError::JourneySyntax { path, message } => {
-            return FailureReport {
-                ok: false,
-                command: "test",
-                diagnostics: vec![tool_diagnostic(
-                    diagnostic("test.journeys.refused", &path, message),
-                    DiagnosticArtifact::FixtureJourneys,
-                    SuggestedAction::CorrectFixtureJourneys,
-                )],
-            };
-        }
         TestLifecycleError::Journeys { message } => {
             return FailureReport {
                 ok: false,
@@ -5459,7 +5533,13 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         ),
         TestLifecycleError::RuntimeConfig(_) => unreachable!("handled before match"),
         TestLifecycleError::RuntimeSetup(_) => unreachable!("handled before match"),
-        TestLifecycleError::JourneySyntax { .. } => unreachable!("handled before match"),
+        TestLifecycleError::JourneyDocument(_) => (
+            "test.journeys.refused",
+            FIXTURE_JOURNEYS_PATH,
+            "the packaged schema-test journey suite was refused",
+            DiagnosticArtifact::FixtureJourneys,
+            SuggestedAction::CorrectFixtureJourneys,
+        ),
         TestLifecycleError::Journeys { .. } => unreachable!("handled before match"),
         TestLifecycleError::Credentials { .. } => unreachable!("handled before match"),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
@@ -8924,21 +9004,22 @@ const INIT_JOURNEYS: &[u8] = br#"# Project journeys: the requests `bregctl test`
 # compiled project first, so a journey can never reach past what a profile
 # already allows. The claims below are synthetic; credentials never belong here,
 # `bregctl test` binds one per step from its own credentials file.
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: record-lifecycle
     steps:
       # `capture` names the created record so later steps can refer to it, by
-      # `recordRef` for a target and by `{recordRef: ...}` for a reference value.
+      # `recordCapture` for a target and by `{recordCapture: ...}` for a reference value.
       - id: create-record-group
         entity: record-group
         accessProfile: operator
-        claims: &operator_claims
+        claims:
           principal: generic-registry-operator
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: group-a, label: Example group}
         expect:
           outcome: success
@@ -8948,13 +9029,16 @@ journeys:
       - id: create-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: create
+          type: create
           data:
             code: example
             label: Example record
-            group: {recordRef: example-group}
+            group: {recordCapture: example-group}
             status: active
         expect:
           outcome: success
@@ -8964,8 +9048,11 @@ journeys:
       - id: get-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: get, recordRef: example-record}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: example-record}
         expect:
           outcome: success
           status: 200
@@ -8976,24 +9063,27 @@ journeys:
       - id: read-record-within-the-claim
         entity: record
         accessProfile: record-reader
-        claims: &reader_claims
+        claims:
           principal: generic-registry-reader
           scopes: [registry:generic:read]
           purpose: registry-reporting
           directClaims:
             registry_record_status: active
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
-      # `etagRef` sends the captured record's ETag as `If-Match`, so a patch
+      # `etagCapture` sends the captured record's ETag as `If-Match`, so a patch
       # fails rather than overwriting a concurrent change.
       - id: retire-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: example-record
-          etagRef: example-record
+          type: patch
+          recordCapture: example-record
+          etagCapture: example-record
           changes:
             - {field: status, value: retired}
         expect:
@@ -9005,14 +9095,22 @@ journeys:
       - id: read-record-outside-the-claim
         entity: record
         accessProfile: record-reader
-        claims: *reader_claims
-        request: {operation: list}
+        claims:
+          principal: generic-registry-reader
+          scopes: [registry:generic:read]
+          purpose: registry-reporting
+          directClaims:
+            registry_record_status: active
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
       - id: list-records
         entity: record
         accessProfile: operator
-        claims: *operator_claims
-        request: {operation: list}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
 "#;
 
@@ -13154,6 +13252,53 @@ fn write_diff_success(
             ExitCode::from(OPERATIONAL_FAILURE_EXIT)
         }
     }
+}
+
+fn write_refusal(
+    refusal: &Refusal,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    match refusal {
+        Refusal::Tool(report) => write_failure(report, format, stdout, stderr),
+        Refusal::Document(refusal) => write_document_failure(refusal, format, stdout, stderr),
+    }
+}
+
+fn write_document_failure(
+    refusal: &DocumentRefusal,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(
+            &mut *stdout,
+            &DocumentFailureReport {
+                ok: false,
+                command: refusal.command,
+                diagnostics: refusal.report.diagnostics(),
+            },
+        )
+        .map_err(io::Error::other)
+        .and_then(|()| writeln!(stdout))
+    } else {
+        // One sentence of the command's own, then the reader's diagnostics
+        // and summary line unchanged.
+        write!(
+            stderr,
+            "bregctl {} refused {}.\n{}",
+            refusal.command,
+            refusal.subject,
+            refusal.report.render_human()
+        )
+    };
+    if result.is_err() {
+        let _ = writeln!(stderr, "bregctl: output could not be written");
+        return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+    }
+    ExitCode::from(DOMAIN_REFUSAL_EXIT)
 }
 
 fn write_failure(

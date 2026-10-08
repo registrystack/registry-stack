@@ -135,19 +135,20 @@ Every entity, profile, field, and claim in a journey is resolved against the com
 The journey `init` wrote proves the `record-reader` row boundary by moving a record out of the reader's rows and counting; these steps add a refusal:
 
 ```yaml
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: record-lifecycle
     steps:
       - id: create-record-group
         entity: record-group
         accessProfile: operator
-        claims: &operator_claims
+        claims:
           principal: generic-registry-operator
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
-          operation: create
+          type: create
           data:
             code: group-a
             label: Example group
@@ -160,14 +161,17 @@ journeys:
       - id: create-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: create
+          type: create
           data:
             code: example
             label: Example record
             group:
-              recordRef: example-group
+              recordCapture: example-group
             status: active
         expect:
           outcome: success
@@ -176,11 +180,14 @@ journeys:
       - id: retire-record
         entity: record
         accessProfile: operator
-        claims: *operator_claims
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: example-record
-          etagRef: example-record
+          type: patch
+          recordCapture: example-record
+          etagCapture: example-record
           changes:
             - field: status
               value: retired
@@ -199,8 +206,8 @@ journeys:
           directClaims:
             registry_record_status: active
         request:
-          operation: get
-          recordRef: example-record
+          type: get
+          recordCapture: example-record
         expect:
           outcome: refusal
           status: 404
@@ -210,8 +217,8 @@ journeys:
 | Step member | Meaning |
 |---|---|
 | `claims` | `principal`, `scopes`, `purpose`, and the `directClaims` row boundaries and claim lookups read. Values are synthetic. |
-| `request.operation` | `create`, `get`, `list`, `query`, `lookup`, `read_path`, `patch`, `batch`, `target_conditions`, `invoke`, or a source-owned change-request action: `submit_request`, `revise_request`, `cancel_request`, or `apply_request`. External review decisions are tested in Casework, not as BReg fixture operations. |
-| `recordRef`, `etagRef` | A record and ETag captured by an earlier step. `etagRef` sends the ETag as `If-Match`, so a patch fails rather than overwrite a concurrent change. |
+| `request.type` | `import`, `create`, `get`, `list`, `query`, `lookup`, `read-path`, `patch`, `batch`, `target-conditions`, `invoke`, or a source-owned change-request action: `submit-request`, `revise-request`, `cancel-request`, or `apply-request`. External review decisions are tested in Casework, not as BReg fixture operations. |
+| `recordCapture`, `etagCapture` | A record and ETag captured by an earlier step. `etagCapture` sends the ETag as `If-Match`, so a patch fails rather than overwrite a concurrent change. Inside a request body, `{recordCapture: <capture>}` stands for the captured record's identifier. |
 | `data`, `changes`, `items`, `selector` and `values`, `path`, `select`, `top`, `count`, `bbox`, `input`, `preconditions` | The request body or query for the operation. |
 | `expect` | `outcome` is `success` or `refusal`; `status` is the HTTP status; `fields` asserts returned values; `count` asserts the item count; `problemCode` asserts the problem code of a refusal. |
 | `capture`, `captureResults` | Store the returned record and ETag, or an action's named results, under a name for later steps. |
@@ -234,6 +241,7 @@ Running the journeys needs more than the project: an empty PostgreSQL database, 
 | A journey step fails with 404 where you expected data. | The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the permission, or preview them with `explain access --scenario` ([control access per profile](../breg-access/)). |
 | A journey filters or sorts on a field and is refused. | The profile's `filterableFields` or `sortableFields` do not list it. Check `explain queries` for the forms the profile may use. |
 | `bregctl dev` refuses the start with `test.step.failed` at `journeys[0].steps[2]`. | The rehearsal ran your journeys and that step failed. The refusal carries the step's own message; correct the step and start again. The full report stays in the project's private `.breg/dev/logs`. |
+| `bregctl test` refuses the fixture journeys with `config.removed-key` or `config.retired-api-version`. | The file uses a spelling journeys version 1 no longer reads: the old `registry.registrystack.org/breg-journeys/v1` header, `operation` in place of `type`, a snake_case request type, or a `*Ref` capture. The `next:` line names the replacement at the position shown. The reader also refuses YAML anchors and aliases, so repeat shared claims in each step. |
 | A step is refused because a logical reference was refused. | The refusal names the class: a field the entity does not declare, a field the permission does not make writable, a request body with no field, a step identifier that is not stable, a step naming both an entity and an action or neither, or a capture no earlier step declares. It never repeats the value you wrote. |
 
 ## Next

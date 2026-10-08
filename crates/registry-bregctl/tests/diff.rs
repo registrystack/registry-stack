@@ -20,7 +20,8 @@ const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
 const VALUE_CANARY: &str = "diff-source-path-record-sql-canary";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: diff-record-list
     steps:
@@ -28,7 +29,7 @@ journeys:
         entity: record
         accessProfile: reader
         claims: {principal: diff-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);

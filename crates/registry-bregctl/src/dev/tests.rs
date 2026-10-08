@@ -1054,12 +1054,16 @@ clients:
             .id,
         "operator"
     );
-    let journeys = br#"journeys:
+    let journeys = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
   - id: record-lifecycle
     steps:
       - id: create-record
         accessProfile: operator
         claims: {principal: operator, purpose: administration}
+        request: {type: list}
+        expect: {outcome: success, status: 200}
 "#;
     assert!(bind_journey_profiles(journeys, &clients)
         .unwrap_err()
@@ -1079,12 +1083,16 @@ clients:
 "#,
     )
     .unwrap();
-    let journeys = br#"journeys:
+    let journeys = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
   - id: public-read
     steps:
       - id: list-public
         accessProfile: public-reader
         claims: {}
+        request: {type: list}
+        expect: {outcome: success, status: 200}
 "#;
     bind_journey_profiles(journeys, &clients).unwrap();
 }
@@ -1107,12 +1115,16 @@ clients:
         .unwrap()
         .expect("the explicit binding wins even when authored claims are empty");
     assert_eq!(exact.id, "authenticated-public-reader");
-    let journey = r#"journeys:
+    let journey = r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
   - id: public-read
     steps:
       - id: list-public
         accessProfile: public-reader
         claims: {}
+        request: {type: list}
+        expect: {outcome: success, status: 200}
 "#;
     bind_journey_profiles(journey.as_bytes(), &clients).unwrap();
 
@@ -1124,6 +1136,20 @@ clients:
         .unwrap_err()
         .to_string()
         .contains("unknown or profile-mismatched"));
+}
+
+fn journey_step(
+    scopes: &[&str],
+    purpose: Option<&str>,
+) -> registry_breg::fixtures::JourneyStepProfile {
+    registry_breg::fixtures::JourneyStepProfile {
+        journey_id: "journey".into(),
+        step_id: "step".into(),
+        access_profile: "reviewer".into(),
+        anonymous: false,
+        scopes: Some(scopes.iter().map(|scope| (*scope).to_owned()).collect()),
+        purpose: purpose.map(str::to_owned),
+    }
 }
 
 #[test]
@@ -1140,12 +1166,12 @@ fn rehearsal_tokens_request_only_the_exact_fixture_scope_subset() {
         assertion_key_file: None,
         assertion_key_input_file: None,
     };
-    let step = json!({"claims":{"scopes":["starter:reviewer"]}});
+    let step = journey_step(&["starter:reviewer"], None);
     let token = rehearsal_token(&client, &step).unwrap();
 
     assert_eq!(token.scopes, ["starter:reviewer"]);
     assert_eq!(token.logical_client_id, "supervisor");
-    let widened = json!({"claims":{"scopes":["unregistered"]}});
+    let widened = journey_step(&["unregistered"], None);
     assert!(rehearsal_token(&client, &widened).is_err());
 }
 
@@ -1171,12 +1197,12 @@ fn rehearsal_tokens_select_distinct_declared_purposes_on_one_logical_client() {
     };
     let change = rehearsal_token(
         &client,
-        &json!({"claims":{"scopes":["registry:request"],"purpose":"record-change"}}),
+        &journey_step(&["registry:request"], Some("record-change")),
     )
     .unwrap();
     let read = rehearsal_token(
         &client,
-        &json!({"claims":{"scopes":["registry:read"],"purpose":"record-read"}}),
+        &journey_step(&["registry:read"], Some("record-read")),
     )
     .unwrap();
 
@@ -1191,7 +1217,7 @@ fn rehearsal_tokens_select_distinct_declared_purposes_on_one_logical_client() {
     assert_eq!(read.purpose.as_deref(), Some("record-read"));
     assert!(rehearsal_token(
         &client,
-        &json!({"claims":{"scopes":["registry:read"],"purpose":"undeclared"}}),
+        &journey_step(&["registry:read"], Some("undeclared")),
     )
     .is_err());
 }

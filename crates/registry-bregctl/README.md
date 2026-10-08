@@ -23,7 +23,7 @@ file under `examples/`) and `steps`. Every step declares `id`, `operation`,
 `entity`, `client` and `accessProfile`. A `create` step additionally declares an
 `input` payload key and `capture` alias; other steps declare a `record` alias.
 Inputs contain exactly those named payload objects. A field reference uses the
-same exact `{ "recordRef": "alias" }` form as authored fixtures. Captures must
+same exact `{ "recordCapture": "alias" }` form as authored fixtures. Captures must
 precede references, and their entity must match the native metadata's reference
 field target. The catalogue and input files are each bounded to 1 MiB; scenarios
 have at most 100 steps and nested reference inputs at most 32 levels. Payloads

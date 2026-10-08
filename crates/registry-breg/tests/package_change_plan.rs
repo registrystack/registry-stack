@@ -48,7 +48,8 @@ use sha2::{Digest, Sha256};
 const INSTANCE: &str = "instance-under-test";
 const DATABASE: &str = "database-under-test";
 const SOURCE_REVISION: &str = "compiler-source-revision";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: asset-list
     steps:
@@ -56,7 +57,7 @@ journeys:
         entity: asset
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 const PRIOR_REVISION: &str =
@@ -2438,7 +2439,7 @@ fn project_planner_build_request() -> PackageBuildRequest {
         modules: Vec::new(),
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),
-            bytes: b"apiVersion: registry.registrystack.org/breg-journeys/v1\njourneys: []\n"
+            bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n"
                 .to_vec(),
         },
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
@@ -2507,7 +2508,7 @@ fn module_planner_build_request() -> PackageBuildRequest {
         }],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".to_owned(),
-            bytes: b"apiVersion: registry.registrystack.org/breg-journeys/v1\njourneys: []\n"
+            bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n"
                 .to_vec(),
         },
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,

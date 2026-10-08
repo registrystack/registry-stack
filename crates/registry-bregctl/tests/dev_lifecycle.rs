@@ -509,124 +509,161 @@ fn installed_dev_accepts_request_lifecycle_delivery_ceiling_floors() {
     );
     write(
         &project.join("tests/journeys.yaml"),
-        br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: request-lifecycle-delivery-ceilings
     steps:
       - id: create-restricted-request
         entity: restricted-change
         accessProfile: operator
-        claims: &operator
+        claims:
           principal: generic-registry-operator
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: restricted-result, label: Restricted result, note: Internal projected note}
         expect: {outcome: success, status: 201}
         capture: restricted-request
       - id: patch-restricted-draft
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: restricted-request
-          etagRef: restricted-request
+          type: patch
+          recordCapture: restricted-request
+          etagCapture: restricted-request
           changes: [{field: note, value: Updated internal projected note}]
         expect: {outcome: success, status: 200}
         capture: restricted-edited
       - id: stale-restricted-draft-etag-is-refused
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: restricted-request
-          etagRef: restricted-request
+          type: patch
+          recordCapture: restricted-request
+          etagCapture: restricted-request
           changes: [{field: note, value: Must not be stored}]
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
       - id: get-restricted-before-submit
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: restricted-edited}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: restricted-edited}
         expect: {outcome: success, status: 200}
         capture: restricted-before-submit
       - id: submit-restricted-request
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: submit_request, recordRef: restricted-before-submit, etagRef: restricted-before-submit}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: submit-request, recordCapture: restricted-before-submit, etagCapture: restricted-before-submit}
         expect: {outcome: success, status: 200}
       - id: get-restricted-before-apply
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: restricted-request}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: restricted-request}
         expect: {outcome: success, status: 200}
         capture: restricted-before-apply
       - id: apply-restricted-request
         entity: restricted-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: apply_request
-          recordRef: restricted-before-apply
-          etagRef: restricted-before-apply
-          proposalVersionRef: restricted-before-apply
-          effectDigestRef: restricted-before-apply
+          type: apply-request
+          recordCapture: restricted-before-apply
+          etagCapture: restricted-before-apply
+          proposalVersionCapture: restricted-before-apply
+          effectDigestCapture: restricted-before-apply
         expect: {outcome: success, status: 200}
       - id: create-public-request
         entity: public-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: public-result, label: Public result}
         expect: {outcome: success, status: 201}
         capture: public-request
       - id: patch-public-draft
         entity: public-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: patch
-          recordRef: public-request
-          etagRef: public-request
+          type: patch
+          recordCapture: public-request
+          etagCapture: public-request
           changes: [{field: label, value: Updated public result}]
         expect: {outcome: success, status: 200}
         capture: public-edited
       - id: get-public-before-submit
         entity: public-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: public-edited}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: public-edited}
         expect: {outcome: success, status: 200}
         capture: public-before-submit
       - id: submit-public-request
         entity: public-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: submit_request, recordRef: public-before-submit, etagRef: public-before-submit}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: submit-request, recordCapture: public-before-submit, etagCapture: public-before-submit}
         expect: {outcome: success, status: 200}
       - id: get-public-before-apply
         entity: public-change
         accessProfile: operator
-        claims: *operator
-        request: {operation: get, recordRef: public-request}
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: get, recordCapture: public-request}
         expect: {outcome: success, status: 200}
         capture: public-before-apply
       - id: apply-public-request
         entity: public-change
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: generic-registry-operator
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: apply_request
-          recordRef: public-before-apply
-          etagRef: public-before-apply
-          proposalVersionRef: public-before-apply
-          effectDigestRef: public-before-apply
+          type: apply-request
+          recordCapture: public-before-apply
+          etagCapture: public-before-apply
+          proposalVersionCapture: public-before-apply
+          effectDigestCapture: public-before-apply
         expect: {outcome: success, status: 200}
 "#,
     );
@@ -1130,35 +1167,46 @@ fn installed_dev_switches_one_clients_claims_and_recovers_import_seed() {
     );
     write(
         &project.join("tests/journeys.yaml"),
-        br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+        br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: purpose-and-import
     steps:
       - id: import-reference
         entity: record-group
         accessProfile: operator
-        claims: &operator
+        claims:
           principal: fixture-officer
           actorKind: human
           requesterClient: officer
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request:
-          operation: import
+          type: import
           items: [{code: journey-group, label: Journey reference}]
         expect: {outcome: success, status: 200}
       - id: list-reference
         entity: record-group
         accessProfile: operator
-        claims: *operator
-        request: {operation: list}
+        claims:
+          principal: fixture-officer
+          actorKind: human
+          requesterClient: officer
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
       - id: create-record
         entity: record
         accessProfile: operator
-        claims: *operator
+        claims:
+          principal: fixture-officer
+          actorKind: human
+          requesterClient: officer
+          scopes: [registry:generic:operate]
+          purpose: registry-operations
         request:
-          operation: create
+          type: create
           data: {code: journey-record, label: Journey record, status: active}
         expect: {outcome: success, status: 201, fields: {code: journey-record, status: active}}
       - id: read-as-same-client
@@ -1171,7 +1219,7 @@ journeys:
           scopes: [registry:generic:read]
           purpose: registry-reporting
           directClaims: {registry_record_status: active}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 1}
 "#,
     );

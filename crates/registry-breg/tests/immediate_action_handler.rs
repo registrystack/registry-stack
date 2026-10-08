@@ -1014,7 +1014,7 @@ fn handler_package_captures_exact_project_and_module_script_origins() {
         modules: vec![],
         fixture_journeys: PackageSourceFile {
             path: "tests/journeys.yaml".into(),
-            bytes: b"apiVersion: registry.registrystack.org/breg-journeys/v1\njourneys: []\n"
+            bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n"
                 .to_vec(),
         },
         migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,

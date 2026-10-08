@@ -60,7 +60,7 @@ its returned UUID a local name for later steps:
 ```
 
 The action and result names must exist in caller-filtered metadata. A logical
-`{"recordRef":"registered-entry"}` input resolves only in an advertised
+`{"recordCapture":"registered-entry"}` input resolves only in an advertised
 reference field with the matching target entity. The runner checks every
 payload and dependency before sending the first mutation.
 

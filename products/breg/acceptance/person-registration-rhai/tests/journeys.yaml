@@ -1,17 +1,18 @@
-apiVersion: registry.registrystack.org/breg-journeys/v1
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
 - id: person-registration-and-native-integrity
   steps:
   - id: register-padded-name
     action: register-person
     accessProfile: person-registrar
-    claims: &registrar_claims
+    claims:
       principal: synthetic-person-registrar
       scopes:
       - registry:person:register
       purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: person-full-name
       input:
         identifier: "0123456789012"
@@ -26,14 +27,14 @@ journeys:
   - id: read-exact-stored-name
     entity: person
     accessProfile: person-reader
-    claims: &reader_claims
+    claims:
       principal: synthetic-person-reader
       scopes:
       - registry:person:read
       purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: full-name-person
+      type: get
+      recordCapture: full-name-person
     expect:
       outcome: success
       status: 200
@@ -43,9 +44,13 @@ journeys:
   - id: recover-committed-receipt
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: person-full-name
       input:
         identifier: "0123456789012"
@@ -59,9 +64,13 @@ journeys:
   - id: same-key-changed-input
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: person-full-name
       input:
         identifier: "0123456789013"
@@ -74,9 +83,13 @@ journeys:
   - id: duplicate-identifier
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: duplicate-identifier
       input:
         identifier: "0123456789012"
@@ -89,9 +102,13 @@ journeys:
   - id: single-given-name
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: single-given-name
       input:
         identifier: "0123456789014"
@@ -104,10 +121,14 @@ journeys:
   - id: read-single-given-name
     entity: person
     accessProfile: person-reader
-    claims: *reader_claims
+    claims:
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: given-only-person
+      type: get
+      recordCapture: given-only-person
     expect:
       outcome: success
       status: 200
@@ -117,9 +138,13 @@ journeys:
   - id: single-family-name
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: single-family-name
       input:
         identifier: "0123456789015"
@@ -132,10 +157,14 @@ journeys:
   - id: read-single-family-name
     entity: person
     accessProfile: person-reader
-    claims: *reader_claims
+    claims:
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: family-only-person
+      type: get
+      recordCapture: family-only-person
     expect:
       outcome: success
       status: 200
@@ -145,9 +174,13 @@ journeys:
   - id: explicit-null-family-name
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: explicit-null-family-name
       input:
         identifier: "0123456789018"
@@ -161,10 +194,14 @@ journeys:
   - id: read-name-with-null-family
     entity: person
     accessProfile: person-reader
-    claims: *reader_claims
+    claims:
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: null-family-person
+      type: get
+      recordCapture: null-family-person
     expect:
       outcome: success
       status: 200
@@ -174,9 +211,13 @@ journeys:
   - id: omitted-name-refusal
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: omitted-name-refusal
       input:
         identifier: "0123456789019"
@@ -188,9 +229,13 @@ journeys:
   - id: null-name-refusal
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: null-name-refusal
       input:
         identifier: "0123456789020"
@@ -204,9 +249,13 @@ journeys:
   - id: blank-name-refusal
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: blank-name-refusal
       input:
         identifier: "0123456789016"
@@ -220,9 +269,13 @@ journeys:
   - id: overlong-identifier
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: overlong-identifier
       input:
         identifier: "01234567890123"
@@ -235,13 +288,13 @@ journeys:
   - id: ordinary-create-preserves-supplied-display-name
     entity: person
     accessProfile: person-administrator
-    claims: &administrator_claims
+    claims:
       principal: synthetic-person-administrator
       scopes:
       - registry:person:manage
       purpose: person-maintenance
     request:
-      operation: create
+      type: create
       data:
         identifier: "0123456789017"
         displayName: '  Supplied unchanged  '
@@ -255,10 +308,14 @@ journeys:
   - id: read-ordinary-value
     entity: person
     accessProfile: person-reader
-    claims: *reader_claims
+    claims:
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: ordinary-person
+      type: get
+      recordCapture: ordinary-person
     expect:
       outcome: success
       status: 200
@@ -268,9 +325,13 @@ journeys:
   - id: short-identifier
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: short-identifier
       input:
         identifier: "012345678901"
@@ -285,9 +346,13 @@ journeys:
   - id: unicode-identifier
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: unicode-identifier
       input:
         identifier: ٠١٢٣٤٥٦٧٨٩٠١٢
@@ -302,9 +367,13 @@ journeys:
   - id: whitespace-identifier
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: whitespace-identifier
       input:
         identifier: ' 123456789012'
@@ -319,9 +388,13 @@ journeys:
   - id: embedded-newline-identifier
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: embedded-newline-identifier
       input:
         identifier: '012345
@@ -338,9 +411,13 @@ journeys:
   - id: trailing-newline-identifier
     action: register-person
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: trailing-newline-identifier
       input:
         identifier: '012345678901
@@ -357,9 +434,13 @@ journeys:
   - id: ordinary-create-enforces-identifier-pattern
     entity: person
     accessProfile: person-administrator
-    claims: *administrator_claims
+    claims:
+      principal: synthetic-person-administrator
+      scopes:
+      - registry:person:manage
+      purpose: person-maintenance
     request:
-      operation: create
+      type: create
       data:
         identifier: not-digits
         displayName: Supplied
@@ -372,11 +453,15 @@ journeys:
   - id: ordinary-patch-enforces-identifier-pattern
     entity: person
     accessProfile: person-administrator
-    claims: *administrator_claims
+    claims:
+      principal: synthetic-person-administrator
+      scopes:
+      - registry:person:manage
+      purpose: person-maintenance
     request:
-      operation: patch
-      recordRef: ordinary-person
-      etagRef: ordinary-person
+      type: patch
+      recordCapture: ordinary-person
+      etagCapture: ordinary-person
       changes:
       - field: identifier
         value: short
@@ -391,9 +476,13 @@ journeys:
   - id: create-active-register
     entity: register
     accessProfile: person-administrator
-    claims: *administrator_claims
+    claims:
+      principal: synthetic-person-administrator
+      scopes:
+      - registry:person:manage
+      purpose: person-maintenance
     request:
-      operation: create
+      type: create
       data:
         registerCode: SYNTH-REGISTER-001
         active: true
@@ -404,12 +493,16 @@ journeys:
   - id: read-initial-register-condition
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: target_conditions
+      type: target-conditions
       input:
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
     expect:
       outcome: success
       status: 200
@@ -417,22 +510,26 @@ journeys:
   - id: create-person-registration-and-patch
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: create-person-registration-and-patch
       input:
         identifier: '1123456789012'
         givenName: '  Mina  '
         familyName: ' Example '
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
         registrationCode: create-person-registration-and-patch
         recordRegistration: true
         updateRegister: true
       preconditions:
         registerId:
-          conditionRef: initial-register-condition
+          conditionCapture: initial-register-condition
     expect:
       outcome: success
       status: 200
@@ -443,10 +540,14 @@ journeys:
   - id: read-coordinated-person
     entity: person
     accessProfile: person-reader
-    claims: *reader_claims
+    claims:
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: coordinated-person
+      type: get
+      recordCapture: coordinated-person
     expect:
       outcome: success
       status: 200
@@ -456,10 +557,14 @@ journeys:
   - id: read-coordinated-registration
     entity: registration
     accessProfile: person-reader
-    claims: *reader_claims
+    claims:
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: coordinated-registration
+      type: get
+      recordCapture: coordinated-registration
     expect:
       outcome: success
       status: 200
@@ -468,22 +573,26 @@ journeys:
   - id: omitted-patch-stale-condition
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: omitted-patch-stale-condition
       input:
         identifier: '1123456789013'
         givenName: '  Mina  '
         familyName: ' Example '
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
         registrationCode: omitted-patch-stale-condition
         recordRegistration: false
         updateRegister: false
       preconditions:
         registerId:
-          conditionRef: initial-register-condition
+          conditionCapture: initial-register-condition
     expect:
       outcome: refusal
       status: 412
@@ -497,14 +606,14 @@ journeys:
       - registry:person:register
       purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: omitted-patch-missing-condition
       input:
         identifier: '1123456789013'
         givenName: '  Mina  '
         familyName: ' Example '
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
         registrationCode: omitted-patch-stale-condition
         recordRegistration: false
         updateRegister: false
@@ -515,12 +624,16 @@ journeys:
   - id: read-current-register-condition
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: target_conditions
+      type: target-conditions
       input:
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
     expect:
       outcome: success
       status: 200
@@ -528,21 +641,25 @@ journeys:
   - id: create-person-only
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: create-person-only
       input:
         identifier: '1123456789014'
         givenName: '  Mina  '
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
         registrationCode: create-person-only
         recordRegistration: false
         updateRegister: false
       preconditions:
         registerId:
-          conditionRef: current-register-condition
+          conditionCapture: current-register-condition
     expect:
       outcome: success
       status: 200
@@ -551,10 +668,14 @@ journeys:
   - id: read-coordinated-person-only
     entity: person
     accessProfile: person-reader
-    claims: *reader_claims
+    claims:
+      principal: synthetic-person-reader
+      scopes:
+      - registry:person:read
+      purpose: person-registration-audit
     request:
-      operation: get
-      recordRef: coordinated-person-only
+      type: get
+      recordCapture: coordinated-person-only
     expect:
       outcome: success
       status: 200
@@ -564,22 +685,26 @@ journeys:
   - id: create-person-and-registration-only
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: create-person-and-registration-only
       input:
         identifier: '1123456789015'
         givenName: null
         familyName: ' Example '
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
         registrationCode: create-person-and-registration-only
         recordRegistration: true
         updateRegister: false
       preconditions:
         registerId:
-          conditionRef: current-register-condition
+          conditionCapture: current-register-condition
     expect:
       outcome: success
       status: 200
@@ -589,10 +714,14 @@ journeys:
   - id: read-register-for-maintenance
     entity: register
     accessProfile: person-administrator
-    claims: *administrator_claims
+    claims:
+      principal: synthetic-person-administrator
+      scopes:
+      - registry:person:manage
+      purpose: person-maintenance
     request:
-      operation: get
-      recordRef: active-register
+      type: get
+      recordCapture: active-register
     expect:
       outcome: success
       status: 200
@@ -600,11 +729,15 @@ journeys:
   - id: inactivate-register
     entity: register
     accessProfile: person-administrator
-    claims: *administrator_claims
+    claims:
+      principal: synthetic-person-administrator
+      scopes:
+      - registry:person:manage
+      purpose: person-maintenance
     request:
-      operation: patch
-      recordRef: register-before-inactivation
-      etagRef: register-before-inactivation
+      type: patch
+      recordCapture: register-before-inactivation
+      etagCapture: register-before-inactivation
       changes:
       - field: active
         value: false
@@ -614,12 +747,16 @@ journeys:
   - id: read-inactive-register-condition
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: target_conditions
+      type: target-conditions
       input:
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
     expect:
       outcome: success
       status: 200
@@ -627,22 +764,26 @@ journeys:
   - id: omitted-patch-retains-active-requirement
     action: register-person-with-registration
     accessProfile: person-registrar
-    claims: *registrar_claims
+    claims:
+      principal: synthetic-person-registrar
+      scopes:
+      - registry:person:register
+      purpose: person-registration
     request:
-      operation: invoke
+      type: invoke
       idempotencyKey: omitted-patch-retains-active-requirement
       input:
         identifier: '1123456789016'
         givenName: '  Mina  '
         familyName: ' Example '
         registerId:
-          recordRef: active-register
+          recordCapture: active-register
         registrationCode: omitted-patch-retains-active-requirement
         recordRegistration: false
         updateRegister: false
       preconditions:
         registerId:
-          conditionRef: inactive-register-condition
+          conditionCapture: inactive-register-condition
     expect:
       outcome: refusal
       status: 412

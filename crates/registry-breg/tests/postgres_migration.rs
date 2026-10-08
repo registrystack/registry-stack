@@ -69,7 +69,8 @@ const INSTANCE: &str = "migration-instance";
 const DATABASE: &str = "migration-database";
 const SOURCE_REVISION: &str = "migration-source-revision";
 const RECONCILE_OPERATOR_CANARY: &str = "operator secret must not enter reconciliation audit";
-const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: asset-list
     steps:
@@ -77,7 +78,7 @@ journeys:
         entity: asset
         accessProfile: reader
         claims: {principal: package-reader}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#;
 

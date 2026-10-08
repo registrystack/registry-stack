@@ -4067,7 +4067,8 @@ async fn changing_population_through_package_apply_starts_a_new_release_series()
             modules: Vec::new(),
             fixture_journeys: PackageSourceFile {
                 path: "tests/journeys.yaml".to_owned(),
-                bytes: br#"apiVersion: registry.registrystack.org/breg-journeys/v1
+                bytes: br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
 journeys:
   - id: population
     steps:
@@ -4075,7 +4076,7 @@ journeys:
         entity: record
         accessProfile: publisher
         claims: {principal: package-publisher}
-        request: {operation: list}
+        request: {type: list}
         expect: {outcome: success, status: 200, count: 0}
 "#
                 .to_vec(),
