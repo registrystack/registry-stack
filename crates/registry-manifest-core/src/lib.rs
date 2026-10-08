@@ -2055,8 +2055,10 @@ impl ValidationError {
 /// diagnostic code and its own fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ValidationCondition {
-    /// An id, name, code, or value repeats one listed earlier.
+    /// A value, name, or code repeats one listed earlier.
     DuplicateValue,
+    /// An id, or an entity or field name, repeats one listed earlier.
+    DuplicateId,
     /// A reference names nothing the manifest declares.
     UnknownReference,
     /// A required member or entry is absent.
@@ -2092,6 +2094,7 @@ impl ValidationCondition {
     pub fn code(self) -> &'static str {
         match self {
             Self::DuplicateValue => "duplicate-value",
+            Self::DuplicateId => "duplicate-id",
             Self::UnknownReference => "unknown-reference",
             Self::MissingMember => "missing-member",
             Self::EmptyValue => "empty-value",
@@ -2114,6 +2117,9 @@ impl ValidationCondition {
         match self {
             Self::DuplicateValue => {
                 "Remove the repeated entry, or give it a value no other entry in the collection uses."
+            }
+            Self::DuplicateId => {
+                "Give the entry an id no other entry in the list uses, or remove the repeated entry."
             }
             Self::UnknownReference => {
                 "Reference an entry this manifest declares, or declare the entry you meant."
@@ -2161,7 +2167,7 @@ fn validate_evaluation_profiles<'a>(
         validate_id(&profile.id, format!("{path}.id"), errors);
         if !ids.insert(profile.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "evaluation profile id must be unique",
             ));
@@ -2200,7 +2206,7 @@ fn validate_ecosystem_bindings(manifest: &MetadataManifest, errors: &mut Vec<Val
             && !ids.insert((binding.id.as_str(), binding.version.as_str()))
         {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "ecosystem binding id and version must be unique",
             ));
@@ -2238,7 +2244,7 @@ fn validate_ecosystem_bindings(manifest: &MetadataManifest, errors: &mut Vec<Val
             validate_non_empty(&profile.version, format!("{profile_path}.version"), errors);
             if !profile_ids.insert(profile.id.as_str()) {
                 errors.push(ValidationError::new(
-                    ValidationCondition::DuplicateValue,
+                    ValidationCondition::DuplicateId,
                     format!("{profile_path}.id"),
                     "profile id must be unique within an ecosystem binding",
                 ));
@@ -2830,7 +2836,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         validate_non_empty(&profile.version, format!("{path}.version"), &mut errors);
         if !profile_ids.insert(profile.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "profile id must be unique",
             ));
@@ -2850,7 +2856,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         validate_id(&codelist.id, format!("{path}.id"), &mut errors);
         if !codelist_ids.insert(codelist.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "codelist id must be unique",
             ));
@@ -2887,7 +2893,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
         validate_id(&dataset.id, format!("{path}.id"), &mut errors);
         if !dataset_ids.insert(dataset.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "dataset id must be unique",
             ));
@@ -2938,7 +2944,7 @@ pub fn validate_manifest(manifest: &MetadataManifest) -> Result<(), MetadataErro
                 );
                 if !dataset_public_service_ids.insert(service_id) {
                     errors.push(ValidationError::new(
-                        ValidationCondition::DuplicateValue,
+                        ValidationCondition::DuplicateId,
                         format!("{service_path}.id"),
                         "dataset public service id must be unique within a dataset",
                     ));
@@ -3776,7 +3782,7 @@ fn validate_requirements<'a>(
         validate_id(&requirement.id, format!("{path}.id"), errors);
         if !ids.insert(requirement.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "requirement id must be unique",
             ));
@@ -3829,7 +3835,7 @@ fn validate_evidence_types<'a>(
         validate_id(&evidence_type.id, format!("{path}.id"), errors);
         if !ids.insert(evidence_type.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "evidence type id must be unique",
             ));
@@ -3902,7 +3908,7 @@ fn validate_requirement_evidence_type_lists(
             validate_id(&list_id, format!("{path}.id"), errors);
             if !list_ids.insert(list_id) {
                 errors.push(ValidationError::new(
-                    ValidationCondition::DuplicateValue,
+                    ValidationCondition::DuplicateId,
                     format!("{path}.id"),
                     "evidence type list id must be unique per requirement",
                 ));
@@ -3924,7 +3930,7 @@ fn validate_requirement_evidence_type_lists(
                 validate_id(evidence_type_id, &evidence_type_path, errors);
                 if !listed_evidence_types.insert(evidence_type_id.as_str()) {
                     errors.push(ValidationError::new(
-                        ValidationCondition::DuplicateValue,
+                        ValidationCondition::DuplicateId,
                         &evidence_type_path,
                         "evidence type id must be unique within an evidence type list",
                     ));
@@ -3970,7 +3976,7 @@ fn validate_service_catalog<'a>(
         validate_id(&authority.id, format!("{path}.id"), errors);
         if !authority_ids.insert(authority.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "authority id must be unique",
             ));
@@ -4003,7 +4009,7 @@ fn validate_service_catalog<'a>(
         validate_id(&service.id, format!("{path}.id"), errors);
         if !service_ids.insert(service.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "public service id must be unique",
             ));
@@ -4061,7 +4067,7 @@ fn validate_service_catalog<'a>(
             let channel_key = format!("{}:{}", service.id, channel.id);
             if !channel_ids.insert(channel_key) {
                 errors.push(ValidationError::new(
-                    ValidationCondition::DuplicateValue,
+                    ValidationCondition::DuplicateId,
                     format!("{channel_path}.id"),
                     "channel id must be unique within a public service",
                 ));
@@ -4100,7 +4106,7 @@ fn validate_service_catalog<'a>(
         validate_id(&data_service.id, format!("{path}.id"), errors);
         if !data_service_ids.insert(data_service.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "data service id must be unique",
             ));
@@ -4148,7 +4154,7 @@ fn validate_service_catalog<'a>(
         validate_id(&form.id, format!("{path}.id"), errors);
         if !form_ids.insert(form.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "form id must be unique",
             ));
@@ -4211,7 +4217,7 @@ fn validate_service_catalog<'a>(
             validate_id(&section.id, format!("{section_path}.id"), errors);
             if !section_ids.insert(section.id.as_str()) {
                 errors.push(ValidationError::new(
-                    ValidationCondition::DuplicateValue,
+                    ValidationCondition::DuplicateId,
                     format!("{section_path}.id"),
                     "form section id must be unique within a form",
                 ));
@@ -4278,7 +4284,7 @@ fn validate_form_field<'a>(
     validate_id(&field.id, format!("{path}.id"), errors);
     if !field_ids.insert(field.id.as_str()) {
         errors.push(ValidationError::new(
-            ValidationCondition::DuplicateValue,
+            ValidationCondition::DuplicateId,
             format!("{path}.id"),
             "form field id must be unique within a form",
         ));
@@ -4473,7 +4479,7 @@ fn validate_distributions(
         validate_id(&distribution.id, format!("{path}.id"), errors);
         if !distribution_ids.insert(distribution.id.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{path}.id"),
                 "distribution id must be unique",
             ));
@@ -4569,7 +4575,7 @@ fn validate_entities(
         validate_id(&entity.name, format!("{entity_path}.name"), errors);
         if !seen_entity_names.insert(entity.name.as_str()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{entity_path}.name"),
                 "entity name must be unique within a dataset",
             ));
@@ -4586,7 +4592,7 @@ fn validate_entities(
             validate_id(&field.name, format!("{field_path}.name"), errors);
             if !field_names.insert(field.name.as_str()) {
                 errors.push(ValidationError::new(
-                    ValidationCondition::DuplicateValue,
+                    ValidationCondition::DuplicateId,
                     format!("{field_path}.name"),
                     "field name must be unique within an entity",
                 ));
@@ -4686,7 +4692,7 @@ fn validate_evidence_offerings(
         validate_id(&offering.id, format!("{offering_path}.id"), errors);
         if !offering_ids.insert(offering.id.clone()) {
             errors.push(ValidationError::new(
-                ValidationCondition::DuplicateValue,
+                ValidationCondition::DuplicateId,
                 format!("{offering_path}.id"),
                 "evidence offering id must be unique globally",
             ));

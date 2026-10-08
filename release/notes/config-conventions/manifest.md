@@ -86,7 +86,13 @@ A manifest refused by `registry_manifest_core::validate_manifest` reported
 `requirements`, `evidence_types`, `authorities`, `public_services`,
 `data_services`, `distributions`, `forms`, `datasets`, or `codelists` is
 refused while the manifest is read, with `config.duplicate-id` at the copy's
-`id` (CFG-ID-5); `duplicate-value` remains for every other repeated value.
+`id` (CFG-ID-5). A repeated id the reader does not catch (an ecosystem
+binding's id and version, and the ids and names nested inside a dataset, form,
+requirement, or public service) answers `config.duplicate-id` too;
+`duplicate-value` remains for every other repeated value. Migration: a script
+that matched `manifest.metadata.duplicate-value` for a repeated id matches
+`config.duplicate-id`. In Rust, `ValidationCondition::DuplicateId` is the new
+condition.
 
 | Before | Now |
 |---|---|

@@ -27,8 +27,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `requirements`, `evidence_types`, `authorities`, `public_services`,
   `data_services`, `distributions`, `forms`, `datasets`, or `codelists` is
   refused while the manifest is read, with `config.duplicate-id` at the
-  copy's `id`; `duplicate-value` remains for every other repeated value. The
-  others:
+  copy's `id`. A repeated id the reader does not catch (an ecosystem binding's
+  id and version, and the ids and names nested inside a dataset, form,
+  requirement, or public service) answers `config.duplicate-id` too, at the
+  copy's `id` or `name`; `duplicate-value` remains for every other repeated
+  value. `registry_manifest_core::ValidationCondition::DuplicateId` is the new
+  condition. Migration: a script that matched `manifest.metadata.duplicate-value`
+  for a repeated id matches `config.duplicate-id`. The others:
 
   | Before | Now |
   |---|---|

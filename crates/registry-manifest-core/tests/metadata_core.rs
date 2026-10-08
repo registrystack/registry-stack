@@ -4732,8 +4732,8 @@ codelists: []"#,
         .iter()
         .find(|error| error.path == "datasets[1].id")
         .unwrap_or_else(|| panic!("expected a duplicate dataset id error; got {errors:?}"));
-    assert_eq!(duplicate.condition, ValidationCondition::DuplicateValue);
-    assert_eq!(duplicate.condition.code(), "duplicate-value");
+    assert_eq!(duplicate.condition, ValidationCondition::DuplicateId);
+    assert_eq!(duplicate.condition.code(), "duplicate-id");
     assert!(
         !duplicate.condition.suggested_action().is_empty(),
         "every condition names its fix"
@@ -4769,6 +4769,7 @@ datasets:
 fn validation_condition_codes_are_distinct_kebab_case() {
     let conditions = [
         ValidationCondition::DuplicateValue,
+        ValidationCondition::DuplicateId,
         ValidationCondition::UnknownReference,
         ValidationCondition::MissingMember,
         ValidationCondition::EmptyValue,

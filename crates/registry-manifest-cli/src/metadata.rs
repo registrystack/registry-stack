@@ -7,7 +7,7 @@ use std::path::Path;
 
 use registry_manifest_core::{
     is_runtime_only_key, is_secret_bearing_key, source_manifest_digest, validate_manifest,
-    MetadataError, MetadataManifest, MetadataManifestFields,
+    MetadataError, MetadataManifest, MetadataManifestFields, ValidationCondition,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Document, Expect, Node, NodeValue, Reader, Report, Severity,
@@ -124,8 +124,13 @@ fn unsupported_version(document: &Document) -> Diagnostic {
     )
 }
 
+/// The shared code for a repeated id (CFG-ID-5), which the manifest answers
+/// beside the reader whichever of them finds the copy.
+const DUPLICATE_ID_CODE: &str = "config.duplicate-id";
+
 /// The diagnostics for a manifest `validate_manifest` or `compile_manifest`
-/// refused. Each rule's code is `manifest.metadata.<condition>`; it is
+/// refused. Each rule's code is `manifest.metadata.<condition>`, except a
+/// repeated id, which is `config.duplicate-id`; it is
 /// placed at the member it names, or at the nearest enclosing member the
 /// file writes when the member is absent, and its path is always the
 /// member's own.
@@ -140,9 +145,13 @@ pub fn metadata_error_diagnostics(document: &Document, error: MetadataError) -> 
                 while document.root().pointer(written).is_none() {
                     written = written.rfind('/').map_or("", |at| &written[..at]);
                 }
+                let code = match error.condition {
+                    ValidationCondition::DuplicateId => DUPLICATE_ID_CODE.to_owned(),
+                    condition => format!("manifest.metadata.{}", condition.code()),
+                };
                 let mut diagnostic = document.diagnostic_at_value(
                     Severity::Error,
-                    &format!("manifest.metadata.{}", error.condition.code()),
+                    &code,
                     written,
                     &error.message,
                     error.condition.suggested_action(),
@@ -249,6 +258,7 @@ pub fn check_metadata_file(path: &Path) -> MetadataCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_manifest_core::ValidationError;
 
     const MINIMAL: &str = "schema_version: registry-manifest/v1\ncatalog:\n  id: demo\n  \
                            base_url: https://metadata.example.test\n  title: Demo\n  \
@@ -387,6 +397,39 @@ mod tests {
                 "{list}"
             );
         }
+    }
+
+    #[test]
+    fn a_repeated_id_the_reader_does_not_catch_answers_the_shared_code() {
+        let read = read_metadata("metadata.yaml", MINIMAL.as_bytes()).unwrap();
+        let error = MetadataError::Validation {
+            errors: vec![
+                ValidationError {
+                    condition: ValidationCondition::DuplicateId,
+                    path: "catalog.id".to_owned(),
+                    message: "an id must be unique".to_owned(),
+                },
+                ValidationError {
+                    condition: ValidationCondition::DuplicateValue,
+                    path: "catalog.title".to_owned(),
+                    message: "values must be unique".to_owned(),
+                },
+            ],
+        };
+        let found = metadata_error_diagnostics(&read.document, error)
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found,
+            [
+                ("config.duplicate-id".to_owned(), "/catalog/id".to_owned()),
+                (
+                    "manifest.metadata.duplicate-value".to_owned(),
+                    "/catalog/title".to_owned()
+                ),
+            ]
+        );
     }
 
     #[test]
