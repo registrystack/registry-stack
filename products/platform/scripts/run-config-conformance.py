@@ -717,6 +717,17 @@ def mutate_path_outside(text: str, spec: dict[str, Any], fmt: Format) -> list[Va
         original.unlink()
         if via == "link":
             original.symlink_to(os.path.relpath(outside, original.parent))
+            return
+        # The project is left as if it never held the file: no directory the
+        # move emptied, and no digests line naming it.
+        if fmt.harness.get("digests"):
+            forget_digest(staged, fmt.harness["digests"], original)
+        directory = original.parent
+        while directory != staged.project and under(directory, staged.project) is not None:
+            if any(directory.iterdir()):
+                break
+            directory.rmdir()
+            directory = directory.parent
 
     start = node.start_mark.index
     if via == "parent":
@@ -1536,6 +1547,18 @@ def refresh_digests(staged: Staged, digests: str) -> None:
     else:
         raise HarnessError(f"{digests} has no line for {name.as_posix()}")
     sums.write_text("".join(lines), encoding="utf-8")
+
+
+def forget_digest(staged: Staged, digests: str, path: Path) -> None:
+    """Drop the digests line for a file the project no longer holds."""
+    sums = staged.project / digests
+    name = under(path, sums.parent)
+    if name is None:
+        # The digests file does not cover the path, so it names nothing to drop.
+        return
+    lines = sums.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = [line for line in lines if line.rstrip("\n").split("  ", 1)[-1] != name.as_posix()]
+    sums.write_text("".join(kept), encoding="utf-8")
 
 
 def remove_tree(path: Path) -> None:

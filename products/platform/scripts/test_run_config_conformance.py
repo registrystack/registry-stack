@@ -333,6 +333,19 @@ class MutationTest(unittest.TestCase):
             self.assertEqual(outside.read_text(encoding="utf-8"), "script\n")
             self.assertFalse((staged.target.parent / "scripts/run.rhai").exists())
 
+    def test_cfg_val_8_path_outside_leaves_a_project_that_never_held_the_file(self) -> None:
+        fmt = demo_format(roles={"relativePath": "/script"}, harness={"digests": "SHA256SUMS"})
+        variant = one(
+            runner.mutate("script: scripts/run.rhai\n", {"pathOutside": {"role": "relativePath", "via": "parent"}}, fmt)
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            staged = self.path_example(temporary)
+            sums = staged.project / "SHA256SUMS"
+            sums.write_text("aaaa  sub/file.yaml\nbbbb  sub/scripts/run.rhai\n", encoding="utf-8")
+            variant.finish(variant.text, staged)
+            self.assertFalse((staged.target.parent / "scripts").exists())
+            self.assertEqual(sums.read_text(encoding="utf-8"), "aaaa  sub/file.yaml\n")
+
     def test_cfg_val_8_path_outside_through_a_link(self) -> None:
         fmt = demo_format(roles={"relativePath": "/script"})
         text = "script: scripts/run.rhai\n"
