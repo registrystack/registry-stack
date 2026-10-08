@@ -94,7 +94,7 @@ pub enum RuntimeConfigErrorKind {
     UnsafeFile,
     /// The file could not be read.
     Unavailable,
-    /// The file is empty or larger than the cap.
+    /// The file is larger than the cap.
     Bounds,
     /// The file is not UTF-8.
     Encoding,
@@ -165,7 +165,8 @@ const AUTHORED_PRECEDENCE: [RuntimeConfigErrorKind; 2] = [
 const CODE_PATH: &str = "platform.runtime-config.path";
 const CODE_UNSAFE_FILE: &str = "platform.runtime-config.unsafe-file";
 const CODE_UNAVAILABLE: &str = "platform.runtime-config.unavailable";
-const CODE_SIZE: &str = "platform.runtime-config.size";
+/// The reader's code for a document over the size bound (CFG-YAML-6).
+const CODE_TOO_LARGE: &str = "yaml.too-large";
 
 /// The reader's code for a `${...}` expression written where substitution is
 /// refused.
@@ -886,11 +887,9 @@ fn unavailable() -> RuntimeConfigError {
 fn out_of_bounds(maximum: u64) -> RuntimeConfigError {
     RuntimeConfigError::file_level(
         RuntimeConfigErrorKind::Bounds,
-        CODE_SIZE,
-        format!("the runtime configuration must be between 1 and {maximum} bytes"),
-        format!(
-            "Give a runtime configuration that is not empty and holds at most {maximum} bytes."
-        ),
+        CODE_TOO_LARGE,
+        format!("the runtime configuration is larger than {maximum} bytes"),
+        format!("Keep the runtime configuration to at most {maximum} bytes."),
     )
 }
 
@@ -1004,7 +1003,7 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, RuntimeConfigError
     if scanned.file_type().is_symlink() || !scanned.is_file() {
         return Err(not_regular());
     }
-    if scanned.len() == 0 || scanned.len() > maximum {
+    if scanned.len() > maximum {
         return Err(out_of_bounds(maximum));
     }
     let file = open_no_follow(path)?;
@@ -1024,7 +1023,7 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, RuntimeConfigError
     let mut reader = file.take(maximum + 1);
     reader.read_to_end(&mut bytes).map_err(|_| unavailable())?;
     let after = reader.get_ref().metadata().map_err(|_| unavailable())?;
-    if bytes.is_empty() || bytes.len() as u64 > maximum {
+    if bytes.len() as u64 > maximum {
         return Err(out_of_bounds(maximum));
     }
     if !same_file(&opened, &after) || bytes.len() as u64 != after.len() {

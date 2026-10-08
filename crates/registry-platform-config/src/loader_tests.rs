@@ -642,8 +642,6 @@ mod files {
     #[test]
     fn cfg_diag_3_a_file_refusal_carries_a_platform_code_and_a_fix() {
         let (_guard, root) = directory();
-        let empty = root.join("empty.yaml");
-        std::fs::write(&empty, "").unwrap();
         for (path, code) in [
             (
                 PathBuf::from("runtime.yaml"),
@@ -654,7 +652,6 @@ mod files {
                 root.join("absent.yaml"),
                 "platform.runtime-config.unavailable",
             ),
-            (empty, "platform.runtime-config.size"),
         ] {
             let error = loader()
                 .load_with::<Example>(&path, env(&[]))
@@ -728,7 +725,7 @@ mod files {
         let error = loader()
             .load_with::<Example>(&empty, env(&[]))
             .expect_err("empty refuses");
-        assert_eq!(error.kind(), RuntimeConfigErrorKind::Bounds);
+        assert_eq!(error.kind(), RuntimeConfigErrorKind::Envelope);
 
         let large = root.join("large.yaml");
         std::fs::write(&large, format!("{}name: {}\n", header(), "x".repeat(200))).unwrap();
@@ -738,6 +735,48 @@ mod files {
             .expect_err("oversized refuses");
         assert_eq!(error.kind(), RuntimeConfigErrorKind::Bounds);
         assert_eq!(error.code(), "runtime_config.bounds");
+    }
+
+    #[test]
+    fn cfg_env_4_an_empty_runtime_file_is_a_missing_envelope_at_its_start() {
+        let (_guard, root) = directory();
+        let empty = root.join("empty.yaml");
+        std::fs::write(&empty, "").unwrap();
+        let error = loader()
+            .load_with::<Example>(&empty, env(&[]))
+            .expect_err("empty refuses");
+        let [diagnostic] = error.diagnostics() else {
+            panic!("one diagnostic: {error}");
+        };
+        assert_eq!(diagnostic.code, "config.missing-envelope");
+        assert_eq!(diagnostic.path, "");
+        let source = diagnostic.source.as_ref().expect("source");
+        assert_eq!((source.line, source.column), (Some(1), Some(1)));
+    }
+
+    #[test]
+    fn cfg_yaml_6_an_oversized_runtime_file_is_too_large_and_names_the_bound() {
+        let (_guard, root) = directory();
+        let large = root.join("large.yaml");
+        let maximum = usize::try_from(DEFAULT_MAX_RUNTIME_CONFIG_BYTES).unwrap();
+        let padding = "#".repeat(maximum + 1 - header().len() - 1);
+        std::fs::write(&large, format!("{}{padding}\n", header())).unwrap();
+        assert_eq!(
+            std::fs::metadata(&large).unwrap().len(),
+            DEFAULT_MAX_RUNTIME_CONFIG_BYTES + 1
+        );
+        let error = loader()
+            .load_with::<Example>(&large, env(&[]))
+            .expect_err("oversized refuses");
+        assert_eq!(error.kind(), RuntimeConfigErrorKind::Bounds);
+        let [diagnostic] = error.diagnostics() else {
+            panic!("one diagnostic: {error}");
+        };
+        assert_eq!(diagnostic.code, "yaml.too-large");
+        assert_eq!(diagnostic.path, "");
+        assert!(diagnostic.message.contains("1048576 bytes"), "{error}");
+        let source = diagnostic.source.as_ref().expect("source");
+        assert_eq!((source.line, source.column), (None, None));
     }
 
     #[test]
