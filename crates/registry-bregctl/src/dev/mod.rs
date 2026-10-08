@@ -350,11 +350,11 @@ enum Status {
 /// Bounded integer members of the retained session state.
 mod members {
     use registry_platform_yaml::{BoundedU32, BoundedU64, Invalid};
-    use serde::{de::Error as _, Deserialize, Deserializer};
+    use serde::{Deserialize, Deserializer};
 
     pub(super) fn port<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
         let port = BoundedU32::<1, { u16::MAX as u32 }>::deserialize(deserializer)?;
-        u16::try_from(port.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(1, u16::MAX)))
+        u16::try_from(port.get()).map_err(|_| Invalid::out_of_range(1, u16::MAX).into_error())
     }
 
     pub(super) fn optional_port<'de, D: Deserializer<'de>>(

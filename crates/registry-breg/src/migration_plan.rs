@@ -320,7 +320,6 @@ mod members {
     use registry_platform_yaml::{
         BoundedU32, BoundedU64, Digest, Identified, Invalid, LocalId, UniqueIdList,
     };
-    use serde::de::Error as _;
     use serde::{Deserialize, Deserializer};
 
     pub(super) fn local_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -369,7 +368,7 @@ mod members {
         deserializer: D,
     ) -> Result<u16, D::Error> {
         let major = BoundedU32::<15, 18>::deserialize(deserializer)?;
-        u16::try_from(major.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(15, 18)))
+        u16::try_from(major.get()).map_err(|_| Invalid::out_of_range(15, 18).into_error())
     }
 
     pub(super) fn backup_age<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {

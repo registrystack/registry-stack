@@ -771,7 +771,7 @@ mod members {
     use std::collections::BTreeMap;
 
     use registry_platform_yaml::{BoundedU32, Digest, ExternalId, Invalid, LocalId};
-    use serde::de::{Error as _, IgnoredAny};
+    use serde::de::IgnoredAny;
     use serde::{Deserialize, Deserializer};
     use serde_json::{Map, Value};
 
@@ -807,7 +807,7 @@ mod members {
 
     pub(super) fn status<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
         let status = BoundedU32::<100, 599>::deserialize(deserializer)?;
-        u16::try_from(status.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(100, 599)))
+        u16::try_from(status.get()).map_err(|_| Invalid::out_of_range(100, 599).into_error())
     }
 
     pub(super) fn count<'de, D: Deserializer<'de>>(
@@ -816,14 +816,14 @@ mod members {
         let count = BoundedU32::<0, 100>::deserialize(deserializer)?;
         usize::try_from(count.get())
             .map(Some)
-            .map_err(|_| D::Error::custom(Invalid::out_of_range(0, 100)))
+            .map_err(|_| Invalid::out_of_range(0, 100).into_error())
     }
 
     pub(super) fn top<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u16>, D::Error> {
         let top = BoundedU32::<1, 100>::deserialize(deserializer)?;
         u16::try_from(top.get())
             .map(Some)
-            .map_err(|_| D::Error::custom(Invalid::out_of_range(1, 100)))
+            .map_err(|_| Invalid::out_of_range(1, 100).into_error())
     }
 
     pub(super) fn postgres_major<'de, D: Deserializer<'de>>(
@@ -832,7 +832,7 @@ mod members {
         const MIN: u32 = super::MIN_SUPPORTED_POSTGRES_MAJOR as u32;
         const MAX: u32 = super::MAX_SUPPORTED_POSTGRES_MAJOR as u32;
         let major = BoundedU32::<MIN, MAX>::deserialize(deserializer)?;
-        u16::try_from(major.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(MIN, MAX)))
+        u16::try_from(major.get()).map_err(|_| Invalid::out_of_range(MIN, MAX).into_error())
     }
 
     pub(super) fn proposal_version<'de, D: Deserializer<'de>>(

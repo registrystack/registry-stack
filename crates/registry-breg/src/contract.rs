@@ -1420,10 +1420,11 @@ impl<'de> Deserialize<'de> for ActionInputSource {
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
         {
-            return Err(D::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "an action input without validTimeRole, pattern, encrypted, or lookup",
                 "Remove validTimeRole, pattern, encrypted, and lookup from the action input.",
-            )));
+            )
+            .into_error());
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
         Ok(Self {
@@ -1510,12 +1511,11 @@ impl<'de> Deserialize<'de> for ChangeRequestReviewSource {
                 authority: authority.ok_or_else(|| D::Error::missing_field("authority"))?,
                 policy_id: policy_id.ok_or_else(|| D::Error::missing_field("policyId"))?,
             })),
-            ChangeRequestReviewMembers { mode: Some(_), .. } => {
-                Err(D::Error::custom(Invalid::expected(
-                    "a review with either mode, or authority and policyId",
-                    "Remove mode to require a review, or remove authority and policyId.",
-                )))
-            }
+            ChangeRequestReviewMembers { mode: Some(_), .. } => Err(Invalid::expected(
+                "a review with either mode, or authority and policyId",
+                "Remove mode to require a review, or remove authority and policyId.",
+            )
+            .into_error()),
         }
     }
 }
@@ -2058,10 +2058,11 @@ impl<'de> Deserialize<'de> for FieldSource {
                 FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
             )
         {
-            return Err(D::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "pattern only on a persisted string or text field",
                 "Remove pattern, or declare the field with type string or text.",
-            )));
+            )
+            .into_error());
         }
         let encrypted = raw.encrypted.unwrap_or_default();
         if encrypted
@@ -2075,17 +2076,19 @@ impl<'de> Deserialize<'de> for FieldSource {
                         | FieldTypeSource::Structured { .. }
                 ))
         {
-            return Err(D::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "encrypted only on a restricted string, text, date, decimal, or structured field",
                 "Remove encrypted, or declare the field restricted with type string, text, date, \
                  decimal, or structured.",
-            )));
+            )
+            .into_error());
         }
         if raw.lookup.is_some() && !encrypted {
-            return Err(D::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "lookup only on an encrypted field",
                 "Declare encrypted: true on the field, or remove lookup.",
-            )));
+            )
+            .into_error());
         }
         Ok(Self {
             id: raw.id,
@@ -2125,11 +2128,12 @@ impl<'de> Deserialize<'de> for DerivedFieldSource {
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
         {
-            return Err(D::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "a derived field without required, validTimeRole, pattern, encrypted, or lookup",
                 "Remove required, validTimeRole, pattern, encrypted, and lookup from the derived \
                  field.",
-            )));
+            )
+            .into_error());
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
         Ok(Self {
@@ -2150,16 +2154,18 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         RawFieldKind::String => {
             reject_type_options::<E>(raw, TypeOptionAllowances::STRING)?;
             let max_length = raw.max_length.ok_or_else(|| {
-                E::custom(Invalid::expected(
+                Invalid::expected(
                     "a string field with maxLength",
                     "Declare maxLength on the string field.",
-                ))
+                )
+                .into_error()
             })?;
             if max_length > MAX_STRING_FIELD_LENGTH {
-                return Err(E::custom(Invalid::expected(
+                return Err(Invalid::expected(
                     "a string field with maxLength from 1 to 1000000",
                     "Lower maxLength to at most 1000000, or declare the field as text.",
-                )));
+                )
+                .into_error());
             }
             FieldTypeSource::String {
                 min_length: raw.min_length.unwrap_or_default(),
@@ -2170,10 +2176,11 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             reject_type_options::<E>(raw, TypeOptionAllowances::TEXT)?;
             FieldTypeSource::Text {
                 max_length: raw.max_length.ok_or_else(|| {
-                    E::custom(Invalid::expected(
+                    Invalid::expected(
                         "a text field with maxLength",
                         "Declare maxLength on the text field.",
-                    ))
+                    )
+                    .into_error()
                 })?,
             }
         }
@@ -2184,24 +2191,27 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         RawFieldKind::Decimal => {
             reject_type_options::<E>(raw, TypeOptionAllowances::DECIMAL)?;
             let precision = raw.precision.ok_or_else(|| {
-                E::custom(Invalid::expected(
+                Invalid::expected(
                     "a decimal field with precision",
                     "Declare precision on the decimal field.",
-                ))
+                )
+                .into_error()
             })?;
             if precision == 0 {
-                return Err(E::custom(Invalid::expected(
+                return Err(Invalid::expected(
                     "a decimal field with precision from 1 to 38",
                     "Declare a precision of at least 1 on the decimal field.",
-                )));
+                )
+                .into_error());
             }
             FieldTypeSource::Decimal {
                 precision,
                 scale: raw.scale.ok_or_else(|| {
-                    E::custom(Invalid::expected(
+                    Invalid::expected(
                         "a decimal field with scale",
                         "Declare scale on the decimal field.",
-                    ))
+                    )
+                    .into_error()
                 })?,
                 minimum: raw.minimum.clone(),
                 maximum: raw.maximum.clone(),
@@ -2223,10 +2233,11 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             reject_type_options::<E>(raw, TypeOptionAllowances::VOCABULARY)?;
             FieldTypeSource::VocabularyCode {
                 vocabulary: raw.vocabulary.clone().ok_or_else(|| {
-                    E::custom(Invalid::expected(
+                    Invalid::expected(
                         "a vocabulary-code field with vocabulary",
                         "Declare vocabulary on the vocabulary-code field.",
-                    ))
+                    )
+                    .into_error()
                 })?,
                 values: raw.values.clone(),
             }
@@ -2235,10 +2246,11 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             reject_type_options::<E>(raw, TypeOptionAllowances::REFERENCE)?;
             FieldTypeSource::Reference {
                 target: raw.target.clone().ok_or_else(|| {
-                    E::custom(Invalid::expected(
+                    Invalid::expected(
                         "a reference field with target",
                         "Declare target on the reference field.",
-                    ))
+                    )
+                    .into_error()
                 })?,
                 on_delete: raw.on_delete.clone().unwrap_or_default(),
             }
@@ -2246,16 +2258,18 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
         RawFieldKind::Crs84Point => {
             reject_type_options::<E>(raw, TypeOptionAllowances::CRS84_POINT)?;
             let precision = raw.precision.ok_or_else(|| {
-                E::custom(Invalid::expected(
+                Invalid::expected(
                     "a crs84-point field with precision",
                     "Declare precision on the crs84-point field.",
-                ))
+                )
+                .into_error()
             })?;
             if u32::from(precision) > MAX_CRS84_PRECISION {
-                return Err(E::custom(Invalid::expected(
+                return Err(Invalid::expected(
                     "a crs84-point field with precision from 0 to 9",
                     "Lower precision on the crs84-point field to at most 9.",
-                )));
+                )
+                .into_error());
             }
             FieldTypeSource::Crs84Point {
                 precision,
@@ -2266,16 +2280,18 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
             reject_type_options::<E>(raw, TypeOptionAllowances::STRUCTURED)?;
             FieldTypeSource::Structured {
                 max_bytes: raw.max_bytes.ok_or_else(|| {
-                    E::custom(Invalid::expected(
+                    Invalid::expected(
                         "a structured field with maxBytes",
                         "Declare maxBytes on the structured field.",
-                    ))
+                    )
+                    .into_error()
                 })?,
                 schema: raw.schema.clone().ok_or_else(|| {
-                    E::custom(Invalid::expected(
+                    Invalid::expected(
                         "a structured field with schema",
                         "Declare schema on the structured field.",
-                    ))
+                    )
+                    .into_error()
                 })?,
             }
         }
@@ -2484,13 +2500,14 @@ fn reject_type_options<E: serde::de::Error>(
         || (!allowed.target && raw.target.is_some())
         || (!allowed.delete && raw.on_delete.is_some())
     {
-        return Err(E::custom(Invalid::expected(
+        return Err(Invalid::expected(
             "only the options the field's type accepts",
             "Remove the options the type does not take: string takes minLength and maxLength, \
              text maxLength, decimal precision, scale, minimum, and maximum, vocabulary-code \
              vocabulary and values, reference target and onDelete, crs84-point precision and \
              bbox, and structured maxBytes and schema.",
-        )));
+        )
+        .into_error());
     }
     Ok(())
 }
@@ -3598,10 +3615,11 @@ impl<'de> Deserialize<'de> for AccessPermissionSource {
     {
         let raw = RawAccessPermissionSource::deserialize(deserializer)?;
         if !raw.entity.is_empty() && raw.row_boundaries.is_none() {
-            return Err(D::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "an entity permission with rowBoundaries",
                 "Declare rowBoundaries on the permission; an explicit empty list grants every row.",
-            )));
+            )
+            .into_error());
         }
         Ok(Self {
             entity: raw.entity,

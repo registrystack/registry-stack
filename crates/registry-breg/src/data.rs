@@ -910,7 +910,7 @@ pub(crate) fn ingestion_chunk_idempotency_key(
 /// Bounded integer members of the checkpoint documents.
 mod members {
     use registry_platform_yaml::{BoundedU32, BoundedU64, Invalid};
-    use serde::{de::Error as _, Deserialize, Deserializer};
+    use serde::{Deserialize, Deserializer};
 
     const MAX_INPUT_BYTES: u64 = super::MAX_DATA_IMPORT_INPUT_BYTES as u64;
     const MAX_INPUT_ITEMS: u64 = super::MAX_INPUT_ITEMS as u64;
@@ -927,7 +927,7 @@ mod members {
     pub(super) fn batch_items<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
         let items = BoundedU32::<1, MAX_BATCH_ITEMS>::deserialize(deserializer)?;
         u16::try_from(items.get())
-            .map_err(|_| D::Error::custom(Invalid::out_of_range(1, MAX_BATCH_ITEMS)))
+            .map_err(|_| Invalid::out_of_range(1, MAX_BATCH_ITEMS).into_error())
     }
 
     pub(super) fn batch_bytes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {

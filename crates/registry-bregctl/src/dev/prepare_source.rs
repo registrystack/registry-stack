@@ -133,9 +133,7 @@ struct Transition {
 /// journal stays within the shared reader's document bound.
 mod authoring_text {
     use registry_platform_yaml::Invalid;
-    use serde::{
-        de::Error as _, ser::Error as _, ser::SerializeMap, Deserialize, Deserializer, Serializer,
-    };
+    use serde::{ser::Error as _, ser::SerializeMap, Deserialize, Deserializer, Serializer};
     use std::{collections::BTreeMap, path::PathBuf};
 
     pub(super) fn serialize<S: Serializer>(
@@ -159,10 +157,11 @@ mod authoring_text {
             .into_iter()
             .map(|(path, text)| {
                 if path.is_empty() {
-                    return Err(D::Error::custom(Invalid::expected(
+                    return Err(Invalid::expected(
                         "a non-empty authoring file path",
                         "Run bregctl dev prepare-source again.",
-                    )));
+                    )
+                    .into_error());
                 }
                 Ok((PathBuf::from(path), text.into_bytes()))
             })
@@ -244,7 +243,7 @@ struct PreparedSource {
 /// shared reader refuses in a configuration position.
 mod report_text {
     use registry_platform_yaml::Invalid;
-    use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serializer};
+    use serde::{ser::Error as _, Deserialize, Deserializer, Serializer};
     use serde_json::Value;
 
     pub(super) fn serialize<S: Serializer>(
@@ -260,10 +259,11 @@ mod report_text {
     ) -> Result<Value, D::Error> {
         let text = String::deserialize(deserializer)?;
         serde_json::from_str(&text).map_err(|_| {
-            D::Error::custom(Invalid::expected(
+            Invalid::expected(
                 "the JSON text of a preparation report",
                 "Run bregctl dev prepare-source again.",
-            ))
+            )
+            .into_error()
         })
     }
 }

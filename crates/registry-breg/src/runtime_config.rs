@@ -2822,10 +2822,10 @@ fn non_empty_assertion_issuers<'de, D: serde::Deserializer<'de>>(
 ) -> std::result::Result<BTreeMap<String, Vec<String>>, D::Error> {
     let issuers = BTreeMap::<String, Vec<String>>::deserialize(deserializer)?;
     if issuers.is_empty() {
-        return Err(serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
+        return Err(registry_platform_yaml::Invalid::expected(
             "at least one client",
             "List at least one client with its assertion issuers, or omit assertionIssuers to apply no assertion-issuer rule.",
-        )));
+        ).into_error());
     }
     Ok(issuers)
 }
