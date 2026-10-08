@@ -635,7 +635,7 @@ fn resolve_policy_fields(
     let published = |field: &String, path: String| {
         described.fields.get(field).cloned().ok_or_else(|| {
             DescriptionRefusal::UnpublishedPolicyField {
-                path: format!("requests[{index}].{path}"),
+                path: format!("/requests/{index}{path}"),
                 field: field.clone(),
             }
         })
@@ -644,19 +644,19 @@ fn resolve_policy_fields(
         .projection
         .iter()
         .enumerate()
-        .map(|(position, field)| published(field, format!("projection[{position}]")))
+        .map(|(position, field)| published(field, format!("/projection/{position}")))
         .collect::<Result<Vec<_>, _>>()?;
     let context_projection = policy
         .context_projection
         .iter()
         .enumerate()
-        .map(|(position, field)| published(field, format!("contextProjection[{position}]")))
+        .map(|(position, field)| published(field, format!("/contextProjection/{position}")))
         .collect::<Result<Vec<_>, _>>()?;
     let display_reference = policy
         .display_reference
         .as_ref()
         .map(|configured| {
-            let descriptor = published(&configured.field, "displayReference.field".to_owned())?;
+            let descriptor = published(&configured.field, "/displayReference/field".to_owned())?;
             let schema = descriptor
                 .schema
                 .as_object()
@@ -688,10 +688,10 @@ fn resolve_policy_fields(
 pub enum DescriptionRefusal {
     /// The description meets the closed adapter contract, but the policy
     /// names a field the description does not publish for that request. The
-    /// `path` is relative to the source policy entry, as
-    /// `requests[<index>].contextProjection[<index>]`,
-    /// `requests[<index>].projection[<index>]`, or
-    /// `requests[<index>].displayReference.field`.
+    /// `path` is a JSON Pointer relative to the source policy entry, as
+    /// `/requests/<index>/contextProjection/<index>`,
+    /// `/requests/<index>/projection/<index>`, or
+    /// `/requests/<index>/displayReference/field`.
     UnpublishedPolicyField { path: String, field: String },
     /// The description is not exactly the closed BReg adapter contract for
     /// this source: malformed, drifted, or paired with other request
@@ -1208,7 +1208,7 @@ mod tests {
         assert_eq!(
             check_description_input(&source, &description("correction")).unwrap_err(),
             DescriptionRefusal::UnpublishedPolicyField {
-                path: "requests[0].projection[1]".to_owned(),
+                path: "/requests/0/projection/1".to_owned(),
                 field: "not-imported".to_owned(),
             }
         );
@@ -1242,7 +1242,7 @@ mod tests {
         assert_eq!(
             check_description_input(&source, &description("correction")).unwrap_err(),
             DescriptionRefusal::UnpublishedPolicyField {
-                path: "requests[0].displayReference.field".to_owned(),
+                path: "/requests/0/displayReference/field".to_owned(),
                 field: "missing".to_owned(),
             }
         );
@@ -1262,7 +1262,7 @@ mod tests {
         assert_eq!(
             check_description_input(&source, &description("correction")).unwrap_err(),
             DescriptionRefusal::UnpublishedPolicyField {
-                path: "requests[0].contextProjection[0]".to_owned(),
+                path: "/requests/0/contextProjection/0".to_owned(),
                 field: "not-imported".to_owned(),
             }
         );

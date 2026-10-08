@@ -233,6 +233,56 @@ reported.
 | `path: casework.yaml:/sources/N/description` | `path: /sources/N/description`, with `source.file`, `source.line`, and `source.column` |
 | `artifact: casework_project` | `artifact: CaseworkProject` |
 
+## BREAKING: every project refusal against its source descriptions is placed in `casework.yaml`
+
+`caseworkctl check`, `explain`, `simulate`, and `package` check a project
+against the source descriptions it imported. Each problem they find is its
+own diagnostic in the shared shape, placed at the line and column of
+`casework.yaml` it concerns, where the first problem was reported alone as
+`caseworkctl.refused` with `artifact: authoring_input` and `path:
+authoring`.
+
+- A source description that pins a review kind is named in `related`, with
+  the pointer of its `review/policyId` in that file.
+- A routing rule the source description rejects is reported with the
+  `casework.routing.*` code of its condition, at the pointer of the rule
+  (`/sources/0/requests/0/routing/0/when/fields/region`), where the message
+  began `routing policy refused at`.
+- A diagnostic names a review kind or a source only when its id is a valid
+  identifier, and never repeats a revision or another value from the file;
+  the position names the member instead. A `suggestedAction` that names
+  `caseworkctl source add` for a source whose id it does not name writes
+  `SOURCE_ID` and the pointer of the id to put there.
+- The `--against-breg-package` refusals keep their codes.
+  `casework.source.none`, `casework.source.ambiguous`, and
+  `casework.source.unknown` are placed at `/sources`, where `path` was
+  `arguments`; `casework.source-description.missing` and
+  `casework.source-revision.stale` are placed at `/sources/N/description`,
+  where `path` was `casework.yaml:/sources/N/description`. `artifact` is
+  `CaseworkProject` for all five, where it was `command_arguments`,
+  `casework_project`, or `source_description`. The stale refusal no longer
+  repeats the pinned or the rederived revision; its `related` entry names
+  the source description file and `/sourceRevision`.
+
+Migration: a script that matched a refusal's message matches its `code`
+and reads `source` for the position and `path` for the member. Nothing in a
+project changes.
+
+| Refusal | Old code and path | New code and path |
+|---|---|---|
+| a source whose `adapter` is not `breg` | `caseworkctl.refused`, `authoring` | `casework.source.unsupported-adapter`, `/sources/N/adapter` |
+| a source with more than 32 requests | `caseworkctl.refused`, `authoring` | `casework.source.too-many-requests`, `/sources/N/requests` |
+| a source description that does not match the BReg adapter contract | `caseworkctl.refused`, `authoring` | `casework.source-description.contract-mismatch`, `/sources/N/description` |
+| a policy field the source description does not publish | `caseworkctl.refused`, `authoring` | `casework.source.unpublished-field`, the pointer of the field |
+| a pinned review kind `reviewKinds` does not declare | `caseworkctl.refused`, `authoring` | `casework.source-description.unknown-review-kind`, `/sources/N/description` |
+| a pinned review kind whose purpose is not `approval` | `caseworkctl.refused`, `authoring` | `casework.source-description.review-kind-not-approval`, `/reviewKinds/K/purpose` |
+| a pinned review kind whose `contextStrategy` is not `source` | `caseworkctl.refused`, `authoring` | `casework.source-description.review-kind-not-source-context`, `/reviewKinds/K/contextStrategy` |
+| no review producer admits the source for the pinned review kind | `caseworkctl.refused`, `authoring` | `casework.source-description.review-not-admitted`, `/sources/N/description` |
+| a `displaySchema` that rejects what a source request discloses | `caseworkctl.refused`, `authoring` | `casework.review-kind.display-hides-disclosure`, `/reviewKinds/K/displaySchema` |
+| a routing rule the source description rejects | `caseworkctl.refused`, `authoring` | the `casework.routing.*` code of its condition, the pointer of the rule |
+| `--against-breg-package` with no, several, or an unknown BReg source | unchanged code, `arguments` | unchanged code, `/sources` |
+| `--against-breg-package` with a missing or stale description | unchanged code, `casework.yaml:/sources/N/description` | unchanged code, `/sources/N/description` |
+
 ## Diagnostic codes
 
 | Old code | New code |
@@ -262,8 +312,10 @@ Project codes:
 - `casework.project.*`: `casework.project.empty-id`, `casework.project.empty-version`, `casework.project.no-work`, `casework.project.wrong-api-version`, `casework.project.wrong-kind`.
 - `casework.queue.*`: `casework.queue.duplicate-id`, `casework.queue.invalid-id`, `casework.queue.invalid-label`, `casework.queue.none`.
 - `casework.request.*`: `casework.request.duplicate-context-field`, `casework.request.duplicate-entity`, `casework.request.empty-entity`, `casework.request.empty-target-id`, `casework.request.invalid-context-field`, `casework.request.invalid-display-reference`, `casework.request.invalid-target-elapsed`, `casework.request.too-many-context-fields`, `casework.request.unknown-clock`.
-- `casework.review-kind.*`: `casework.review-kind.accountability-before-terminal`, `casework.review-kind.answer-stage-approvals`, `casework.review-kind.answer-stage-count`, `casework.review-kind.answer-without-outcomes`, `casework.review-kind.answered-outcome-in-approval`, `casework.review-kind.duplicate-clock`, `casework.review-kind.duplicate-deciding-profile`, `casework.review-kind.duplicate-id`, `casework.review-kind.duplicate-outcome-id`, `casework.review-kind.duplicate-stage-id`, `casework.review-kind.ineligible-deciding-profile`, `casework.review-kind.invalid-clock`, `casework.review-kind.invalid-deciding-profile`, `casework.review-kind.invalid-display-schema`, `casework.review-kind.invalid-id`, `casework.review-kind.invalid-outcome-id`, `casework.review-kind.invalid-outcome-label`, `casework.review-kind.invalid-result-schema`, `casework.review-kind.invalid-stage-id`, `casework.review-kind.invalid-stage-queue`, `casework.review-kind.invalid-version`, `casework.review-kind.no-deciding-profiles`, `casework.review-kind.no-stages`, `casework.review-kind.required-approvals-out-of-range`, `casework.review-kind.result-required-without-result-schema`, `casework.review-kind.retention-out-of-range`, `casework.review-kind.too-many-clocks`, `casework.review-kind.too-many-deciding-profiles`, `casework.review-kind.too-many-outcomes`, `casework.review-kind.too-many-stages`, `casework.review-kind.too-many`, `casework.review-kind.unanswered-outcome-in-answer`, `casework.review-kind.unknown-clock`, `casework.review-kind.unknown-queue`.
+- `casework.review-kind.*`: `casework.review-kind.accountability-before-terminal`, `casework.review-kind.answer-stage-approvals`, `casework.review-kind.answer-stage-count`, `casework.review-kind.answer-without-outcomes`, `casework.review-kind.answered-outcome-in-approval`, `casework.review-kind.display-hides-disclosure`, `casework.review-kind.duplicate-clock`, `casework.review-kind.duplicate-deciding-profile`, `casework.review-kind.duplicate-id`, `casework.review-kind.duplicate-outcome-id`, `casework.review-kind.duplicate-stage-id`, `casework.review-kind.ineligible-deciding-profile`, `casework.review-kind.invalid-clock`, `casework.review-kind.invalid-deciding-profile`, `casework.review-kind.invalid-display-schema`, `casework.review-kind.invalid-id`, `casework.review-kind.invalid-outcome-id`, `casework.review-kind.invalid-outcome-label`, `casework.review-kind.invalid-result-schema`, `casework.review-kind.invalid-stage-id`, `casework.review-kind.invalid-stage-queue`, `casework.review-kind.invalid-version`, `casework.review-kind.no-deciding-profiles`, `casework.review-kind.no-stages`, `casework.review-kind.required-approvals-out-of-range`, `casework.review-kind.result-required-without-result-schema`, `casework.review-kind.retention-out-of-range`, `casework.review-kind.too-many-clocks`, `casework.review-kind.too-many-deciding-profiles`, `casework.review-kind.too-many-outcomes`, `casework.review-kind.too-many-stages`, `casework.review-kind.too-many`, `casework.review-kind.unanswered-outcome-in-answer`, `casework.review-kind.unknown-clock`, `casework.review-kind.unknown-queue`.
 - `casework.review-producer.*`: `casework.review-producer.duplicate-id`, `casework.review-producer.duplicate-kind`, `casework.review-producer.duplicate-principal`, `casework.review-producer.duplicate-source-namespace`, `casework.review-producer.ineligible-initiator-profile`, `casework.review-producer.invalid-completion-destination`, `casework.review-producer.invalid-id`, `casework.review-producer.invalid-initiator-profile`, `casework.review-producer.invalid-issuer`, `casework.review-producer.invalid-kind`, `casework.review-producer.invalid-profile`, `casework.review-producer.invalid-recipient-binding`, `casework.review-producer.invalid-source-namespace`, `casework.review-producer.invalid-subject`, `casework.review-producer.invalid-trusted-initiator-issuer`, `casework.review-producer.missing-trusted-initiator-issuer`, `casework.review-producer.no-kinds`, `casework.review-producer.no-source-namespaces`, `casework.review-producer.none`, `casework.review-producer.not-a-requester-profile`, `casework.review-producer.recovery-days-out-of-range`, `casework.review-producer.recovery-exceeds-retention`, `casework.review-producer.too-many-kinds`, `casework.review-producer.too-many-source-namespaces`, `casework.review-producer.too-many`, `casework.review-producer.unknown-review-kind`, `casework.review-producer.without-review-kinds`.
 - `casework.routing.*`: `casework.routing.duplicate-predicate-value`, `casework.routing.duplicate-projection-field`, `casework.routing.duplicate-rule-id`, `casework.routing.empty-condition`, `casework.routing.field-not-projected`, `casework.routing.invalid-because`, `casework.routing.invalid-predicate-value`, `casework.routing.invalid-rule-id`, `casework.routing.invalid-source-description`, `casework.routing.invalid-source-value`, `casework.routing.predicate-value-count`, `casework.routing.stage-without-review`, `casework.routing.too-many-predicates`, `casework.routing.too-many-projection-fields`, `casework.routing.too-many-rules`, `casework.routing.unexpected-source-state`, `casework.routing.unknown-field`, `casework.routing.unknown-queue`, `casework.routing.unknown-stage`, `casework.routing.unreachable-rule`.
-- `casework.source.*`: `casework.source.duplicate-id`, `casework.source.empty-adapter`, `casework.source.empty-description`, `casework.source.empty-id`, `casework.source.no-requests`.
+- `casework.source.*`: `casework.source.ambiguous`, `casework.source.duplicate-id`, `casework.source.empty-adapter`, `casework.source.empty-description`, `casework.source.empty-id`, `casework.source.no-requests`, `casework.source.none`, `casework.source.too-many-requests`, `casework.source.unknown`, `casework.source.unpublished-field`, `casework.source.unsupported-adapter`.
+- `casework.source-description.*`: `casework.source-description.contract-mismatch`, `casework.source-description.missing`, `casework.source-description.review-kind-not-approval`, `casework.source-description.review-kind-not-source-context`, `casework.source-description.review-not-admitted`, `casework.source-description.unknown-review-kind`.
+- `casework.source-revision.*`: `casework.source-revision.stale`.
 - `casework.task-template.*`: `casework.task-template.duplicate-entry`, `casework.task-template.duplicate-id`, `casework.task-template.duplicate-permission`, `casework.task-template.empty-list`, `casework.task-template.ineligible-profile`, `casework.task-template.invalid-audience`, `casework.task-template.invalid-bounds`, `casework.task-template.invalid-entry`, `casework.task-template.invalid-id`, `casework.task-template.invalid-operation`, `casework.task-template.invalid-purpose`, `casework.task-template.invalid-requester-tag`, `casework.task-template.invalid-scope`, `casework.task-template.invalid-subject-claim`, `casework.task-template.invalid-subject-field`, `casework.task-template.invalid-team`, `casework.task-template.invalid-text`, `casework.task-template.lifetime-out-of-range`, `casework.task-template.missing-evidence-context`, `casework.task-template.mixed-eligibility`, `casework.task-template.no-eligibility`, `casework.task-template.permissions-out-of-range`, `casework.task-template.subjects-out-of-range`, `casework.task-template.too-many-entries`, `casework.task-template.too-many`, `casework.task-template.unexpected-evidence-context`, `casework.task-template.unknown-item-kind`, `casework.task-template.unknown-review-kind`, `casework.task-template.unknown-source`, `casework.task-template.unsupported-item-state`.

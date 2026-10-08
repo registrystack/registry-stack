@@ -727,17 +727,13 @@ fn check_against_a_breg_package_refuses_a_stale_pin_naming_the_check_and_the_rep
     assert_eq!(report["ok"], false);
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["code"], "casework.source-revision.stale");
-    assert_eq!(diagnostic["artifact"], "source_description");
-    assert_eq!(diagnostic["path"], "casework.yaml:/sources/0/description");
+    assert_eq!(diagnostic["artifact"], "CaseworkProject");
+    assert_eq!(diagnostic["path"], "/sources/0/description");
+    assert_eq!(diagnostic["related"][0]["path"], "/sourceRevision");
+    // Neither revision is repeated (CFG-SEC-3); the related entry names
+    // where the pinned one is written.
     let message = diagnostic["message"].as_str().unwrap();
-    assert!(
-        message.contains("sha256:regional-source-revision"),
-        "{message}"
-    );
-    assert!(
-        message.contains("sha256:rederived-by-the-package"),
-        "{message}"
-    );
+    assert!(!message.contains("sha256:"), "{message}");
     let action = diagnostic["suggestedAction"].as_str().unwrap();
     assert!(
         action.contains("caseworkctl source add BREG_PROJECT --project ")
@@ -764,12 +760,15 @@ fn check_against_a_breg_package_selects_one_source_and_never_guesses() {
 
     let (exit, report) = check_against_breg_package(&fake, package.path(), &[]);
     assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#?}");
-    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "casework.source.ambiguous");
+    assert_eq!(diagnostic["path"], "/sources");
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(message.contains("--source-id"), "{message}");
+    let action = diagnostic["suggestedAction"].as_str().unwrap();
     assert!(
-        message.contains("--source-id")
-            && message.contains("regional-register")
-            && message.contains("response-register"),
-        "{message}"
+        action.contains("regional-register") && action.contains("response-register"),
+        "{action}"
     );
 
     let (exit, report) =

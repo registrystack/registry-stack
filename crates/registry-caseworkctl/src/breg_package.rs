@@ -5,9 +5,11 @@
 //! rederives. The package is verified by the public `bregctl` of the same
 //! release, never by linking the BReg crates.
 
-use crate::project::{load_and_check_policy, DeniedFindings};
+use crate::project::{nameable, project_refusal, read_project};
 use crate::source_add::{check_version, invoke, require_ok, shell_word};
 use anyhow::{Context, Result};
+use registry_casework_core::ConfigFinding;
+use registry_platform_yaml::Related;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -15,6 +17,8 @@ const OPERATION: &str = "check --against-breg-package";
 
 /// Adds the `bregPackage` comparison to a completed check report, or refuses
 /// a pin the package does not rederive with the repin and recheck commands.
+/// Every refusal is placed in `casework.yaml` (CFG-DIAG-1) and names a source
+/// id only when it is a valid identifier (CFG-SEC-3).
 pub(super) fn compare(
     project: &Path,
     package: &Path,
@@ -22,7 +26,10 @@ pub(super) fn compare(
     bregctl_bin: &Path,
     mut report: Value,
 ) -> Result<Value> {
-    let policy = load_and_check_policy(project)?;
+    let decoded = read_project(project)?;
+    let policy = &decoded.value;
+    let refuse =
+        |finding: ConfigFinding| project_refusal(vec![finding.to_diagnostic(&decoded.document)]);
     let breg_sources = policy
         .sources
         .iter()
@@ -32,67 +39,71 @@ pub(super) fn compare(
     let declared = || {
         breg_sources
             .iter()
-            .map(|(_, source)| source.id.as_str())
+            .map(|(index, source)| {
+                nameable(&source.id)
+                    .map_or_else(|| format!("the id at /sources/{index}/id"), str::to_owned)
+            })
             .collect::<Vec<_>>()
             .join(", ")
     };
     let (index, source) = match (source_id, breg_sources.as_slice()) {
         (None, [only]) => *only,
         (None, []) => {
-            return Err(refusal(
+            return Err(refuse(ConfigFinding::new(
                 "casework.source.none",
-                "arguments",
-                "the project declares no BReg source to compare with a BReg package".to_owned(),
-                "Remove --against-breg-package, or declare a BReg source and run caseworkctl source add.".to_owned(),
-            ))
+                "/sources",
+                "the project declares no BReg source to compare with a BReg package",
+                "Remove --against-breg-package, or declare a BReg source and run caseworkctl source add.",
+            )))
         }
         (None, _) => {
-            return Err(refusal(
+            return Err(refuse(ConfigFinding::new(
                 "casework.source.ambiguous",
-                "arguments",
-                format!(
-                    "the project declares several BReg sources ({}); name the one the package builds with --source-id",
-                    declared()
-                ),
+                "/sources",
+                "the project declares several BReg sources, so the one the package builds must be named with --source-id",
                 format!(
                     "Rerun {} with --source-id set to one of: {}.",
                     check_command(project, package, None, bregctl_bin),
                     declared()
                 ),
-            ))
+            )))
         }
         (Some(wanted), _) => match breg_sources.iter().find(|(_, source)| source.id == wanted) {
             Some(selected) => *selected,
             None => {
-                return Err(refusal(
+                return Err(refuse(ConfigFinding::new(
                     "casework.source.unknown",
-                    "arguments",
-                    format!(
-                        "--source-id {wanted} names no BReg source of the project; declared: {}",
-                        declared()
+                    "/sources",
+                    nameable(wanted).map_or_else(
+                        || "--source-id names no BReg source declared here".to_owned(),
+                        |wanted| format!("--source-id {wanted} names no BReg source declared here"),
                     ),
                     format!(
                         "Rerun {} with --source-id set to one of: {}.",
                         check_command(project, package, None, bregctl_bin),
                         declared()
                     ),
-                ))
+                )))
             }
         },
     };
-    let description_path = format!("casework.yaml:/sources/{index}/description");
-    let repin = repin_command(project, &source.id, bregctl_bin);
+    let description_at = format!("/sources/{index}/description");
+    let source_id = nameable(&source.id);
+    let repin = repin_command(project, source_id, bregctl_bin);
+    let unnamed = || {
+        source_id.map_or_else(
+            || format!(", where SOURCE_ID is the id at /sources/{index}/id"),
+            |_| String::new(),
+        )
+    };
     let description = project.join(&source.description);
     if !description.is_file() {
-        return Err(refusal(
+        return Err(refuse(ConfigFinding::new(
             "casework.source-description.missing",
-            &description_path,
-            format!(
-                "source {} has no imported source description to compare",
-                source.id
-            ),
-            format!("Run {repin}."),
-        ));
+            description_at,
+            "this source has no imported source description to compare",
+            format!("Run {repin}{}.", unnamed()),
+        )));
     }
     let bytes = std::fs::read(&description)
         .with_context(|| format!("reading {}", description.display()))?;
@@ -120,21 +131,25 @@ pub(super) fn compare(
         .as_str()
         .context("bregctl check --package reported no packageDigest")?;
     if rederived != pinned {
-        return Err(DeniedFindings(vec![json!({
-            "severity": "error",
-            "code": "casework.source-revision.stale",
-            "artifact": "source_description",
-            "path": description_path,
-            "message": format!(
-                "source {} pins sourceRevision {pinned}, but the BReg package rederives registry revision {rederived}",
-                source.id
+        let mut diagnostic = ConfigFinding::new(
+            "casework.source-revision.stale",
+            description_at,
+            "the imported source description pins a sourceRevision the BReg package does not rederive",
+            format!(
+                "Repin from the BReg project that built this package with {repin}, then rerun {}{}.",
+                check_command(project, package, source_id.or(Some("SOURCE_ID")), bregctl_bin),
+                unnamed()
             ),
-            "suggestedAction": format!(
-                "Repin from the BReg project that built this package with {repin}, then rerun {}.",
-                check_command(project, package, Some(&source.id), bregctl_bin)
-            ),
-        })])
-        .into());
+        )
+        .to_diagnostic(&decoded.document);
+        diagnostic.related.push(Related {
+            file: description.display().to_string(),
+            line: None,
+            column: None,
+            path: "/sourceRevision".to_owned(),
+            message: "the pinned revision is here".to_owned(),
+        });
+        return Err(project_refusal(vec![diagnostic]));
     }
     report
         .as_object_mut()
@@ -151,18 +166,6 @@ pub(super) fn compare(
             }),
         );
     Ok(report)
-}
-
-fn refusal(code: &str, path: &str, message: String, action: String) -> anyhow::Error {
-    DeniedFindings(vec![json!({
-        "severity": "error",
-        "code": code,
-        "artifact": if path == "arguments" { "command_arguments" } else { "casework_project" },
-        "path": path,
-        "message": message,
-        "suggestedAction": action,
-    })])
-    .into()
 }
 
 fn bregctl_argument(bregctl_bin: &Path) -> String {
@@ -196,10 +199,11 @@ pub(crate) fn check_command(
     command
 }
 
-fn repin_command(project: &Path, source_id: &str, bregctl_bin: &Path) -> String {
+fn repin_command(project: &Path, source_id: Option<&str>, bregctl_bin: &Path) -> String {
     format!(
-        "caseworkctl source add BREG_PROJECT --project {} --source-id {source_id} --apply{}",
+        "caseworkctl source add BREG_PROJECT --project {} --source-id {} --apply{}",
         shell_word(&project.display().to_string()),
+        source_id.unwrap_or("SOURCE_ID"),
         bregctl_argument(bregctl_bin),
     )
 }

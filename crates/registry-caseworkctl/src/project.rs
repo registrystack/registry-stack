@@ -9,14 +9,14 @@ use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, AttemptUncertainMarking,
     AttemptUncertainMarkingReport, CaseworkProject, ConfigFinding, ConfigLoadError,
-    ReviewContextStrategy, ReviewKindPurpose, SourcePolicy, SourceRequestPolicy,
-    SourceRetentionReport, SourceRetentionSelector,
+    ReviewContextStrategy, ReviewKindPurpose, SourceRequestPolicy, SourceRetentionReport,
+    SourceRetentionSelector,
 };
 use registry_platform_config::{
     plan_package, sha256_uri, write_package, SecretError, SecretProvider, SecretReference,
     SecretResolver,
 };
-use registry_platform_yaml::{Decoded, Diagnostic, Report, Severity};
+use registry_platform_yaml::{Decoded, Diagnostic, LocalId, Related, Report, Severity};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
@@ -358,17 +358,6 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     }))
 }
 
-#[derive(Debug)]
-pub(super) struct DeniedFindings(pub Vec<Value>);
-
-impl std::fmt::Display for DeniedFindings {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "the Casework authoring findings were denied")
-    }
-}
-
-impl std::error::Error for DeniedFindings {}
-
 /// A refused runtime file, with every diagnostic its check reported, and
 /// for `check --runtime-config` those of the project beside them.
 #[derive(Debug)]
@@ -600,7 +589,6 @@ pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Re
     }
     let source_description = if !pending {
         check_source_descriptions(project)?;
-        crate::policy::check(project, &policy)?;
         "checked"
     } else {
         "pending_source_add"
@@ -716,7 +704,7 @@ pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
 /// `casework.yaml` of `project`, read through the shared reader and checked,
 /// with the document its diagnostics are placed in. The file is named as the
 /// project path given joined with `casework.yaml` (CFG-DIAG-1).
-fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {
+pub(crate) fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {
     let policy_path = project.join("casework.yaml");
     let bytes = fs::read(&policy_path)
         .map_err(ConfigLoadError::Read)
@@ -725,22 +713,54 @@ fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {
         .map_err(ConfigLoadError::Refused)
         .context("loading and checking casework.yaml")?;
     let policy = &decoded.value;
-    if policy.sources.is_empty() {
-        if policy.review_kinds.is_empty() || policy.review_producers.is_empty() {
-            bail!("declare a review kind and producer or connect a source before checking the project");
+    let mut findings = Vec::new();
+    // The shared reader already refused a project with no work
+    // (`casework.project.no-work`, `casework.review-producer.none`), an empty
+    // adapter, and an empty request list; these are the bounds of the one
+    // adapter caseworkctl connects.
+    for (index, source) in policy.sources.iter().enumerate() {
+        if source.adapter != "breg" {
+            findings.push(ConfigFinding::new(
+                "casework.source.unsupported-adapter",
+                format!("/sources/{index}/adapter"),
+                "caseworkctl connects only the breg adapter",
+                "Write adapter: breg.",
+            ));
         }
-        return Ok(decoded);
+        if source.requests.len() > MAXIMUM_REQUEST_ENTITIES {
+            findings.push(ConfigFinding::new(
+                "casework.source.too-many-requests",
+                format!("/sources/{index}/requests"),
+                format!("a breg source declares at most {MAXIMUM_REQUEST_ENTITIES} requests"),
+                format!(
+                    "Keep at most {MAXIMUM_REQUEST_ENTITIES} requests under this source, one per request entity."
+                ),
+            ));
+        }
     }
-    if policy.sources.iter().any(|source| {
-        source.adapter != "breg"
-            || source.requests.is_empty()
-            || source.requests.len() > MAXIMUM_REQUEST_ENTITIES
-    }) {
-        bail!(
-            "each source must use the breg adapter and declare between 1 and {MAXIMUM_REQUEST_ENTITIES} request entities"
-        );
+    if findings.is_empty() {
+        Ok(decoded)
+    } else {
+        let diagnostics = findings
+            .iter()
+            .map(|finding| finding.to_diagnostic(&decoded.document))
+            .collect();
+        Err(project_refusal(diagnostics))
     }
-    Ok(decoded)
+}
+
+/// A refusal of `casework.yaml` carrying `diagnostics` already placed in its
+/// document, reported like the reader's own (CFG-DIAG-1).
+pub(crate) fn project_refusal(diagnostics: Vec<Diagnostic>) -> anyhow::Error {
+    let mut report = Report::new(diagnostics);
+    report.set_files_checked(1);
+    report.into()
+}
+
+/// `id` when a diagnostic may name it: an identifier that passes the
+/// `LocalId` grammar, and nothing for any other value (CFG-SEC-3).
+pub(crate) fn nameable(id: &str) -> Option<&str> {
+    LocalId::new(id).is_ok().then_some(id)
 }
 
 pub(super) fn explain(project: &Path) -> Result<Value> {
@@ -769,7 +789,6 @@ fn compute_package(project: &Path) -> Result<PackageContents> {
     let project = fs::canonicalize(project).context("resolving the Casework authoring project")?;
     let policy = load_and_check_policy(&project)?;
     check_source_descriptions(&project)?;
-    crate::policy::check(&project, &policy)?;
 
     let mut inputs = BTreeMap::from([(
         "casework.yaml".to_owned(),
@@ -1822,26 +1841,66 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
     })
 }
 
+/// Check every imported source description against `casework.yaml`, and
+/// refuse with every problem found, each placed in `casework.yaml`
+/// (CFG-DIAG-1, CFG-DIAG-5). A description that does not meet the BReg
+/// adapter contract is reported once, and nothing further is checked
+/// against it.
 fn check_source_descriptions(project: &Path) -> Result<()> {
-    let policy = load_and_check_policy(project)?;
+    let decoded = read_project(project)?;
+    let policy = &decoded.value;
+    let mut diagnostics = Vec::new();
     for (index, source) in policy.sources.iter().enumerate() {
+        let at = format!("/sources/{index}");
         let path = project_input_path(project, &source.description)?;
         let bytes = read_package_input(&path)?;
-        validate_breg_source_description(source, &bytes).map_err(|refusal| match refusal {
-            // The description is current; the policy names a field its
-            // source never published, so repeating source add cannot help.
-            registry_casework_breg::DescriptionRefusal::UnpublishedPolicyField {
-                path: key_path,
-                field,
-            } => anyhow::anyhow!(
-                "casework.yaml sources[{index}].{key_path} names source field {field}, which source description {} does not publish; name a field listed in that description's fields, or remove it from the policy",
-                path.display()
-            ),
-            _ => anyhow::anyhow!("source description {} does not match the exact BReg adapter contract bound to this source; repeat source add", path.display()),
-        })?;
-        check_source_review_binding(&policy, source, &path, &bytes)?;
+        if let Err(refusal) = validate_breg_source_description(source, &bytes) {
+            let finding = match refusal {
+                // The description is current; the policy names a field its
+                // source never published, so repeating source add cannot help.
+                registry_casework_breg::DescriptionRefusal::UnpublishedPolicyField {
+                    path: key_path,
+                    ..
+                } => ConfigFinding::new(
+                    "casework.source.unpublished-field",
+                    format!("{at}{key_path}"),
+                    "the imported source description does not publish this field",
+                    "Name a field listed in the source description's fields, or remove it from the policy.",
+                )
+                .with_related(format!("{at}/description"), "the source description is named here"),
+                _ => ConfigFinding::new(
+                    "casework.source-description.contract-mismatch",
+                    format!("{at}/description"),
+                    "the imported source description does not match the exact BReg adapter contract bound to this source",
+                    format!("Repeat source add: {}.", source_add_command(project, index)),
+                ),
+            };
+            diagnostics.push(finding.to_diagnostic(&decoded.document));
+            continue;
+        }
+        diagnostics.extend(check_source_review_binding(
+            project, &decoded, index, &bytes,
+        )?);
+        diagnostics.extend(
+            crate::policy::routing_findings(project, policy, index)?
+                .iter()
+                .map(|finding| finding.to_diagnostic(&decoded.document)),
+        );
     }
-    Ok(())
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(project_refusal(diagnostics))
+    }
+}
+
+/// The `source add` command that imports source `index` again. The source id
+/// is not repeated (CFG-SEC-3); the command names where it is written.
+fn source_add_command(project: &Path, index: usize) -> String {
+    format!(
+        "caseworkctl source add BREG_PROJECT --project {} --source-id SOURCE_ID --apply, where SOURCE_ID is the id at /sources/{index}/id",
+        crate::source_add::shell_word(&project.display().to_string())
+    )
 }
 
 /// Confirm the pinned description's declared review policy still resolves
@@ -1867,89 +1926,157 @@ fn check_source_descriptions(project: &Path) -> Result<()> {
 /// fault: the runtime resolves a producer by actor identity and is
 /// unaffected, but `source add` refuses to choose between two, so the
 /// project can no longer be repinned by the command that wrote the binding.
+/// The same pass refuses a source-context review kind whose displaySchema
+/// rejects what a described request discloses.
 ///
 /// This check is offline and only re-derives what the pinned description
 /// already asserts about itself against the policy on disk right now. It
 /// cannot detect drift in the BReg registry.yaml this description was
 /// compiled from after that compilation happened: confirming that would
 /// require re-deriving `sourceRevision`, which this check does not do.
-/// Every refusal below names the pinned `sourceRevision` and is worded to
-/// claim only that the binding is broken as pinned, never that the pin has
-/// been verified current.
+/// Every refusal below is worded to claim only that the binding is broken
+/// as pinned, never that the pin has been verified current, and names the
+/// pinned `review/policyId` in the description as a related location.
 fn check_source_review_binding(
-    policy: &CaseworkProject,
-    source: &SourcePolicy,
-    path: &Path,
+    project: &Path,
+    decoded: &Decoded<CaseworkProject>,
+    index: usize,
     bytes: &[u8],
-) -> Result<()> {
+) -> Result<Vec<Diagnostic>> {
+    let policy = &decoded.value;
+    let source = &policy.sources[index];
     let root: Value = serde_json::from_slice(bytes)
         .context("re-parsing a source description already validated as well-formed JSON")?;
     let described = match root.get("requests").and_then(Value::as_array) {
-        Some(requests) => requests.iter().collect::<Vec<_>>(),
-        None => vec![&root["request"]],
+        Some(requests) => requests
+            .iter()
+            .enumerate()
+            .map(|(position, request)| (format!("/requests/{position}"), request))
+            .collect::<Vec<_>>(),
+        None => vec![("/request".to_owned(), &root["request"])],
     };
-    for request in described {
-        check_request_review_binding(policy, source, path, &root, &request["review"])?;
-        crate::display_schema::check_described_request(policy, source, path, request)?;
+    let mut diagnostics = Vec::new();
+    for (request_at, request) in described {
+        diagnostics.extend(request_review_binding(
+            project,
+            decoded,
+            index,
+            &request_at,
+            &request["review"],
+        )?);
+        if let Some(refusal) = crate::display_schema::display_refusal(policy, source, request) {
+            diagnostics.push(
+                ConfigFinding::new(
+                    "casework.review-kind.display-hides-disclosure",
+                    format!("/reviewKinds/{}/displaySchema", refusal.kind),
+                    format!(
+                        "this displaySchema rejects what a source request can disclose to a reviewer, so Casework would hide those review tasks from every reviewer: {}",
+                        refusal.mismatches.join("; ")
+                    ),
+                    "Make this displaySchema admit each projected field's source schema under its API name, as bregctl explain change-requests reports it.",
+                )
+                .with_related(
+                    format!("/sources/{index}/requests/{}", refusal.request),
+                    "the request whose disclosure is rejected is declared here",
+                )
+                .to_diagnostic(&decoded.document),
+            );
+        }
     }
-    Ok(())
+    Ok(diagnostics)
 }
 
-fn check_request_review_binding(
-    policy: &CaseworkProject,
-    source: &SourcePolicy,
-    path: &Path,
-    root: &Value,
+fn request_review_binding(
+    project: &Path,
+    decoded: &Decoded<CaseworkProject>,
+    index: usize,
+    request_at: &str,
     review: &Value,
-) -> Result<()> {
+) -> Result<Option<Diagnostic>> {
     if review.get("mode").and_then(Value::as_str) == Some("none") {
-        return Ok(());
+        return Ok(None);
     }
-    let source_revision = root["sourceRevision"].as_str().context(
-        "source description sourceRevision was not a string despite passing description validation",
-    )?;
+    let policy = &decoded.value;
+    let source = &policy.sources[index];
     let policy_id = review["policyId"].as_str().context(
         "source description review.policyId was not a string despite passing description validation",
     )?;
-    let source_id = source.id.as_str();
-    let rendered_path = path.display();
-    let Some(kind) = policy.review_kinds.iter().find(|kind| kind.id == policy_id) else {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, but casework.yaml declares no reviewKinds[].id matching {policy_id:?} as pinned; declare a reviewKinds entry with id {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that resolves"
-        );
+    let pinned = nameable(policy_id).map_or_else(
+        || "a review kind".to_owned(),
+        |policy_id| format!("review kind {policy_id}"),
+    );
+    let at = format!("/sources/{index}/description");
+    let repin = source_add_command(project, index);
+    let named_here = "the source description that pins it is named here";
+    let finding = match policy
+        .review_kinds
+        .iter()
+        .position(|kind| kind.id == policy_id)
+    {
+        None => ConfigFinding::new(
+            "casework.source-description.unknown-review-kind",
+            at,
+            format!("the imported source description pins {pinned}, which reviewKinds does not declare"),
+            format!("Declare that review kind under reviewKinds, or repin one that resolves with {repin}."),
+        ),
+        Some(kind_index) => {
+            let kind = &policy.review_kinds[kind_index];
+            // Mirrors the producer filter `caseworkctl source add` applies
+            // when it chooses the producer it pins: an admitting producer is
+            // one whose sourceNamespaces contains this source's id and whose
+            // kinds contains the pinned policy id. Only the filter is
+            // mirrored, not `source add`'s exactly-one rule: that command has
+            // to pick the single identity it writes into the description,
+            // while the runtime resolves a producer by the authenticated
+            // actor's profile, issuer, and subject in
+            // ReviewRuntime::producer_for_actor. Two identities admitting one
+            // source and policy are a working failover pair, not a broken
+            // binding.
+            let admitted = policy.review_producers.iter().any(|producer| {
+                producer
+                    .source_namespaces
+                    .iter()
+                    .any(|namespace| namespace.as_str() == source.id)
+                    && producer.kinds.iter().any(|kind| kind.as_str() == policy_id)
+            });
+            if kind.purpose != ReviewKindPurpose::Approval {
+                ConfigFinding::new(
+                    "casework.source-description.review-kind-not-approval",
+                    format!("/reviewKinds/{kind_index}/purpose"),
+                    format!("the imported source description of /sources/{index} pins {pinned}, whose purpose must be approval"),
+                    format!("Write purpose: approval, or repin a review kind that qualifies with {repin}."),
+                )
+                .with_related(at, named_here)
+            } else if kind.context_strategy != ReviewContextStrategy::Source {
+                ConfigFinding::new(
+                    "casework.source-description.review-kind-not-source-context",
+                    format!("/reviewKinds/{kind_index}/contextStrategy"),
+                    format!("the imported source description of /sources/{index} pins {pinned}, whose contextStrategy must be source"),
+                    format!("Write contextStrategy: source, or repin a review kind that qualifies with {repin}."),
+                )
+                .with_related(at, named_here)
+            } else if !admitted {
+                ConfigFinding::new(
+                    "casework.source-description.review-not-admitted",
+                    at,
+                    format!("no review producer admits this source for {pinned}, which the imported source description pins"),
+                    format!("Add this source's id to the sourceNamespaces, and the review kind to the kinds, of a review producer under reviewProducers, or repin with {repin}."),
+                )
+                .with_related("/reviewProducers", "review producers are declared here")
+            } else {
+                return Ok(None);
+            }
+        }
     };
-    if kind.purpose != ReviewKindPurpose::Approval {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, which resolves to a reviewKinds entry whose purpose is not approval as pinned; set reviewKinds[].purpose to approval for {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that qualifies"
-        );
-    }
-    if kind.context_strategy != ReviewContextStrategy::Source {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, which resolves to a reviewKinds entry whose contextStrategy is not source as pinned; set reviewKinds[].contextStrategy to source for {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy that qualifies"
-        );
-    }
-    // Mirrors the producer filter `caseworkctl source add` applies at
-    // crates/registry-caseworkctl/src/source_add.rs:450-464: an admitting
-    // producer is one whose sourceNamespaces contains this source's id and
-    // whose kinds contains the pinned policy id. Only the filter is mirrored,
-    // not `source add`'s exactly-one rule: that command has to pick the single
-    // identity it writes into the description, while the runtime resolves a
-    // producer by the authenticated actor's profile, issuer, and subject in
-    // ReviewRuntime::producer_for_actor. Two identities admitting one source
-    // and policy are a working failover pair, not a broken binding.
-    let admitted = policy.review_producers.iter().any(|producer| {
-        producer
-            .source_namespaces
-            .iter()
-            .any(|namespace| namespace.as_str() == source_id)
-            && producer.kinds.iter().any(|kind| kind.as_str() == policy_id)
+    let mut diagnostic = finding.to_diagnostic(&decoded.document);
+    diagnostic.related.push(Related {
+        file: project.join(&source.description).display().to_string(),
+        line: None,
+        column: None,
+        path: format!("{request_at}/review/policyId"),
+        message: "the imported source description pins the review kind here".to_owned(),
     });
-    if !admitted {
-        bail!(
-            "source {source_id} description {rendered_path} pins review.policyId {policy_id:?} at sourceRevision {source_revision:?}, but casework.yaml admits no reviewProducers[] entry whose sourceNamespaces includes {source_id:?} and whose kinds includes {policy_id:?} as pinned; declare a reviewProducers[] entry admitting source {source_id:?} for review kind {policy_id:?} in casework.yaml, or re-run `caseworkctl source add` to repin a policy a producer admits"
-        );
-    }
-    Ok(())
+    Ok(Some(diagnostic))
 }
 
 /// Attach the audit destination an applying operator command writes to. It
@@ -3133,6 +3260,43 @@ mod tests {
     }
 
     #[test]
+    fn read_project_places_every_source_caseworkctl_cannot_connect() {
+        let request = "      - entity: scope-correction\n        queue: corrections\n";
+        let extra = (0..32)
+            .map(|index| format!("      - entity: extra-{index}\n        queue: corrections\n"))
+            .collect::<String>();
+        let yaml = CASEWORK_YAML
+            .replace("    adapter: breg\n", "    adapter: other\n")
+            .replace(request, &format!("{extra}{request}"));
+        assert_ne!(yaml, CASEWORK_YAML);
+        let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
+
+        let error = read_project(&project).unwrap_err();
+        let report = error.downcast_ref::<Report>().unwrap();
+        let placed = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            placed,
+            [
+                ("casework.source.unsupported-adapter", "/sources/0/adapter"),
+                ("casework.source.too-many-requests", "/sources/0/requests"),
+            ],
+            "{report}"
+        );
+        for diagnostic in report.diagnostics() {
+            let source = diagnostic.source.as_ref().unwrap();
+            assert_eq!(
+                source.file,
+                project.join("casework.yaml").display().to_string()
+            );
+            assert!(source.line.is_some(), "{report}");
+        }
+    }
+
+    #[test]
     fn check_source_descriptions_refuses_an_unresolved_review_policy_id() {
         let mut description: Value = serde_json::from_str(BREG_SOURCE_DESCRIPTION).unwrap();
         description["request"]["review"]["policyId"] = json!("missing-review-kind");
@@ -3140,8 +3304,19 @@ mod tests {
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
+        assert!(
+            error.contains("casework.source-description.unknown-review-kind"),
+            "{error}"
+        );
+        assert!(
+            error.contains("casework.yaml:26:18 /sources/0/description"),
+            "{error}"
+        );
         assert!(error.contains("missing-review-kind"), "{error}");
-        assert!(error.contains("sha256:source-revision"), "{error}");
+        assert!(
+            error.contains("professional-licences.json /request/review/policyId"),
+            "{error}"
+        );
     }
 
     // registrystack/registry-stack#1467 (CASE-32): a policy that names a
@@ -3149,8 +3324,12 @@ mod tests {
     // a stale binding, so repeating source add cannot fix it and the refusal
     // must not suggest it.
     fn assert_names_unpublished_policy_field(error: &str, key_path: &str) {
+        assert!(
+            error.contains("casework.source.unpublished-field"),
+            "{error}"
+        );
+        assert!(error.contains("casework.yaml:"), "{error}");
         assert!(error.contains(key_path), "{error}");
-        assert!(error.contains("priority"), "{error}");
         assert!(error.contains("does not publish"), "{error}");
         assert!(!error.contains("source add"), "{error}");
         assert!(!error.contains("adapter contract"), "{error}");
@@ -3168,7 +3347,7 @@ mod tests {
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
         assert_names_unpublished_policy_field(
             &error,
-            "sources[0].requests[0].contextProjection[4]",
+            " /sources/0/requests/0/contextProjection/4\n",
         );
     }
 
@@ -3184,7 +3363,7 @@ mod tests {
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
         assert_names_unpublished_policy_field(
             &error,
-            "sources[0].requests[0].displayReference.field",
+            " /sources/0/requests/0/displayReference/field\n",
         );
     }
 
@@ -3198,7 +3377,7 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert_names_unpublished_policy_field(&error, "sources[0].requests[0].projection[1]");
+        assert_names_unpublished_policy_field(&error, " /sources/0/requests/0/projection/1\n");
     }
 
     #[test]
@@ -3216,7 +3395,12 @@ mod tests {
             error.contains("does not match the exact BReg adapter contract bound to this source"),
             "{error}"
         );
-        assert!(error.contains("repeat source add"), "{error}");
+        assert!(
+            error.contains("casework.source-description.contract-mismatch"),
+            "{error}"
+        );
+        assert!(error.contains(" /sources/0/description\n"), "{error}");
+        assert!(error.contains("Repeat source add"), "{error}");
         assert!(!error.contains("does not publish"), "{error}");
     }
 
@@ -3311,7 +3495,11 @@ mod tests {
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("licensedActivities"), "{error}");
         assert!(
             error.contains("\"example-general-nursing-care\""),
@@ -3338,7 +3526,11 @@ mod tests {
         let (_root, project) = write_offline_project(CASEWORK_YAML, &description);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("licensedActivities"), "{error}");
         assert!(
             error.contains("\"example-general-nursing-care\""),
@@ -3372,7 +3564,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("supportingReference"), "{error}");
         assert!(error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
@@ -3388,7 +3584,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("record"), "{error}");
         assert!(error.contains("object"), "{error}");
         assert!(error.contains("string"), "{error}");
@@ -3477,7 +3677,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("supportingReference"), "{error}");
         assert!(error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
@@ -3503,7 +3707,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
         assert!(error.contains("authorizationConditions"), "{error}");
         assert!(error.contains("number"), "{error}");
@@ -3520,7 +3728,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
         assert!(error.contains("authorizationConditions"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
@@ -3539,7 +3751,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("allOf branch 1"), "{error}");
         assert!(error.contains("admits no value"), "{error}");
     }
@@ -3589,7 +3805,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("supportingReference"), "{error}");
         assert!(error.contains("supporting-reference"), "{error}");
         assert!(error.contains("additionalProperties"), "{error}");
@@ -3608,7 +3828,11 @@ mod tests {
         let (_root, project) = write_offline_project(&yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("review kind scope-correction"), "{error}");
+        assert!(
+            error.contains("casework.review-kind.display-hides-disclosure"),
+            "{error}"
+        );
+        assert!(error.contains(" /reviewKinds/0/displaySchema\n"), "{error}");
         assert!(error.contains("supportingReference"), "{error}");
         assert!(error.contains("patternProperties"), "{error}");
         assert!(error.contains("^supporting"), "{error}");
@@ -3671,10 +3895,13 @@ mod tests {
             write_offline_project(&renamed_namespace_yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("admits no reviewProducers"), "{error}");
-        assert!(error.contains("professional-licences"), "{error}");
+        assert!(
+            error.contains("casework.source-description.review-not-admitted"),
+            "{error}"
+        );
+        assert!(error.contains("no review producer admits"), "{error}");
         assert!(error.contains("scope-correction"), "{error}");
-        assert!(error.contains("sha256:source-revision"), "{error}");
+        assert!(error.contains(" /reviewProducers "), "{error}");
     }
 
     #[test]
@@ -3694,8 +3921,11 @@ mod tests {
             write_offline_project(&retargeted_kind_yaml, BREG_SOURCE_DESCRIPTION);
 
         let error = format!("{:#}", check_source_descriptions(&project).unwrap_err());
-        assert!(error.contains("admits no reviewProducers"), "{error}");
-        assert!(error.contains("professional-licences"), "{error}");
+        assert!(
+            error.contains("casework.source-description.review-not-admitted"),
+            "{error}"
+        );
+        assert!(error.contains("no review producer admits"), "{error}");
         assert!(error.contains("scope-correction"), "{error}");
     }
 

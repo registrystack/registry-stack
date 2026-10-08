@@ -43,6 +43,15 @@
   `--production`. `--deny-warnings` replaces `--deny-findings`. Migration
   steps and the old-to-new table are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: every refusal `caseworkctl check`, `explain`, `simulate`, and
+  `package` make of a project against its imported source descriptions is
+  its own diagnostic, placed at the line and column of `casework.yaml` it
+  concerns, with its own `casework.<area>.<condition>` code, where each was
+  the first problem alone under `caseworkctl.refused` at path `authoring`.
+  The `--against-breg-package` refusals keep their codes and are placed at
+  `/sources` or `/sources/N/description`; the stale pin no longer repeats
+  either revision. Migration steps and the old-to-new table are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

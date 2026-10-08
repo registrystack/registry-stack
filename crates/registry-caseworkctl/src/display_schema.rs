@@ -46,46 +46,70 @@ const MAXIMUM_SCHEMA_DEPTH: usize = 16;
 /// rather than materialized here.
 const MAXIMUM_WITNESS_ITEMS: u64 = 64;
 
-/// Refuse a described request whose bound source-context review kind cannot
+/// A described request whose bound source-context review kind cannot
+/// display what the request discloses.
+pub(crate) struct DisplayRefusal {
+    /// The review kind's index under `reviewKinds`.
+    pub(crate) kind: usize,
+    /// The declared request's index under the source's `requests`.
+    pub(crate) request: usize,
+    /// Every mismatch the source schemas prove, in field order.
+    pub(crate) mismatches: Vec<String>,
+}
+
+/// Whether a described request's bound source-context review kind cannot
 /// display what the request's projected fields disclose. A request that
 /// requires no review, names no declared kind, or binds a kind that is not
 /// source-context is left to the checks that refuse those bindings.
+pub(crate) fn display_refusal(
+    policy: &CaseworkProject,
+    source: &SourcePolicy,
+    request: &Value,
+) -> Option<DisplayRefusal> {
+    let policy_id = request
+        .pointer("/review/policyId")
+        .and_then(Value::as_str)?;
+    let kind = policy
+        .review_kinds
+        .iter()
+        .position(|kind| kind.id == policy_id)
+        .filter(|kind| {
+            policy.review_kinds[*kind].context_strategy == ReviewContextStrategy::Source
+        })?;
+    let entity = request["requestEntity"].as_str().unwrap_or_default();
+    let declared = source
+        .requests
+        .iter()
+        .position(|declared| declared.entity == entity)?;
+    let mismatches = display_mismatches(
+        &policy.review_kinds[kind].display_schema,
+        request,
+        &source.requests[declared].context_projection,
+    );
+    (!mismatches.is_empty()).then_some(DisplayRefusal {
+        kind,
+        request: declared,
+        mismatches,
+    })
+}
+
+/// Refuse a described request [`display_refusal`] finds a mismatch in.
 pub(crate) fn check_described_request(
     policy: &CaseworkProject,
     source: &SourcePolicy,
     description: &Path,
     request: &Value,
 ) -> Result<()> {
-    let Some(policy_id) = request.pointer("/review/policyId").and_then(Value::as_str) else {
+    let Some(refusal) = display_refusal(policy, source, request) else {
         return Ok(());
     };
-    let Some(kind) = policy
-        .review_kinds
-        .iter()
-        .find(|kind| kind.id == policy_id)
-        .filter(|kind| kind.context_strategy == ReviewContextStrategy::Source)
-    else {
-        return Ok(());
-    };
-    let entity = request["requestEntity"].as_str().unwrap_or_default();
-    let Some(declared) = source
-        .requests
-        .iter()
-        .find(|declared| declared.entity == entity)
-    else {
-        return Ok(());
-    };
-    let mismatches =
-        display_mismatches(&kind.display_schema, request, &declared.context_projection);
-    if mismatches.is_empty() {
-        return Ok(());
-    }
     bail!(
         "review kind {kind_id} displaySchema rejects what source {source_id} request entity {entity} in {description} can disclose to a reviewer, so Casework would hide those review tasks from every reviewer: {mismatches}; make the displaySchema of reviewKinds entry {kind_id} admit each projected field's source schema under its API name, as `bregctl explain change-requests` reports it",
-        kind_id = kind.id,
+        kind_id = policy.review_kinds[refusal.kind].id,
         source_id = source.id,
+        entity = source.requests[refusal.request].entity,
         description = description.display(),
-        mismatches = mismatches.join("; "),
+        mismatches = refusal.mismatches.join("; "),
     )
 }
 

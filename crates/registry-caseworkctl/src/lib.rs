@@ -501,20 +501,6 @@ where
                 );
                 return ExitCode::from(exit);
             }
-            if let Some(denied) = error.downcast_ref::<project::DeniedFindings>() {
-                write_failure(
-                    &machine_report(
-                        format,
-                        report_kind,
-                        json!({"ok":false,"command":"check","diagnostics":denied.0}),
-                        DOMAIN_REFUSAL_EXIT,
-                    ),
-                    format,
-                    stdout,
-                    stderr,
-                );
-                return ExitCode::from(DOMAIN_REFUSAL_EXIT);
-            }
             let (exit, diagnostic) = classify_failure(command_kind, &error);
             write_failure(
                 &machine_report(
@@ -1586,6 +1572,59 @@ mod tests {
     }
 
     #[test]
+    fn check_places_a_routing_value_the_source_description_rejects_in_casework_yaml() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("casework");
+        let example = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/casework/examples/multi-stage-routing-clocks");
+        std::fs::create_dir_all(project.join("sources")).unwrap();
+        let policy = std::fs::read_to_string(example.join("casework.yaml")).unwrap();
+        let rejected = policy.replace("{region: {equals: north}}", "{region: {equals: west}}");
+        assert_ne!(rejected, policy);
+        std::fs::write(project.join("casework.yaml"), rejected).unwrap();
+        for source in ["regional-register.json", "response-register.json"] {
+            std::fs::copy(
+                example.join("sources").join(source),
+                project.join("sources").join(source),
+            )
+            .unwrap();
+        }
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format=json"),
+                OsString::from("check"),
+                project.clone().into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        let report: Value = serde_json::from_slice(&stdout).unwrap();
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report:#}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(
+            diagnostic["code"],
+            "casework.routing.invalid-predicate-value"
+        );
+        assert_eq!(
+            diagnostic["path"],
+            "/sources/0/requests/0/routing/0/when/fields/region"
+        );
+        assert_eq!(
+            diagnostic["source"]["file"],
+            project.join("casework.yaml").display().to_string()
+        );
+        assert_eq!(diagnostic["source"]["line"], 28);
+        assert!(!diagnostic["message"].as_str().unwrap().contains("west"));
+    }
+
+    #[test]
     fn check_reports_the_exact_broken_review_policy_binding() {
         let root = crate::canonical_tempdir();
         let project = root.path().join("casework");
@@ -1613,7 +1652,7 @@ mod tests {
                 OsString::from("caseworkctl"),
                 OsString::from("--format=json"),
                 OsString::from("check"),
-                project.into_os_string(),
+                project.clone().into_os_string(),
             ],
             &mut stdout,
             &mut stderr,
@@ -1623,14 +1662,22 @@ mod tests {
         let report: Value = serde_json::from_slice(&stdout).unwrap();
         let diagnostic = &report["diagnostics"][0];
         let message = diagnostic["message"].as_str().unwrap();
-        assert!(message.contains("regional-register"), "{message}");
         assert!(message.contains("missing-review-kind"), "{message}");
-        assert!(
-            message.contains("sha256:regional-source-revision"),
-            "{message}"
+        assert!(!message.contains("sha256:"), "{message}");
+        assert_eq!(
+            diagnostic["code"],
+            "casework.source-description.unknown-review-kind"
         );
-        assert_eq!(diagnostic["artifact"], "authoring_input");
-        assert_eq!(diagnostic["path"], "authoring");
+        assert_eq!(diagnostic["path"], "/sources/0/description");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            project.join("casework.yaml").display().to_string()
+        );
+        assert_eq!(
+            diagnostic["related"][0]["file"],
+            regional_path.display().to_string()
+        );
+        assert_eq!(diagnostic["related"][0]["path"], "/request/review/policyId");
     }
 
     #[test]

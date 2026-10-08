@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use registry_casework_core::{
-    check_routing_policy, evaluate_activity_clock, evaluate_routing, evaluate_subject_clock,
-    CaseworkProject, ClockPolicy, HolidaySetDocument, ReviewTiming, RoutingActivity,
+    evaluate_activity_clock, evaluate_routing, evaluate_subject_clock, routing_policy_findings,
+    CaseworkProject, ClockPolicy, ConfigFinding, HolidaySetDocument, ReviewTiming, RoutingActivity,
     RoutingContext, RoutingFieldDescriptor, RoutingSourceMetadata, SourcePolicy,
     SourceRequestPolicy,
 };
@@ -17,33 +17,48 @@ use serde_json::{json, Value};
 
 pub(crate) const MAXIMUM_SOURCE_DESCRIPTION_BYTES: usize = 1024 * 1024;
 
-/// Compile source metadata against authored routing. Runtime startup, explain,
-/// and simulation use this same boundary.
-pub(super) fn check(project: &Path, policy: &CaseworkProject) -> Result<()> {
+/// Compile one source's metadata against its authored routing, placing each
+/// finding under `/sources/{index}/requests/{n}` in `casework.yaml`. Runtime
+/// startup, check, explain, and simulation use this same boundary.
+pub(super) fn routing_findings(
+    project: &Path,
+    policy: &CaseworkProject,
+    index: usize,
+) -> Result<Vec<ConfigFinding>> {
     let queues = policy
         .queues
         .iter()
         .map(|queue| queue.id.clone())
         .collect::<BTreeSet<_>>();
-    for source in &policy.sources {
-        let description = load_source_description(project, source)?;
-        for request in &source.requests {
-            let metadata = metadata_for_request(&description, request)?;
-            check_routing_policy(
+    let source = &policy.sources[index];
+    let description = load_source_description(project, source)?;
+    let mut findings = Vec::new();
+    for (request_index, request) in source.requests.iter().enumerate() {
+        let metadata = metadata_for_request(&description, request)?;
+        findings.extend(
+            routing_policy_findings(
                 &request.queue,
                 &request.projection,
                 &request.routing,
                 &queues,
                 Some(&metadata),
             )
-            .with_context(|| request_path(source, request))?;
-        }
+            .into_iter()
+            .map(|routing| {
+                ConfigFinding::new(
+                    routing.reason.code(),
+                    format!("/sources/{index}/requests/{request_index}{}", routing.path),
+                    routing.reason.message(),
+                    routing.reason.suggested_action(),
+                )
+            }),
+        );
     }
-    Ok(())
+    Ok(findings)
 }
 
+/// Explain a project `check_source_descriptions` already accepted.
 pub(super) fn explain(project: &Path, policy: &CaseworkProject) -> Result<Value> {
-    check(project, policy)?;
     let mut requests = Vec::new();
     for source in &policy.sources {
         let description = load_source_description(project, source)?;
@@ -85,7 +100,6 @@ pub(super) fn simulate(
     policy: &CaseworkProject,
     fixture_path: &Path,
 ) -> Result<Value> {
-    check(project, policy)?;
     let fixture: SimulationFixture = load_yaml(fixture_path, "simulation fixture")?;
     let source = policy
         .sources
