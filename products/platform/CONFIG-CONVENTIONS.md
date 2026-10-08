@@ -222,8 +222,7 @@ resolve to a number, boolean, or null (`1:`, `true:`, `~:`) is refused
 **CFG-YAML-6 (MUST). Input is bounded.** A document larger than 1 MiB is
 refused before parsing (`yaml.too-large`), naming the bound, and a document
 of exactly 1 MiB is accepted; the bound is the same for every format, YAML or
-JSON; a product may lower it for a format, never raise it, and declares the
-lower bound in the format's registry entry. A document
+JSON, and no reader sets another, lower or higher. A document
 nested deeper than 128 levels of mappings and lists is refused
 (`yaml.too-deep`), naming the bound. Input is UTF-8; a leading byte-order mark
 is accepted and ignored; LF and CRLF line endings are both accepted.
