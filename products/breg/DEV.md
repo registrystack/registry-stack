@@ -263,6 +263,12 @@ claims for another product, such as Casework. The empty list gives that client
 no BReg access-profile binding. It is registered with the local issuer but omitted
 from the BReg runtime's `allowedClients`, so it cannot call BReg.
 
+When no client is left to name in `allowedClients` (every client is profile-free
+and none sets `allowBregAccess`), the session writes `allowedClients:
+unrestricted`, so the runtime accepts a token from every client of its local
+issuer. The local issuer is the only issuer the session trusts, and governed
+profiles and token scopes still authorize each call.
+
 An integration client that must call BReg without becoming a journey or seed
 binding must opt in with `allowBregAccess: true`. Use that flag only when its
 scopes and authority claims are intentionally sufficient for the BReg profiles
