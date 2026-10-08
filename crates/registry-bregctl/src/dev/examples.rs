@@ -1686,7 +1686,10 @@ mod tests {
         let report = catalogue_refusal(&json!({"version":1,"scenarios":[]}));
         assert_eq!(
             located(&report),
-            [("config.missing-envelope", "", Some(1))],
+            [
+                ("config.missing-envelope", "", Some(1)),
+                ("config.removed-key", "/version", Some(3))
+            ],
             "{}",
             report.render_human()
         );

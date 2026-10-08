@@ -4188,7 +4188,7 @@ fn a_clients_file_without_the_header_is_refused_naming_the_current_one() {
     let report = clients_refusal(format!("version: 1\n{ONE_CLIENT}").as_bytes());
     assert_eq!(
         codes(&report),
-        ["config.missing-envelope"],
+        ["config.missing-envelope", "config.removed-key"],
         "{}",
         report.render_human()
     );
