@@ -126,6 +126,8 @@ Reader codes have two segments; product codes have three.
 | `yaml.syntax` | the YAML is not well formed and no narrower code applies |
 | `yaml.tab-indentation` | a tab is used for indentation |
 | `yaml.unclosed-quote` | a quoted value is not closed, or its continuation is not indented |
+| `yaml.invalid-escape` | a backslash in a double-quoted value starts an escape sequence YAML does not define |
+| `yaml.text-after-quote` | text follows the closing quote of a quoted value |
 | `yaml.colon-in-plain-value` | a `: ` inside an unquoted value starts a mapping |
 | `yaml.unexpected-end` | the document ends inside an unfinished construct |
 | `yaml.duplicate-key` | a mapping holds the same key twice |

@@ -667,10 +667,18 @@ impl Builder<'_, '_> {
             .map(|line| line.strip_suffix('\r').unwrap_or(line))
             .collect();
 
-        let leading_tab = [at.line, at.line + 1]
-            .into_iter()
-            .find_map(|line| leading_tab_position(&lines, line));
-        if info.contains("tab") || leading_tab.is_some() {
+        // A tab the parser names may indent the line after its marker. Any
+        // other error blames a tab only when it indents the error's own line
+        // up to the error's column.
+        let parser_names_a_tab = info.contains("tab");
+        let leading_tab = if parser_names_a_tab {
+            [at.line, at.line + 1]
+                .into_iter()
+                .find_map(|line| leading_tab_position(&lines, line))
+        } else {
+            leading_tab_position(&lines, at.line).filter(|tab| tab.column <= at.column)
+        };
+        if parser_names_a_tab || leading_tab.is_some() {
             let tab = leading_tab
                 .or_else(|| tab_at_or_after(&lines, at))
                 .unwrap_or(at);
@@ -679,6 +687,24 @@ impl Builder<'_, '_> {
                 pointer,
                 Some(tab),
                 messages::tab_indentation(),
+            );
+        }
+        if info.contains("quoted scalar")
+            && (info.contains("escape") || info.contains("hexadecimal"))
+        {
+            return Problem::error(
+                "yaml.invalid-escape",
+                pointer,
+                Some(at),
+                messages::invalid_escape(),
+            );
+        }
+        if info.starts_with("invalid trailing content after") {
+            return Problem::error(
+                "yaml.text-after-quote",
+                pointer,
+                Some(at),
+                messages::text_after_quote(closing_quote_before(&lines, at)),
             );
         }
         if info.contains("quoted scalar") {
@@ -807,6 +833,16 @@ fn leading_tab_position(lines: &[&str], line: usize) -> Option<Position> {
         }
     }
     None
+}
+
+/// The quote that closed the value before the text at `at`.
+fn closing_quote_before(lines: &[&str], at: Position) -> Option<char> {
+    let text = lines.get(at.line.checked_sub(1)?)?;
+    text.chars()
+        .take(at.column.saturating_sub(1))
+        .filter(|c| !matches!(c, ' ' | '\t'))
+        .last()
+        .filter(|c| matches!(c, '\'' | '"'))
 }
 
 fn tab_at_or_after(lines: &[&str], at: Position) -> Option<Position> {

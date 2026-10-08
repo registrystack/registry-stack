@@ -235,6 +235,8 @@ each with line, column, and a fix:
 |---|---|---|
 | `yaml.tab-indentation` | a tab character in indentation | Indent with spaces. |
 | `yaml.unclosed-quote` | a quoted value with no closing quote | Close the quote. |
+| `yaml.invalid-escape` | an escape YAML does not define in a double-quoted value (`"C:\Users"`) | Use single quotes, or double the backslash. |
+| `yaml.text-after-quote` | text after the closing quote of a quoted value (`'it's'`, `"x" y`) | Put the whole value inside the quotes. |
 | `yaml.colon-in-plain-value` | `: ` inside an unquoted value (`because: Overdue: move it`) | Quote the value. |
 | `yaml.unexpected-end` | input that ends inside a list or mapping | Complete or remove the unfinished item. |
 | `yaml.syntax` | any other syntax error | Check the indentation and punctuation at this position. |

@@ -201,6 +201,8 @@ const SYNTAX_CODES: &[&str] = &[
     "yaml.unclosed-quote",
     "yaml.colon-in-plain-value",
     "yaml.unexpected-end",
+    "yaml.invalid-escape",
+    "yaml.text-after-quote",
     "yaml.syntax",
 ];
 

@@ -24,6 +24,8 @@ pub const CODES: &[CodeInfo] = &[
     CodeInfo { code: "yaml.syntax", meaning: "the YAML is not well formed and no narrower code applies" },
     CodeInfo { code: "yaml.tab-indentation", meaning: "a tab is used for indentation" },
     CodeInfo { code: "yaml.unclosed-quote", meaning: "a quoted value is not closed, or its continuation is not indented" },
+    CodeInfo { code: "yaml.invalid-escape", meaning: "a backslash in a double-quoted value starts an escape sequence YAML does not define" },
+    CodeInfo { code: "yaml.text-after-quote", meaning: "text follows the closing quote of a quoted value" },
     CodeInfo { code: "yaml.colon-in-plain-value", meaning: "a `: ` inside an unquoted value starts a mapping" },
     CodeInfo { code: "yaml.unexpected-end", meaning: "the document ends inside an unfinished construct" },
     CodeInfo { code: "yaml.duplicate-key", meaning: "a mapping holds the same key twice" },
@@ -207,6 +209,23 @@ pub(crate) fn unclosed_quote() -> Text {
         "a quoted value starting here is not closed, or continues onto a line that is not indented",
         "Close the quote.",
     )
+}
+
+pub(crate) fn invalid_escape() -> Text {
+    text(
+        "a backslash in the double-quoted value starting here begins an escape sequence YAML does not define",
+        "Use single quotes, or double the backslash.",
+    )
+}
+
+/// `quote` is the quote that closed the value, when the reader found it.
+pub(crate) fn text_after_quote(quote: Option<char>) -> Text {
+    let action = match quote {
+        Some('\'') => "Put the whole value inside the quotes, and write a quote inside single quotes as two (`''`).",
+        Some('"') => "Put the whole value inside the quotes, and write a quote inside double quotes as `\\\"`.",
+        _ => "Put the whole value inside the quotes.",
+    };
+    text("text follows the closing quote of a quoted value", action)
 }
 
 pub(crate) fn colon_in_plain_value() -> Text {

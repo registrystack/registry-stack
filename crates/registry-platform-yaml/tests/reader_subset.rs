@@ -386,6 +386,72 @@ fn cfg_yaml_8_unclosed_quote() {
 }
 
 #[test]
+fn cfg_yaml_8_an_unknown_escape_in_double_quotes_names_the_backslash() {
+    for text in [
+        "path: \"C:\\Users\\me\"\n",
+        "path: \"\\q\"\n",
+        "path: \"\\x4\"\n",
+    ] {
+        let report = scan_refusal(text);
+        assert_diagnostic(
+            only(&report),
+            "yaml.invalid-escape",
+            "/path",
+            (1, 7),
+            "a backslash in the double-quoted value starting here begins an escape sequence YAML does not define",
+            "Use single quotes, or double the backslash.",
+        );
+    }
+}
+
+#[test]
+fn cfg_yaml_8_text_after_a_closing_quote_is_named_as_such() {
+    let report = scan_refusal("name: 'it's'\n");
+    assert_diagnostic(
+        only(&report),
+        "yaml.text-after-quote",
+        "/name",
+        (1, 11),
+        "text follows the closing quote of a quoted value",
+        "Put the whole value inside the quotes, and write a quote inside single quotes as two (`''`).",
+    );
+    let report = scan_refusal("name: \"x\" y\n");
+    assert_diagnostic(
+        only(&report),
+        "yaml.text-after-quote",
+        "/name",
+        (1, 11),
+        "text follows the closing quote of a quoted value",
+        "Put the whole value inside the quotes, and write a quote inside double quotes as `\\\"`.",
+    );
+}
+
+#[test]
+fn cfg_yaml_8_a_tab_on_a_later_line_is_not_blamed() {
+    let report = scan_refusal("tags: [a, b]]\n\t# note\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.syntax", "{report}");
+    assert_eq!(at(diagnostic).0, 1);
+    let report = scan_refusal("name: x: y\n\t# note\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "yaml.colon-in-plain-value", "{report}");
+    assert_eq!(at(diagnostic).0, 1);
+}
+
+#[test]
+fn cfg_yaml_8_a_tab_indenting_a_later_block_line_is_still_named() {
+    for (text, line) in [("a:\n  b: 1\n\tc: 2\n", 3), ("- a\n\t- b\n", 2)] {
+        let report = scan_refusal(text);
+        let diagnostic = only(&report);
+        assert_eq!(
+            diagnostic.code, "yaml.tab-indentation",
+            "{text:?}: {report}"
+        );
+        assert_eq!(at(diagnostic), (line, 1), "{text:?}");
+    }
+}
+
+#[test]
 fn cfg_yaml_8_colon_in_plain_value() {
     let report = scan_refusal("reason:\n  because: Overdue: move it\n");
     let diagnostic = only(&report);
@@ -430,6 +496,8 @@ fn cfg_yaml_8_syntax_codes_are_the_closed_list() {
         "yaml.unclosed-quote",
         "yaml.colon-in-plain-value",
         "yaml.unexpected-end",
+        "yaml.invalid-escape",
+        "yaml.text-after-quote",
         "yaml.syntax",
     ];
     for text in [
@@ -443,6 +511,7 @@ fn cfg_yaml_8_syntax_codes_are_the_closed_list() {
         "key: [a, b]]\n",
         "- a\nb: c\n",
         "a: \"\\q\"\n",
+        "a: 'it's'\n",
     ] {
         let report = scan_refusal(text);
         let diagnostic = only(&report);
