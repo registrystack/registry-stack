@@ -852,6 +852,74 @@ fn cfg_sec_3_a_message_from_a_type_is_never_passed_through() {
 }
 
 #[test]
+fn cfg_sec_3_a_checking_type_reads_as_one_sentence_under_another_deserializer() {
+    assert_eq!(
+        Invalid::expected("an even number", "Write an even number.").to_string(),
+        "expected an even number"
+    );
+    assert_eq!(
+        Invalid::out_of_range(1, 10).to_string(),
+        "expected a whole number from 1 to 10"
+    );
+    let errors = [
+        serde_json::from_str::<LocalId>("\"A\"").unwrap_err(),
+        serde_json::from_str::<Url>("\"x\"").unwrap_err(),
+        serde_json::from_str::<Digest>("\"x\"").unwrap_err(),
+        serde_json::from_str::<BoundedU32<1, 10>>("11").unwrap_err(),
+        serde_json::from_str::<UniqueList<String>>("[\"a\", \"a\"]").unwrap_err(),
+    ];
+    for error in errors {
+        let text = error.to_string();
+        assert!(!text.contains('\u{1f}'), "{text:?}");
+        assert!(!text.contains("registry-platform-yaml"), "{text:?}");
+        assert!(
+            text.starts_with("expected ") || text.starts_with("item "),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn cfg_sec_3_into_error_words_a_checking_type_like_custom() {
+    #[derive(Debug)]
+    struct Even;
+
+    impl<'de> Deserialize<'de> for Even {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Even, D::Error> {
+            let value = u32::deserialize(deserializer)?;
+            if value.is_multiple_of(2) {
+                Ok(Even)
+            } else {
+                Err(Invalid::expected("an even whole number", "Write an even number.").into_error())
+            }
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Holder {
+        workers: Even,
+    }
+
+    let report = refusal::<Holder>("workers: 3\n");
+    assert_diagnostic(
+        only(&report),
+        "config.invalid-value",
+        "/workers",
+        (3, 10),
+        "expected an even whole number",
+        "Write an even number.",
+    );
+    let error = serde_json::from_str::<Holder>("{\"workers\": 3}").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("expected an even whole number"),
+        "{error}"
+    );
+}
+
+#[test]
 fn cfg_sec_3_an_unknown_variant_names_the_accepted_values_only() {
     let report = refusal::<Everything>("mode: strictest\n");
     assert_diagnostic(

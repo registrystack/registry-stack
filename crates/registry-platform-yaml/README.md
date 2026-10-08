@@ -63,7 +63,7 @@ The public surface:
 | `Diagnostic`, `Report`, `Severity`, `Source`, `Related` | The one diagnostic shape (CFG-DIAG-1), JSON and human rendering. |
 | `CODES` | Every reader code and its meaning. |
 | `ScalarHook`, `ScalarSite`, `Refusal` | Inspect or replace scalars while the tree is built. |
-| `Invalid` | What a checking type returns: the expectation and the fix, never the value. |
+| `Invalid`, `Invalid::into_error()` | What a checking type returns: the expectation and the fix, never the value. `into_error()` turns it into any deserializer's error. |
 | `LocalId`, `ExternalId`, `Digest`, `Url`, `ProjectIdentity`, `DataLiteral` | Shared value types (CFG-ID, CFG-VAL). |
 | `BoundedU32<MIN, MAX>`, `BoundedU64<MIN, MAX>` | Integers with both bounds in the type and the schema (CFG-QTY-4). |
 | `UniqueList<T>`, `UniqueIdList<T>` with `Identified` | A set (`config.duplicate-item`) and a list of named items (`config.duplicate-id`) (CFG-ID-5, CFG-ID-6). |
@@ -239,6 +239,14 @@ ships a replacement for each (CFG-SCHEMA-8).
 
 In every union, every variant is a struct variant, `Variant {}` when it has
 no members, so a variant refuses unknown keys like any struct.
+
+Closedness holds under the reader only. The shared types and the recipes
+still decode under `serde_json` or another deserializer, and an `Invalid`
+then shows its sentence alone (`expected ...`), but nothing refuses an
+unknown key the type does not refuse itself: a struct without
+`deny_unknown_fields` and every `tagged_union!` variant drop one silently.
+An HTTP body or a JSON file that reuses these types is closed only when it
+is read through the reader.
 
 A member given under two spellings the type accepts (an `alias`) is
 `config.duplicate-key` at the second key.

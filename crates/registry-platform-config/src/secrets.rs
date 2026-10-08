@@ -100,10 +100,11 @@ impl<'de> serde::Deserialize<'de> for SecretReference {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = <String as serde::Deserialize>::deserialize(deserializer)?;
         Self::parse(value).map_err(|_| {
-            serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
+            registry_platform_yaml::Invalid::expected(
                 "an exact secret:env/NAME or secret:file/name reference",
                 "Write the reference as secret:env/NAME or secret:file/name.",
-            ))
+            )
+            .into_error()
         })
     }
 }

@@ -43,13 +43,18 @@ const PROTOCOL: &str = "registry-platform-yaml";
 const SEPARATOR: char = '\u{1f}';
 const PROBE_VARIANT: &str = "\u{0}registry-platform-yaml/no-such-variant";
 
-/// An error a product's own `Deserialize` or `TryFrom` code reports through
-/// [`serde::de::Error::custom`], so the reader words it as one of its own
-/// diagnostics at the node being decoded.
+/// An error a product's own `Deserialize` or `TryFrom` code reports, so the
+/// reader words it as one of its own diagnostics at the node being decoded.
+///
+/// A `Deserialize` impl returns `invalid.into_error()`; a `TryFrom` used
+/// through `#[serde(try_from = "...")]` returns the `Invalid` itself. Both
+/// reach the reader through [`serde::de::Error::custom`], which a product may
+/// also call directly.
 ///
 /// The texts are `&'static str`, so they cannot carry a value read from the
-/// file (CFG-SEC-3). A deserializer other than the reader shows a readable
-/// sentence followed by the reader's markers.
+/// file (CFG-SEC-3). Plain `Display` (`{}`) writes only the sentence, which
+/// is what a deserializer other than the reader shows; the reader reads the
+/// whole error through the alternate form (`{:#}`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Invalid(InvalidKind);
 
@@ -98,27 +103,54 @@ impl Invalid {
     pub(crate) fn duplicate_id(first: usize, second: usize) -> Invalid {
         Invalid(InvalidKind::DuplicateId { first, second })
     }
+
+    /// This error as any deserializer's error type:
+    /// `serde::de::Error::custom(self)`. A `Deserialize` impl returns
+    /// `Err(Invalid::expected(..).into_error())`.
+    pub fn into_error<E: de::Error>(self) -> E {
+        E::custom(self)
+    }
 }
 
+/// `{}` writes the sentence only. `{:#}` adds the fields the reader reads
+/// back, separated by U+001F; only the reader asks for it.
 impl fmt::Display for Invalid {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = SEPARATOR;
         match &self.0 {
-            InvalidKind::Expected { expected, action } => write!(
-                formatter,
-                "expected {expected}{s}{PROTOCOL}{s}expected{s}{expected}{s}{action}"
-            ),
+            InvalidKind::Expected { expected, .. } => write!(formatter, "expected {expected}")?,
             InvalidKind::OutOfRange { minimum, maximum } => write!(
                 formatter,
-                "expected a whole number from {minimum} to {maximum}{s}{PROTOCOL}{s}out-of-range{s}{minimum}{s}{maximum}"
+                "expected a whole number from {minimum} to {maximum}"
+            )?,
+            InvalidKind::DuplicateItem { first, second } => {
+                write!(formatter, "item {second} repeats item {first}")?
+            }
+            InvalidKind::DuplicateId { first, second } => {
+                write!(formatter, "item {second} repeats the id of item {first}")?
+            }
+        }
+        if !formatter.alternate() {
+            return Ok(());
+        }
+        let s = SEPARATOR;
+        match &self.0 {
+            InvalidKind::Expected { expected, action } => {
+                write!(
+                    formatter,
+                    "{s}{PROTOCOL}{s}expected{s}{expected}{s}{action}"
+                )
+            }
+            InvalidKind::OutOfRange { minimum, maximum } => write!(
+                formatter,
+                "{s}{PROTOCOL}{s}out-of-range{s}{minimum}{s}{maximum}"
             ),
             InvalidKind::DuplicateItem { first, second } => write!(
                 formatter,
-                "item {second} repeats item {first}{s}{PROTOCOL}{s}duplicate-item{s}{first}{s}{second}"
+                "{s}{PROTOCOL}{s}duplicate-item{s}{first}{s}{second}"
             ),
             InvalidKind::DuplicateId { first, second } => write!(
                 formatter,
-                "item {second} repeats the id of item {first}{s}{PROTOCOL}{s}duplicate-id{s}{first}{s}{second}"
+                "{s}{PROTOCOL}{s}duplicate-id{s}{first}{s}{second}"
             ),
         }
     }
@@ -248,8 +280,10 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl de::Error for Error {
+    /// The alternate form carries an [`Invalid`]'s fields; any other text is
+    /// never shown.
     fn custom<T: fmt::Display>(message: T) -> Error {
-        Error::unlocated(Kind::Custom(message.to_string()))
+        Error::unlocated(Kind::Custom(format!("{message:#}")))
     }
 
     fn invalid_type(_: de::Unexpected<'_>, expected: &dyn de::Expected) -> Error {

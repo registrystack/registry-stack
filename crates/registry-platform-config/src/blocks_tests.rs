@@ -531,6 +531,13 @@ fn a_secret_reference_reads_and_writes_as_its_text() {
     let error = serde_json::from_value::<SecretReference>(serde_json::json!("literal-value"))
         .expect_err("literal refused");
     assert!(!error.to_string().contains("literal-value"), "{error}");
+    assert!(!error.to_string().contains('\u{1f}'), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("expected an exact secret:env/NAME or secret:file/name reference"),
+        "{error}"
+    );
     let ordered = std::collections::BTreeSet::from([
         SecretReference::parse("secret:file/b").unwrap(),
         SecretReference::parse("secret:file/a").unwrap(),
