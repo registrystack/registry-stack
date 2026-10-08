@@ -110,15 +110,23 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="render",
         loader_sources=("crates/registry-render/src",),
-        runtime_schema=Exemption("Render publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/render/schemas/runtime.schema.json",
+        shared_blocks=(
+            "Digest",
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "ListenerBind",
+            "PackageConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+        ),
         reference_refusal=TestRef(
             "crates/registry-render/src/runtime.rs",
             "environment_expressions_substitute_values_but_never_secret_references",
         ),
         authored_refusal=TestRef(
             "crates/registry-render/src/manifest.rs",
-            "an_authored_manifest_carrying_an_environment_expression_is_refused",
+            "cfg_sec_2_an_authored_manifest_carrying_an_environment_expression_is_refused",
         ),
         digest_mismatch=TestRef(
             "crates/registry-render/tests/serve.rs",

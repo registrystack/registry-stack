@@ -95,6 +95,10 @@ rather than held for the stable release.
    `render.runtime.public-bind` by every command that reads the file; it was
    refused only when serve started. Migration: a script that matched the
    previous sentence should match the diagnostic code instead.
+10. **Versions count from 1** (CFG-QTY-4). `bundleVersion` and each
+    document's `version` are 1 to 4294967295; 0 was accepted and is now
+    refused with `config.out-of-range` at the member. Migration: a bundle or
+    document at version 0 moves to 1, and the next change to 2.
 
 ## Other changes
 
@@ -102,6 +106,12 @@ rather than held for the stable release.
   `# yaml-language-server: $schema=...` line first in the manifest and in
   each label table (CFG-SCHEMA-7). It refuses a `--locale` that is not a
   local identifier.
+- JSON Schemas for `manifest.yaml`, `labels/<locale>.yaml`, and the runtime
+  file are generated from the types Render reads and published under
+  `products/render/schemas` with the `$id`s the `init` modelines name
+  (CFG-SCHEMA-2). `editors/configure.py render <bundle>` maps them to the
+  bundle's `manifest.yaml`, `labels/*.yaml`, and a `runtime.yaml` beside them.
+  A minimal runtime file is `products/render/examples/runtime.yaml`.
 
 ## Diagnostic codes, old to new
 

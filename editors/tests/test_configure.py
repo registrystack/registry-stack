@@ -188,6 +188,24 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(len(tasks), 2)
         self.assertEqual({task["command"] for task in tasks}, {"bregctl", "caseworkctl"})
 
+    def test_render_bundle_maps_its_manifest_label_tables_and_runtime(self):
+        bundle = self.project("render", "manifest.yaml", "products/render/bundles/receipt/manifest.yaml")
+        configure.configure("render", bundle, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = bundle / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {
+                (managed / "bundle.schema.json").as_uri(): [str(bundle / "manifest.yaml")],
+                (managed / "labels.schema.json").as_uri(): [str(bundle / "labels/*.yaml")],
+                (managed / "runtime.schema.json").as_uri(): [str(bundle / "runtime.yaml")],
+            },
+        )
+        self.assertEqual(
+            (managed / "labels.schema.json").read_bytes(),
+            (ROOT / "products/render/schemas/labels.schema.json").read_bytes(),
+        )
+
     def test_check_task_uses_product_cli_shape(self):
         project = self.workspace / "sample"
         document = project / "metadata.yaml"

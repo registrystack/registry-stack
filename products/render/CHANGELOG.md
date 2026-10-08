@@ -31,6 +31,11 @@
   diagnostic shape on standard error, each at its line and column. A public
   `listener.bind` is refused wherever the file is read, not only when serve
   starts.
+- BREAKING: `bundleVersion` and each document's `version` count from 1; 0 is
+  refused with `config.out-of-range`.
+- JSON Schemas for the bundle manifest, label tables, and runtime file are
+  generated from the reader types under `products/render/schemas`, and
+  `editors/configure.py render` maps them.
 - Rebuild every package with `registry-render package` and repin
   `package.expectedDigest`: the maintained example digests moved, and their
   PDF and data hashes did not.

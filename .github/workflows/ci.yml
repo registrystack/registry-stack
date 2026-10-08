@@ -591,6 +591,10 @@ jobs:
         working-directory: products/manifest
         run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 
+      - name: Reproduce the Render schemas
+        if: matrix.name == 'render'
+        run: cargo test --locked -p registry-render --features schema --lib schema::
+
       - name: Report disk usage
         if: always()
         run: |

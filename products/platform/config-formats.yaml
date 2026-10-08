@@ -2560,7 +2560,13 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
       kind: RenderBundle
-    schema: none
+    schema:
+      path: products/render/schemas/bundle.schema.json
+      id: https://id.registrystack.org/schemas/render/bundle/bundle.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-render --features schema --example render-schema -- --output products/render/schemas
+      driftCheck: crates/registry-render/src/schema.rs
+      differentialTest: crates/registry-render/src/schema.rs
     reader:
       crate: registry-render
       file: crates/registry-render/src/manifest.rs
@@ -2569,7 +2575,7 @@ formats:
     check: registry-render check --bundle {project}
     example: products/render/bundles/receipt/manifest.yaml
     conformance:
-      requiredText: /documents/0/id
+      requiredText: none
       optionalText: none
       integer: /documents/0/version
       boolean: none
@@ -2594,14 +2600,20 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
       kind: RenderLabels
-    schema: none
+    schema:
+      path: products/render/schemas/labels.schema.json
+      id: https://id.registrystack.org/schemas/render/labels/labels.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-render --features schema --example render-schema -- --output products/render/schemas
+      driftCheck: crates/registry-render/src/schema.rs
+      differentialTest: crates/registry-render/src/schema.rs
     reader:
       crate: registry-render
       file: crates/registry-render/src/labels.rs
       function: read_labels
       type: LabelsFile
     check: registry-render check --bundle {project}
-    example: none
+    example: products/render/bundles/certificate/labels/en.yaml
     conformance:
       requiredText: none
       optionalText: none
@@ -2625,22 +2637,32 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
       kind: RenderRuntimeConfig
-    schema: none
+    schema:
+      path: products/render/schemas/runtime.schema.json
+      id: https://id.registrystack.org/schemas/render/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-render --features schema --example render-schema -- --output products/render/schemas
+      driftCheck: crates/registry-render/src/schema.rs
+      differentialTest: crates/registry-render/src/schema.rs
     reader:
       crate: registry-render
       file: crates/registry-render/src/runtime.rs
       function: load
       type: RenderRuntime
     check: registry-render check --bundle {project} --runtime-config {file}
-    example: none
+    example: products/render/examples/runtime.yaml
     conformance:
-      requiredText: none
+      requiredText: /package/root
       optionalText: none
       integer: none
       boolean: none
     securityMembers:
       - pointer: /listener/bind
-        whenOmitted: unclassified
+        whenOmitted: refused
+      - pointer: /auth/apiKeyRef
+        whenOmitted: refused
+      - pointer: /package/expectedDigest
+        whenOmitted: open
     restrictingMembers: []
   - id: render/data-schema
     product: render

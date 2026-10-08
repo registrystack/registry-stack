@@ -117,8 +117,8 @@ pub const MAXIMUM_SHUTDOWN_GRACE_MILLISECONDS: u64 = 3_600_000;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ListenerRuntime {
-    /// Loopback or private address to listen on. Public and all-interfaces
-    /// binds are refused at startup, see [`validate_bind`]. TLS is the
+    /// Loopback, private, or link-local address to listen on. A public or
+    /// all-interfaces bind is refused when the file is read. TLS is the
     /// proxy's job, not Render's.
     pub bind: ListenerBind,
     /// Time allowed for renders in flight to finish at shutdown, in
@@ -181,6 +181,10 @@ fn default_shutdown_grace(
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthRuntime {
     /// Secret reference to the caller API key, under a declared provider.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_config::SecretReference")
+    )]
     pub api_key_ref: String,
 }
 

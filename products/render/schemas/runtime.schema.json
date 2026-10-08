@@ -1,0 +1,351 @@
+{
+  "$defs": {
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditRuntime": {
+      "additionalProperties": false,
+      "description": "The audit block every Registry Stack product shares: a `file` (the\ndefault) or `stdout` destination, with rotation and retention for a file.",
+      "else": {
+        "required": [
+          "path"
+        ]
+      },
+      "if": {
+        "properties": {
+          "destination": {
+            "const": "stdout"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file",
+          "description": "Where audit lines go: `file` or `stdout`."
+        },
+        "path": {
+          "description": "The absolute path of the active audit file, for a `file` destination.",
+          "pattern": "^/+(?:(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+)?)/+)*(?:[^/.][^/]*|\\.(?:[^/.][^/]*|\\.[^/]+))$",
+          "type": "string"
+        },
+        "retentionDays": {
+          "description": "Days a rotated file is kept, for a `file` destination. Default: 90.",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "description": "Size at which the active file rotates, in bytes, for a `file`\ndestination. Default: 100 MiB.",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "path"
+              ]
+            },
+            {
+              "required": [
+                "rotateBytes"
+              ]
+            },
+            {
+              "required": [
+                "retentionDays"
+              ]
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AuthRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "apiKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the caller API key, under a declared provider."
+        }
+      },
+      "required": [
+        "apiKeyRef"
+      ],
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "LimitsRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumConcurrentRenders": {
+          "description": "Most renders in flight at once. Default: the CPU count, at most 8.",
+          "format": "uint64",
+          "maximum": 64,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumOutputBytes": {
+          "default": 8388608,
+          "description": "Largest PDF a render may produce, in bytes.",
+          "format": "uint64",
+          "maximum": 8388608,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumRequestBytes": {
+          "default": 8388608,
+          "description": "Largest request body (data and base64 assets), in bytes. The httpsec\ndefault is 1 MiB; renders with photos need a conscious, bounded raise.",
+          "format": "uint64",
+          "maximum": 67108864,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "renderTimeoutSeconds": {
+          "default": 20,
+          "description": "Wall-clock budget per render, in seconds; the worker is killed at\nthis bound.",
+          "format": "uint64",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind",
+          "allOf": [
+            {
+              "$ref": "#/$defs/socketPort"
+            },
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ipv4SocketHost"
+                },
+                {
+                  "$ref": "#/$defs/ipv6HexSocketHost"
+                },
+                {
+                  "$ref": "#/$defs/ipv6MixedSocketHost"
+                }
+              ]
+            }
+          ],
+          "description": "Loopback, private, or link-local address to listen on. A public or\nall-interfaces bind is refused when the file is read. TLS is the\nproxy's job, not Render's."
+        },
+        "shutdownGraceMilliseconds": {
+          "default": 30000,
+          "description": "Time allowed for renders in flight to finish at shutdown, in\nmilliseconds. Open connections get the same again.",
+          "format": "uint64",
+          "maximum": 3600000,
+          "minimum": 1000,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "PackageConfig": {
+      "additionalProperties": false,
+      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
+      "properties": {
+        "expectedDigest": {
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
+        },
+        "root": {
+          "description": "Absolute path of the package directory.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "ipv4SocketHost": {
+      "description": "Four canonical decimal IPv4 octets followed by a decimal port.",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0):[0-9]+$"
+    },
+    "ipv6HexSocketHost": {
+      "description": "A bracketed hexadecimal IPv6 literal, including every RFC 3986 compression position, followed by a decimal port.",
+      "pattern": "^\\[(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,7}:|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}|(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}|(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}|(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}|[0-9A-Fa-f]{1,4}:(?:(?::[0-9A-Fa-f]{1,4}){1,6})|:(?:(?::[0-9A-Fa-f]{1,4}){1,7}|:))\\]:[0-9]+$"
+    },
+    "ipv6MixedSocketHost": {
+      "description": "A bracketed IPv6 literal whose final 32 bits use canonical dotted-decimal IPv4 notation, followed by a decimal port.",
+      "pattern": "^\\[(?:(?:[0-9A-Fa-f]{1,4}:){6}|::(?:[0-9A-Fa-f]{1,4}:){5}|(?:[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){4}|(?:(?:[0-9A-Fa-f]{1,4}:){0,1}[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){3}|(?:(?:[0-9A-Fa-f]{1,4}:){0,2}[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){2}|(?:(?:[0-9A-Fa-f]{1,4}:){0,3}[0-9A-Fa-f]{1,4})?::[0-9A-Fa-f]{1,4}:|(?:(?:[0-9A-Fa-f]{1,4}:){0,4}[0-9A-Fa-f]{1,4})?::)(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\]:[0-9]+$"
+    },
+    "socketPort": {
+      "description": "A decimal u16 port, including zero and Rust-compatible leading zeroes.",
+      "pattern": ":0*(?:[0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/render/runtime/runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/render/runtime/v1alpha1",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditRuntime"
+    },
+    "auth": {
+      "$ref": "#/$defs/AuthRuntime"
+    },
+    "kind": {
+      "const": "RenderRuntimeConfig",
+      "type": "string"
+    },
+    "limits": {
+      "$ref": "#/$defs/LimitsRuntime"
+    },
+    "listener": {
+      "$ref": "#/$defs/ListenerRuntime"
+    },
+    "package": {
+      "$ref": "#/$defs/PackageConfig",
+      "allOf": [
+        {
+          "properties": {
+            "root": {
+              "not": {
+                "pattern": "(^|/)\\.{1,2}(/|$)"
+              }
+            }
+          }
+        }
+      ],
+      "description": "The verified bundle package Render serves."
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "listener",
+    "package",
+    "secretProviders",
+    "auth",
+    "audit"
+  ],
+  "title": "Registry Render runtime configuration",
+  "type": "object"
+}

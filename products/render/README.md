@@ -49,6 +49,11 @@ Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
   `check`, `compile`, or `serve`; start editable source with
   `registry-render init`.
 - `integrations/` — the OpenFn job and App Kit wiring sketches.
+- `schemas/`: JSON Schemas for `manifest.yaml`, `labels/<locale>.yaml`, and
+  the `serve` runtime file, generated from the types Render reads. Regenerate
+  them with `cargo run -p registry-render --features schema --example
+  render-schema -- --output products/render/schemas`; `examples/runtime.yaml`
+  is a minimal runtime file they accept.
 
 ## Exit codes
 

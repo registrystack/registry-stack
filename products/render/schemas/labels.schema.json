@@ -1,0 +1,40 @@
+{
+  "$defs": {
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/render/labels/labels.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`labels/<locale>.yaml`: the text a template prints, by label key.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/render/labels/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "RenderLabels",
+      "type": "string"
+    },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "The text of each label, by key. Every locale of a document defines\nthe same keys.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "labels"
+  ],
+  "title": "Registry Render label table",
+  "type": "object"
+}

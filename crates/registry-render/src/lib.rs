@@ -38,6 +38,8 @@ pub mod openapi;
 pub mod problem;
 pub mod render;
 pub mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod server;
 pub mod worker;
 pub mod world;

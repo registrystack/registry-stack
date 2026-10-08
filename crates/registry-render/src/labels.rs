@@ -29,8 +29,8 @@ pub(crate) const LABELS_FORMAT: FormatSpec<'static> = FormatSpec {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct LabelsFile {
-    /// The envelope, which the reader checks before decoding; declared so
-    /// the closed struct accepts it.
+    // The envelope, which the reader checks before decoding; declared so
+    // the closed struct accepts it.
     #[allow(dead_code)]
     pub(crate) api_version: String,
     #[allow(dead_code)]

@@ -54,6 +54,11 @@ SCHEMAS = {
         ("products/discovery/schemas/evidence-mapping.schema.json", "mappings/*.yaml"),
         ("products/discovery/schemas/evidence-mapping.schema.json", "mappings/*.yml"),
     ),
+    "render": (
+        ("products/render/schemas/bundle.schema.json", "manifest.yaml"),
+        ("products/render/schemas/labels.schema.json", "labels/*.yaml"),
+        ("products/render/schemas/runtime.schema.json", "runtime.yaml"),
+    ),
 }
 CHECKS = {
     "breg": ("bregctl", "check", "{project}"),

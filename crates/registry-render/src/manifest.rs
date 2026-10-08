@@ -139,7 +139,7 @@ pub(crate) struct ManifestFile {
     pub(crate) api_version: String,
     pub(crate) kind: String,
     /// Author-defined bundle version, monotonic per bundle.
-    pub(crate) bundle_version: BoundedU32<0, { u32::MAX }>,
+    pub(crate) bundle_version: BoundedU32<1, { u32::MAX }>,
     /// The document types, each with an id unique in the bundle.
     #[serde(default)]
     pub(crate) documents: UniqueIdList<DocumentFile>,
@@ -153,13 +153,13 @@ pub(crate) struct DocumentFile {
     /// Stable document identifier used in requests and routes.
     pub(crate) id: LocalId,
     /// The document's own version; printed on paper by templates that wish to.
-    pub(crate) version: BoundedU32<0, { u32::MAX }>,
+    pub(crate) version: BoundedU32<1, { u32::MAX }>,
     /// Entry point relative to the bundle root: a `.typ` file inside the
     /// bundle.
     pub(crate) entry_file: String,
     /// JSON Schema (draft 2020-12) for the request data, relative to the
     /// bundle root: a `.json` file inside the bundle.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub(crate) schema_file: Option<String>,
     /// Label tables the template receives, by locale: each names
@@ -167,7 +167,7 @@ pub(crate) struct DocumentFile {
     #[serde(default)]
     pub(crate) labels: UniqueList<LocalId>,
     /// PDF standard for this document; plain PDF when absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "PdfStandardSpec"))]
     pub(crate) pdf_standard: Option<PdfStandardSpec>,
 }
@@ -359,6 +359,30 @@ mod tests {
         assert_eq!(
             refused_codes(&unknown),
             [("config.unknown-key".to_owned(), "/extra".to_owned())]
+        );
+    }
+
+    #[test]
+    fn cfg_qty_4_versions_count_from_one() {
+        let bundle = format!(
+            "{HEAD}bundleVersion: 0\ndocuments:\n  - id: d\n    version: 1\n    entryFile: templates/d.typ\n"
+        );
+        assert_eq!(
+            refused_codes(&bundle),
+            [(
+                "config.out-of-range".to_owned(),
+                "/bundleVersion".to_owned()
+            )]
+        );
+        let document = format!(
+            "{HEAD}bundleVersion: 1\ndocuments:\n  - id: d\n    version: 0\n    entryFile: templates/d.typ\n"
+        );
+        assert_eq!(
+            refused_codes(&document),
+            [(
+                "config.out-of-range".to_owned(),
+                "/documents/0/version".to_owned()
+            )]
         );
     }
 

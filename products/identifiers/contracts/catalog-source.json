@@ -176,6 +176,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Discovery authoring, runtime configuration, and index JSON Schema."
+    },
+    {
+      "glob": "products/render/schemas/*.schema.json",
+      "sourcePath": "crates/registry-render/src/schema.rs",
+      "owner": "render",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema."
     }
   ],
   "records": [

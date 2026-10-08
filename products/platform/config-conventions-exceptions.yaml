@@ -10219,62 +10219,36 @@ exceptions:
   wp: WP3
   reason: the reader does not read through registry-platform-yaml
   resolution: Read through registry-platform-yaml
-- rule: CFG-SCHEMA-2
+- rule: CFG-NAME-2
   format: render/bundle
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
+  location: products/render/schemas/bundle.schema.json#/$defs/PdfStandardSpec/enum/1.4
+  class: protocol-constant
+  reason: 1.4 is written as the PDF specification (ISO 32000) numbers its versions
+  resolution: Permanent.
+- rule: CFG-NAME-2
   format: render/bundle
-  location: editors/configure.py#/SCHEMAS/render
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-1
-  format: render/labels
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: render/labels
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: render/labels
-  location: editors/configure.py#/SCHEMAS/render
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
-- rule: CFG-SCHEMA-1
-  format: render/runtime
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: render/runtime
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: render/runtime
-  location: editors/configure.py#/SCHEMAS/render
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
+  location: products/render/schemas/bundle.schema.json#/$defs/PdfStandardSpec/enum/1.5
+  class: protocol-constant
+  reason: 1.5 is written as the PDF specification (ISO 32000) numbers its versions
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: render/bundle
+  location: products/render/schemas/bundle.schema.json#/$defs/PdfStandardSpec/enum/1.6
+  class: protocol-constant
+  reason: 1.6 is written as the PDF specification (ISO 32000) numbers its versions
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: render/bundle
+  location: products/render/schemas/bundle.schema.json#/$defs/PdfStandardSpec/enum/1.7
+  class: protocol-constant
+  reason: 1.7 is written as the PDF specification (ISO 32000) numbers its versions
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: render/bundle
+  location: products/render/schemas/bundle.schema.json#/$defs/PdfStandardSpec/enum/2.0
+  class: protocol-constant
+  reason: 2.0 is written as the PDF specification (ISO 32000) numbers its versions
+  resolution: Permanent.
 - rule: CFG-ENV-1
   format: scheduling/ctl-report
   location: products/platform/config-formats.yaml#/current/apiVersion

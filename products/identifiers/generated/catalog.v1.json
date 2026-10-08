@@ -3062,6 +3062,60 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/render/bundle/bundle.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "render",
+      "title": "Registry Render bundle manifest",
+      "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-render/src/schema.rs",
+        "sha256": "bbbc5cc8a18153dddeb0c1ba38a166f7b73251311e386f98097837866fa8ec80"
+      },
+      "artifact": {
+        "path": "products/render/schemas/bundle.schema.json",
+        "sha256": "48c416e7a409cde355bb7e7a1a1bd8eac6248e65867fd76b55b777d4b6e335d2",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/render/labels/labels.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "render",
+      "title": "Registry Render label table",
+      "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-render/src/schema.rs",
+        "sha256": "bbbc5cc8a18153dddeb0c1ba38a166f7b73251311e386f98097837866fa8ec80"
+      },
+      "artifact": {
+        "path": "products/render/schemas/labels.schema.json",
+        "sha256": "1f7517cc73cc2c0cb0c626cc2f716f638d333d4d9db7ebe7eaef0c4046a191b8",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/render/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "render",
+      "title": "Registry Render runtime configuration",
+      "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-render/src/schema.rs",
+        "sha256": "bbbc5cc8a18153dddeb0c1ba38a166f7b73251311e386f98097837866fa8ec80"
+      },
+      "artifact": {
+        "path": "products/render/schemas/runtime.schema.json",
+        "sha256": "91cd3eb374cbd4a95cdc27ea5bd5aa697e2ae21bfc613771bd68f8eb91cf21eb",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
