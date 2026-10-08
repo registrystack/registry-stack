@@ -85,11 +85,23 @@ formats:
       - /authentication/oidc/jwksUri
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: runtime.example.yaml}
 
+  # The removed keys and the retired apiVersion the Messaging authoring
+  # readers refuse by name.
+  messaging/project:
+    project: products/messaging/examples/starter
+    removedKeys:
+      - /providers/0/kind
+      - /accessProfiles/0/dailyLimit
+    retiredApiVersions:
+      - registry.registrystack.org/messaging-package/v1alpha1
+    init: {command: "messagingctl init {directory}", file: messaging.yaml}
   messaging/template:
     project: products/messaging/examples/starter
     init: {command: "messagingctl init {directory}", file: templates/appointment-reminder/1/template.yaml}
   messaging/provider:
     project: products/messaging/examples/starter
+    removedKeys:
+      - /capabilities/concurrencyLimit
     init: {command: "messagingctl init {directory}", file: providers/sms-gateway/provider.yaml}
   # The removed key the Messaging runtime refuses by name; the registry does
   # not declare it yet.
@@ -250,7 +262,5 @@ formats:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
   scheduling/records:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
-  messaging/project:
-    init: {command: "messagingctl init {directory}", file: messaging.yaml}
   evidence/authoring-project:
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: evidence-project.yaml}
