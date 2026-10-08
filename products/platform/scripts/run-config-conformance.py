@@ -1772,7 +1772,7 @@ def run_cells(
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=ROOT, help="repository root")
-    parser.add_argument("--bin-dir", type=Path, help="directory of built binaries (default: <root>/target/debug)")
+    parser.add_argument("--bin-dir", type=Path, help="directory of built binaries (default: $CARGO_TARGET_DIR/debug, else <root>/target/debug)")
     parser.add_argument("--strict", action="store_true", help="also fail on stale or unacknowledged entries")
     parser.add_argument("--matrix", action="store_true", help="print one `format<TAB>case<TAB>status` line per cell")
     parser.add_argument("--verbose", action="store_true", help="also print expected failures and inapplicable cells")
@@ -1847,6 +1847,12 @@ def validate_ids(expected: ExpectedFailures, formats: list[Format], cases: list[
             raise HarnessError(f"expected-failures.yaml names case {case_id}, which the corpus does not")
 
 
+def default_bin_dir(root: Path) -> Path:
+    """Where cargo puts debug binaries: `CARGO_TARGET_DIR` when set, else `<root>/target`."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    return (Path(target) if target else root / "target") / "debug"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if (args.only_format or args.only_case) and (args.strict or args.write_expected_failures):
@@ -1854,7 +1860,7 @@ def main(argv: list[str] | None = None) -> int:
               " they cannot be combined with --strict or --write-expected-failures", file=sys.stderr)
         return 2
     root = Path(os.path.realpath(args.root))
-    bin_dir = Path(os.path.realpath(args.bin_dir or root / "target/debug"))
+    bin_dir = Path(os.path.realpath(args.bin_dir or default_bin_dir(root)))
     corpus = root / CORPUS
     expected_path = corpus / "expected-failures.yaml"
     try:

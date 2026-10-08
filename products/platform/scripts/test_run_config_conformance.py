@@ -28,6 +28,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import yaml
 
@@ -1131,6 +1132,14 @@ class EndToEndTest(unittest.TestCase):
             os.environ.clear()
             os.environ.update(saved)
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_the_default_bin_dir_follows_cargo_target_dir(self) -> None:
+        root = Path("/work/tree")
+        with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/elsewhere/target"}):
+            self.assertEqual(runner.default_bin_dir(root), Path("/elsewhere/target/debug"))
+        with mock.patch.dict(os.environ):
+            os.environ.pop("CARGO_TARGET_DIR", None)
+            self.assertEqual(runner.default_bin_dir(root), root / "target/debug")
 
     def test_cfg_check_3_conforming_check_passes_every_case(self) -> None:
         code, stdout, _ = self.run_runner("--matrix")

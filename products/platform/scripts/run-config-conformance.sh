@@ -9,7 +9,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "${script_dir}/../../.." && pwd)"
 
-bin_dir="${root}/target/debug"
+bin_dir="${CARGO_TARGET_DIR:-${root}/target}/debug"
 previous=''
 for argument in "$@"; do
 	case "$argument" in
