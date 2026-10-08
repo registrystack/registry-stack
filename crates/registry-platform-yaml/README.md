@@ -21,7 +21,11 @@ that may reach a terminal, a CI log, or an agent's context:
   environment (CFG-SEC-3). Messages name keys, paths, accepted values,
   bounds, and the expected envelope. A message a type's own `Deserialize`
   code writes is never passed through, and keys and file names are escaped
-  of control characters in human output.
+  of control characters in human output;
+- the `Debug` output of a `Text`, and so of a `Node`, `Document`, or
+  `Decoded` document, shows `<redacted>` for every text value, since a
+  substituted value may be a secret. Keys and spans still show. A product's
+  own decoded types print what their own `Debug` prints.
 
 The reader does not open files, read the environment, or resolve secrets.
 The caller passes bytes and the file name diagnostics should carry. Runtime

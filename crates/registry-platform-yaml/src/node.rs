@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The document tree the reader builds: every node keeps its source span.
 
+use std::fmt;
+
 use serde_json::{Map, Number, Value};
 
 use crate::scalar::{resolve_plain, Resolved};
@@ -46,7 +48,12 @@ pub enum ScalarStyle {
 }
 
 /// A text value and how it reached the tree.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Its `Debug` output shows `<redacted>` for the text (CFG-SEC-3): a
+/// substituted value may be a secret from the environment, and a `Node` or
+/// `Document` holding one may reach a log. Keys, styles, and spans still
+/// show.
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Text {
     pub text: String,
@@ -55,6 +62,17 @@ pub struct Text {
     /// substitution in runtime files). A substituted value is always text and
     /// is never resolved again.
     pub substituted: bool,
+}
+
+impl fmt::Debug for Text {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Text")
+            .field("text", &format_args!("<redacted>"))
+            .field("style", &self.style)
+            .field("substituted", &self.substituted)
+            .finish()
+    }
 }
 
 /// One node of the document tree.

@@ -975,6 +975,34 @@ fn cfg_sec_3_no_diagnostic_repeats_a_value() {
 }
 
 #[test]
+fn cfg_sec_3_debug_output_of_a_document_leaves_text_values_out() {
+    #[derive(Debug, Deserialize)]
+    struct Named {
+        #[allow(dead_code)]
+        name: String,
+        #[allow(dead_code)]
+        url: String,
+    }
+    let mut hook = Substitute("substituted-secret");
+    let decoded = Reader::new(FILE)
+        .with_hook(&mut hook)
+        .decode::<Named>(
+            with_envelope("name: ${NAME}\nurl: written-secret\n").as_bytes(),
+            &EXPECT,
+        )
+        .unwrap_or_else(|report| panic!("{report}"));
+    for shown in [
+        format!("{:?}", decoded.document),
+        format!("{:#?}", decoded.document.root()),
+    ] {
+        assert!(!shown.contains("secret"), "{shown}");
+        assert!(shown.contains("<redacted>"), "{shown}");
+        // Keys still show, so the tree can be read.
+        assert!(shown.contains("\"url\""), "{shown}");
+    }
+}
+
+#[test]
 fn cfg_sec_3_a_message_from_a_type_is_never_passed_through() {
     let report = refusal::<Everything>("leaky: secret-value\n");
     let diagnostic = only(&report);
