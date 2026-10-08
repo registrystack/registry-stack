@@ -220,13 +220,13 @@ as a structural problem does, so the decode's other problems are not
 reported with it. `Reader::scan` and `Reader::read`, which know no member
 types, refuse it as out of the reader's range.
 
-A whole number's message states the bounds a format declares and leaves out
-a bound that is only its type's extreme: a `u64` member reads "a whole
-number of 0 or more", an `i32` member "a whole number", and a
-`BoundedU32<5, { u32::MAX }>` member "a whole number of 5 or more". A value
-past a type's extreme is still told the bound it crossed. When an unquoted
-value holding a `#` with no space before it is refused, as `port: 8080#main`
-is, the fix adds "A `#` starts a comment only after a space: put a space
+A whole number's message states both bounds (CFG-QTY-4): the ones a format
+declares, or else its type's extremes. A `BoundedU32<1, 36500>` member named
+`retentionDays` reads "a whole number of days from 1 to 36500", and a `u16`
+member "a whole number from 0 to 65535".
+
+When an unquoted value holding a `#` with no space before it is refused, as
+`port: 8080#main` is, the fix adds "A `#` starts a comment only after a space: put a space
 before the `#` that starts the comment." The sentence names no part of the
 value (CFG-SEC-3) and is not added for a value a `ScalarHook` substituted.
 

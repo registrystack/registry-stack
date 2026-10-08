@@ -1492,7 +1492,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             "{message}"
         );
         assert!(
-            message.contains("expected a whole number of 0 or more days"),
+            message.contains("expected a whole number of days from 0 to 65535"),
             "{message}"
         );
         assert!(!message.contains(canary), "{message}");

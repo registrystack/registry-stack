@@ -64,7 +64,7 @@ fn cfg_val_1_an_integer_position_refuses_a_number() {
             "config.expected-integer",
             "/port",
             (3, 7),
-            "expected a whole number of 0 or more",
+            "expected a whole number from 0 to 65535",
             "Write digits only.",
         );
     }
@@ -140,8 +140,8 @@ fn cfg_val_1_an_unrepresentable_integer_in_an_integer_member_names_its_bounds() 
         "config.out-of-range",
         "/port",
         (3, 7),
-        "the value is outside its bounds; expected a whole number of 0 or more",
-        "Write a whole number of 0 or more.",
+        "the value is outside its bounds; expected a whole number from 0 to 65535",
+        "Write a whole number from 0 to 65535.",
     );
     let report = refusal::<Settings>("timeoutSeconds: 123456789012345678901234567890\n");
     assert_diagnostic(
@@ -261,7 +261,7 @@ fn cfg_val_3_a_quoted_number_is_refused_at_the_quote() {
         "config.expected-integer",
         "/port",
         (3, 7),
-        "expected a whole number of 0 or more; quoted values are text",
+        "expected a whole number from 0 to 65535; quoted values are text",
         "Remove the quotes.",
     );
 }
@@ -487,14 +487,14 @@ struct Extremes {
 }
 
 #[test]
-fn cfg_diag_6_an_upper_bound_at_the_type_maximum_reads_or_more() {
+fn cfg_qty_4_a_bound_no_format_declared_is_stated_as_the_type_extreme() {
     for (body, code, path, column, message, action) in [
         (
             "count: \"5\"\n",
             "config.expected-integer",
             "/count",
             8,
-            "expected a whole number of 0 or more; quoted values are text",
+            "expected a whole number from 0 to 18446744073709551615; quoted values are text",
             "Remove the quotes.",
         ),
         (
@@ -502,23 +502,23 @@ fn cfg_diag_6_an_upper_bound_at_the_type_maximum_reads_or_more() {
             "config.expected-integer",
             "/count",
             8,
-            "expected a whole number of 0 or more, not unquoted text",
-            "Write a whole number of 0 or more.",
+            "expected a whole number from 0 to 18446744073709551615, not unquoted text",
+            "Write a whole number from 0 to 18446744073709551615.",
         ),
         (
             "count: -1\n",
             "config.out-of-range",
             "/count",
             8,
-            "the value is outside its bounds; expected a whole number of 0 or more",
-            "Write a whole number of 0 or more.",
+            "the value is outside its bounds; expected a whole number from 0 to 18446744073709551615",
+            "Write a whole number from 0 to 18446744073709551615.",
         ),
         (
             "level: 1.5\n",
             "config.expected-integer",
             "/level",
             8,
-            "expected a whole number of 0 or more",
+            "expected a whole number from 0 to 255",
             "Write digits only.",
         ),
         (
@@ -526,7 +526,7 @@ fn cfg_diag_6_an_upper_bound_at_the_type_maximum_reads_or_more() {
             "config.expected-integer",
             "/timeoutMilliseconds",
             22,
-            "expected a whole number of 0 or more milliseconds",
+            "expected a whole number of milliseconds from 0 to 4294967295",
             "Write the number of milliseconds as digits.",
         ),
         (
@@ -534,7 +534,7 @@ fn cfg_diag_6_an_upper_bound_at_the_type_maximum_reads_or_more() {
             "config.expected-integer",
             "/quota",
             8,
-            "expected a whole number of 0 or more; quoted values are text",
+            "expected a whole number from 0 to 18446744073709551615; quoted values are text",
             "Remove the quotes.",
         ),
         (
@@ -542,61 +542,44 @@ fn cfg_diag_6_an_upper_bound_at_the_type_maximum_reads_or_more() {
             "config.out-of-range",
             "/floorBytes",
             13,
-            "the value is outside its bounds; expected a whole number of 5 or more bytes",
-            "Write a whole number of 5 or more bytes.",
+            "the value is outside its bounds; expected a whole number of bytes from 5 to 4294967295",
+            "Write a whole number of bytes from 5 to 4294967295.",
         ),
-    ] {
-        let report = refusal::<Extremes>(body);
-        assert_diagnostic(only(&report), code, path, (3, column), message, action);
-        assert!(
-            !report.render_human().contains("18446744073709551615")
-                && !report.render_human().contains("4294967295"),
-            "{report}"
-        );
-    }
-}
-
-#[test]
-fn cfg_diag_6_a_signed_type_with_both_extremes_names_no_bound() {
-    for (body, path, column, message, action) in [
         (
             "offset: \"5\"\n",
+            "config.expected-integer",
             "/offset",
             9,
-            "expected a whole number; quoted values are text",
+            "expected a whole number from -2147483648 to 2147483647; quoted values are text",
             "Remove the quotes.",
         ),
         (
             "shiftMinutes: 5m\n",
+            "config.expected-integer",
             "/shiftMinutes",
             15,
-            "expected a whole number of minutes",
+            "expected a whole number of minutes from -9223372036854775808 to 9223372036854775807",
             "Write the number of minutes as digits.",
         ),
         (
             "shiftMinutes: soon\n",
+            "config.expected-integer",
             "/shiftMinutes",
             15,
-            "expected a whole number of minutes, not unquoted text",
-            "Write a whole number of minutes.",
+            "expected a whole number of minutes from -9223372036854775808 to 9223372036854775807, not unquoted text",
+            "Write a whole number of minutes from -9223372036854775808 to 9223372036854775807.",
         ),
         (
             "total: \"1\"\n",
+            "config.expected-integer",
             "/total",
             8,
-            "expected a whole number; quoted values are text",
+            "expected a whole number from -9223372036854775808 to 18446744073709551615; quoted values are text",
             "Remove the quotes.",
         ),
     ] {
         let report = refusal::<Extremes>(body);
-        assert_diagnostic(
-            only(&report),
-            "config.expected-integer",
-            path,
-            (3, column),
-            message,
-            action,
-        );
+        assert_diagnostic(only(&report), code, path, (3, column), message, action);
     }
 }
 
@@ -614,15 +597,15 @@ fn cfg_diag_6_a_value_past_a_type_extreme_is_told_that_extreme() {
             "offset: 3000000000\n",
             "/offset",
             9,
-            "the value is outside its bounds; expected a whole number of 2147483647 or less",
-            "Write a whole number of 2147483647 or less.",
+            "the value is outside its bounds; expected a whole number from -2147483648 to 2147483647",
+            "Write a whole number from -2147483648 to 2147483647.",
         ),
         (
             "offset: -3000000000\n",
             "/offset",
             9,
-            "the value is outside its bounds; expected a whole number of -2147483648 or more",
-            "Write a whole number of -2147483648 or more.",
+            "the value is outside its bounds; expected a whole number from -2147483648 to 2147483647",
+            "Write a whole number from -2147483648 to 2147483647.",
         ),
         (
             "floorBytes: 4294967296\n",
@@ -668,7 +651,7 @@ fn cfg_diag_1_the_json_of_a_range_refusal_keeps_its_fields() {
             "code": "config.expected-integer",
             "artifact": "ExampleRuntimeConfig",
             "path": "/count",
-            "message": "expected a whole number of 0 or more; quoted values are text",
+            "message": "expected a whole number from 0 to 18446744073709551615; quoted values are text",
             "suggestedAction": "Remove the quotes.",
             "source": {"file": "runtime.yaml", "line": 3, "column": 8}
         }])
@@ -1281,7 +1264,7 @@ fn cfg_diag_6_a_refused_value_with_an_unspaced_hash_says_where_comments_start() 
             "config.expected-integer",
             "/port",
             7,
-            "expected a whole number of 0 or more",
+            "expected a whole number from 0 to 65535",
             "Write digits only.",
         ),
         (
@@ -1357,7 +1340,7 @@ fn cfg_diag_6_the_hash_hint_is_given_only_for_an_unquoted_value_that_fails() {
         let report = refusal::<Everything>(body);
         assert_eq!(
             only(&report).suggested_action,
-            "Write a whole number of 0 or more.",
+            "Write a whole number from 0 to 65535.",
             "{body}"
         );
     }
@@ -2426,7 +2409,7 @@ fn cfg_yaml_1_json_is_read_as_yaml_flow_content() {
         "config.expected-integer",
         "/port",
         (2, 10),
-        "expected a whole number of 0 or more; quoted values are text",
+        "expected a whole number from 0 to 65535; quoted values are text",
         "Remove the quotes.",
     );
     let text = format!(
@@ -2452,7 +2435,7 @@ fn decode_at_reports_full_paths_from_the_root() {
         "config.expected-integer",
         "/listener/port",
         (5, 9),
-        "expected a whole number of 0 or more; quoted values are text",
+        "expected a whole number from 0 to 65535; quoted values are text",
         "Remove the quotes.",
     );
     let report = document.decode_at::<Listener>("/nowhere").unwrap_err();

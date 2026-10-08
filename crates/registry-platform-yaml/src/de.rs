@@ -580,33 +580,19 @@ impl<'a> NodeDe<'a> {
             Some((low, high)) => (low.max(type_minimum), high.min(type_maximum)),
             None => (type_minimum, type_maximum),
         };
-        let bounds = messages::Bounds::within(minimum, maximum, type_minimum, type_maximum);
+        let bounds = messages::Bounds::new(minimum, maximum);
         match &self.site.node.value {
-            NodeValue::Integer(value) if *value < minimum || *value > maximum => {
-                // The bound the value passed is stated even at the type's
-                // extreme, so the message never contradicts the value.
-                let bounds = messages::Bounds {
-                    minimum: bounds.minimum.or((*value < minimum).then_some(minimum)),
-                    maximum: bounds.maximum.or((*value > maximum).then_some(maximum)),
-                };
-                Err(self.fail(
-                    "config.out-of-range",
-                    messages::integer_out_of_range(self.unit(), &bounds),
-                ))
-            }
+            NodeValue::Integer(value) if *value < minimum || *value > maximum => Err(self.fail(
+                "config.out-of-range",
+                messages::integer_out_of_range(self.unit(), &bounds),
+            )),
             NodeValue::Integer(value) => Ok(*value),
             NodeValue::Null => Err(self.null_error(false)),
             _ => match self.site.node.unrepresentable() {
-                Some(Unrepresentable::Integer { negative }) => {
-                    let bounds = messages::Bounds {
-                        minimum: bounds.minimum.or(negative.then_some(minimum)),
-                        maximum: bounds.maximum.or((!negative).then_some(maximum)),
-                    };
-                    Err(self.claim(
-                        "config.out-of-range",
-                        messages::integer_out_of_range(self.unit(), &bounds),
-                    ))
-                }
+                Some(Unrepresentable::Integer) => Err(self.claim(
+                    "config.out-of-range",
+                    messages::integer_out_of_range(self.unit(), &bounds),
+                )),
                 _ => Err(self.fail(
                     "config.expected-integer",
                     messages::expected_integer(self.found(), self.unit(), &bounds),
@@ -633,7 +619,7 @@ impl<'a> NodeDe<'a> {
                 None => Ok(&text.text),
                 Some(literal) => {
                     let found = match literal {
-                        Unrepresentable::Integer { .. } => Found::Integer,
+                        Unrepresentable::Integer => Found::Integer,
                         Unrepresentable::Number => Found::Number,
                     };
                     Err(self.claim("config.expected-string", messages::expected_string(found)))
@@ -879,8 +865,7 @@ fn describe(site: &Site<'_>, kind: Kind, buffered: bool) -> Problem {
                 }
             }
             Some(Protocol::OutOfRange { minimum, maximum }) => {
-                // The text carries no type, so both bounds read as declared.
-                let bounds = messages::Bounds::declared(minimum, maximum);
+                let bounds = messages::Bounds::new(minimum, maximum);
                 if buffered {
                     let expected = messages::whole_number(None, &bounds);
                     approximate("config.out-of-range", Some(&expected))

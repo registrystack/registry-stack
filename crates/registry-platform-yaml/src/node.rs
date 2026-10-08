@@ -194,9 +194,7 @@ impl Node {
             return None;
         }
         match resolve_plain(&text.text) {
-            Resolved::IntegerOutOfRange => Some(Unrepresentable::Integer {
-                negative: text.text.starts_with('-'),
-            }),
+            Resolved::IntegerOutOfRange => Some(Unrepresentable::Integer),
             Resolved::FloatOutOfRange => Some(Unrepresentable::Number),
             _ => None,
         }
@@ -222,7 +220,7 @@ impl Node {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Unrepresentable {
     /// An integer outside `i64::MIN..=u64::MAX`.
-    Integer { negative: bool },
+    Integer,
     /// A number that overflows binary64.
     Number,
 }

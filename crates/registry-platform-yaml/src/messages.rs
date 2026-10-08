@@ -731,55 +731,28 @@ pub(crate) fn expected_string(found: Found) -> Text {
     text(format!("expected text, not {}", found.phrase()), action)
 }
 
-/// The bounds a message states for a whole number. An end is `None` where
-/// it is only its type's extreme, which no format declared and no author
-/// wrote. An unsigned type's minimum, 0, is a real bound: it refuses negative
-/// numbers.
+/// The bounds a message states for a whole number: the ones a format
+/// declared, or else its type's extremes (CFG-QTY-4), so a message never
+/// leaves a bound unsaid.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Bounds {
-    pub minimum: Option<i128>,
-    pub maximum: Option<i128>,
+    pub minimum: i128,
+    pub maximum: i128,
 }
 
 impl Bounds {
-    /// Bounds a format declared, both stated.
-    pub(crate) fn declared(minimum: i128, maximum: i128) -> Bounds {
-        Bounds {
-            minimum: Some(minimum),
-            maximum: Some(maximum),
-        }
-    }
-
-    /// `minimum` to `maximum` for a type that holds `type_minimum` to
-    /// `type_maximum`, leaving out an end at the type's extreme.
-    pub(crate) fn within(
-        minimum: i128,
-        maximum: i128,
-        type_minimum: i128,
-        type_maximum: i128,
-    ) -> Bounds {
-        Bounds {
-            minimum: (minimum > type_minimum || type_minimum >= 0).then_some(minimum),
-            maximum: (maximum < type_maximum).then_some(maximum),
-        }
+    pub(crate) fn new(minimum: i128, maximum: i128) -> Bounds {
+        Bounds { minimum, maximum }
     }
 }
 
-/// `a whole number of days from 1 to 36500`, `a whole number of 0 or more
-/// seconds`, `a whole number of 10 or less`, or `a whole number of days`.
+/// `a whole number of days from 1 to 36500` or `a whole number from 0 to
+/// 65535`.
 pub(crate) fn whole_number(unit: Option<&str>, bounds: &Bounds) -> String {
-    let unit_after = unit.map(|unit| format!(" {unit}")).unwrap_or_default();
-    match (bounds.minimum, bounds.maximum) {
-        (Some(min), Some(max)) => match unit {
-            Some(unit) => format!("a whole number of {unit} from {min} to {max}"),
-            None => format!("a whole number from {min} to {max}"),
-        },
-        (Some(min), None) => format!("a whole number of {min} or more{unit_after}"),
-        (None, Some(max)) => format!("a whole number of {max} or less{unit_after}"),
-        (None, None) => match unit {
-            Some(unit) => format!("a whole number of {unit}"),
-            None => "a whole number".to_string(),
-        },
+    let Bounds { minimum, maximum } = bounds;
+    match unit {
+        Some(unit) => format!("a whole number of {unit} from {minimum} to {maximum}"),
+        None => format!("a whole number from {minimum} to {maximum}"),
     }
 }
 
