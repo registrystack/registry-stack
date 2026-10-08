@@ -27,6 +27,7 @@ PRODUCT_FILES = {
     "manifest": "metadata.yaml",
     "render": "manifest.yaml",
     "evidence": "evidence-project.yaml",
+    "platform": "task-connection.yaml",
 }
 PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
 SCHEMAS = {
@@ -63,6 +64,9 @@ SCHEMAS = {
         ("products/manifest/schemas/metadata.schema.json", "{document}"),
         ("products/manifest/schemas/profile.schema.json", "**/profile.yaml"),
     ),
+    "platform": (
+        ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
+    ),
 }
 CHECKS = {
     "breg": ("bregctl", "check", "{project}"),
@@ -73,6 +77,7 @@ CHECKS = {
     "manifest": ("registry-manifest", "validate", "{document}"),
     "render": ("registry-render", "check", "--bundle", "{project}"),
     "evidence": ("evidencectl", "check", "{project}"),
+    "platform": ("evidencectl", "dev", "check", "task-connection.yaml"),
 }
 
 

@@ -193,16 +193,29 @@ enum DevAction {
     Token(TokenArgs),
     /// Exchange an existing Casework approval using an explicit configured issuer connection.
     Grant(GrantArgs),
+    /// Check a task connection or local issuer session state file offline.
+    Check(CheckArgs),
+}
+
+#[derive(Debug, Args)]
+struct CheckArgs {
+    /// A task connection file or a local issuer session state file; its
+    /// envelope says which. No secret reference is resolved.
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+    /// Exit 1 when the check reports a warning.
+    #[arg(long)]
+    deny_warnings: bool,
 }
 
 #[derive(Debug, Args)]
 struct GrantArgs {
-    /// Registered agent client ID in the owner-only connection file.
+    /// Registered agent client ID listed under `clients` in the task connection file.
     client: String,
     /// Existing Casework-approved grant UUID; this command does not approve tasks.
     #[arg(long)]
     grant: String,
-    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    /// Task connection file (`PlatformTaskConnection`) naming the fixed target and each client's assertion key reference.
     #[arg(long, value_name = "FILE")]
     connection: PathBuf,
     /// Existing project whose private directory receives the grant-specific header.
@@ -543,6 +556,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
         ),
         Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
         Some(DevAction::Grant(args)) => approved_grant(args, format),
+        Some(DevAction::Check(args)) => Ok(check_platform_file(&args, format)),
         None => {
             if !args.detach {
                 return Err(DevRefusal {
@@ -598,6 +612,7 @@ fn action_name(action: &DevAction) -> &'static str {
         DevAction::Clean(_) => "clean",
         DevAction::Token(_) => "token",
         DevAction::Grant(_) => "grant",
+        DevAction::Check(_) => "check",
     }
 }
 
@@ -944,6 +959,58 @@ fn verify_borrowed_registrations(
         }
     }
     Ok(())
+}
+
+/// Check one platform file offline (CFG-CHECK-1): exit 0 when nothing was
+/// refused, 1 when something was or a warning was reported under
+/// `--deny-warnings`, and 3 when the file could not be read.
+fn check_platform_file(args: &CheckArgs, format: OutputFormat) -> ExitCode {
+    let checked = registry_thunderid_tooling::check::check_file(&args.file);
+    let report = &checked.report;
+    let exit = if checked.unreadable {
+        crate::report::OPERATIONAL_FAILURE_EXIT
+    } else if report.error_count() > 0 || (args.deny_warnings && report.warning_count() > 0) {
+        crate::report::DOMAIN_REFUSAL_EXIT
+    } else {
+        crate::report::SUCCESS_EXIT
+    };
+    match format {
+        OutputFormat::Json => {
+            let members = json!({
+                "filesChecked": report.files_checked().unwrap_or(0),
+                "errors": report.error_count(),
+                "warnings": report.warning_count(),
+                "diagnostics": report.to_json_value(),
+            });
+            crate::print_report(&match exit {
+                crate::report::SUCCESS_EXIT => {
+                    crate::report::success("dev check", "checked", members)
+                }
+                crate::report::DOMAIN_REFUSAL_EXIT => {
+                    crate::report::refused("dev check", "refused", members)
+                }
+                _ => {
+                    let mut failed = crate::report::failure("dev check", exit, Vec::new());
+                    for (key, value) in members.as_object().into_iter().flatten() {
+                        failed[key] = value.clone();
+                    }
+                    failed
+                }
+            });
+        }
+        OutputFormat::Human if exit == crate::report::SUCCESS_EXIT => {
+            print!("{}", report.render_human());
+        }
+        OutputFormat::Human => {
+            let sentence = if checked.unreadable {
+                "evidencectl dev check could not read the file."
+            } else {
+                "evidencectl dev check refused the file."
+            };
+            eprint!("{sentence}\n{}", report.render_human());
+        }
+    }
+    ExitCode::from(exit)
 }
 
 fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {

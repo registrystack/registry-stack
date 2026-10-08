@@ -26,6 +26,7 @@
 //! tooling, examples, and CI all read that one pin.
 
 pub mod bootstrap;
+pub mod check;
 pub mod container;
 pub mod description;
 pub mod grant;

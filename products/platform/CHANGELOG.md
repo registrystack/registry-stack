@@ -64,6 +64,10 @@
   again.
   Migration steps and the diagnostic code table for both files:
   `release/notes/config-conventions/platform.md`.
+- `evidencectl dev check <file>` checks a task connection file or a session
+  state file offline, without resolving a secret reference, and exits 0, 1,
+  or 3 under the shared check contract; `--format json` reports the
+  diagnostics.
 
 ## v0.39.0 - 2026-10-06
 

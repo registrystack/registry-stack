@@ -228,6 +228,25 @@ class ConfigureTests(unittest.TestCase):
             (ROOT / "products/manifest/schemas/profile.schema.json").read_bytes(),
         )
 
+    def test_platform_maps_its_task_connection_file(self):
+        project = self.project(
+            "platform", "task-connection.yaml", "products/platform/examples/task-connection.yaml"
+        )
+        configure.configure("platform", project, self.workspace, None)
+        schemas = json.loads((self.workspace / ".vscode/settings.json").read_text())["yaml.schemas"]
+        managed = project / ".registry-stack-editor/schemas"
+        self.assertEqual(
+            schemas,
+            {(managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")]},
+        )
+        self.assertEqual(
+            (managed / "task-connection.schema.json").read_bytes(),
+            (ROOT / "products/platform/schemas/task-connection.schema.json").read_bytes(),
+        )
+        task = json.loads((self.workspace / ".vscode/tasks.json").read_text())["tasks"][0]
+        self.assertEqual(task["command"], "evidencectl")
+        self.assertEqual(task["options"]["cwd"], str(project))
+
     def test_check_task_uses_product_cli_shape(self):
         project = self.workspace / "sample"
         document = project / "metadata.yaml"
@@ -240,6 +259,7 @@ class ConfigureTests(unittest.TestCase):
             "manifest": ["validate", str(document)],
             "render": ["check", "--bundle", str(project)],
             "evidence": ["check", str(project)],
+            "platform": ["dev", "check", "task-connection.yaml"],
         }
         for product, args in expected.items():
             with self.subTest(product=product):

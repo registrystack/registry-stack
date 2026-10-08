@@ -133,12 +133,12 @@ enum DevAction {
 
 #[derive(Debug, Args)]
 struct GrantArgs {
-    /// Registered agent client ID in the owner-only connection file.
+    /// Registered agent client ID listed under `clients` in the task connection file.
     client: String,
     /// Existing Casework-approved grant UUID; this command does not approve tasks.
     #[arg(long)]
     grant: String,
-    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    /// Task connection file (`PlatformTaskConnection`) naming the fixed target and each client's assertion key reference.
     #[arg(long, value_name = "FILE")]
     connection: PathBuf,
     /// Existing project whose private directory receives the grant-specific header.

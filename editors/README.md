@@ -63,7 +63,8 @@ python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/
 ```
 
 The product argument also accepts `casework`, `messaging`, `discovery`,
-`render` and `evidence`. Manifest and wallet-delivery setup records the
+`render`, `evidence`, and `platform` (a directory holding a task connection
+file, `task-connection.yaml`). Manifest and wallet-delivery setup records the
 selected document in `.registry-stack-editor/project.json`, so an arbitrary
 configuration filename can be recognized without claiming unrelated YAML.
 
@@ -75,7 +76,8 @@ schemas; their policy/package validation comes from their check task. Render
 maps its bundle `manifest.yaml`, its `labels/*.yaml` tables, and a `runtime.yaml`
 beside them. Manifest maps the selected document to the metadata manifest
 schema and every `profile.yaml` below the project to the profile descriptor
-schema. Wallet delivery has no maintained authoring JSON schema.
+schema. Platform maps `task-connection.yaml` and checks it with `evidencectl
+dev check`. Wallet delivery has no maintained authoring JSON schema.
 
 For multiple product directories in one workspace, pass `--workspace` with the
 ancestor directory. Schema mappings name the specific project's paths so one

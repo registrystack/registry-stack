@@ -1260,6 +1260,7 @@ mod tests {
         "dev clean",
         "dev token",
         "dev grant",
+        "dev check",
         "audit show",
         "source add",
         "source suggest",

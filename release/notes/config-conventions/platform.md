@@ -65,6 +65,17 @@ open with `apiVersion` and `kind`.
 
 ## Other changes
 
+- **The check.** `evidencectl dev check <file>` is the offline check for a
+  task connection file and a session state file; the file's envelope says
+  which (CFG-CHECK-1). It resolves no secret reference and judges no file
+  mode, so it runs on a file whose keys are not present. It prints every
+  finding the reader and the connection rules report, takes
+  `--format json` and `--deny-warnings`, and exits 0 when nothing is
+  refused, 1 when something is (or a warning is reported under
+  `--deny-warnings`), and 3 when the file cannot be read
+  (`platform.check.unreadable`). `editors/configure.py platform <directory>`
+  maps the schema to `task-connection.yaml` in that directory and adds an
+  editor task that runs this check.
 - A JSON Schema for the task connection file is generated from the type
   `dev grant` reads and published as
   `products/platform/schemas/task-connection.schema.json`

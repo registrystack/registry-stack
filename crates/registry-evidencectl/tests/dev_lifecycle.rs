@@ -196,6 +196,84 @@ fn approved_grant_command_requires_connection_and_refuses_arbitrary_requirements
     );
 }
 
+const TASK_CONNECTION_EXAMPLE: &str =
+    include_str!("../../../products/platform/examples/task-connection.yaml");
+
+#[test]
+fn dev_check_reports_platform_file_findings_in_both_formats() {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let connection = scratch.path().join("connection.yaml");
+    fs::write(&connection, TASK_CONNECTION_EXAMPLE).expect("connection");
+    let output = evidencectl()
+        .args(["dev", "check"])
+        .arg(&connection)
+        .output()
+        .expect("dev check");
+    assert_success(&output, "dev check");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "0 errors, 0 warnings in 1 file\n"
+    );
+
+    fs::write(
+        &connection,
+        TASK_CONNECTION_EXAMPLE.replace("http://127.0.0.1:8090", "http://casework.example"),
+    )
+    .expect("connection");
+    let output = evidencectl()
+        .args(["dev", "check"])
+        .arg(&connection)
+        .output()
+        .expect("dev check");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.starts_with("evidencectl dev check refused the file.\n"),
+        "{error}"
+    );
+    assert!(
+        error.contains("error[platform.task-connection.invalid-endpoint]")
+            && error.contains("connection.yaml:4:14 /caseworkUrl")
+            && error.contains("next: "),
+        "{error}"
+    );
+    assert!(!error.contains("casework.example"), "{error}");
+
+    let output = evidencectl()
+        .args(["--format", "json", "dev", "check"])
+        .arg(&connection)
+        .output()
+        .expect("dev check json");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "dev check");
+    assert_eq!(report["status"], "refused");
+    assert_eq!(report["filesChecked"], 1);
+    assert_eq!(report["errors"], 1);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "platform.task-connection.invalid-endpoint"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/caseworkUrl");
+    assert_eq!(report["diagnostics"][0]["source"]["line"], 4);
+
+    let output = evidencectl()
+        .args(["--format", "json", "dev", "check"])
+        .arg(scratch.path().join("absent.yaml"))
+        .output()
+        .expect("dev check json");
+    assert_eq!(output.status.code(), Some(3));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+    assert_eq!(report["status"], "operational-failure");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "platform.check.unreadable"
+    );
+}
+
 #[test]
 fn dev_grant_prints_every_connection_file_finding_without_its_values() {
     let scratch = tempfile::tempdir().expect("tempdir");
