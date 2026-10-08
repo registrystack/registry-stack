@@ -114,10 +114,12 @@ fn require_absolute(field: &str, path: &Path) -> Result<(), ConfigBlockError> {
 pub struct SecretProvidersConfig {
     /// Enables `secret:file/name` references, read from files under `root`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "FileSecretProviderConfig"))]
     pub file: Option<FileSecretProviderConfig>,
     /// Enables `secret:env/NAME` references, read from the process
     /// environment. Declared as an empty mapping: `environment: {}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "EnvironmentSecretProviderConfig"))]
     pub environment: Option<EnvironmentSecretProviderConfig>,
 }
 

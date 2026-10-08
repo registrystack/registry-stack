@@ -88,6 +88,12 @@ open with `apiVersion` and `kind`.
   files, and both are read by tests.
 - The identifier catalog lists the task connection schema under the
   `platform` owner.
+- The shared `SecretProvidersConfig` block's `file` and `environment`
+  members no longer admit `null` in any published schema. The reader
+  already refused it (`config.null-value`, CFG-EMPTY-1); leave a provider
+  out to disable it. Every runtime schema embedding the block was
+  regenerated, so BReg's, which already dropped the `null`, embeds it
+  unchanged again (CFG-SCHEMA-5).
 
 ## Diagnostic codes, old to new
 

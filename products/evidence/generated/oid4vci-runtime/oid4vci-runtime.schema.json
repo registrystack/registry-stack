@@ -262,25 +262,11 @@
       "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
       "properties": {
         "environment": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
           "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
         },
         "file": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FileSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/FileSecretProviderConfig",
           "description": "Enables `secret:file/name` references, read from files under `root`."
         }
       },
