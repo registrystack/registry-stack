@@ -1820,34 +1820,6 @@ exceptions:
   wp: WP6
   reason: 'members spread across allOf without unevaluatedProperties: false'
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-ENV-2
-  format: breg/mcp-runtime
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/breg-mcp-runtime/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/breg/mcp-runtime/v1alpha1; refuse the old value with config.retired-api-version
-- rule: CFG-SCHEMA-1
-  format: breg/mcp-runtime
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: breg/mcp-runtime
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: breg/mcp-runtime
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-SCHEMA-8
   format: breg/mcp-runtime
   location: crates/registry-platform-config/src/blocks.rs#JwksSource
@@ -1855,6 +1827,36 @@ exceptions:
   wp: WP3
   reason: JwksSource derives serde's tag
   resolution: Decode it with the shared reader's union helper
+- rule: CFG-NAME-2
+  format: breg/mcp-runtime
+  location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES256
+  class: protocol-constant
+  reason: ES256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/mcp-runtime
+  location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/ES384
+  class: protocol-constant
+  reason: ES384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/mcp-runtime
+  location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/EdDSA
+  class: protocol-constant
+  reason: EdDSA is written as JOSE EdDSA (RFC 8037) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/mcp-runtime
+  location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS256
+  class: protocol-constant
+  reason: RS256 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: breg/mcp-runtime
+  location: products/breg/generated/mcp-runtime/mcp-runtime.schema.json#/$defs/AccessTokenAlgorithm/enum/RS384
+  class: protocol-constant
+  reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
+  resolution: Permanent.
 - rule: CFG-CHECK-1
   format: breg/migration-descriptor
   location: products/platform/config-formats.yaml#/check
@@ -5397,34 +5399,6 @@ exceptions:
   wp: WP6
   reason: an object schema with no members accepts any member
   resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
-- rule: CFG-ENV-2
-  format: breg/review-runtime
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/breg-review-runtime/v1alpha1
-  resolution: Read and write id.registrystack.org/formats/breg/review-runtime/v1alpha1; refuse the old value with config.retired-api-version
-- rule: CFG-SCHEMA-1
-  format: breg/review-runtime
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: breg/review-runtime
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
-  format: breg/review-runtime
-  location: editors/configure.py#/SCHEMAS/breg
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
 - rule: CFG-ENV-2
   format: breg/routes-explanation
   location: products/platform/config-formats.yaml#/current/apiVersion

@@ -452,8 +452,18 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="breg-mcp",
         loader_sources=("crates/registry-breg-mcp/src",),
-        runtime_schema=Exemption("the citizen service publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
+        shared_blocks=(
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
         reference_refusal=TestRef(
             "crates/registry-breg-mcp/src/config.rs",
             "runtime_loader_refuses_environment_expressions_in_secret_references",
@@ -484,8 +494,17 @@ ROWS: tuple[Row, ...] = (
     Row(
         product="breg-review",
         loader_sources=("crates/registry-breg-review/src",),
-        runtime_schema=Exemption("the citizen service publishes no generated runtime schema"),
-        shared_blocks=(),
+        runtime_schema="products/breg/generated/review-runtime/review-runtime.schema.json",
+        shared_blocks=(
+            "EnvironmentSecretProviderConfig",
+            "FileSecretProviderConfig",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+        ),
         reference_refusal=TestRef(
             "crates/registry-breg-review/src/config.rs",
             "runtime_loader_refuses_environment_expressions_in_secret_references",

@@ -204,7 +204,7 @@ formats:
     audience: operator
     stability: experimental
     current:
-      apiVersion: registry.registrystack.org/breg-mcp-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/breg/mcp-runtime/v1alpha1
       kind: BRegMcpRuntimeConfig
       checkedBy:
         file: crates/registry-breg-mcp/src/config.rs
@@ -212,23 +212,40 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/mcp-runtime/v1alpha1
       kind: BRegMcpRuntimeConfig
-    schema: none
+    schema:
+      path: products/breg/generated/mcp-runtime/mcp-runtime.schema.json
+      id: https://id.registrystack.org/schemas/breg/mcp-runtime/mcp-runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-breg-mcp --features schema --example mcp-runtime-schema -- --output products/breg/generated/mcp-runtime
+      driftCheck: crates/registry-breg-mcp/src/schema.rs
     reader:
       crate: registry-breg-mcp
       file: crates/registry-breg-mcp/src/config.rs
       function: load
       type: RuntimeConfig
     check: breg-mcp --runtime-config {file} check
-    example: none
+    example: products/breg/examples/mcp-runtime/runtime.yaml
     conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
+      requiredText: /resourceServer/issuer
+      optionalText: /audit/path
+      integer: /rateLimits/perCitizen/requestsPerMinute
       boolean: none
     securityMembers:
       - pointer: /listener/bind
-        whenOmitted: unclassified
-    restrictingMembers: []
+        whenOmitted: refused
+      - pointer: /resourceServer/algorithms
+        whenOmitted: refused
+      - pointer: /resourceServer/allowedClients
+        whenOmitted: refused
+      - pointer: /resourceServer/requiredScopes
+        whenOmitted: refused
+      - pointer: /registry/accessProfile
+        whenOmitted: refused
+      - pointer: /registry/scopes
+        whenOmitted: refused
+      - pointer: /rateLimits
+        whenOmitted: refused
+    restrictingMembers: [/resourceServer/algorithms, /resourceServer/allowedClients, /resourceServer/requiredScopes]
   - id: breg/review-runtime
     product: breg
     title: Citizen review page runtime configuration
@@ -237,7 +254,7 @@ formats:
     audience: operator
     stability: experimental
     current:
-      apiVersion: registry.registrystack.org/breg-review-runtime/v1alpha1
+      apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
       kind: BRegReviewRuntimeConfig
       checkedBy:
         file: crates/registry-breg-review/src/config.rs
@@ -245,22 +262,33 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
       kind: BRegReviewRuntimeConfig
-    schema: none
+    schema:
+      path: products/breg/generated/review-runtime/review-runtime.schema.json
+      id: https://id.registrystack.org/schemas/breg/review-runtime/review-runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-breg-review --features schema --example review-runtime-schema -- --output products/breg/generated/review-runtime
+      driftCheck: crates/registry-breg-review/src/schema.rs
     reader:
       crate: registry-breg-review
       file: crates/registry-breg-review/src/config.rs
       function: load
       type: RuntimeConfig
     check: breg-review --runtime-config {file} check
-    example: none
+    example: products/breg/examples/review-runtime/runtime.yaml
     conformance:
-      requiredText: none
-      optionalText: none
-      integer: none
+      requiredText: /signIn/issuer
+      optionalText: /audit/path
+      integer: /session/maximumSessions
       boolean: none
     securityMembers:
       - pointer: /listener/bind
-        whenOmitted: unclassified
+        whenOmitted: refused
+      - pointer: /publicOrigin
+        whenOmitted: refused
+      - pointer: /signIn/scopes
+        whenOmitted: refused
+      - pointer: /registry/accessProfile
+        whenOmitted: refused
     restrictingMembers: []
   - id: breg/package
     product: breg
