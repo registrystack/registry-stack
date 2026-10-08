@@ -375,7 +375,7 @@ struct CheckArgs {
     )]
     package: Option<PathBuf>,
 
-    /// One BReg tool file to check on its own, read by its kind: journeys, schema-test
+    /// One tool file to check on its own, read by its kind: journeys, schema-test
     /// credentials or receipt, a data checkpoint or import state, a migration descriptor,
     /// rehearsal receipt or backup binding, a model selection, or a development clients,
     /// example scenarios, session state or source preparation file. No secret, database,
