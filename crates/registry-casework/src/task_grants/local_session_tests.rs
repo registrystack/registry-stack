@@ -569,7 +569,7 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
         assert_eq!(denied.status, StatusCode::NOT_FOUND);
     }
     let connection = workspace.path().join("connection.yaml");
-    private(&connection,serde_norway::to_string(&json!({"version":1,"caseworkUrl":session.url(),"tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"bootstrapResource":AUDIENCE,"clients":{"task-agent":{"assertionKeyFile":session.root().join("credentials/task-agent/assertion-key.jwk"),"resource":AUDIENCE,"scopes":["records:get"]}}})).unwrap().as_bytes());
+    private(&connection,serde_norway::to_string(&json!({"apiVersion":registry_thunderid_tooling::task_connection::API_VERSION,"kind":registry_thunderid_tooling::task_connection::KIND,"caseworkUrl":session.url(),"tokenEndpoint":format!("{}/oauth2/token",session.issuer()),"clientAssertionAudience":session.issuer(),"bootstrapResource":AUDIENCE,"secretProviders":{"file":{"root":session.root().join("credentials/task-agent")}},"clients":{"task-agent":{"assertionKeyRef":"secret:file/assertion-key.jwk","resource":AUDIENCE,"scopes":["records:get"]}}})).unwrap().as_bytes());
     let args = vec![
         "dev".into(),
         "grant".into(),

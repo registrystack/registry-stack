@@ -599,6 +599,10 @@ jobs:
         if: matrix.name == 'render'
         run: cargo test --locked -p registry-render --features schema --lib schema::tests
 
+      - name: Reproduce the task connection schema
+        if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-thunderid-tooling')
+        run: cargo test --locked -p registry-thunderid-tooling --features schema --lib schema::tests
+
       - name: Report disk usage
         if: always()
         run: |

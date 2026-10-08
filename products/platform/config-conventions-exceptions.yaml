@@ -10100,34 +10100,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: platform/task-connection
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1'
-- rule: CFG-ENV-1
-  format: platform/task-connection
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: PlatformTaskConnection'
-- rule: CFG-SCHEMA-1
-  format: platform/task-connection
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-2
-  format: platform/task-connection
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
 - rule: CFG-SCHEMA-6
   format: platform/task-connection
   location: editors/configure.py#/SCHEMAS/platform
@@ -10135,13 +10107,6 @@ exceptions:
   wp: WP6
   reason: the format is not mapped for editors
   resolution: Map its schema in editors/configure.py
-- rule: CFG-YAML-1
-  format: platform/task-connection
-  location: crates/registry-thunderid-tooling/src/grant_file.rs#acquire_to_header()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: platform/thunderid-session
   location: products/platform/config-formats.yaml#/check
@@ -10149,34 +10114,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: platform/thunderid-session
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/platform/thunderid-session/v1alpha1'
-- rule: CFG-ENV-1
-  format: platform/thunderid-session
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: PlatformThunderidSession'
-- rule: CFG-SCHEMA-1
-  format: platform/thunderid-session
-  location: products/platform/config-formats.yaml#/example
-  class: pending
-  wp: WP6
-  reason: the format registers no minimal valid example
-  resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: platform/thunderid-session
-  location: crates/registry-thunderid-tooling/src/container.rs#load_state()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-NAME-2
   format: render/bundle
   location: products/render/schemas/bundle.schema.json#/$defs/PdfStandardSpec/enum/1.4

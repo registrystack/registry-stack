@@ -197,6 +197,52 @@ fn approved_grant_command_requires_connection_and_refuses_arbitrary_requirements
 }
 
 #[test]
+fn dev_grant_prints_every_connection_file_finding_without_its_values() {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let connection = scratch.path().join("connection.yaml");
+    fs::write(
+        &connection,
+        "version: 1\ncaseworkUrl: http://127.0.0.1:8090\nclients:\n  task-agent:\n    assertionKeyFile: /private/agent-keys/task-agent.jwk\n",
+    )
+    .expect("connection");
+    fs::set_permissions(&connection, fs::Permissions::from_mode(0o644)).expect("mode");
+    let grant = |format: &str| {
+        evidencectl()
+            .args(["--format", format, "dev", "grant", "task-agent", "--grant"])
+            .arg("4f1c2a9b-7d3e-4c1a-9b2d-3e4f5a6b7c8d")
+            .arg("--connection")
+            .arg(&connection)
+            .arg(scratch.path())
+            .output()
+            .expect("dev grant")
+    };
+
+    let output = grant("human");
+    assert_eq!(output.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.starts_with("evidencectl: the task connection was refused: "),
+        "{error}"
+    );
+    assert!(
+        error.contains("error[config.missing-envelope]") && error.contains("next: "),
+        "{error}"
+    );
+    assert!(!error.contains("agent-keys"), "{error}");
+
+    let output = grant("json");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["command"], "dev grant");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["diagnostics"][0]["code"], "config.missing-envelope");
+    assert!(!report.to_string().contains("agent-keys"));
+    assert!(!scratch.path().join(".evidence").exists());
+}
+
+#[test]
 fn equal_local_ports_fail_before_creating_private_state() {
     let fixture = Project::new();
     let output = evidencectl()

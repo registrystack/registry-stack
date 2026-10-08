@@ -139,22 +139,38 @@ Casework and the consuming resource with the intended shared issuer first;
 independent default local-development issuer sessions do not automatically share
 trust.
 
-Keep the connection file and existing registered agent key owner-only (0600).
-Its closed v1 format is:
+The connection file (`PlatformTaskConnection`) names no secret, so others may
+read it, but only its owner may write it: it must be a regular, single-link file
+owned by the current user and not group- or other-writable (for example 0644 or
+0600), because a redirected token endpoint would receive the client's signed
+assertion. Each client's private assertion key, one JWK, is a secret reference
+resolved through the file's `secretProviders` only when a grant is acquired; a
+file provider reads `<root>/<name>`, which must be owner-only (0600 or 0400).
+The format is:
 
 ```yaml
-version: 1
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
+kind: PlatformTaskConnection
 caseworkUrl: https://casework.example
 # Stock ThunderID 1.0.1 expects its issuer URL as the client assertion audience.
 tokenEndpoint: https://issuer.example/oauth2/token
 clientAssertionAudience: https://issuer.example
 bootstrapResource: urn:casework:example
+secretProviders:
+  file:
+    root: /absolute/private
 clients:
   task-agent:
-    assertionKeyFile: /absolute/private/task-agent.jwk
+    assertionKeyRef: secret:file/task-agent.jwk
     resource: urn:breg:example
     scopes: [records:get]
 ```
+
+`secret:env/NAME` reads the key from an environment variable instead, when
+`secretProviders` declares `environment: {}`. The
+schema is `products/platform/schemas/task-connection.schema.json`, and
+`products/platform/examples/task-connection.yaml` is a complete example.
 
 The OAuth client must already be registered with that key and permitted to
 exchange assertions from the configured Casework authority. Before approval,

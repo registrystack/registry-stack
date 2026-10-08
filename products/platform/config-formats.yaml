@@ -3650,23 +3650,30 @@ formats:
     audience: operator
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      otherHeader: 'version: 1'
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
+      kind: PlatformTaskConnection
+      checkedBy:
+        file: crates/registry-thunderid-tooling/src/task_connection.rs
+        symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
       kind: PlatformTaskConnection
-    schema: none
+    schema:
+      path: products/platform/schemas/task-connection.schema.json
+      id: https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-thunderid-tooling --features schema --example task-connection-schema -- --output products/platform/schemas
+      driftCheck: crates/registry-thunderid-tooling/src/schema.rs
+      differentialTest: crates/registry-thunderid-tooling/src/schema.rs
     reader:
       crate: registry-thunderid-tooling
-      file: crates/registry-thunderid-tooling/src/grant_file.rs
-      function: acquire_to_header
-      type: Connections
+      file: crates/registry-thunderid-tooling/src/task_connection.rs
+      function: read
+      type: TaskConnection
     check: none
-    example: none
+    example: products/platform/examples/task-connection.yaml
     conformance:
-      requiredText: none
+      requiredText: /bootstrapResource
       optionalText: none
       integer: none
       boolean: none
@@ -3680,9 +3687,11 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/platform/thunderid-session/v1alpha1
+      kind: PlatformThunderidSession
+      checkedBy:
+        file: crates/registry-thunderid-tooling/src/container.rs
+        symbol: SESSION_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/platform/thunderid-session/v1alpha1
       kind: PlatformThunderidSession
@@ -3690,10 +3699,10 @@ formats:
     reader:
       crate: registry-thunderid-tooling
       file: crates/registry-thunderid-tooling/src/container.rs
-      function: load_state
-      type: SessionState
+      function: read_session_state
+      type: StateFile
     check: none
-    example: none
+    example: products/platform/examples/thunderid/session.json
     conformance:
       requiredText: none
       optionalText: none

@@ -1,0 +1,223 @@
+{
+  "$defs": {
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "TaskClient": {
+      "additionalProperties": false,
+      "description": "One registered client.",
+      "properties": {
+        "assertionKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "The client's private assertion key, one JWK, as a secret reference\na provider under `secretProviders` resolves."
+        },
+        "resource": {
+          "$ref": "#/$defs/ExternalId",
+          "allOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$"
+            }
+          ],
+          "description": "The resource the approved grant is exchanged for: an absolute URI\nwithout a fragment or user information."
+        },
+        "scopes": {
+          "allOf": [
+            {
+              "items": {
+                "maxLength": 128,
+                "pattern": "^[!#-)+-\\[\\]-~]+$"
+              },
+              "maxItems": 32,
+              "minItems": 1
+            }
+          ],
+          "description": "The scope ceiling requested with the grant: 1 to 32 distinct OAuth\nscope tokens, each at most 128 bytes and without `*`.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "assertionKeyRef",
+        "resource",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host and no user information.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@]+([/?#].*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A task connection file: the Casework target, the issuer that exchanges\ntokens for it, and the clients registered to acquire grants.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/task-connection/v1alpha1",
+      "type": "string"
+    },
+    "bootstrapResource": {
+      "$ref": "#/$defs/ExternalId",
+      "allOf": [
+        {
+          "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$"
+        }
+      ],
+      "description": "The resource of the bootstrap token that asks Casework for a grant\nassertion: an absolute URI without a fragment or user information."
+    },
+    "caseworkUrl": {
+      "$ref": "#/$defs/Url",
+      "allOf": [
+        {
+          "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]://[^/?#@]+|[Hh][Tt][Tt][Pp]://(?:127\\.0\\.0\\.1|localhost|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$"
+        }
+      ],
+      "description": "The Casework base URL a grant assertion is requested from: `https`,\nor `http` to 127.0.0.1, localhost, or [::1]; no query or fragment."
+    },
+    "clientAssertionAudience": {
+      "$ref": "#/$defs/ExternalId",
+      "allOf": [
+        {
+          "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9._~:/?\\[\\]@!$&'()*+,;=-]|%[0-9A-Fa-f]{2})*$"
+        }
+      ],
+      "description": "The audience of each client's private_key_jwt assertion: an absolute\nURI without a fragment or user information."
+    },
+    "clients": {
+      "additionalProperties": false,
+      "description": "The registered clients, by client id: 1 to 32. A client id is 1 to\n64 lowercase letters, digits, or `-`, since it also names the header\nfile a grant is written to.",
+      "maxProperties": 32,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[^\\u0000-\\u001F\\u007F-\\u009F]+$": {
+          "$ref": "#/$defs/TaskClient"
+        }
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/ExternalId",
+        "allOf": [
+          {
+            "pattern": "^[a-z0-9-]{1,64}$"
+          }
+        ]
+      },
+      "type": "object"
+    },
+    "kind": {
+      "const": "PlatformTaskConnection",
+      "type": "string"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig",
+      "description": "The providers that resolve each client's `assertionKeyRef`."
+    },
+    "tokenEndpoint": {
+      "$ref": "#/$defs/Url",
+      "allOf": [
+        {
+          "pattern": "^(?:[Hh][Tt][Tt][Pp][Ss]://[^/?#@]+|[Hh][Tt][Tt][Pp]://(?:127\\.0\\.0\\.1|localhost|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$"
+        }
+      ],
+      "description": "The OAuth token endpoint each client authenticates to with\nprivate_key_jwt: `https`, or `http` to 127.0.0.1, localhost, or\n[::1]; no query or fragment."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "caseworkUrl",
+    "tokenEndpoint",
+    "clientAssertionAudience",
+    "bootstrapResource",
+    "secretProviders",
+    "clients"
+  ],
+  "title": "Registry Stack task connection",
+  "type": "object"
+}

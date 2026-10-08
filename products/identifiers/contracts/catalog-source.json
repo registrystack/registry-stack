@@ -192,6 +192,14 @@
       "status": "active",
       "compatibilityLine": "v1",
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/*.schema.json",
+      "sourcePath": "crates/registry-thunderid-tooling/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack task connection JSON Schema."
     }
   ],
   "records": [

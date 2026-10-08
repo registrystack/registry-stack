@@ -948,7 +948,7 @@ fn verify_borrowed_registrations(
 
 fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {
     let project = fs::canonicalize(&args.project).context("the grant output project must exist")?;
-    let output = tokio::runtime::Builder::new_current_thread()
+    let acquired = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
         .block_on(registry_thunderid_tooling::grant_file::acquire_to_header(
@@ -956,7 +956,39 @@ fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {
             &project.join(".evidence"),
             &args.client,
             &args.grant,
-        ))?;
+        ));
+    let output = match acquired {
+        Ok(output) => output,
+        Err(error) => {
+            let Some(found) = error.report() else {
+                return Err(error.into());
+            };
+            // An unopenable connection file is unavailable input; every
+            // other finding refuses the file's content or mode.
+            let exit = if found
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "platform.task-connection.unreadable")
+            {
+                crate::report::OPERATIONAL_FAILURE_EXIT
+            } else {
+                crate::report::DOMAIN_REFUSAL_EXIT
+            };
+            match format {
+                OutputFormat::Human => eprintln!("evidencectl: {error}"),
+                OutputFormat::Json => crate::print_report(&crate::report::failure(
+                    "dev grant",
+                    exit,
+                    found
+                        .to_json_value()
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
+                )),
+            }
+            return Ok(ExitCode::from(exit));
+        }
+    };
     match format {
         OutputFormat::Human => println!(
             "Wrote approved task authorization header to {}",

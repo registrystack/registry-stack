@@ -30,7 +30,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "b9a3e3234041b6bf18c076d2c62b3d6af0dcfbce2df926e8f7174f61b0d54182"
+        "sha256": "88e12dcf7bc50f5fea624f6e9f6be73b82b4cb854073b7eef619cc7d3072c6af"
       }
     },
     {
@@ -3076,6 +3076,24 @@
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
         "sha256": "3f1e3c30d730820c1e6eade98ec4bc6fff641610531e1c474b695d4324f07e26",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Registry Stack task connection",
+      "description": "Registry Stack task connection JSON Schema.",
+      "source": {
+        "path": "crates/registry-thunderid-tooling/src/schema.rs",
+        "sha256": "a0d71d083c0502cd9f9805451c1f80a1f0cf5623df094886cb1a6a140ce8bfe0"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/task-connection.schema.json",
+        "sha256": "85286c08f4a2d2deecdb2145f18ffb099d11b9ff500c72d7bc862c1b8d67d155",
         "mediaType": "application/schema+json"
       }
     },

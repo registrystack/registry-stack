@@ -132,17 +132,23 @@ Approve a displayed governed template through the Casework UI or API. The
 approval request contains only its template ID and version, with current item
 `If-Match` and an idempotency key.
 
-To acquire the approved UUID, create an owner-only connection file:
+To acquire the approved UUID, create a task connection file that only you may
+write. It names the agent's key by reference; the key file itself stays
+owner-only:
 
 ```yaml
-version: 1
+apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1
+kind: PlatformTaskConnection
 caseworkUrl: http://127.0.0.1:8092
 tokenEndpoint: http://127.0.0.1:8093/oauth2/token
 clientAssertionAudience: http://127.0.0.1:8093
 bootstrapResource: urn:example:local-review
+secretProviders:
+  file:
+    root: /absolute/project/.casework/dev/credentials/task-agent
 clients:
   task-agent:
-    assertionKeyFile: /absolute/project/.casework/dev/credentials/task-agent/assertion-key.jwk
+    assertionKeyRef: secret:file/assertion-key.jwk
     resource: urn:example:local-review
     scopes: [records:get]
 ```

@@ -42,6 +42,28 @@
   Evidence clients and the token exchanges change only the reported kind,
   from `timeout` to `connect`; the review client still classifies the
   failure as ambiguous.
+- BREAKING: `registry-thunderid-tooling` reads the task connection file that
+  `evidencectl dev grant`, `bregctl dev grant`, and `caseworkctl dev grant`
+  share through `registry-platform-yaml`. The file opens with
+  `apiVersion: id.registrystack.org/formats/platform/task-connection/v1alpha1`
+  and `kind: PlatformTaskConnection` in place of `version: 1`; each client
+  names its key as `assertionKeyRef: secret:file/<name>` or
+  `secret:env/NAME`, resolved through a top-level `secretProviders` block,
+  in place of `assertionKeyFile`. The file may be readable by others but not
+  writable by group or others. A refusal reports every finding with a
+  `platform.task-connection.*` or reader code and repeats no value; an
+  unopenable file makes `evidencectl dev grant` exit 3. Migration: replace
+  `version: 1` with the envelope, and move each `assertionKeyFile` to
+  `secretProviders.file.root` plus `assertionKeyRef: secret:file/<name>`.
+  Its JSON Schema is `products/platform/schemas/task-connection.schema.json`.
+- BREAKING: the ThunderID development session state file, `session.json`,
+  opens with `apiVersion` and `kind: PlatformThunderidSession` and uses
+  camelCase members; the unused `schema_applied` member is gone. A file
+  written by an earlier release is refused. Migration: stop the development
+  session, delete the directory that holds `session.json`, and start it
+  again.
+  Migration steps and the diagnostic code table for both files:
+  `release/notes/config-conventions/platform.md`.
 
 ## v0.39.0 - 2026-10-06
 
