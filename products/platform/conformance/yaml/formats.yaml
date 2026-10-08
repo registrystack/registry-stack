@@ -160,13 +160,11 @@ formats:
       - /version
       - /clients/task-agent/assertionKeyFile
 
-  # The authoring template ships without the project marker and the
-  # disposable signing key `evidencectl new` writes, so the copy gets a marker
-  # and, where the check signs fixture answers, a freshly generated key.
+  # The authoring template ships without the disposable signing key
+  # `evidencectl new` writes, so the copy gets a freshly generated key for the
+  # check to sign fixture answers with.
   evidence/fixture:
     project: crates/registry-evidencectl/templates/sqlite-extract
-    write:
-      evidence-project.yaml: "version: 1\nproject: evidence-authoring\n"
     prepare:
       - evidencectl keygen signing --out-dir {project}/secrets
     init: {command: "evidencectl init --profile local --transport sqlite-extract {directory}", file: fixtures/record-status.yaml}
