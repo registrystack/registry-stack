@@ -434,7 +434,7 @@ macro_rules! checked_text {
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 let text = String::deserialize(deserializer)?;
-                Self::new(text).map_err(de::Error::custom)
+                Self::new(text).map_err(Invalid::into_error)
             }
         }
     };
