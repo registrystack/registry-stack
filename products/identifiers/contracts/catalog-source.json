@@ -90,6 +90,16 @@
       "reason": "Manifest profile identifiers in fixtures are not Registry Stack resolver contracts."
     },
     {
+      "glob": "products/platform/config-conventions-exceptions.yaml",
+      "classification": "planned-resolution",
+      "reason": "Exception resolutions name the identifier a deviation moves to; the change that applies a resolution publishes its identifier and deletes the entry."
+    },
+    {
+      "glob": "products/platform/scripts/test_check_config_conventions.py",
+      "classification": "fixture",
+      "reason": "Convention lint tests build throwaway schemas whose identifiers are test inputs, not Registry Stack resolver contracts."
+    },
+    {
       "glob": "release/*.schema.json",
       "classification": "retired-product",
       "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
