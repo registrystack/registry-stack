@@ -51,7 +51,7 @@ async fn authored_multi_period_response_obeys_the_shared_document_byte_limit() {
         "entities":[{"id":"unit","route":"units","primaryDataset":"load","mutationMode":"mutable","fields":fields}],
         "vocabularies":vocabularies,
         "accessProfiles":[{"id":"publisher","principalClaim":"principal","permissions":[{"entity":"unit","operations":["list"],"allowCount":true,"rowBoundaries":[],"readableFields":accessible,"filterableFields":accessible}]}],
-        "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"eventDate ne null","period":{"kind":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},"dimensions":dimension_ids,"disclosure":{"minimumCount":5,"roundingBase":5},"live":["publisher"]}]
+        "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"eventDate ne null","period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},"dimensions":dimension_ids,"disclosure":{"minimumCount":5,"roundingBase":5},"live":["publisher"]}]
     });
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let compiled = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());

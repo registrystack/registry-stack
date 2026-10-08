@@ -8,7 +8,7 @@ use registry_platform_config::contains_environment_expression;
 pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
     ApiVersion, BoundedU32, BoundedU64, DataLiteral, Digest, EnvelopeRule, Expect, FormatSpec,
-    Invalid, Reader, Refusal, ScalarHook, ScalarSite, Severity, Url,
+    Invalid, LocalId, Reader, Refusal, RemovedKey, ScalarHook, ScalarSite, Severity, Url,
 };
 pub use registry_platform_yaml::{Decoded, Report};
 use serde::{
@@ -103,7 +103,7 @@ pub struct RegistryProject {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalDatasetSource {
-    pub id: String,
+    pub id: LocalId,
     pub unit: String,
     pub population: String,
     pub period: StatisticalPeriodSource,
@@ -124,7 +124,7 @@ pub struct StatisticalDatasetSource {
     rename_all = "snake_case",
     rename_all_fields = "camelCase"
 )]
-#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum StatisticalPeriodSource {
     Flow {
         field: String,
@@ -137,8 +137,8 @@ pub enum StatisticalPeriodSource {
         validity: StatisticalValiditySource,
     },
 }
-registry_platform_yaml::tagged_union!(StatisticalPeriodSource, tag = "kind");
-serialize_tagged_union!(StatisticalPeriodSource, tag = "kind");
+registry_platform_yaml::tagged_union!(StatisticalPeriodSource, tag = "type");
+serialize_tagged_union!(StatisticalPeriodSource, tag = "type");
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -3845,8 +3845,15 @@ pub const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
         api_versions: &PROJECT_API_VERSIONS,
         retired_api_versions: &[],
     },
-    removed_keys: &[],
+    removed_keys: &PROJECT_REMOVED_KEYS,
 };
+
+/// Members `registry.yaml` no longer accepts, each with the member that
+/// replaced it.
+const PROJECT_REMOVED_KEYS: [RemovedKey<'static>; 1] = [RemovedKey {
+    pointer: "/statisticalDatasets/*/period/kind",
+    replacement: "Rename `kind` to `type`, keeping its value: `type: flow` or `type: stock`.",
+}];
 
 /// A module's `module.yaml`. A module carries no envelope: its project's
 /// module lock names it by identifier, version, and digest. Its diagnostics

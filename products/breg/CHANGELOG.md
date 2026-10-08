@@ -96,6 +96,12 @@
   package with this release against it, then `plan` and `apply` the rebuild,
   which is recorded as a metadata-only activation. Migration steps are in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: experimental statistical datasets in `registry.yaml` tag their
+  period with `type: flow` or `type: stock` in place of `kind`, and a
+  dataset `id` outside the local identifier grammar is refused when the
+  project is read, as `config.invalid-value`, rather than by the compiler.
+  Rename `period.kind` to `period.type`. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded

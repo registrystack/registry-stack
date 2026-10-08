@@ -31,7 +31,6 @@ pub(super) fn compile(
     let mut seen = BTreeSet::new();
     for source in &project.statistical_datasets {
         let root = format!("statisticalDatasets[id={}]", source.id);
-        super::validate_id(&source.id, &format!("{root}.id"), &mut errors);
         if !seen.insert(source.id.clone()) {
             errors.push(error(
                 "breg.statistical-dataset.id-duplicate",
@@ -275,9 +274,9 @@ pub(super) fn compile(
             continue;
         }
         compiled.insert(
-            source.id.clone(),
+            source.id.to_string(),
             CompiledStatisticalDataset {
-                id: source.id.clone(),
+                id: source.id.to_string(),
                 unit_entity_id: source.unit.clone(),
                 population: source.population.clone(),
                 period,

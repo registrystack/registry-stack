@@ -3293,12 +3293,6 @@ exceptions:
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
 - rule: CFG-ID-1
   format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/StatisticalDatasetSource/properties/id
-  class: stable-move
-  reason: id is not typed as $defs/LocalId
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId'
-- rule: CFG-ID-1
-  format: breg/project
   location: products/breg/generated/authoring/registry-project.schema.json#/$defs/StringFieldSourceSchema/properties/id
   class: stable-move
   reason: id is not typed as $defs/LocalId
@@ -3378,12 +3372,6 @@ exceptions:
 - rule: CFG-ID-7
   format: breg/project
   location: products/breg/generated/authoring/registry-project.schema.json#/$defs/HookHandlerSource
-  class: stable-move
-  reason: a union tagged by kind, not type
-  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'
-- rule: CFG-ID-7
-  format: breg/project
-  location: products/breg/generated/authoring/registry-project.schema.json#/$defs/StatisticalPeriodSource
   class: stable-move
   reason: a union tagged by kind, not type
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'

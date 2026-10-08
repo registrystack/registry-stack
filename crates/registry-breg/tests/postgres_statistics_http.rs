@@ -4285,7 +4285,7 @@ fn statistics_registry_source() -> Value {
         ],
         "statisticalDatasets":[{
             "id":"records-by-category","unit":"record","population":"active eq true",
-            "period":{"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
+            "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5},
             "live":["analyst","analyst-wide"],"releases":{"publisher":"publisher","readers":["reader"]}
         }]
@@ -4328,7 +4328,7 @@ fn cap_registry() -> registry_breg::CompiledRegistry {
         "vocabularies":[{"id":"category","values":codes}],
         "statisticalDatasets":[{
             "id":"daily-by-category","unit":"record","population":"active eq true",
-            "period":{"kind":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},
+            "period":{"type":"flow","field":"event-date","granularity":"day","firstPeriod":"2025-01-01"},
             "dimensions":["category"],"disclosure":{"minimumCount":5,"roundingBase":5},
             "live":["analyst"],"releases":{"publisher":"publisher","readers":["reader"]}
         }]

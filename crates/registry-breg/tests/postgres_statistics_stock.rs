@@ -331,7 +331,7 @@ fn partial_text_registry() -> registry_breg::CompiledRegistry {
         ],
         "statisticalDatasets":[{
             "id":"monthly-air-permits","unit":"permit","population":"startswith(permitType,'a')",
-            "period":{"kind":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
+            "period":{"type":"flow","field":"valid-from","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["administrative-boundary"],
             "disclosure":{"minimumCount":2,"roundingBase":2},
             "live":["facility-operator"]

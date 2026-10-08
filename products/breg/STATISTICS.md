@@ -22,7 +22,7 @@ statisticalDatasets:
     unit: discharge-report
     population: "substanceCode ne null"
     period:
-      kind: flow
+      type: flow
       field: period-start
       granularity: month
       firstPeriod: 2025-01
@@ -99,7 +99,7 @@ rows valid at the reference date. It may use the entity's temporal declaration:
 
 ```yaml
 period:
-  kind: stock
+  type: stock
   granularity: month
   firstPeriod: 2025-01
   validity: temporal

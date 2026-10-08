@@ -56,7 +56,7 @@ async fn million_unit_three_dimension_statistics_measurement() {
             "filterableFields":["active","category","region","event-date"]}]},
             {"id":"reader","principalClaim":"principal","permissions":[]}],
         "statisticalDatasets":[{"id":"units-by-category","unit":"unit","population":"active ne null",
-            "period":{"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
+            "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["active","category","region"],
             "disclosure":{"minimumCount":5,"roundingBase":5},"live":["publisher"],
             "releases":{"publisher":"publisher","readers":["reader"]}}]

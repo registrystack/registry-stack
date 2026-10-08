@@ -2708,6 +2708,11 @@
       ],
       "type": "object"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
     "LookupPermissionSource": {
       "additionalProperties": false,
       "properties": {
@@ -3691,7 +3696,7 @@
           "$ref": "#/$defs/StatisticalDisclosureSource"
         },
         "id": {
-          "type": "string"
+          "$ref": "#/$defs/LocalId"
         },
         "live": {
           "items": {
@@ -3766,13 +3771,13 @@
             "granularity": {
               "$ref": "#/$defs/StatisticalPeriodGranularitySource"
             },
-            "kind": {
+            "type": {
               "const": "flow",
               "type": "string"
             }
           },
           "required": [
-            "kind",
+            "type",
             "field",
             "granularity",
             "firstPeriod"
@@ -3788,7 +3793,7 @@
             "granularity": {
               "$ref": "#/$defs/StatisticalPeriodGranularitySource"
             },
-            "kind": {
+            "type": {
               "const": "stock",
               "type": "string"
             },
@@ -3797,7 +3802,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "granularity",
             "firstPeriod",
             "validity"

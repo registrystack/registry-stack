@@ -61,7 +61,7 @@ fn source() -> Value {
             "id":"records-by-category",
             "unit":"record",
             "population":"active eq true",
-            "period":{"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
+            "period":{"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["category"],
             "disclosure":{"minimumCount":5,"roundingBase":5},
             "live":["analyst"],
@@ -616,7 +616,7 @@ fn statistical_dataset_refuses_release_documents_over_the_eight_mibibyte_cap() {
 #[test]
 fn statistical_period_unions_refuse_at_the_member_inside_the_form() {
     let period = "project.statisticalDatasets[0].period";
-    let stock = |validity: Value| json!({"kind":"stock","granularity":"month","firstPeriod":"2025-01","validity":validity});
+    let stock = |validity: Value| json!({"type":"stock","granularity":"month","firstPeriod":"2025-01","validity":validity});
     for (written, code, path) in [
         (
             stock(json!(["temporal"])),
@@ -634,19 +634,19 @@ fn statistical_period_unions_refuse_at_the_member_inside_the_form() {
             format!("{period}.validity.to"),
         ),
         (
-            json!({"kind":"flow","granularity":"month","firstPeriod":"2025-01"}),
+            json!({"type":"flow","granularity":"month","firstPeriod":"2025-01"}),
             "config.missing-key",
             period.to_owned(),
         ),
         (
-            json!({"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01","validity":"temporal"}),
+            json!({"type":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01","validity":"temporal"}),
             "config.unknown-key",
             format!("{period}.validity"),
         ),
         (
-            json!({"kind":"snapshot","granularity":"month","firstPeriod":"2025-01"}),
+            json!({"type":"snapshot","granularity":"month","firstPeriod":"2025-01"}),
             "config.unknown-variant",
-            format!("{period}.kind"),
+            format!("{period}.type"),
         ),
     ] {
         let mut value = source();
@@ -663,6 +663,67 @@ fn statistical_period_unions_refuse_at_the_member_inside_the_form() {
 }
 
 #[test]
+fn a_period_tagged_by_kind_is_refused_with_its_replacement_named() {
+    let mut value = source();
+    value["statisticalDatasets"][0]["period"] =
+        json!({"kind":"flow","field":"event-date","granularity":"month","firstPeriod":"2025-01"});
+    let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+        .expect_err("a period tagged by kind is refused when the project is read");
+    let refused = failure
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        refused,
+        vec![
+            (
+                "config.missing-key",
+                "project.statisticalDatasets[0].period"
+            ),
+            (
+                "config.removed-key",
+                "project.statisticalDatasets[0].period.kind"
+            ),
+        ],
+        "{failure:?}"
+    );
+    let removed = &failure.diagnostics()[1];
+    assert!(
+        removed.message.contains("`type`"),
+        "the refusal names the member that replaces kind: {removed:?}"
+    );
+}
+
+#[test]
+fn a_dataset_id_outside_the_local_identifier_grammar_is_refused_when_read() {
+    let long = "u".repeat(65);
+    for written in ["Units", "1-units", "units.by.category", long.as_str()] {
+        let mut value = source();
+        value["statisticalDatasets"][0]["id"] = json!(written);
+        let failure = parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+            .expect_err("an id outside the grammar is refused when the project is read");
+        let refused = failure
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            refused,
+            vec![("config.invalid-value", "project.statisticalDatasets[0].id")],
+            "{failure:?}"
+        );
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| !diagnostic.message.contains(written)),
+            "the refusal does not repeat the value: {failure:?}"
+        );
+    }
+}
+
+#[test]
 fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
     for validity in [
         json!("temporal"),
@@ -670,7 +731,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
     ] {
         let mut value = source();
         value["statisticalDatasets"][0]["period"] = json!({
-            "kind":"stock","granularity":"month","firstPeriod":"2025-01","validity":validity
+            "type":"stock","granularity":"month","firstPeriod":"2025-01","validity":validity
         });
         compile(&value).expect("stock validity compiles");
     }
@@ -715,7 +776,7 @@ fn temporal_and_pair_stock_compile_and_invalid_periods_are_refused() {
     assert_refused(
         |value| {
             value["statisticalDatasets"][0]["period"] = json!({
-                "kind":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"
+                "type":"stock","granularity":"month","firstPeriod":"2025-01","validity":"temporal"
             });
             value["entities"][0]
                 .as_object_mut()

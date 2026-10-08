@@ -317,6 +317,36 @@ review. `test` rebuilds the deployed registry from its packaged sources with
 this release's compiler; when the stricter reader refuses those sources, it
 reports `migration.rehearsal.baseline_unavailable`.
 
+### BREAKING: a statistical dataset's period is tagged by `type`
+
+Statistical datasets are experimental, so their members follow the
+conventions now (CFG-ID-7, CFG-ID-1) rather than at the stable move.
+
+| Was | Is |
+|---|---|
+| `period: {kind: flow, ...}` | `period: {type: flow, ...}` |
+| `period: {kind: stock, ...}` | `period: {type: stock, ...}` |
+| a dataset `id` outside `^[a-z][a-z0-9_-]{0,63}$` refused by the compiler as `breg.identifier.invalid` | refused when the project is read, as `config.invalid-value` at `statisticalDatasets[N].id` |
+
+A period that still writes `kind` is refused with `config.removed-key` at
+`period.kind`, whose fix names `type`, beside `config.missing-key` for the
+absent `type`. The identifier grammar is unchanged, so a dataset id the
+compiler accepted is still accepted.
+
+To migrate, rename the member in each `statisticalDatasets[].period` of
+`registry.yaml`:
+
+```sh
+perl -pi -e 's/^(\s+)kind: (flow|stock)$/$1type: $2/' registry.yaml
+```
+
+then review the diff: the expression also renames any other `kind: flow` or
+`kind: stock` line in the file. Rebuild and promote the project as usual.
+`bregctl test` rebuilds a deployed registry from its packaged sources with
+this release's reader, so a deployed package whose project still writes
+`kind` cannot be rehearsed and reports
+`migration.rehearsal.baseline_unavailable`.
+
 ### BREAKING: configuration diagnostic codes are named `breg.<area>.<condition>`
 
 Every code the Base Registry Engine reports for a problem in

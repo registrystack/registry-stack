@@ -805,7 +805,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "id":"monthly-owned-correction-requests",
             "unit":"correction-request",
             "population":"included eq true",
-            "period":{"kind":"flow","field":"requested-on","granularity":"month","firstPeriod":"2025-01"},
+            "period":{"type":"flow","field":"requested-on","granularity":"month","firstPeriod":"2025-01"},
             "dimensions":["included"],
             "disclosure":{"minimumCount":2,"roundingBase":2},
             "live":["submitter"]
