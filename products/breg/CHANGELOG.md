@@ -32,6 +32,13 @@
   `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
   apply no assertion-issuer rule. Migration steps are in
   `release/notes/config-conventions/breg.md`.
+- The project, module, and runtime JSON Schemas admit `null` only in a
+  comparison literal, as the reader does, and declare no `default: null`. The
+  project schema states its `apiVersion` and `kind` as constants, an embedded
+  `schema` member carries `x-registry-foreign: json-schema-2020-12`, and the
+  project and module schemas are published as
+  `https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json`
+  and `https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json`.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
   row, and journaling a `GET` the caller did not send. A `HEAD` now receives

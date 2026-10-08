@@ -3107,12 +3107,7 @@ fn install_schema_constraints(schema: &mut Value) {
         .pointer_mut("/$defs/RawAuditConfig")
         .and_then(Value::as_object_mut)
     {
-        let set = |name: &str| {
-            serde_json::json!({
-                "required": [name],
-                "properties": {name: {"not": {"type": "null"}}}
-            })
-        };
+        let set = |name: &str| serde_json::json!({"required": [name]});
         audit.insert(
             "if".to_owned(),
             serde_json::json!({

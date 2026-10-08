@@ -1747,6 +1747,7 @@ struct StructuredFieldSourceSchema {
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
     max_bytes: u32,
+    #[schemars(extend("x-registry-foreign" = "json-schema-2020-12"))]
     schema: Value,
     #[serde(default)]
     encrypted: bool,
@@ -2309,6 +2310,10 @@ pub enum FieldTypeSource {
     },
     Structured {
         max_bytes: u32,
+        #[cfg_attr(
+            feature = "schema",
+            schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+        )]
         schema: Value,
     },
 }

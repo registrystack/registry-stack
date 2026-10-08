@@ -61,6 +61,7 @@ mod attachments;
 mod statistics;
 
 pub const AUTHORING_API_VERSION: &str = "registry.registrystack.org/v1alpha1";
+pub const AUTHORING_KIND: &str = "RegistryProject";
 pub const MAX_BATCH_ITEMS: u16 = 100;
 pub const MAX_BATCH_BYTES: u32 = 2_097_152;
 /// The transport ceiling a chunk-submission request body is read under: the
@@ -413,7 +414,7 @@ fn validate_project_header(
             "the project uses an unsupported API version",
         ));
     }
-    if project.kind != "RegistryProject" {
+    if project.kind != AUTHORING_KIND {
         errors.push(Diagnostic::error(
             "project.kind.unsupported",
             "project.kind",

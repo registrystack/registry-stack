@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use crate::compiler::{AUTHORING_API_VERSION, AUTHORING_KIND};
 use crate::contract::{RegistryModule, RegistryProject};
 #[cfg(feature = "runtime")]
 use crate::runtime_config::runtime_config_schema;
@@ -13,10 +14,10 @@ const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 
 pub const REGISTRY_PROJECT_SCHEMA_FILE: &str = "registry-project.schema.json";
 pub const REGISTRY_PROJECT_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json";
+    "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_FILE: &str = "registry-module.schema.json";
 pub const REGISTRY_MODULE_SCHEMA_ID: &str =
-    "https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json";
+    "https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json";
 #[cfg(feature = "runtime")]
 pub const RUNTIME_CONFIG_SCHEMA_FILE: &str = "runtime.schema.json";
 #[cfg(feature = "runtime")]
@@ -30,7 +31,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
             REGISTRY_PROJECT_SCHEMA_FILE,
             "Base Registry Engine authored project",
             REGISTRY_PROJECT_SCHEMA_ID,
-            serde_json::to_value(schemars::schema_for!(RegistryProject))?,
+            project_schema()?,
         ),
         (
             REGISTRY_MODULE_SCHEMA_FILE,
@@ -64,7 +65,24 @@ pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         .collect()
 }
 
-fn published(derived: Value, title: &str, identifier: &str) -> Value {
+fn project_schema() -> Result<Value, serde_json::Error> {
+    let mut derived = serde_json::to_value(schemars::schema_for!(RegistryProject))?;
+    for (property, expected) in [
+        ("apiVersion", AUTHORING_API_VERSION),
+        ("kind", AUTHORING_KIND),
+    ] {
+        if let Some(member) = derived
+            .pointer_mut(&format!("/properties/{property}"))
+            .and_then(Value::as_object_mut)
+        {
+            member.insert("const".to_owned(), Value::String(expected.to_owned()));
+        }
+    }
+    Ok(derived)
+}
+
+fn published(mut derived: Value, title: &str, identifier: &str) -> Value {
+    refuse_null(&mut derived, "");
     let mut object = match derived {
         Value::Object(object) => object,
         other => {
@@ -80,6 +98,55 @@ fn published(derived: Value, title: &str, identifier: &str) -> Value {
     object.insert("$id".to_owned(), Value::String(identifier.to_owned()));
     object.insert("title".to_owned(), Value::String(title.to_owned()));
     Value::Object(object)
+}
+
+/// The reader refuses `null` in every member but a comparison literal
+/// (CFG-EMPTY-1), so an optional member is written by leaving it out. This
+/// drops the `null` schemars adds to an `Option` and the `default: null` it
+/// declares for one, everywhere except `$defs/DataLiteral`, the record value
+/// in which `null` means the stored value is null. Instance values under
+/// `default`, `const`, `enum`, and `examples` are left as written.
+fn refuse_null(schema: &mut Value, pointer: &str) {
+    if pointer == "/$defs/DataLiteral" {
+        return;
+    }
+    match schema {
+        Value::Object(object) => {
+            if object.get("default") == Some(&Value::Null) {
+                object.remove("default");
+            }
+            if let Some(Value::Array(kinds)) = object.get_mut("type") {
+                kinds.retain(|kind| kind != "null");
+                if let [only] = kinds.as_slice() {
+                    let only = only.clone();
+                    object.insert("type".to_owned(), only);
+                }
+            }
+            for keyword in ["anyOf", "oneOf"] {
+                let Some(Value::Array(branches)) = object.get_mut(keyword) else {
+                    continue;
+                };
+                branches.retain(|branch| branch.get("type") != Some(&Value::from("null")));
+                if let [Value::Object(only)] = branches.as_slice() {
+                    let only = only.clone();
+                    object.remove(keyword);
+                    object.extend(only);
+                }
+            }
+            for (key, member) in object.iter_mut() {
+                if matches!(key.as_str(), "default" | "const" | "enum" | "examples") {
+                    continue;
+                }
+                refuse_null(member, &format!("{pointer}/{key}"));
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter_mut().enumerate() {
+                refuse_null(item, &format!("{pointer}/{index}"));
+            }
+        }
+        _ => {}
+    }
 }
 
 fn render(value: Value) -> Result<String, serde_json::Error> {
@@ -240,6 +307,142 @@ mod tests {
         let path = acceptance_root().join(project).join("registry.yaml");
         serde_norway::from_str(&fs::read_to_string(path).expect("the fixture exists"))
             .expect("the fixture is well-formed YAML")
+    }
+
+    fn every_document() -> Vec<(&'static str, Value)> {
+        let mut rendered = documents().expect("the authoring schemas generate");
+        #[cfg(feature = "runtime")]
+        rendered.extend(runtime_documents().expect("the runtime schema generates"));
+        rendered
+            .into_iter()
+            .map(|(file, document)| {
+                let value = serde_json::from_str(&document).expect("a generated schema is JSON");
+                (file, value)
+            })
+            .collect()
+    }
+
+    /// Collects the pointer of every place a schema admits `null`, outside
+    /// `$defs/DataLiteral`, the one member that holds a record value.
+    fn null_admissions(node: &Value, pointer: &str, found: &mut Vec<String>) {
+        if pointer == "/$defs/DataLiteral" {
+            return;
+        }
+        match node {
+            Value::Object(object) => {
+                if object.get("default") == Some(&Value::Null) {
+                    found.push(format!("{pointer}/default"));
+                }
+                match object.get("type") {
+                    Some(Value::String(kind)) if kind == "null" => found.push(pointer.to_owned()),
+                    Some(Value::Array(kinds)) if kinds.iter().any(|kind| kind == "null") => {
+                        found.push(format!("{pointer}/type"));
+                    }
+                    _ => {}
+                }
+                for keyword in ["enum", "const"] {
+                    let admitted = match object.get(keyword) {
+                        Some(Value::Array(values)) if keyword == "enum" => {
+                            values.contains(&Value::Null)
+                        }
+                        Some(Value::Null) => true,
+                        _ => false,
+                    };
+                    if admitted {
+                        found.push(format!("{pointer}/{keyword}"));
+                    }
+                }
+                for (key, member) in object {
+                    if matches!(key.as_str(), "default" | "const" | "enum" | "examples") {
+                        continue;
+                    }
+                    null_admissions(member, &format!("{pointer}/{key}"), found);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    null_admissions(item, &format!("{pointer}/{index}"), found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn generated_schemas_admit_null_only_as_a_data_literal() {
+        for (file, document) in every_document() {
+            let mut found = Vec::new();
+            null_admissions(&document, "", &mut found);
+            assert!(found.is_empty(), "{file} admits null at {found:#?}");
+        }
+        let project: Value = serde_json::from_str(&schema_document()).expect("the schema is JSON");
+        let literal = &project["$defs"]["DataLiteral"];
+        let mut found = Vec::new();
+        null_admissions(literal, "/literal", &mut found);
+        assert!(
+            !found.is_empty(),
+            "a comparison literal still admits null as a record value"
+        );
+    }
+
+    #[test]
+    fn registry_project_schema_states_its_envelope_values() {
+        let project: Value = serde_json::from_str(&schema_document()).expect("the schema is JSON");
+        assert_eq!(
+            project["properties"]["apiVersion"]["const"],
+            crate::compiler::AUTHORING_API_VERSION
+        );
+        assert_eq!(project["properties"]["kind"]["const"], "RegistryProject");
+        let schema = compile(&schema_document());
+        let mut instance = fixture("business");
+        assert!(schema.is_valid(&instance));
+        instance["kind"] = Value::String("RegistryModule".to_owned());
+        assert!(!schema.is_valid(&instance));
+    }
+
+    /// Collects every `schema` member: each holds an adopter's JSON Schema.
+    fn embedded_schema_members<'a>(
+        node: &'a Value,
+        pointer: &str,
+        found: &mut Vec<(String, &'a Value)>,
+    ) {
+        match node {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    if let Some(member) = properties.get("schema") {
+                        found.push((format!("{pointer}/properties/schema"), member));
+                    }
+                }
+                for (key, member) in object {
+                    embedded_schema_members(member, &format!("{pointer}/{key}"), found);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    embedded_schema_members(item, &format!("{pointer}/{index}"), found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn embedded_structured_schemas_carry_the_foreign_marker() {
+        for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
+            let document: Value =
+                serde_json::from_str(&documents().expect("the authoring schemas generate")[file])
+                    .expect("the schema is JSON");
+            let mut found = Vec::new();
+            embedded_schema_members(&document, "", &mut found);
+            assert_eq!(found.len(), 3, "{file}: {found:#?}");
+            for (pointer, member) in found {
+                assert_eq!(
+                    member.get("x-registry-foreign"),
+                    Some(&Value::String("json-schema-2020-12".to_owned())),
+                    "{file}{pointer}"
+                );
+            }
+        }
     }
 
     #[test]

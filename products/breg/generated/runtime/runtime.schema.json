@@ -51,10 +51,7 @@
       "additionalProperties": false,
       "properties": {
         "assertionAudience": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "clientId": {
           "type": "string"
@@ -63,10 +60,7 @@
           "$ref": "#/$defs/SecretReference"
         },
         "resource": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "scopes": {
           "default": [],
@@ -106,25 +100,11 @@
           "description": "The Evidence service's base URL. It is `https`; `http` is accepted\nonly for a loopback host, for local development."
         },
         "caBundleRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "PEM CA bundle for the Evidence service and its token endpoint.\nOmitted, the platform's trusted roots verify them."
         },
         "privateKeyJwt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EvidencePrivateKeyJwtConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/EvidencePrivateKeyJwtConfig",
           "description": "The refreshing credential: a private-key JWT client exchange.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "revokedKeyIds": {
@@ -135,14 +115,7 @@
           "type": "array"
         },
         "tokenRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "Compatibility path for a pre-issued token. Long-running providers\nshould configure `privateKeyJwt` so expiry triggers a fresh exchange.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "trustBindingId": {
@@ -272,14 +245,7 @@
               "type": "string"
             },
             "caBundleRef": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/SecretReference"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/SecretReference"
             },
             "endpoint": {
               "maxLength": 2048,
@@ -303,14 +269,7 @@
               "$ref": "#/$defs/SecretReference"
             },
             "sessionTokenRef": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/SecretReference"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/SecretReference"
             },
             "timeoutMilliseconds": {
               "default": 10000,
@@ -423,30 +382,21 @@
         },
         "path": {
           "description": "Absolute path of the active audit file. Required for, and accepted\nonly with, the `file` destination; omitted with `stdout`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "retainDays": {
           "description": "Days a rotated file is retained, accepted only with the `file`\ndestination. Omitted, a rotated file is retained for 90 days.",
           "format": "uint32",
           "maximum": 36500,
           "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "rotateBytes": {
           "description": "Size in bytes at which the active file rotates, accepted only with the\n`file` destination. Omitted, the file rotates at 100 MiB.",
           "format": "uint64",
           "maximum": 4294967295,
           "minimum": 1048576,
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         }
       },
       "required": [
@@ -456,37 +406,16 @@
         "not": {
           "anyOf": [
             {
-              "properties": {
-                "path": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "path"
               ]
             },
             {
-              "properties": {
-                "rotateBytes": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "rotateBytes"
               ]
             },
             {
-              "properties": {
-                "retainDays": {
-                  "not": {
-                    "type": "null"
-                  }
-                }
-              },
               "required": [
                 "retainDays"
               ]
@@ -567,10 +496,7 @@
             ]
           },
           "pattern": "^[\\x21-\\x7E]+$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "trustedActors": {
           "additionalProperties": {
@@ -769,14 +695,7 @@
           "type": "string"
         },
         "tls": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawEventDestinationTlsConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/RawEventDestinationTlsConfig",
           "description": "Optional private CA and client identity secret references for HTTPS."
         }
       },
@@ -832,25 +751,11 @@
       ],
       "properties": {
         "caBundleRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "PEM CA bundle secret reference, when the receiver uses a private\ncertificate authority. Omitted, the platform's trusted roots verify\nthe receiver. At least one of `caBundleRef` and `clientIdentityRef`\nis written."
         },
         "clientIdentityRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "PEM client identity secret reference for mutual TLS. Omitted, the\nregistry presents no client certificate."
         }
       },
@@ -861,14 +766,7 @@
       "description": "Raw `fieldEncryption` deployment block, absent by default.",
       "properties": {
         "provider": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawFieldEncryptionProvider"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/RawFieldEncryptionProvider"
         }
       },
       "type": "object"
@@ -1009,14 +907,7 @@
           "$ref": "#/$defs/ListenerBind"
         },
         "publicOrigin": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Url"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/Url",
           "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. It is `https`; `http` is accepted\nonly for a loopback host, for local development. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links."
         }
       },
@@ -1274,34 +1165,17 @@
       "properties": {
         "completionRecipient": {
           "description": "The logical recipient the review authority names in each completion\nnotification. Written together with `completionTokenRef`; omitted, no\ncompletion notification is accepted and the registry polls for\nresults.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "completionTokenRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "The bearer token the review authority presents when it notifies this\nregistry that a review completed. Written together with\n`completionRecipient`; omitted, no completion notification is\naccepted and the registry polls for results."
         },
         "endpoint": {
           "type": "string"
         },
         "privateKeyJwt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig",
           "description": "A refreshing client-assertion credential for the review service.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "producerId": {
@@ -1317,14 +1191,7 @@
           "type": "integer"
         },
         "tokenRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "A static bearer token for the review service. Exactly one of\n`tokenRef` and `privateKeyJwt` is written."
         }
       },
@@ -1346,28 +1213,14 @@
           "type": "string"
         },
         "privateKeyJwt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/RawReviewPrivateKeyJwtConfig",
           "description": "A refreshing client-assertion credential for the executing registry.\nExactly one of `tokenRef` and `privateKeyJwt` is written."
         },
         "registryId": {
           "type": "string"
         },
         "tokenRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "A static bearer token for the executing registry. Exactly one of\n`tokenRef` and `privateKeyJwt` is written."
         }
       },
@@ -1385,14 +1238,7 @@
           "type": "string"
         },
         "caBundleRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "A PEM bundle of the roots that sign the token endpoint's certificate.\nOmitted, the platform's trusted roots verify it."
         },
         "clientAssertionKeyRef": {
@@ -1500,25 +1346,11 @@
       "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
       "properties": {
         "environment": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
           "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
         },
         "file": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FileSecretProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/FileSecretProviderConfig",
           "description": "Enables `secret:file/name` references, read from files under `root`."
         }
       },
@@ -1537,14 +1369,7 @@
           "description": "The Casework base URL the status check calls. It is `https`; `http`\nis accepted only for a loopback host, for local development."
         },
         "caBundleRef": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SecretReference"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/SecretReference",
           "description": "PEM CA bundle for Casework and its token endpoint. Omitted, the\nplatform's trusted roots verify them."
         },
         "caseworkResource": {
@@ -1668,14 +1493,7 @@
       "$ref": "#/$defs/RawListenerConfig"
     },
     "metricsListener": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/RawMetricsListenerConfig"
-        },
-        {
-          "type": "null"
-        }
-      ],
+      "$ref": "#/$defs/RawMetricsListenerConfig",
       "description": "Optional operator-private metrics listener. Absent by default, which\nserves no metrics surface at all."
     },
     "operationalTimeouts": {

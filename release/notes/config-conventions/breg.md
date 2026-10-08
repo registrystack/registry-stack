@@ -45,6 +45,29 @@ loads. Correct the source project, rebuild the package with `bregctl package
 --baseline-package <deployed package>`, and apply it before starting the
 upgraded runtime.
 
+### The published schemas describe what the reader accepts
+
+The project, module, and runtime JSON Schemas are generated from the same
+types the reader decodes, and now say what it refuses:
+
+- No member admits `null` and none declares `default: null`, except a
+  comparison literal (`$defs/DataLiteral`), where `null` is a record value.
+  An optional member is written by leaving it out. A file the schema now
+  refuses for a `null` was already refused by the reader.
+- The project schema states `apiVersion: registry.registrystack.org/v1alpha1`
+  and `kind: RegistryProject` as constants, the values the compiler already
+  required.
+- A structured field's or action input's `schema` member, which holds the
+  adopter's own JSON Schema, carries `x-registry-foreign: json-schema-2020-12`.
+- The project schema is published as
+  `https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json`
+  and the module schema as
+  `https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json`,
+  where they were under `schemas/breg/authoring/`. The earlier identifiers
+  stay resolvable as deprecated. An editor mapping by file path, such as the
+  one `editors/configure.py` writes, needs no change; a tool that names the
+  schema by its `$id` should name the new one.
+
 ### BREAKING: `runtime.yaml` is decoded by the shared reader
 
 `breg` and every `bregctl` command that takes `--runtime-config` decode

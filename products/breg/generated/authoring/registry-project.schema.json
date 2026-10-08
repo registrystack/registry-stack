@@ -22,10 +22,7 @@
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[a-z][a-z0-9_-]*$",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -172,10 +169,7 @@
           "uniqueItems": true
         },
         "id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "operation": {
           "$ref": "#/$defs/Operation"
@@ -277,10 +271,7 @@
         },
         "module": {
           "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "refusals": {
           "default": [],
@@ -291,10 +282,7 @@
         },
         "script": {
           "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "writes": {
           "items": {
@@ -408,16 +396,10 @@
         {
           "properties": {
             "maximum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "minimum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "precision": {
               "format": "uint8",
@@ -525,14 +507,7 @@
         {
           "properties": {
             "bbox": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Crs84BboxSource"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/Crs84BboxSource"
             },
             "precision": {
               "format": "uint8",
@@ -558,7 +533,9 @@
               "minimum": 0,
               "type": "integer"
             },
-            "schema": true,
+            "schema": {
+              "x-registry-foreign": "json-schema-2020-12"
+            },
             "type": {
               "const": "structured",
               "type": "string"
@@ -574,10 +551,7 @@
       ],
       "properties": {
         "apiName": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -604,10 +578,7 @@
           "$ref": "#/$defs/DataLiteral"
         },
         "equalsInput": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "field": {
           "type": "string"
@@ -626,14 +597,7 @@
       "additionalProperties": false,
       "properties": {
         "consentIssuer": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConsentIssuerSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/ConsentIssuerSource",
           "description": "Required when the action creates consent-record rows."
         },
         "effects": {
@@ -650,14 +614,7 @@
           "type": "array"
         },
         "handler": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ActionHandlerSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ActionHandlerSource"
         },
         "id": {
           "type": "string"
@@ -706,16 +663,10 @@
       "additionalProperties": false,
       "properties": {
         "entity": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -724,16 +675,10 @@
       "additionalProperties": false,
       "properties": {
         "fromEffect": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -830,11 +775,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -850,15 +791,7 @@
           "$ref": "#/$defs/BooleanFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -917,10 +850,7 @@
           "uniqueItems": true
         },
         "id": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "operation": {
           "$ref": "#/$defs/Operation"
@@ -947,24 +877,15 @@
       "properties": {
         "atLeast": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "atMost": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "equals": true,
         "equalsFromRequestField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "output": {
           "type": "string"
@@ -1091,10 +1012,7 @@
       "additionalProperties": false,
       "properties": {
         "executor": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "mode": {
           "$ref": "#/$defs/ChangeRequestOnApprovedModeSource",
@@ -1149,16 +1067,10 @@
       "additionalProperties": false,
       "properties": {
         "entity": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -1218,36 +1130,20 @@
       "properties": {
         "atLeast": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "atMost": {
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "currentDate": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestCurrentDatePredicateSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeRequestCurrentDatePredicateSource"
         },
         "equals": {
           "$ref": "#/$defs/DataLiteral"
         },
         "equalsFromRequestField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "field": {
           "type": "string"
@@ -1364,14 +1260,7 @@
           }
         },
         "planner": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestPlannerSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeRequestPlannerSource"
         },
         "retention": {
           "$ref": "#/$defs/ChangeRequestRetentionSource",
@@ -1392,16 +1281,10 @@
       "additionalProperties": false,
       "properties": {
         "entity": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -1410,16 +1293,10 @@
       "additionalProperties": false,
       "properties": {
         "fromEffect": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "fromField": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -1562,10 +1439,7 @@
         },
         "until": {
           "description": "An optional timestamp field ending the give earlier than `maxDuration`.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -1586,11 +1460,7 @@
               "type": "array"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "unique",
@@ -1600,10 +1470,7 @@
               "items": {
                 "$ref": "#/$defs/UniqueWhenPredicate"
               },
-              "type": [
-                "array",
-                "null"
-              ]
+              "type": "array"
             }
           },
           "required": [
@@ -1616,11 +1483,7 @@
           "additionalProperties": false,
           "properties": {
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "compare",
@@ -1651,31 +1514,19 @@
               "type": "string"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "int_range",
               "type": "string"
             },
             "maximum": {
-              "default": null,
               "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
+              "type": "integer"
             },
             "minimum": {
-              "default": null,
               "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
+              "type": "integer"
             }
           },
           "required": [
@@ -1691,11 +1542,7 @@
               "type": "string"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "vocabulary",
@@ -1719,18 +1566,10 @@
           "additionalProperties": false,
           "properties": {
             "endField": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "temporal-non-overlap",
@@ -1743,11 +1582,7 @@
               "type": "array"
             },
             "startField": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           "required": [
@@ -1792,22 +1627,10 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "bbox": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Crs84BboxSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/Crs84BboxSource"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -1829,15 +1652,7 @@
           "$ref": "#/$defs/Crs84PointFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -1867,11 +1682,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -1884,15 +1695,7 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "required": {
           "default": false,
@@ -1902,15 +1705,7 @@
           "$ref": "#/$defs/DateFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -1930,11 +1725,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -1947,29 +1738,13 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maximum": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "minimum": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "precision": {
           "format": "uint8",
@@ -1991,15 +1766,7 @@
           "$ref": "#/$defs/DecimalFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -2088,16 +1855,10 @@
         {
           "properties": {
             "maximum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "minimum": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "precision": {
               "format": "uint8",
@@ -2205,14 +1966,7 @@
         {
           "properties": {
             "bbox": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Crs84BboxSource"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/Crs84BboxSource"
             },
             "precision": {
               "format": "uint8",
@@ -2238,7 +1992,9 @@
               "minimum": 0,
               "type": "integer"
             },
-            "schema": true,
+            "schema": {
+              "x-registry-foreign": "json-schema-2020-12"
+            },
             "type": {
               "const": "structured",
               "type": "string"
@@ -2254,10 +2010,7 @@
       ],
       "properties": {
         "apiName": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -2385,15 +2138,7 @@
           "type": "array"
         },
         "requestVisibility": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RequestVisibilitySource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/RequestVisibilitySource"
         },
         "requireConsent": {
           "description": "Current subject-issued consent required for each row, ANDed.",
@@ -2421,15 +2166,7 @@
           "uniqueItems": true
         },
         "spatialQueries": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SpatialQueryPermissionSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/SpatialQueryPermissionSource"
         },
         "submitterTargets": {
           "items": {
@@ -2458,25 +2195,11 @@
       "additionalProperties": false,
       "properties": {
         "accessLog": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AccessLogSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/AccessLogSource",
           "description": "Subject-facing record access history, separate from the operational audit."
         },
         "accessRequirements": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AccessRequirementsSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/AccessRequirementsSource",
           "description": "Mandatory request-access requirements checked against every profile, including module contributions."
         },
         "attachments": {
@@ -2487,49 +2210,20 @@
           "type": "array"
         },
         "batch": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BatchSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/BatchSource"
         },
         "changeControl": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeControlSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeControlSource"
         },
         "changeRequest": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChangeRequestSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ChangeRequestSource"
         },
         "classification": {
           "$ref": "#/$defs/Classification",
           "default": "internal"
         },
         "consentRecord": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConsentRecordSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/ConsentRecordSource",
           "description": "Declares this entity's rows as subject-issued consent decisions that\n`requireConsent` permissions check before returning a subject's row."
         },
         "constraints": {
@@ -2553,14 +2247,7 @@
           "type": "array"
         },
         "geojson": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GeoJsonSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/GeoJsonSource"
         },
         "hooks": {
           "default": [],
@@ -2601,15 +2288,7 @@
           "type": "array"
         },
         "temporal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TemporalSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/TemporalSource"
         },
         "tombstone": {
           "default": false,
@@ -2823,10 +2502,7 @@
           "properties": {
             "abi": {
               "description": "The handler ABI the script speaks.",
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "rhai",
@@ -2849,10 +2525,7 @@
           "properties": {
             "abi": {
               "description": "The handler ABI the module speaks.",
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             },
             "kind": {
               "const": "wasm",
@@ -2910,14 +2583,7 @@
       "description": "One declared hook on an entity.\n\nThe shape is [`registry_platform_hooks::HookDeclaration`] with `trigger`\nand `when` closed to the vocabulary this compiler validates, and with\n`handler` optional. A hook that declares no handler is still recorded in\nthe outbox and delivered nowhere; production compilation refuses that.\n\nEntity hooks run after the triggering transaction commits, so `phase` is\nwritten and the compiler refuses any value it cannot run.",
       "properties": {
         "handler": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HookHandlerSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/HookHandlerSource",
           "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
         },
         "id": {
@@ -2930,10 +2596,7 @@
         },
         "principal": {
           "description": "The access profile a proposal from this hook is applied under.\nOptional: a hook that declares none is a non-proposing hook, and a\nproposal from one is refused and dead-lettered at delivery time.\nDeclaring none is not an authoring error.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "projection": {
           "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
@@ -2948,14 +2611,7 @@
           "description": "Committed record change that can produce this hook."
         },
         "when": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EventConditionSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/EventConditionSource",
           "description": "Optional field tests, combined with AND. Omit to run on every matching trigger."
         }
       },
@@ -2996,11 +2652,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -3016,15 +2668,7 @@
           "$ref": "#/$defs/Int64FieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -3101,20 +2745,10 @@
           "type": "array"
         },
         "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "participantId": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "publisher": {
           "$ref": "#/$defs/ManifestProjectionPublisherSource"
@@ -3138,26 +2772,13 @@
       "additionalProperties": false,
       "properties": {
         "conformsTo": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "endpointDescription": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "endpointUrl": {
           "type": "string"
@@ -3166,10 +2787,7 @@
           "type": "string"
         },
         "iri": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "servesDatasets": {
           "items": {
@@ -3193,10 +2811,7 @@
       "additionalProperties": false,
       "properties": {
         "accessProfile": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "applicableLegislation": {
           "default": [],
@@ -3206,14 +2821,7 @@
           "type": "array"
         },
         "classificationCeiling": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Classification"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/Classification"
         },
         "conformsTo": {
           "default": [],
@@ -3223,54 +2831,28 @@
           "type": "array"
         },
         "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "id": {
           "type": "string"
         },
         "iri": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "owner": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "spatialCoverage": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionDatasetStatus"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionDatasetStatus"
         },
         "title": {
           "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "version": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -3293,66 +2875,34 @@
       "additionalProperties": false,
       "properties": {
         "accessService": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "accessUrl": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "dataset": {
           "type": "string"
         },
         "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "downloadUrl": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "format": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "id": {
           "type": "string"
         },
         "iri": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "mediaType": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "title": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         }
       },
       "required": [
@@ -3365,20 +2915,10 @@
       "additionalProperties": false,
       "properties": {
         "conceptUri": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "fields": {
           "default": [],
@@ -3398,14 +2938,7 @@
           "type": "array"
         },
         "title": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         }
       },
       "required": [
@@ -3427,28 +2960,16 @@
           "type": "string"
         },
         "language": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "relationshipConceptUri": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "relationshipRole": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "unit": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -3492,19 +3013,13 @@
       "additionalProperties": false,
       "properties": {
         "authorityType": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "id": {
           "type": "string"
         },
         "iri": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "name": {
           "type": "string"
@@ -3578,22 +3093,13 @@
       "additionalProperties": false,
       "properties": {
         "dcat": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "jsonSchema": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "shacl": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "type": "object"
@@ -3618,20 +3124,10 @@
           "type": "string"
         },
         "iri": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "label": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ManifestProjectionTextSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ManifestProjectionTextSource"
         }
       },
       "required": [
@@ -3650,10 +3146,7 @@
           "type": "array"
         },
         "externalRef": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -3662,10 +3155,7 @@
           "type": "string"
         },
         "version": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -3707,11 +3197,7 @@
       "additionalProperties": false,
       "properties": {
         "digest": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -3796,14 +3282,7 @@
       "additionalProperties": false,
       "properties": {
         "actorKind": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ActorKindSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/ActorKindSource"
         },
         "anonymous": {
           "default": false,
@@ -3824,11 +3303,7 @@
           "type": "array"
         },
         "principalClaim": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "requesterClients": {
           "items": {
@@ -3856,14 +3331,7 @@
           "uniqueItems": true
         },
         "taskGrant": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TaskGrantSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/TaskGrantSource"
         }
       },
       "required": [
@@ -4023,11 +3491,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -4050,15 +3514,7 @@
           "$ref": "#/$defs/ReferenceFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -4123,13 +3579,9 @@
       "type": "object"
     },
     "RequestVisibilitySource": {
-      "oneOf": [
-        {
-          "const": "owner",
-          "description": "Expose only requests created by the current authenticated principal.",
-          "type": "string"
-        }
-      ]
+      "const": "owner",
+      "description": "Expose only requests created by the current authenticated principal.",
+      "type": "string"
     },
     "RowBoundarySource": {
       "additionalProperties": false,
@@ -4190,14 +3642,7 @@
       "additionalProperties": false,
       "properties": {
         "bbox": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SpatialBboxPermissionSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/SpatialBboxPermissionSource"
         }
       },
       "type": "object"
@@ -4212,14 +3657,7 @@
           "type": "array"
         },
         "disclosure": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StatisticalDisclosureSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/StatisticalDisclosureSource"
         },
         "id": {
           "type": "string"
@@ -4237,14 +3675,7 @@
           "type": "string"
         },
         "releases": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StatisticalReleasesSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/StatisticalReleasesSource"
         },
         "unit": {
           "type": "string"
@@ -4374,10 +3805,7 @@
           "type": "string"
         },
         "until": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         }
       },
       "required": [
@@ -4405,11 +3833,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -4422,15 +3846,7 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maxLength": {
           "format": "uint32",
@@ -4444,11 +3860,7 @@
           "type": "integer"
         },
         "pattern": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "required": {
           "default": false,
@@ -4458,15 +3870,7 @@
           "$ref": "#/$defs/StringFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -4487,11 +3891,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -4504,15 +3904,7 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maxBytes": {
           "format": "uint32",
@@ -4523,20 +3915,14 @@
           "default": false,
           "type": "boolean"
         },
-        "schema": true,
+        "schema": {
+          "x-registry-foreign": "json-schema-2020-12"
+        },
         "type": {
           "$ref": "#/$defs/StructuredFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -4593,11 +3979,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -4610,15 +3992,7 @@
           "type": "string"
         },
         "lookup": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FieldLookupSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/FieldLookupSource"
         },
         "maxLength": {
           "format": "uint32",
@@ -4626,11 +4000,7 @@
           "type": "integer"
         },
         "pattern": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "required": {
           "default": false,
@@ -4640,15 +4010,7 @@
           "$ref": "#/$defs/TextFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -4669,11 +4031,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -4689,15 +4047,7 @@
           "$ref": "#/$defs/TimestampFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -4787,11 +4137,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -4807,15 +4153,7 @@
           "$ref": "#/$defs/UuidFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         }
       },
       "required": [
@@ -4842,11 +4180,7 @@
       "additionalProperties": false,
       "properties": {
         "apiName": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "classification": {
           "$ref": "#/$defs/Classification"
@@ -4862,15 +4196,7 @@
           "$ref": "#/$defs/VocabularyCodeFieldKindSchema"
         },
         "validTimeRole": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ValidTimeRole"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ValidTimeRole"
         },
         "values": {
           "default": [],
@@ -4911,7 +4237,7 @@
       "type": "object"
     }
   },
-  "$id": "https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -4929,6 +4255,7 @@
       "type": "array"
     },
     "apiVersion": {
+      "const": "registry.registrystack.org/v1alpha1",
       "type": "string"
     },
     "entities": {
@@ -4945,18 +4272,11 @@
       "type": "array"
     },
     "kind": {
+      "const": "RegistryProject",
       "type": "string"
     },
     "manifestProjection": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ManifestProjectionSource"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
+      "$ref": "#/$defs/ManifestProjectionSource"
     },
     "modules": {
       "default": [],
@@ -4966,25 +4286,10 @@
       "type": "array"
     },
     "package": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/PackageIdentitySource"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
+      "$ref": "#/$defs/PackageIdentitySource"
     },
     "recipients": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/RecipientsSource"
-        },
-        {
-          "type": "null"
-        }
-      ],
+      "$ref": "#/$defs/RecipientsSource",
       "description": "Named organizations and frozen groups that consent may be given to."
     },
     "registry": {

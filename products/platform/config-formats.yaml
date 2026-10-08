@@ -80,7 +80,7 @@ formats:
       kind: BRegProject
     schema:
       path: products/breg/generated/authoring/registry-project.schema.json
-      id: https://id.registrystack.org/schemas/breg/authoring/registry-project.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
       origin: generated
       generator: cargo run -p registry-breg --features schema --example authoring-schema -- --output products/breg/generated/authoring
       driftCheck: products/breg/scripts/check-generated.sh
@@ -93,7 +93,7 @@ formats:
     example: products/breg/acceptance/asset-site-placement/registry.yaml
     conformance:
       requiredText: /registry/id
-      optionalText: /package/sourceRevision
+      optionalText: /manifestProjection/catalog/description
       integer: /entities/0/batch/maximumItems
       boolean: /accessProfiles/0/default
       idList: /entities
@@ -127,7 +127,7 @@ formats:
       kind: BRegModule
     schema:
       path: products/breg/generated/authoring/registry-module.schema.json
-      id: https://id.registrystack.org/schemas/breg/authoring/registry-module.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/breg/module/module.v1alpha1.schema.json
       origin: generated
       generator: cargo run -p registry-breg --features schema --example authoring-schema -- --output products/breg/generated/authoring
       driftCheck: products/breg/scripts/check-generated.sh
