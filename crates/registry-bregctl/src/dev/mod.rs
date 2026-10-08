@@ -252,7 +252,9 @@ struct State {
     project: PathBuf,
     owner: String,
     status: Status,
+    #[serde(deserialize_with = "members::port")]
     breg_port: u16,
+    #[serde(deserialize_with = "members::port")]
     issuer_port: u16,
     /// A separate ready BREG dev session owns this issuer and its registrations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,19 +265,29 @@ struct State {
     issuer_image: Option<String>,
     /// Session-owned loopback assertion endpoint used only while issuing
     /// multi-purpose rehearsal tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "members::optional_port"
+    )]
     purpose_port: Option<u16>,
+    #[serde(deserialize_with = "members::port")]
     database_port: u16,
     /// Fixed at first start from the compiled schema; retained with the database.
     requires_postgis: bool,
     /// Kernel-selected loopback receiver port, retained with destination bindings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "members::optional_port"
+    )]
     webhook_port: Option<u16>,
     clients_file: PathBuf,
     /// The pin `capture` derives from what the session runs: the compiled
     /// registry revision, the package identity, and the canonical journeys
     /// and clients. A change of spelling alone leaves it unchanged.
     source_digest: String,
+    #[serde(deserialize_with = "members::sequence")]
     sequence: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline_runtime: Option<PathBuf>,
@@ -327,6 +339,27 @@ enum Status {
     Stopping,
     Stopped,
     Failed,
+}
+
+/// Bounded integer members of the retained session state.
+mod members {
+    use registry_platform_yaml::{BoundedU32, BoundedU64, Invalid};
+    use serde::{de::Error as _, Deserialize, Deserializer};
+
+    pub(super) fn port<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+        let port = BoundedU32::<1, { u16::MAX as u32 }>::deserialize(deserializer)?;
+        u16::try_from(port.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(1, u16::MAX)))
+    }
+
+    pub(super) fn optional_port<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u16>, D::Error> {
+        port(deserializer).map(Some)
+    }
+
+    pub(super) fn sequence<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<1, { u64::MAX }>::deserialize(deserializer).map(BoundedU64::get)
+    }
 }
 
 fn state_api_version() -> String {

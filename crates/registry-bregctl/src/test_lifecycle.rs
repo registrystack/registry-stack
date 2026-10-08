@@ -333,10 +333,7 @@ fn load_credentials(
                 Severity::Error,
                 "breg.credentials.unknown-journey",
                 &format!("/bindings/{index}/journeyId"),
-                &format!(
-                    "the packaged journey suite has no journey with this id; it declares {}",
-                    journey_ids.join(", ")
-                ),
+                "the packaged journey suite has no journey with this id",
                 "Name a journey of tests/journeys.yaml in journeyId, or remove the binding.",
             ));
             continue;
@@ -346,7 +343,7 @@ fn load_credentials(
                 Severity::Error,
                 "breg.credentials.duplicate-binding",
                 &format!("/bindings/{index}"),
-                &format!("journey {journey_id} step {step_id} already has a credential binding"),
+                "an earlier binding already gives this journey step a credential",
                 "Remove this binding; bind every step exactly once.",
             ));
             continue;
@@ -373,9 +370,7 @@ fn load_credentials(
                         Severity::Error,
                         "breg.credentials.unresolved-secret",
                         &pointer,
-                        &format!(
-                            "the secret referenced for journey {journey_id} step {step_id} could not be resolved as UTF-8 text"
-                        ),
+                        "the referenced secret could not be resolved as UTF-8 text",
                         "Store the token as UTF-8 text under this reference, through a secret provider the runtime configuration enables.",
                     )),
                 }
@@ -390,10 +385,7 @@ fn load_credentials(
             Severity::Error,
             "breg.credentials.incomplete-bindings",
             "/bindings",
-            &format!(
-                "the bindings do not give exactly one credential to every step of journeys {}; anonymous steps require an anonymous binding and protected steps require a well-formed bearer token",
-                journey_ids.join(", ")
-            ),
+            "the bindings do not give exactly one credential to every step of the packaged journeys; anonymous steps require an anonymous binding and protected steps require a well-formed bearer token",
             CREDENTIALS_ACTION,
         )])
     })

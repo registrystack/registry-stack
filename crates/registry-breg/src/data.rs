@@ -907,6 +907,43 @@ pub(crate) fn ingestion_chunk_idempotency_key(
     Ok(format!("breg-data-v1-{}", sha256_hex(&binding)))
 }
 
+/// Bounded integer members of the checkpoint documents.
+mod members {
+    use registry_platform_yaml::{BoundedU32, BoundedU64, Invalid};
+    use serde::{de::Error as _, Deserialize, Deserializer};
+
+    const MAX_INPUT_BYTES: u64 = super::MAX_DATA_IMPORT_INPUT_BYTES as u64;
+    const MAX_INPUT_ITEMS: u64 = super::MAX_INPUT_ITEMS as u64;
+    const MAX_BATCH_ITEMS: u32 = crate::compiler::MAX_BATCH_ITEMS as u32;
+
+    pub(super) fn input_bytes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<0, MAX_INPUT_BYTES>::deserialize(deserializer).map(BoundedU64::get)
+    }
+
+    pub(super) fn input_items<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        BoundedU64::<0, MAX_INPUT_ITEMS>::deserialize(deserializer).map(BoundedU64::get)
+    }
+
+    pub(super) fn batch_items<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+        let items = BoundedU32::<1, MAX_BATCH_ITEMS>::deserialize(deserializer)?;
+        u16::try_from(items.get())
+            .map_err(|_| D::Error::custom(Invalid::out_of_range(1, MAX_BATCH_ITEMS)))
+    }
+
+    pub(super) fn batch_bytes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+        BoundedU32::<1, { crate::compiler::MAX_BATCH_BYTES }>::deserialize(deserializer)
+            .map(BoundedU32::get)
+    }
+
+    /// An export has no size bound of its own: it grows by one page per
+    /// resumed run.
+    pub(super) fn export_count<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u64, D::Error> {
+        BoundedU64::<0, { u64::MAX }>::deserialize(deserializer).map(BoundedU64::get)
+    }
+}
+
 /// The checkpoint `bregctl data import` keeps beside its run. The shared
 /// reader checks and removes the header before the members are decoded, so
 /// the header members are written from the format and never read.
@@ -923,15 +960,22 @@ pub struct DataImportCheckpoint {
     operation: DataImportOperation,
     profile_id: String,
     input_digest: String,
+    #[serde(deserialize_with = "members::input_bytes")]
     input_length: u64,
+    #[serde(deserialize_with = "members::input_items")]
     item_count: u64,
     chunk_algorithm_version: String,
+    #[serde(deserialize_with = "members::batch_items")]
     maximum_items: u16,
+    #[serde(deserialize_with = "members::batch_bytes")]
     maximum_bytes: u32,
     import_id: String,
+    #[serde(deserialize_with = "members::input_items")]
     next_item_index: u64,
+    #[serde(deserialize_with = "members::input_bytes")]
     next_byte_offset: u64,
     committed_prefix_digest: String,
+    #[serde(deserialize_with = "members::input_items")]
     completed_chunk_count: u64,
     complete: bool,
 }
@@ -1413,9 +1457,12 @@ pub struct DataExportCheckpoint {
     operation: Operation,
     profile_id: String,
     requested_fields: Vec<String>,
+    #[serde(deserialize_with = "members::export_count")]
     output_length: u64,
     output_prefix_digest: String,
+    #[serde(deserialize_with = "members::export_count")]
     record_count: u64,
+    #[serde(deserialize_with = "members::export_count")]
     completed_page_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,

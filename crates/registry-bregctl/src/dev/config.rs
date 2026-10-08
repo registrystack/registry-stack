@@ -155,6 +155,11 @@ pub(super) struct LocalEvidencePrivateKeyJwt {
     pub scopes: Vec<String>,
 }
 
+fn recovery_days<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    registry_platform_yaml::BoundedU32::<1, 90>::deserialize(deserializer)
+        .map(registry_platform_yaml::BoundedU32::get)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct LocalReviewAuthority {
@@ -162,6 +167,7 @@ pub(super) struct LocalReviewAuthority {
     /// Casework requester access profile selected on every authority exchange.
     pub profile: String,
     pub producer_id: String,
+    #[serde(deserialize_with = "recovery_days")]
     pub recovery_days: u32,
     /// Logical client from this same closed file. Its generated key is copied
     /// into the private runtime secret tree and is never written to this file.

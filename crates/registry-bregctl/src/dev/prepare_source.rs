@@ -83,6 +83,11 @@ const PREPARED_SOURCE_FORMAT: FormatSpec<'static> = FormatSpec {
 /// read. Nothing is changed.
 const INVALID_PREPARATION: &str = "retained source preparation is invalid; preserve it for inspection, or run bregctl dev stop --remove, then remove .breg/dev and start again";
 
+fn transition_sequence<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    registry_platform_yaml::BoundedU64::<2, { u64::MAX }>::deserialize(deserializer)
+        .map(registry_platform_yaml::BoundedU64::get)
+}
+
 fn transition_api_version() -> String {
     TRANSITION_API_VERSION.to_owned()
 }
@@ -108,6 +113,9 @@ struct Transition {
     kind: String,
     prior_digest: String,
     target_digest: String,
+    /// The package sequence the transition installs, which follows the
+    /// session's first package.
+    #[serde(deserialize_with = "transition_sequence")]
     sequence: u64,
     // Only the selected model document, registry identity, and clients change.
     #[serde(with = "authoring_text")]
@@ -124,6 +132,7 @@ struct Transition {
 /// Authoring files a transition records, written as their UTF-8 text so the
 /// journal stays within the shared reader's document bound.
 mod authoring_text {
+    use registry_platform_yaml::Invalid;
     use serde::{
         de::Error as _, ser::Error as _, ser::SerializeMap, Deserialize, Deserializer, Serializer,
     };
@@ -150,7 +159,10 @@ mod authoring_text {
             .into_iter()
             .map(|(path, text)| {
                 if path.is_empty() {
-                    return Err(D::Error::custom("a prepared authoring file has no path"));
+                    return Err(D::Error::custom(Invalid::expected(
+                        "a non-empty authoring file path",
+                        "Run bregctl dev prepare-source again.",
+                    )));
                 }
                 Ok((PathBuf::from(path), text.into_bytes()))
             })
@@ -162,7 +174,13 @@ mod authoring_text {
 /// and read back through the same reader as `source-prepared-<client>.json`.
 mod prepared_record {
     use super::{read_prepared, PreparedSource};
+    use registry_platform_yaml::Invalid;
     use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+
+    const PREPARED: Invalid = Invalid::expected(
+        "the prepared source record",
+        "Run bregctl dev prepare-source again.",
+    );
 
     pub(super) fn serialize<S: Serializer>(
         prepared: &PreparedSource,
@@ -175,9 +193,9 @@ mod prepared_record {
         deserializer: D,
     ) -> Result<PreparedSource, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
-        let bytes = serde_json::to_vec(&value).map_err(D::Error::custom)?;
+        let bytes = serde_json::to_vec(&value).map_err(|_| D::Error::custom(PREPARED))?;
         read_prepared("source-transition.json#/prepared", &bytes)
-            .map_err(|_| D::Error::custom("the transition's prepared record is invalid"))
+            .map_err(|_| D::Error::custom(PREPARED))
     }
 }
 
@@ -185,7 +203,13 @@ mod prepared_record {
 /// and read back through the same reader as `.breg/dev/clients.json`.
 mod retained_clients {
     use super::{config, Clients};
+    use registry_platform_yaml::Invalid;
     use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+
+    const CLIENTS: Invalid = Invalid::expected(
+        "the retained development clients document",
+        "Run bregctl dev prepare-source again.",
+    );
 
     pub(super) fn serialize<S: Serializer>(
         clients: &Clients,
@@ -198,9 +222,8 @@ mod retained_clients {
         deserializer: D,
     ) -> Result<Clients, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
-        let bytes = serde_json::to_vec(&value).map_err(D::Error::custom)?;
-        config::retained(&bytes)
-            .map_err(|_| D::Error::custom("the transition's clients are invalid"))
+        let bytes = serde_json::to_vec(&value).map_err(|_| D::Error::custom(CLIENTS))?;
+        config::retained(&bytes).map_err(|_| D::Error::custom(CLIENTS))
     }
 }
 
@@ -220,6 +243,7 @@ struct PreparedSource {
 /// is command output, not configuration, so it may carry null members the
 /// shared reader refuses in a configuration position.
 mod report_text {
+    use registry_platform_yaml::Invalid;
     use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serializer};
     use serde_json::Value;
 
@@ -235,7 +259,12 @@ mod report_text {
         deserializer: D,
     ) -> Result<Value, D::Error> {
         let text = String::deserialize(deserializer)?;
-        serde_json::from_str(&text).map_err(|_| D::Error::custom("the prepared report is not JSON"))
+        serde_json::from_str(&text).map_err(|_| {
+            D::Error::custom(Invalid::expected(
+                "the JSON text of a preparation report",
+                "Run bregctl dev prepare-source again.",
+            ))
+        })
     }
 }
 

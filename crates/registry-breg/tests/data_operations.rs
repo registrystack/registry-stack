@@ -783,6 +783,47 @@ fn checkpoints_carry_their_header_and_refuse_the_one_an_earlier_bregctl_wrote() 
 }
 
 #[test]
+fn checkpoint_counts_are_refused_outside_their_bounds() {
+    let registry = compiled(true);
+    let import_plan = DataImportPlan::from_jsonl(
+        &registry,
+        ENTITY,
+        DataImportOperation::Create,
+        PROFILE,
+        format!("{}\n", create_line("ROW-CANARY-A", 1)).as_bytes(),
+    )
+    .unwrap();
+    let import = DataImportCheckpoint::start(&import_plan, PACKAGE, SCHEMA).unwrap();
+    let import_json = parse_json_strict(&import.canonical_json().unwrap()).unwrap();
+    for (member, value) in [
+        ("maximumItems", json!(0)),
+        ("maximumItems", json!(101)),
+        ("maximumBytes", json!(0)),
+        ("itemCount", json!(1_000_001)),
+        ("nextByteOffset", json!(256 * 1024 * 1024 + 1)),
+    ] {
+        let mut changed = import_json.clone();
+        changed[member] = value;
+        let bytes = canonicalize_json(&changed).unwrap();
+        let Err(DataError::CheckpointDocument(report)) =
+            DataImportCheckpoint::read(IMPORT_CHECKPOINT, &bytes)
+        else {
+            panic!("{member} outside its bounds is refused by the reader");
+        };
+        let found: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect();
+        assert_eq!(
+            found,
+            [("config.out-of-range".to_owned(), format!("/{member}"))],
+            "{member}"
+        );
+    }
+}
+
+#[test]
 fn the_registered_checkpoint_examples_read() {
     let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/examples/formats");

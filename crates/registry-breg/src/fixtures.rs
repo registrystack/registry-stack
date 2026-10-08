@@ -762,7 +762,7 @@ fn fill_object(target: &mut Map<String, Value>, value: Option<Value>) {
 mod members {
     use std::collections::BTreeMap;
 
-    use registry_platform_yaml::{BoundedU32, Digest, ExternalId, LocalId};
+    use registry_platform_yaml::{BoundedU32, Digest, ExternalId, Invalid, LocalId};
     use serde::de::{Error as _, IgnoredAny};
     use serde::{Deserialize, Deserializer};
     use serde_json::{Map, Value};
@@ -799,7 +799,7 @@ mod members {
 
     pub(super) fn status<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
         let status = BoundedU32::<100, 599>::deserialize(deserializer)?;
-        u16::try_from(status.get()).map_err(D::Error::custom)
+        u16::try_from(status.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(100, 599)))
     }
 
     pub(super) fn count<'de, D: Deserializer<'de>>(
@@ -808,12 +808,23 @@ mod members {
         let count = BoundedU32::<0, 100>::deserialize(deserializer)?;
         usize::try_from(count.get())
             .map(Some)
-            .map_err(D::Error::custom)
+            .map_err(|_| D::Error::custom(Invalid::out_of_range(0, 100)))
     }
 
     pub(super) fn top<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u16>, D::Error> {
         let top = BoundedU32::<1, 100>::deserialize(deserializer)?;
-        u16::try_from(top.get()).map(Some).map_err(D::Error::custom)
+        u16::try_from(top.get())
+            .map(Some)
+            .map_err(|_| D::Error::custom(Invalid::out_of_range(1, 100)))
+    }
+
+    pub(super) fn postgres_major<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<u16, D::Error> {
+        const MIN: u32 = super::MIN_SUPPORTED_POSTGRES_MAJOR as u32;
+        const MAX: u32 = super::MAX_SUPPORTED_POSTGRES_MAJOR as u32;
+        let major = BoundedU32::<MIN, MAX>::deserialize(deserializer)?;
+        u16::try_from(major.get()).map_err(|_| D::Error::custom(Invalid::out_of_range(MIN, MAX)))
     }
 
     pub(super) fn proposal_version<'de, D: Deserializer<'de>>(
@@ -5930,6 +5941,7 @@ pub struct SchemaTestReceipt {
     prior_package_digest: Option<String>,
     source_closure_sha256: String,
     migration_plan_sha256: String,
+    #[serde(deserialize_with = "members::postgres_major")]
     postgres_major: u16,
     target_managed_schema_fingerprint: String,
     successful_journey_ids: Vec<String>,
@@ -7920,7 +7932,6 @@ journeys:
             ("migrationPlanSha256", json!(DIGEST_B)),
             ("targetManagedSchemaFingerprint", json!(DIGEST_B)),
             ("priorPackageDigest", json!(DIGEST_B)),
-            ("postgresMajor", json!(19)),
             ("successfulJourneyIds", json!(["another-journey"])),
             ("journeyFileSha256", json!(DIGEST_B)),
         ] {
@@ -7932,6 +7943,21 @@ journeys:
                 Err(FixtureError::ReceiptBindingRefused)
             ));
         }
+
+        let mut unsupported: Value = serde_json::from_slice(bytes).expect("receipt parses");
+        unsupported["postgresMajor"] = json!(19);
+        let unsupported = canonicalize_json(&unsupported).expect("changed receipt canonicalizes");
+        let Err(FixtureError::ReceiptDocument(report)) =
+            validate_schema_test_receipt_for_package(&unsupported, &fixture.prepared, suite)
+        else {
+            panic!("an unsupported PostgreSQL major is refused by the reader");
+        };
+        let found: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(found, [("config.out-of-range", "/postgresMajor")]);
     }
 
     fn assert_candidate_build_substitutions_are_refused(

@@ -4384,7 +4384,7 @@ bindings:
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("credential message is a string");
-    assert!(message.contains("package-record-list"), "{message}");
+    assert!(!message.contains("package-record-list"), "{message}");
     assert!(
         !rendered.contains("secret:file/operator-token"),
         "{rendered}"
@@ -4427,8 +4427,8 @@ bindings:
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("credential message is a string");
-    assert!(message.contains("package-record-list"), "{message}");
-    assert!(message.contains("list-records"), "{message}");
+    assert!(!message.contains("package-record-list"), "{message}");
+    assert!(!message.contains("list-records"), "{message}");
     assert!(
         !rendered.contains("secret:file/operator-token"),
         "{rendered}"
