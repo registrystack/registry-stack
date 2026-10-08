@@ -1261,3 +1261,46 @@ Candidate promotion validity is seven days. The final candidate artifact and
 private candidate images are retained for eight days, leaving one day of
 cleanup margin without adding an operator step. Cleanup cannot target public
 package names.
+
+## Upgrade steps in the release note
+
+A release that changes an authored file or a runtime configuration lists, in
+its release note, each edit an operator makes by hand. These steps are manual
+edits: no released binary rewrites a project or a runtime configuration, and
+the engine reads only the state the immediately preceding release wrote.
+
+The steps have one source of truth,
+`release/notes/config-conventions/upgrade-steps.yaml`, read by
+`release/scripts/upgrade_steps.py`. A step is one of three kinds:
+
+- `edit`: a list of `envelope`, `set`, `delete`, `rename` and
+  `replace-value` operations on the files matching its `file` glob under its
+  `root` (`project`, `target` or `runtime`). Applying it is deterministic.
+- `manual`: an instruction the engine reports and never applies, for edits
+  that need an operator decision or a recomputed value.
+- `unknown`: a breaking item whose edit is not yet derived. The engine refuses
+  it and names the file and the diagnostic.
+
+Every `BREAKING` heading in `release/notes/config-conventions/*.md` is followed
+by a line `<!-- upgrade: id, id -->` naming the steps that cover it, or the
+reserved word `already-wrong` (the old form was never accepted) or `no-file`
+(there is no file an operator could edit). `release/scripts/test_upgrade_steps.py`
+fails when a breaking item has no marker, when a marker names a missing step,
+when a step is cited by no item, and when a step is cited from another
+product's note. Run it with PyYAML:
+
+```sh
+uv run --no-project --with PyYAML==6.0.2 python3 -m unittest release/scripts/test_upgrade_steps.py
+```
+
+The upgrade rehearsal (`release/scripts/rehearse-upgrade.py`) applies the
+`edit` steps listed in `BREG_UPGRADE_STEPS`, `CASEWORK_UPGRADE_STEPS` and
+`EVIDENCE_UPGRADE_STEPS` to the project on disk after the previous release
+wrote state and before the new binaries run. Messaging is not wired: its
+applied package ledger names a digest an applied step would change. Every
+other step, and the BReg registry and runtime steps, is proven only by the
+unit tests applying it to a sample document; no real rehearsal has run them.
+
+To add a step, append an entry to the steps file, cite its id from the
+`BREAKING` item's marker, and, if the rehearsal's starter project carries the
+file, add the id to the product's list in `rehearse-upgrade.py`.
