@@ -18,7 +18,7 @@ use registry_platform_yaml::{
     tagged_union, BoundedU64, Decoded, Diagnostic, Digest, Document, EnvelopeRule, Expect,
     ExternalId, FormatSpec, Invalid, Reader, Report, Severity, UniqueList, Url,
 };
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer};
 
 use crate::{
     definitions::EVIDENCE_DEFINITIONS_SCHEMA_V1,
@@ -569,7 +569,7 @@ macro_rules! checked_text {
                 if check(&text) {
                     Ok(Self(text.into()))
                 } else {
-                    Err(de::Error::custom(Invalid::expected($expected, $action)))
+                    Err(Invalid::expected($expected, $action).into_error())
                 }
             }
         }
@@ -695,10 +695,11 @@ impl<'de> Deserialize<'de> for Scopes {
         let scopes = UniqueList::<ScopeToken>::deserialize(deserializer)?;
         if scopes.is_empty() || scopes.len() > registry_platform_httputil::MAXIMUM_REQUESTED_SCOPES
         {
-            return Err(de::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "a list of 1 to 32 scopes",
                 "List the scopes the token request asks for, or leave scopes out to ask for none.",
-            )));
+            )
+            .into_error());
         }
         Ok(Self(scopes))
     }
@@ -713,10 +714,11 @@ impl<'de> Deserialize<'de> for DefinitionPins {
         let pins =
             BTreeMap::<DefinitionHandle, ExpectedDefinitionMember>::deserialize(deserializer)?;
         if pins.len() > MAXIMUM_DEFINITION_PINS {
-            return Err(de::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "at most 128 pinned definitions",
                 "Pin only the definitions this client requests.",
-            )));
+            )
+            .into_error());
         }
         Ok(Self(pins))
     }
@@ -730,10 +732,11 @@ impl<'de> Deserialize<'de> for ContractDefinitions {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let definitions = Vec::<serde_json::Value>::deserialize(deserializer)?;
         if definitions.len() > MAXIMUM_CONTRACT_DEFINITIONS {
-            return Err(de::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "at most 16384 definitions",
                 "Fetch the contracts again with `evidencectl client contracts fetch` and review the new file.",
-            )));
+            )
+            .into_error());
         }
         Ok(Self(definitions))
     }

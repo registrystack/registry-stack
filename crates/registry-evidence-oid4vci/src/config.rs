@@ -28,7 +28,7 @@ use registry_platform_yaml::{
     shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, Invalid, Report, Severity,
     UniqueList, Url,
 };
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The `apiVersion` of a delivery runtime file.
 pub const OID4VCI_RUNTIME_API_VERSION: &str =
@@ -626,10 +626,11 @@ impl<'de> Deserialize<'de> for UnrestrictedKeyword {
         if text == "unrestricted" {
             Ok(Self)
         } else {
-            Err(de::Error::custom(Invalid::expected(
+            Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
                 "Write unrestricted to admit any value, or list the admitted values.",
-            )))
+            )
+            .into_error())
         }
     }
 }
@@ -661,10 +662,11 @@ impl<'de> Deserialize<'de> for ListedIdentifiers {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let items = UniqueList::<ExternalId>::deserialize(deserializer)?;
         if items.is_empty() {
-            return Err(de::Error::custom(Invalid::expected(
+            return Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
                 "Write unrestricted to admit any value, or list the admitted values.",
-            )));
+            )
+            .into_error());
         }
         Ok(Self(items))
     }
