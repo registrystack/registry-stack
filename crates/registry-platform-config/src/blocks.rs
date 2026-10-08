@@ -526,10 +526,7 @@ pub struct OidcClientsConfig {
         skip_serializing_if = "BTreeMap::is_empty",
         deserialize_with = "non_empty_assertion_issuers"
     )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "assertion_issuers_schema")
-    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "assertion_issuers_schema"))]
     pub assertion_issuers: BTreeMap<String, Vec<String>>,
 }
 
