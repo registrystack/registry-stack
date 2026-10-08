@@ -845,20 +845,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/dev-prepared-source
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1'
-- rule: CFG-ENV-1
-  format: breg/dev-prepared-source
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegDevPreparedSource'
 - rule: CFG-SCHEMA-1
   format: breg/dev-prepared-source
   location: products/platform/config-formats.yaml#/example
@@ -866,13 +852,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/dev-prepared-source
-  location: crates/registry-bregctl/src/dev/prepare_source.rs#run()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/dev-source-transition
   location: products/platform/config-formats.yaml#/check
@@ -880,20 +859,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-ENV-1
-  format: breg/dev-source-transition
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: the format carries no apiVersion
-  resolution: 'Write and check apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1'
-- rule: CFG-ENV-1
-  format: breg/dev-source-transition
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegDevSourceTransition'
 - rule: CFG-SCHEMA-1
   format: breg/dev-source-transition
   location: products/platform/config-formats.yaml#/example
@@ -901,13 +866,6 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-YAML-1
-  format: breg/dev-source-transition
-  location: crates/registry-bregctl/src/dev/prepare_source.rs#recover()
-  class: pending
-  wp: WP3
-  reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
 - rule: CFG-CHECK-1
   format: breg/dev-state
   location: products/platform/config-formats.yaml#/check

@@ -1326,3 +1326,24 @@ stop --remove <project>` with the earlier `bregctl`, then remove
 migration takes. A script that reads `state.json` finds `containerId`,
 `webhookPort`, and the other optional members absent, not `null`, until they
 have a value.
+
+### BREAKING: source preparation record and journal headers (`.breg/dev/source-prepared-<client>.json`, `.breg/dev/source-transition.json`)
+
+`bregctl dev prepare-source` writes the record that repeats an identical
+request with `apiVersion:
+id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1` and `kind:
+BRegDevPreparedSource`, and the journal that recovers an interrupted apply
+with `apiVersion:
+id.registrystack.org/formats/breg/dev-source-transition/v1alpha1` and `kind:
+BRegDevSourceTransition`. Both are read back through the shared reader. The
+record keeps the printed report as its exact JSON text, so a repeated request
+prints the same report, and the journal keeps the authoring files it restores
+as their text rather than as arrays of bytes. A journal larger than the shared
+reader's 1 MiB document bound is refused before anything is written, naming
+the fix (`source transition exceeds the 1 MiB retained journal bound`); the
+bound was 4 MiB. Only `bregctl` writes these files, so there is nothing to
+edit: a record or journal an earlier `bregctl` wrote is refused unchanged
+(`retained source preparation is invalid`), and the refusal names the fix.
+Finish or recover any source preparation with the earlier `bregctl` before
+upgrading; otherwise run `bregctl dev stop --remove <project>`, remove
+`<project>/.breg/dev`, and start again.

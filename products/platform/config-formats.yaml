@@ -720,14 +720,16 @@ formats:
   - id: breg/dev-prepared-source
     product: breg
     title: Development prepared source record
-    files: [source-prepared-*.json]
+    files: [.breg/dev/source-prepared-*.json]
     syntax: json
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1
+      kind: BRegDevPreparedSource
+      checkedBy:
+        file: crates/registry-bregctl/src/dev/prepare_source.rs
+        symbol: PREPARED_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1
       kind: BRegDevPreparedSource
@@ -735,7 +737,7 @@ formats:
     reader:
       crate: registry-bregctl
       file: crates/registry-bregctl/src/dev/prepare_source.rs
-      function: run
+      function: read_prepared
       type: PreparedSource
     check: none
     example: none
@@ -749,14 +751,16 @@ formats:
   - id: breg/dev-source-transition
     product: breg
     title: Development source transition journal
-    files: [source-transition.json]
+    files: [.breg/dev/source-transition.json]
     syntax: json
     audience: generated
     stability: unpromised
     current:
-      apiVersion: none
-      kind: none
-      checkedBy: none
+      apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1
+      kind: BRegDevSourceTransition
+      checkedBy:
+        file: crates/registry-bregctl/src/dev/prepare_source.rs
+        symbol: TRANSITION_API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1
       kind: BRegDevSourceTransition
@@ -764,7 +768,7 @@ formats:
     reader:
       crate: registry-bregctl
       file: crates/registry-bregctl/src/dev/prepare_source.rs
-      function: recover
+      function: read_transition
       type: Transition
     check: none
     example: none
