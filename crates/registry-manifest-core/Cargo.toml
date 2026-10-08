@@ -13,9 +13,14 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
 oxiri = { version = "0.3.1" }
 registry-platform-canonical-json.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }

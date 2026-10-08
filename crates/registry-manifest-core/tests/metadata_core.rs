@@ -6,8 +6,8 @@ use registry_manifest_core::{
     render_dcat_profile, render_entity_schema_draft_2020_12, render_entity_shacl,
     render_evidence_offering, render_form_schema_draft_2020_12, render_ogc_records_items,
     render_policy_collection, render_shacl, validate_manifest, verify_evidence_pack_policy_hash,
-    CodelistConcept, CodelistManifest, MetadataError, MetadataManifest, ProfileClaim,
-    ODRL_ENFORCEMENT_PROFILE, SUPPORTED_ODRL_ENFORCEMENT_TERMS,
+    CodelistConcept, CodelistManifest, LocalizedText, MetadataError, MetadataManifest,
+    ProfileClaim, ValidationCondition, ODRL_ENFORCEMENT_PROFILE, SUPPORTED_ODRL_ENFORCEMENT_TERMS,
 };
 use serde_json::{json, Value};
 
@@ -4380,14 +4380,13 @@ fn validation_rejects_a_field_concept_listed_twice() {
     assert!(
         errors.iter().any(|error| {
             error.path == "datasets[0].entities[0].fields[0].concepts[1]"
-                && error
-                    .message
-                    .contains("https://vocab.example.test/person#identifier")
+                && error.condition == ValidationCondition::DuplicateValue
+                && !error.message.contains("vocab.example.test")
                 && error
                     .message
                     .contains("datasets[0].entities[0].fields[0].concepts[0]")
         }),
-        "expected a duplicate concept error naming the IRI and both positions; got {errors:?}"
+        "expected a duplicate concept error naming both positions and not the IRI; got {errors:?}"
     );
 }
 
@@ -4425,9 +4424,8 @@ fn validation_rejects_field_concepts_that_expand_to_one_term() {
     assert!(
         errors.iter().any(|error| {
             error.path == "datasets[0].entities[0].fields[0].concepts[1]"
-                && error
-                    .message
-                    .contains("http://data.europa.eu/m8g/birthDate")
+                && error.condition == ValidationCondition::DuplicateValue
+                && !error.message.contains("birthDate")
         }),
         "two prefixes for one namespace must not pass as two terms; got {errors:?}"
     );
@@ -4726,3 +4724,77 @@ codelists:
       - code: certified
       - code: not_certified
 "#;
+
+#[test]
+fn validation_errors_carry_a_condition_with_a_stable_code_and_action() {
+    let manifest = manifest_with_body(
+        r#"datasets:
+  - id: register
+    title: Register
+    entities: []
+  - id: register
+    title: Register again
+    entities: []
+codelists: []"#,
+    );
+
+    let errors = validation_errors(&manifest);
+    let duplicate = errors
+        .iter()
+        .find(|error| error.path == "datasets[1].id")
+        .unwrap_or_else(|| panic!("expected a duplicate dataset id error; got {errors:?}"));
+    assert_eq!(duplicate.condition, ValidationCondition::DuplicateValue);
+    assert_eq!(duplicate.condition.code(), "duplicate-value");
+    assert!(
+        !duplicate.condition.suggested_action().is_empty(),
+        "every condition names its fix"
+    );
+}
+
+#[test]
+fn validation_condition_codes_are_distinct_kebab_case() {
+    let conditions = [
+        ValidationCondition::DuplicateValue,
+        ValidationCondition::UnknownReference,
+        ValidationCondition::MissingMember,
+        ValidationCondition::EmptyValue,
+        ValidationCondition::InvalidId,
+        ValidationCondition::InvalidUrl,
+        ValidationCondition::InvalidIri,
+        ValidationCondition::InvalidVocabularyPrefix,
+        ValidationCondition::InvalidDigest,
+        ValidationCondition::PolicyHashMismatch,
+        ValidationCondition::PolicyNotCanonicalizable,
+        ValidationCondition::TooManyItems,
+        ValidationCondition::Unsupported,
+        ValidationCondition::InvalidValue,
+    ];
+    let mut codes = std::collections::BTreeSet::new();
+    for condition in conditions {
+        let code = condition.code();
+        assert!(
+            code.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                && !code.starts_with('-')
+                && !code.ends_with('-'),
+            "{code} is not kebab-case"
+        );
+        assert!(codes.insert(code), "{code} is used twice");
+        assert!(condition.suggested_action().ends_with('.'));
+    }
+}
+
+#[test]
+fn localized_text_is_chosen_by_node_kind() {
+    let plain: LocalizedText = serde_json::from_value(json!("Register")).expect("plain text");
+    assert_eq!(plain, LocalizedText::Plain("Register".to_string()));
+
+    let localized: LocalizedText =
+        serde_json::from_value(json!({"en": "Register", "fr": "Registre"})).expect("localized");
+    let LocalizedText::Localized(map) = localized else {
+        panic!("a mapping decodes as localized text");
+    };
+    assert_eq!(map.get("fr").map(String::as_str), Some("Registre"));
+
+    let refused = serde_json::from_value::<LocalizedText>(json!(["Register"]));
+    assert!(refused.is_err(), "a list is neither form");
+}

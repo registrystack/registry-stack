@@ -5732,6 +5732,8 @@ dependencies = [
  "oxiri 0.3.1",
  "oxjsonld",
  "registry-platform-canonical-json",
+ "registry-platform-yaml",
+ "schemars",
  "serde",
  "serde_json",
  "serde_path_to_error",
