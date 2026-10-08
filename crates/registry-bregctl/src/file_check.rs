@@ -288,7 +288,7 @@ fn read(file: &Path, label: &str) -> Result<Vec<u8>, Failure> {
     let bound = u64::try_from(MAXIMUM_DOCUMENT_BYTES + 1).unwrap_or(u64::MAX);
     crate::read_bounded_source_file(file, "breg.check.file-unreadable", label, bound).map_err(
         |refusal| {
-            if refusal.code == "source.file.bounds" {
+            if refusal.code == "breg.source.file-bounds" {
                 // The reader refuses a document over its bound before reading
                 // a byte of it, so a buffer one byte over stands in for the
                 // file the bounded read stopped at, and the refusal is the
