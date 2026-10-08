@@ -658,8 +658,8 @@ pub(crate) fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
 }
 
 /// `error`, a refusal of the runtime file at `path` or of the policy it
-/// binds, as the report the runtime prints at startup. A refusal of the
-/// package or of a dependency has no such report and keeps its message.
+/// binds, as the report the runtime prints at startup. The runtime file
+/// that cannot be read at all keeps its message.
 pub(crate) fn runtime_refusal(path: &Path, error: RuntimeConfigError) -> anyhow::Error {
     let unavailable = matches!(
         &error,

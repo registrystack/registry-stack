@@ -1021,8 +1021,8 @@ pub fn check_runtime(
 /// The report `scheduling` prints when it refuses the runtime file at
 /// `path` with `error`: the shared loader's diagnostics, the packaged
 /// policy's own report, or every rule the file breaks, each at its position.
-/// `None` for a refusal of the package or of a dependency, which its message
-/// alone describes.
+/// A refusal of the package or of a dependency is one diagnostic at the member
+/// that names it. `None` when the file itself cannot be read.
 #[must_use]
 pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
     match error {
@@ -1030,10 +1030,11 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
         RuntimeConfigError::Policy(report) => return Some(report.clone()),
         _ => {}
     }
-    if !error.in_file() {
-        return None;
-    }
     let check = RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, true, stand_in_for);
+    if !error.in_file() {
+        check.loaded.as_ref()?;
+        return Some(Report::new(vec![positioned(&check, error)]));
+    }
     let config = &check.loaded.as_ref()?.config;
     let policy = config.load_policy().ok();
     let mut diagnostics: Vec<Diagnostic> = config
@@ -2995,13 +2996,21 @@ holdPolicy:
     }
 
     #[test]
-    fn a_package_refusal_has_no_positioned_report() {
+    fn a_package_refusal_is_reported_at_the_package_root_member() {
         let root = canonical_tempdir();
         let document = operator_value(&root.path().join("package"), "development-loopback");
         let path = write_operator(root.path(), document);
         let error = RuntimeConfig::load(&path).expect_err("no package exists");
         assert!(!error.in_file(), "{error}");
-        assert!(startup_report(&path, &error).is_none());
+        let report = startup_report(&path, &error).expect("a positioned package refusal");
+        let [diagnostic] = report.diagnostics() else {
+            panic!("one diagnostic expected: {report:?}");
+        };
+        assert_eq!(diagnostic.code, error.code());
+        assert_eq!(diagnostic.path, "/package/root");
+        let source = diagnostic.source.as_ref().expect("the file is named");
+        assert!(source.line.is_some(), "{source:?}");
+        assert!(!diagnostic.suggested_action.is_empty());
     }
 
     #[test]
