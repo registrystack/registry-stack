@@ -5491,97 +5491,6 @@ exceptions:
   wp: WP7
   reason: a read format with no offline check command
   resolution: Add an offline check command
-- rule: CFG-EMPTY-2
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawOidcVerifierConfig/properties/assertionIssuers
-  class: pending
-  wp: WP8
-  reason: the restricting member /authentication/oidc/assertionIssuers accepts an empty mapping
-  resolution: 'Refuse empty: declare minItems: 1 (or minProperties: 1) and no empty default'
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAuditConfig/properties/path
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAuditConfig/properties/retainDays
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAuditConfig/properties/rotateBytes
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAuthorityClaimsConfig/properties/contextual
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewAuthorityConfig/properties/completionRecipient
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewAuthorityConfig/properties/completionTokenRef
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewAuthorityConfig/properties/privateKeyJwt
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewAuthorityConfig/properties/tokenRef
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewExecutorConfig/properties/privateKeyJwt
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewExecutorConfig/properties/tokenRef
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewPrivateKeyJwtConfig/properties/caBundleRef
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
-- rule: CFG-EMPTY-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/properties/metricsListener
-  class: pending
-  wp: WP6
-  reason: 'default: null'
-  resolution: Remove the default and describe what omitting the member means
 - rule: CFG-ENV-2
   format: breg/runtime
   location: products/platform/config-formats.yaml#/current/apiVersion
@@ -5636,6 +5545,12 @@ exceptions:
   class: stable-move
   reason: a union tagged by kind, not type
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the variants with a type member, or use single-key mappings'
+- rule: CFG-ID-7
+  format: breg/runtime
+  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig
+  class: stable-move
+  reason: the credential is chosen by which of tokenRef and privateKeyJwt is present, an untagged choice between two mappings; reviewAuthorities and reviewExecutors carry the same choice without a schema oneOf
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): replace tokenRef and privateKeyJwt in evidenceProviders, reviewAuthorities, and reviewExecutors with one credential member tagged by type, credential: {type: static-token, tokenRef} or credential: {type: private-key-jwt, ...}'
 - rule: CFG-ID-7
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawFieldEncryptionProvider
@@ -5769,251 +5684,24 @@ exceptions:
   wp: WP6
   reason: the format registers no minimal valid example
   resolution: Register a minimal valid example
-- rule: CFG-SCHEMA-4
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig/oneOf/1/properties/privateKeyJwt
-  class: pending
-  wp: WP3
-  reason: an object schema with no members accepts any member
-  resolution: 'Close the object (additionalProperties or unevaluatedProperties: false)'
 - rule: CFG-SCHEMA-5
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawDatabaseConfig
-  class: pending
-  wp: WP3
-  reason: RawDatabaseConfig redeclares the shared block DatabaseConfig
-  resolution: Embed DatabaseConfig unchanged from the platform schema
+  class: decision
+  reason: 'BReg''s database block carries pool bounds and SQL role names the shared DatabaseConfig does not define, and the shared block carries trustedRootCertificateRef and testOnlyPlaintext, which BReg does not implement; embedding it would add a database TLS posture, not a respelling'
+  resolution: 'Decision for Jeremi raised 2026-10-08 by the BReg authored-formats track: either the shared DatabaseConfig gains pool and roles members and BReg flattens it through the shared-block recipe, adopting trustedRootCertificateRef, or BReg moves pool and roles beside an embedded DatabaseConfig as a stable-move'
 - rule: CFG-SCHEMA-5
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawListenerConfig
-  class: pending
-  wp: WP3
-  reason: RawListenerConfig redeclares the shared block ListenerConfig
-  resolution: Embed ListenerConfig unchanged from the platform schema
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidencePrivateKeyJwtConfig/properties/privateKeyRef
-  class: pending
-  wp: WP8
-  reason: privateKeyRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig/oneOf/0/properties/tokenRef
-  class: pending
-  wp: WP8
-  reason: tokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig/properties/caBundleRef
-  class: pending
-  wp: WP8
-  reason: caBundleRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig/properties/tokenRef
-  class: pending
-  wp: WP8
-  reason: tokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig/properties/trustedJwksRef
-  class: pending
-  wp: WP8
-  reason: trustedJwksRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAttachmentStorageConfig/oneOf/1/properties/accessKeyIdRef
-  class: pending
-  wp: WP8
-  reason: accessKeyIdRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAttachmentStorageConfig/oneOf/1/properties/caBundleRef
-  class: pending
-  wp: WP8
-  reason: caBundleRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAttachmentStorageConfig/oneOf/1/properties/secretAccessKeyRef
-  class: pending
-  wp: WP8
-  reason: secretAccessKeyRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAttachmentStorageConfig/oneOf/1/properties/sessionTokenRef
-  class: pending
-  wp: WP8
-  reason: sessionTokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawAttachmentVerificationConfig/oneOf/1/properties/authorizationRef
-  class: pending
-  wp: WP8
-  reason: authorizationRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawCursorConfig/properties/secretRef
-  class: pending
-  wp: WP8
-  reason: secretRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawDatabaseConfig/properties/migrationUrlRef
-  class: pending
-  wp: WP8
-  reason: migrationUrlRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawDatabaseConfig/properties/runtimeUrlRef
-  class: pending
-  wp: WP8
-  reason: runtimeUrlRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawEventDestinationConfig/properties/hmacSha256KeyRef
-  class: pending
-  wp: WP8
-  reason: hmacSha256KeyRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawEventDestinationTlsConfig/anyOf/0/properties/caBundleRef
-  class: pending
-  wp: WP8
-  reason: caBundleRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawEventDestinationTlsConfig/anyOf/1/properties/clientIdentityRef
-  class: pending
-  wp: WP8
-  reason: clientIdentityRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawEventDestinationTlsConfig/properties/caBundleRef
-  class: pending
-  wp: WP8
-  reason: caBundleRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef
-  class: pending
-  wp: WP8
-  reason: clientIdentityRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawFieldEncryptionProvider/oneOf/1/properties/dekRef
-  class: pending
-  wp: WP8
-  reason: dekRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewAuthorityConfig/properties/completionTokenRef
-  class: pending
-  wp: WP8
-  reason: completionTokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewAuthorityConfig/properties/tokenRef
-  class: pending
-  wp: WP8
-  reason: tokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewExecutorConfig/properties/tokenRef
-  class: pending
-  wp: WP8
-  reason: tokenRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewPrivateKeyJwtConfig/properties/caBundleRef
-  class: pending
-  wp: WP8
-  reason: caBundleRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewPrivateKeyJwtConfig/properties/clientAssertionKeyRef
-  class: pending
-  wp: WP8
-  reason: clientAssertionKeyRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawReviewPrivateKeyJwtConfig/properties/clientIdRef
-  class: pending
-  wp: WP8
-  reason: clientIdRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/TaskGrantStatusConfig/properties/caBundleRef
-  class: pending
-  wp: WP8
-  reason: caBundleRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-SEC-1
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/TaskGrantStatusConfig/properties/privateKeyRef
-  class: pending
-  wp: WP8
-  reason: privateKeyRef ends in Ref but is not a SecretReference
-  resolution: Type the member as $defs/SecretReference, or drop the Ref suffix
-- rule: CFG-VAL-7
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/EvidenceProviderConfig/properties/baseUrl
-  class: pending
-  wp: WP3
-  reason: baseUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
+  class: stable-move
+  reason: 'BReg''s listener holds publicOrigin beside bind, so its type is not the shared ListenerConfig'
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): move listener.publicOrigin to a top-level publicOrigin, as breg-review writes it, and type listener as the shared ListenerConfig; refuse listener.publicOrigin with config.removed-key naming publicOrigin'
 - rule: CFG-VAL-7
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawContextualClaimNames/properties/grantSourceIssuer
-  class: pending
-  wp: WP3
-  reason: grantSourceIssuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawListenerConfig/properties/publicOrigin
-  class: pending
-  wp: WP3
-  reason: publicOrigin is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/TaskGrantStatusConfig/properties/baseUrl
-  class: pending
-  wp: WP3
-  reason: baseUrl is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
-- rule: CFG-VAL-7
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/TaskGrantStatusConfig/properties/sourceIssuer
-  class: pending
-  wp: WP3
-  reason: sourceIssuer is not typed as $defs/Url
-  resolution: 'Type the member with $ref: #/$defs/Url'
+  class: stable-move
+  reason: 'grantSourceIssuer names the token claim that carries a grant''s source issuer, not an issuer URL, and the member name does not say so'
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): rename authentication.authorityClaims.contextual.grantSourceIssuer to grantSourceIssuerClaim; refuse the old key with config.removed-key'
 - rule: CFG-CHECK-1
   format: breg/schema-test-credentials
   location: products/platform/config-formats.yaml#/check

@@ -1563,41 +1563,63 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
     } else {
         ("migration-database-url", MIGRATION_ROLE)
     };
+    let mut runtime = json!({
+        "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1","kind":"BRegRuntimeConfig",
+        "listener":{"bind":format!("127.0.0.1:{}",state.breg_port),"publicOrigin":state.breg_origin()},
+        "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
+        "secretProviders":{"file":{"root":final_root.join("secrets")}},
+        "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
+        "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
+        "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+        "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
+        "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
+            "baseUrl":provider.base_url,
+            "trustBindingId":provider.trust_binding_id,
+            "tokenRef":provider.token_file.as_ref().map(|_| format!("secret:file/evidence-token-{id}")),
+            "privateKeyJwt":provider.private_key_jwt.as_ref().map(|credentials| json!({
+                "tokenEndpoint":credentials.token_endpoint,
+                "clientId":credentials.client_id,
+                "privateKeyRef":format!("secret:file/evidence-client-key-{id}"),
+                "assertionAudience":credentials.assertion_audience,
+                "resource":credentials.resource,
+                "scopes":credentials.scopes
+            })),
+            "trustedJwksRef":format!("secret:file/evidence-jwks-{id}"),
+            "revokedKeyIds":provider.revoked_key_ids,
+            "caBundleRef":provider.ca_bundle_file.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
+        }))).collect::<BTreeMap<_,_>>(),
+        "reviewAuthorities":local_review_authorities(state, clients),
+        "reviewExecutors":review_executors
+    });
+    // runtime.yaml writes an optional member by leaving it out (CFG-EMPTY-1),
+    // and an empty assertionIssuers map is refused, so an absent setting is
+    // omitted rather than written as null or `{}`.
+    omit_null_members(&mut runtime);
+    if assertion_issuers.is_empty() {
+        runtime["authentication"]["oidc"]
+            .as_object_mut()
+            .expect("the runtime document carries an oidc object")
+            .remove("assertionIssuers");
+    }
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
         } else {
             "runtime.yaml"
         }),
-        &json!({
-            "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1","kind":"BRegRuntimeConfig",
-            "listener":{"bind":format!("127.0.0.1:{}",state.breg_port),"publicOrigin":state.breg_origin()},
-            "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
-            "secretProviders":{"file":{"root":final_root.join("secrets")}},
-            "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
-            "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
-            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
-            "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
-            "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
-                "baseUrl":provider.base_url,
-                "trustBindingId":provider.trust_binding_id,
-                "tokenRef":provider.token_file.as_ref().map(|_| format!("secret:file/evidence-token-{id}")),
-                "privateKeyJwt":provider.private_key_jwt.as_ref().map(|credentials| json!({
-                    "tokenEndpoint":credentials.token_endpoint,
-                    "clientId":credentials.client_id,
-                    "privateKeyRef":format!("secret:file/evidence-client-key-{id}"),
-                    "assertionAudience":credentials.assertion_audience,
-                    "resource":credentials.resource,
-                    "scopes":credentials.scopes
-                })),
-                "trustedJwksRef":format!("secret:file/evidence-jwks-{id}"),
-                "revokedKeyIds":provider.revoked_key_ids,
-                "caBundleRef":provider.ca_bundle_file.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
-            }))).collect::<BTreeMap<_,_>>(),
-            "reviewAuthorities":local_review_authorities(state, clients),
-            "reviewExecutors":review_executors
-        }),
+        &runtime,
     )
+}
+
+fn omit_null_members(value: &mut Value) {
+    match value {
+        Value::Object(members) => {
+            members.retain(|_, member| !member.is_null());
+            members.values_mut().for_each(omit_null_members);
+        }
+        Value::Array(items) => items.iter_mut().for_each(omit_null_members),
+        _ => {}
+    }
 }
 
 fn local_review_executors(

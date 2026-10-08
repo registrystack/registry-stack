@@ -87,12 +87,12 @@ pub(crate) enum RawAttachmentStorageConfig {
         region: String,
         #[serde(default = "default_path_style")]
         path_style: bool,
-        access_key_id_ref: String,
-        secret_access_key_ref: String,
+        access_key_id_ref: SecretReference,
+        secret_access_key_ref: SecretReference,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_token_ref: Option<String>,
+        session_token_ref: Option<SecretReference>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        ca_bundle_ref: Option<String>,
+        ca_bundle_ref: Option<SecretReference>,
         #[serde(default = "default_timeout")]
         #[cfg_attr(feature = "schema", schemars(range(min = 100, max = 60_000)))]
         timeout_milliseconds: u64,
@@ -189,16 +189,13 @@ impl AttachmentStorageConfig {
             )))
             .map_err(|_| AttachmentStorageError::InvalidConfiguration)?;
         }
-        let secret = |value| {
-            SecretReference::parse(value).map_err(|_| AttachmentStorageError::InvalidConfiguration)
-        };
         Ok(Self(Some(S3Config {
             bucket_url: url,
             region,
-            access_key_id_ref: secret(access_key_id_ref)?,
-            secret_access_key_ref: secret(secret_access_key_ref)?,
-            session_token_ref: session_token_ref.map(secret).transpose()?,
-            ca_bundle_ref: ca_bundle_ref.map(secret).transpose()?,
+            access_key_id_ref,
+            secret_access_key_ref,
+            session_token_ref,
+            ca_bundle_ref,
             timeout: Duration::from_millis(timeout_milliseconds),
         })))
     }
@@ -746,7 +743,6 @@ mod tests {
             ("bucket", json!("127.0.0.1")),
             ("region", json!("us/east")),
             ("timeoutMilliseconds", json!(0)),
-            ("accessKeyIdRef", json!("inline-secret-canary")),
         ] {
             let mut input = raw("https://storage.example");
             input[key] = value;
@@ -754,6 +750,12 @@ mod tests {
                 AttachmentStorageConfig::from_raw(serde_json::from_value(input).unwrap()).is_err()
             );
         }
+        let mut input = raw("https://storage.example");
+        input["accessKeyIdRef"] = json!("inline-secret-canary");
+        let error = serde_json::from_value::<RawAttachmentStorageConfig>(input)
+            .err()
+            .expect("an inline credential is not a secret reference");
+        assert!(!error.to_string().contains("inline-secret-canary"));
         assert!(serde_json::from_value::<RawAttachmentStorageConfig>(
             json!({"kind":"database", "endpoint":"https://ignored.example"})
         )
@@ -782,8 +784,12 @@ mod tests {
     #[cfg(feature = "schema")]
     fn storage_schema_refuses_inline_credentials_and_database_extras() {
         let schema = crate::runtime_config::runtime_config_schema().unwrap();
-        let storage_schema = schema.pointer("/$defs/RawAttachmentStorageConfig").unwrap();
-        let validator = jsonschema::JSONSchema::compile(storage_schema).unwrap();
+        let mut storage_schema = schema
+            .pointer("/$defs/RawAttachmentStorageConfig")
+            .unwrap()
+            .clone();
+        storage_schema["$defs"] = schema["$defs"].clone();
+        let validator = jsonschema::JSONSchema::compile(&storage_schema).unwrap();
         let mut input = raw("https://storage.example");
         assert!(validator.is_valid(&input));
         input["accessKeyIdRef"] = json!("inline-credential-canary");

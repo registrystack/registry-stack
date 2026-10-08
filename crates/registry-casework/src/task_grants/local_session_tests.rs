@@ -353,16 +353,16 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     .unwrap();
     let checker = Arc::new(
         TaskGrantStatusRegistry::activate(
-            &[TaskGrantStatusConfig {
-                source_issuer: AUTHORITY.into(),
-                base_url: session.url(),
-                token_endpoint: format!("{}/oauth2/token", session.issuer()),
-                client_assertion_audience: session.issuer(),
-                client_id: "status-client".into(),
-                private_key_ref: "secret:file/assertion-key.jwk".into(),
-                casework_resource: AUDIENCE.into(),
-                ca_bundle_ref: None,
-            }],
+            &[serde_json::from_value::<TaskGrantStatusConfig>(json!({
+                "sourceIssuer": AUTHORITY,
+                "baseUrl": session.url(),
+                "tokenEndpoint": format!("{}/oauth2/token", session.issuer()),
+                "clientAssertionAudience": session.issuer(),
+                "clientId": "status-client",
+                "privateKeyRef": "secret:file/assertion-key.jwk",
+                "caseworkResource": AUDIENCE,
+            }))
+            .unwrap()],
             AUDIENCE,
             &secrets,
         )

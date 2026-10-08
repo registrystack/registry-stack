@@ -937,12 +937,14 @@ mod tests {
             (Some(Value::Null), Some(Value::Null), false),
             (Some(serde_json::json!("secret:file/token")), None, true),
             (None, Some(private_key_jwt.clone()), true),
+            // `null` is never a value (CFG-EMPTY-1): an absent credential
+            // is written by leaving its member out.
             (
                 Some(serde_json::json!("secret:file/token")),
                 Some(Value::Null),
-                true,
+                false,
             ),
-            (Some(Value::Null), Some(private_key_jwt.clone()), true),
+            (Some(Value::Null), Some(private_key_jwt.clone()), false),
             (
                 Some(serde_json::json!("secret:file/token")),
                 Some(private_key_jwt),

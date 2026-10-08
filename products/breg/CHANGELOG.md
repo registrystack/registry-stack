@@ -20,6 +20,15 @@
   `database.url`, `database.password`, and `database.plaintext` are refused as
   `config.removed-key`. The runtime file may be up to 1 MiB. The code table
   and migration steps are in `release/notes/config-conventions/breg.md`.
+- BREAKING: `runtime.yaml` secret references and URLs are typed by the shared
+  reader. A `*Ref` member that is not `secret:file/NAME` or `secret:env/NAME`,
+  and a `publicOrigin`, Evidence provider `baseUrl`, or task-grant status
+  `baseUrl` or `sourceIssuer` that is not an absolute `http` or `https` URL,
+  is refused as `config.invalid-value` at the member. A task-grant status
+  `sourceIssuer` written as a `urn:` was accepted and is refused, and
+  `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
+  apply no assertion-issuer rule. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
   row, and journaling a `GET` the caller did not send. A `HEAD` now receives

@@ -2372,3 +2372,73 @@ unknown key inside a platform block (`package`, `authentication.oidc`,
   diagnostics keep their code, pointer, and fix in `bregctl --format json`,
   but the tool report has no source position field; the human `breg` output
   carries it.
+
+## Runtime references and URLs typed by the shared reader
+
+Every `*Ref` member of `runtime.yaml` is decoded as the shared
+`SecretReference`, and the URLs a runtime calls or compares (`listener.publicOrigin`,
+an Evidence provider's `baseUrl`, the task-grant status `baseUrl` and
+`sourceIssuer`) as the shared `Url`. It touches secret reference handling,
+outbound endpoints, and the value-free reporting of operator configuration.
+
+### Threat
+
+A product-side parse of each reference, repeated per block, can drift: one
+block accepting a reference another refuses, or a refusal that echoes the
+inline secret an operator pasted where a reference belongs. A URL checked only
+after decode reports the whole block, not the member, so the operator cannot
+tell which value to fix.
+
+### Enforcement and defaults
+
+- The database `runtimeUrlRef` and `migrationUrlRef`, `cursor.secretRef`, the
+  review authority, review executor, and Evidence provider credentials
+  (`tokenRef`, `privateKeyJwt.privateKeyRef`, `trustedJwksRef`,
+  `caBundleRef`), an event destination's `hmacSha256KeyRef` and TLS
+  `caBundleRef` and `clientIdentityRef`, the attachment storage and
+  verification references, the field-encryption `dekRef`, and the task-grant
+  status `privateKeyRef` and `caBundleRef` are `SecretReference`
+  (`crates/registry-platform-config`). The reader refuses a value that is not
+  `secret:env/NAME` or `secret:file/name` as `config.invalid-value` at the
+  member and never repeats it. Which providers a reference may name is still
+  checked against `secretProviders` after decode, unchanged; the
+  field-encryption `dekRef` still refuses an environment reference.
+- `Url` (`crates/registry-platform-yaml`) refuses anything but an absolute
+  `http` or `https` URL with a host and no user information, of at most 2048
+  characters. The product checks that follow are unchanged: `publicOrigin`,
+  an Evidence `baseUrl`, and a task-grant `baseUrl` are `https`, with `http`
+  only for a loopback host. `sourceIssuer` is compared with the Casework
+  issuer and never fetched, so `http` stays accepted there; a non-URL issuer
+  such as a `urn:` is now refused.
+- An empty `authentication.oidc.assertionIssuers` mapping is refused: it
+  restricts which authority each client may exchange from, and omitting the
+  member is how a file applies no assertion-issuer rule (CFG-EMPTY-2). A
+  client listed with `[]` may exchange from no authority, as a client left
+  out may not; that was already the verifier's behaviour.
+- The published schema states the same: each reference is
+  `$ref: SecretReference`, each URL `$ref: Url`, and an optional reference,
+  path, or retention member publishes no `default: null` and says what
+  omitting it means.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `raw_database_urls_inline_secrets_and_plaintext_posture_are_refused` (an
+  inline database URL refused at `/database/runtimeUrlRef` without its
+  password), `invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refused`
+  (a traversing key reference refused at the member, value-free), and
+  `invalid_assertion_issuer_shapes_are_refused` (the empty mapping refused,
+  an empty per-client list accepted as no authority).
+- `crates/registry-breg/src/attachment_storage.rs` and
+  `crates/registry-breg/src/attachment_verification.rs`: an inline
+  credential is refused at decode and the error does not carry it.
+- `crates/registry-breg/src/task_grant/config.rs`: user information,
+  `http` outside loopback, and a fragment are refused in the status
+  `baseUrl`.
+
+### Accepted residuals
+
+- **A provider-specific refusal comes after decode.** A reference that names
+  a provider `secretProviders` does not enable is still refused by the
+  product check, with the runtime's code, after the reader has accepted its
+  shape.

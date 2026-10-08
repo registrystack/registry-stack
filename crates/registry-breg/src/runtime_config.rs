@@ -28,7 +28,7 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
-use registry_platform_yaml::{Diagnostic, Report, Source};
+use registry_platform_yaml::{Diagnostic, Report, Source, Url};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -98,11 +98,6 @@ const DEFAULT_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 =
 const MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_073_741_824;
 #[cfg(feature = "schema")]
 const MAX_DATABASE_POOL_SIZE: u64 = 128;
-#[cfg(feature = "schema")]
-const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
-    "^(secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
-#[cfg(feature = "schema")]
-const MAX_SECRET_REFERENCE_SCHEMA_LENGTH: usize = "secret:file/".len() + 128;
 #[cfg(feature = "schema")]
 const SQL_IDENTIFIER_SCHEMA_PATTERN: &str = "^[_a-z][_a-z0-9]{0,62}$";
 #[cfg(feature = "schema")]
@@ -1422,10 +1417,8 @@ pub struct DatabaseConfig {
 
 impl DatabaseConfig {
     fn from_raw(raw: RawDatabaseConfig) -> Result<Self> {
-        let runtime_url_ref =
-            parse_secret_reference(raw.runtime_url_ref, RuntimeConfigError::InvalidDatabase)?;
-        let migration_url_ref =
-            parse_secret_reference(raw.migration_url_ref, RuntimeConfigError::InvalidDatabase)?;
+        let runtime_url_ref = raw.runtime_url_ref;
+        let migration_url_ref = raw.migration_url_ref;
         let roles = SqlRoles::from_raw(raw.roles)?;
         // One database reference logs in as one role, so two references are
         // required only when the runtime and migration roles differ.
@@ -1578,9 +1571,10 @@ impl OidcVerifierConfig {
         // Duplicate assertion-issuer client keys are already refused before this
         // point: the shared reader refuses any duplicate YAML mapping key
         // anywhere in the document, including here.
-        let assertion_issuer_clients = raw.assertion_issuers.keys().cloned().collect::<Vec<_>>();
+        let assertion_issuers = raw.assertion_issuers;
+        let assertion_issuer_clients = assertion_issuers.keys().cloned().collect::<Vec<_>>();
         validate_bounded_list(&assertion_issuer_clients)?;
-        for issuers in raw.assertion_issuers.values() {
+        for issuers in assertion_issuers.values() {
             validate_bounded_list(issuers)?;
             let issuer_unique = issuers.iter().collect::<HashSet<_>>();
             if issuer_unique.len() != issuers.len() {
@@ -1599,7 +1593,7 @@ impl OidcVerifierConfig {
             scope_separator: raw.scope_separator,
             allowed_clients: raw.allowed_clients,
             denied_kids: raw.denied_kids,
-            assertion_issuers: raw.assertion_issuers,
+            assertion_issuers,
             max_token_lifetime,
             leeway,
             jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
@@ -2049,7 +2043,7 @@ impl AuthorityClaimsConfig {
                 return Err(RuntimeConfigError::InvalidOidc);
             }
         }
-        let contextual = raw.contextual.map(ClaimNames::from).unwrap_or_default();
+        let contextual = ClaimNames::from(raw.contextual);
         contextual
             .validate()
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
@@ -2191,7 +2185,7 @@ impl IdempotencyConfig {
 impl CursorConfig {
     fn from_raw(raw: RawCursorConfig) -> Result<Self> {
         Ok(Self {
-            secret_ref: parse_secret_reference(raw.secret_ref, RuntimeConfigError::InvalidCursor)?,
+            secret_ref: raw.secret_ref,
             max_age: seconds_bounded(raw.max_age_seconds, 1, 86_400)?,
         })
     }
@@ -2367,17 +2361,11 @@ impl ReviewAuthorityConfig {
             (Some(token_ref), Some(recipient))
                 if crate::review_store::valid_completion_recipient(&recipient) =>
             {
-                Some((
-                    parse_secret_reference(token_ref, RuntimeConfigError::InvalidBinding)?,
-                    recipient,
-                ))
+                Some((token_ref, recipient))
             }
             _ => return Err(RuntimeConfigError::InvalidBinding),
         };
-        let token_ref = raw
-            .token_ref
-            .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidBinding))
-            .transpose()?;
+        let token_ref = raw.token_ref;
         let private_key_jwt = raw
             .private_key_jwt
             .map(ReviewPrivateKeyJwtConfig::from_raw)
@@ -2413,16 +2401,28 @@ impl ReviewAuthorityConfig {
 struct RawReviewAuthorityConfig {
     endpoint: String,
     profile: String,
-    #[serde(default)]
-    token_ref: Option<String>,
-    #[serde(default)]
+    /// A static bearer token for the review service. Exactly one of
+    /// `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_ref: Option<SecretReference>,
+    /// A refreshing client-assertion credential for the review service.
+    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
     producer_id: String,
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3650)))]
     recovery_days: u32,
-    #[serde(default)]
-    completion_token_ref: Option<String>,
-    #[serde(default)]
+    /// The bearer token the review authority presents when it notifies this
+    /// registry that a review completed. Written together with
+    /// `completionRecipient`; omitted, no completion notification is
+    /// accepted and the registry polls for results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion_token_ref: Option<SecretReference>,
+    /// The logical recipient the review authority names in each completion
+    /// notification. Written together with `completionTokenRef`; omitted, no
+    /// completion notification is accepted and the registry polls for
+    /// results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     completion_recipient: Option<String>,
 }
 
@@ -2459,23 +2459,12 @@ impl ReviewPrivateKeyJwtConfig {
         }
         Ok(Self {
             token_endpoint,
-            client_id_ref: parse_secret_reference(
-                raw.client_id_ref,
-                RuntimeConfigError::InvalidBinding,
-            )?,
-            client_assertion_key_ref: parse_secret_reference(
-                raw.client_assertion_key_ref,
-                RuntimeConfigError::InvalidBinding,
-            )?,
+            client_id_ref: raw.client_id_ref,
+            client_assertion_key_ref: raw.client_assertion_key_ref,
             assertion_audience: raw.assertion_audience,
             resource: raw.resource,
             scopes: raw.scopes,
-            ca_bundle_ref: raw
-                .ca_bundle_ref
-                .map(|reference| {
-                    parse_secret_reference(reference, RuntimeConfigError::InvalidBinding)
-                })
-                .transpose()?,
+            ca_bundle_ref: raw.ca_bundle_ref,
         })
     }
 }
@@ -2485,13 +2474,15 @@ impl ReviewPrivateKeyJwtConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawReviewPrivateKeyJwtConfig {
     token_endpoint: String,
-    client_id_ref: String,
-    client_assertion_key_ref: String,
+    client_id_ref: SecretReference,
+    client_assertion_key_ref: SecretReference,
     assertion_audience: String,
     resource: String,
     scopes: Vec<String>,
-    #[serde(default)]
-    ca_bundle_ref: Option<String>,
+    /// A PEM bundle of the roots that sign the token endpoint's certificate.
+    /// Omitted, the platform's trusted roots verify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ca_bundle_ref: Option<SecretReference>,
 }
 
 #[derive(Clone)]
@@ -2521,10 +2512,7 @@ impl ReviewExecutorConfig {
             reqwest::Url::parse(&raw.endpoint).map_err(|_| RuntimeConfigError::InvalidBinding)?;
         registry_platform_httputil::client::ServiceBaseUrl::new(endpoint.clone())
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
-        let token_ref = raw
-            .token_ref
-            .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidBinding))
-            .transpose()?;
+        let token_ref = raw.token_ref;
         let private_key_jwt = raw
             .private_key_jwt
             .map(ReviewPrivateKeyJwtConfig::from_raw)
@@ -2547,9 +2535,13 @@ impl ReviewExecutorConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawReviewExecutorConfig {
     endpoint: String,
-    #[serde(default)]
-    token_ref: Option<String>,
-    #[serde(default)]
+    /// A static bearer token for the executing registry. Exactly one of
+    /// `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_ref: Option<SecretReference>,
+    /// A refreshing client-assertion credential for the executing registry.
+    /// Exactly one of `tokenRef` and `privateKeyJwt` is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
     registry_id: String,
     access_profile: String,
@@ -2609,7 +2601,7 @@ struct RawRuntimeConfig {
     wasm_execution: RawWasmExecutionConfig,
     /// Optional operator-private metrics listener. Absent by default, which
     /// serves no metrics surface at all.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     metrics_listener: Option<RawMetricsListenerConfig>,
 }
 
@@ -2618,10 +2610,14 @@ struct RawRuntimeConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawListenerConfig {
     bind: ListenerBind,
-    /// Canonical HTTPS origin (loopback HTTP for local development) for QGIS
-    /// discovery and pagination. Required when the registry exposes GIS collections.
+    /// Canonical public origin for QGIS discovery and pagination links, with
+    /// an optional deployment path prefix such as
+    /// `https://registry.example.org/breg`. It is `https`; `http` is accepted
+    /// only for a loopback host, for local development. Required when the
+    /// registry exposes GIS collections; omitted, the registry builds no
+    /// absolute discovery or paging links.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_origin: Option<String>,
+    public_origin: Option<Url>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2647,8 +2643,8 @@ struct RawDeploymentIdentity {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawDatabaseConfig {
-    runtime_url_ref: String,
-    migration_url_ref: String,
+    runtime_url_ref: SecretReference,
+    migration_url_ref: SecretReference,
     pool: RawPoolBounds,
     roles: RawSqlRoles,
 }
@@ -2714,13 +2710,36 @@ struct RawOidcVerifierConfig {
     allowed_clients: Vec<String>,
     #[serde(default)]
     denied_kids: Vec<String>,
-    #[serde(default)]
+    /// The assertion authorities each client may exchange a subject token
+    /// from, keyed by client identifier. Omitted, no assertion-issuer rule
+    /// applies; written, it lists at least one client, and a client not
+    /// listed, or listed with `[]`, may exchange from no authority.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "non_empty_assertion_issuers"
+    )]
     assertion_issuers: BTreeMap<String, Vec<String>>,
     max_token_lifetime_seconds: u64,
     leeway_milliseconds: u64,
     /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
     #[serde(default)]
     jwks_cache: RawJwksCacheConfig,
+}
+
+/// An empty mapping is not how the file says "no assertion-issuer rule"
+/// (CFG-EMPTY-2): omitting the member says it.
+fn non_empty_assertion_issuers<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, Vec<String>>, D::Error> {
+    let issuers = BTreeMap::<String, Vec<String>>::deserialize(deserializer)?;
+    if issuers.is_empty() {
+        return Err(serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
+            "at least one client",
+            "List at least one client with its assertion issuers, or omit assertionIssuers to apply no assertion-issuer rule.",
+        )));
+    }
+    Ok(issuers)
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2754,8 +2773,10 @@ struct RawAuthorityClaimsConfig {
     principal: String,
     #[serde(default)]
     purpose: Option<String>,
+    /// The claim names that carry delegated-authority context. Each name
+    /// defaults to its `registry_` claim; written, every name is given.
     #[serde(default)]
-    contextual: Option<RawContextualClaimNames>,
+    contextual: RawContextualClaimNames,
     #[serde(default)]
     trusted_actors: BTreeMap<String, String>,
 }
@@ -2773,6 +2794,23 @@ struct RawContextualClaimNames {
     grant_exp: String,
     grant_bounds: String,
     approver: String,
+}
+
+impl Default for RawContextualClaimNames {
+    fn default() -> Self {
+        let names = ClaimNames::default();
+        Self {
+            actor_kind: names.actor_kind,
+            purpose: names.purpose,
+            grant_id: names.grant_id,
+            grant_source_issuer: names.grant_source_issuer,
+            grant_client: names.grant_client,
+            grant_resource: names.grant_resource,
+            grant_exp: names.grant_exp,
+            grant_bounds: names.grant_bounds,
+            approver: names.approver,
+        }
+    }
 }
 
 impl From<RawContextualClaimNames> for ClaimNames {
@@ -2803,14 +2841,16 @@ struct RawAuditConfig {
     #[serde(default)]
     destination: AuditDestinationKind,
     /// Absolute path of the active audit file. Required for, and accepted
-    /// only with, the `file` destination.
-    #[serde(default)]
+    /// only with, the `file` destination; omitted with `stdout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<String>,
-    /// Size in bytes at which the active file rotates. Defaults to 100 MiB.
-    #[serde(default)]
+    /// Size in bytes at which the active file rotates, accepted only with the
+    /// `file` destination. Omitted, the file rotates at 100 MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     rotate_bytes: Option<u64>,
-    /// Days a rotated file is retained. Defaults to 90.
-    #[serde(default)]
+    /// Days a rotated file is retained, accepted only with the `file`
+    /// destination. Omitted, a rotated file is retained for 90 days.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     retain_days: Option<u32>,
 }
 
@@ -2818,7 +2858,7 @@ struct RawAuditConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawCursorConfig {
-    secret_ref: String,
+    secret_ref: SecretReference,
     /// Defaults to the bounded cursor validity lifetime.
     #[serde(default = "default_cursor_max_age_seconds")]
     max_age_seconds: u64,
@@ -3028,49 +3068,15 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         provider.insert(
             "oneOf".to_owned(),
             serde_json::json!([
-                {"required": ["tokenRef"], "properties": {"tokenRef": {"type": "string"}}},
-                {"required": ["privateKeyJwt"], "properties": {"privateKeyJwt": {"type": "object"}}}
+                {"required": ["tokenRef"]},
+                {"required": ["privateKeyJwt"]}
             ]),
         );
-    }
-    for definition in [
-        "RawAttachmentStorageConfig",
-        "RawAttachmentVerificationConfig",
-    ] {
-        if let Some(variants) = schema
-            .pointer_mut(&format!("/$defs/{definition}/oneOf"))
-            .and_then(Value::as_array_mut)
-        {
-            for variant in variants {
-                for key in [
-                    "accessKeyIdRef",
-                    "secretAccessKeyRef",
-                    "sessionTokenRef",
-                    "caBundleRef",
-                    "authorizationRef",
-                ] {
-                    if let Some(member) = variant
-                        .get_mut("properties")
-                        .and_then(|properties| properties.get_mut(key))
-                        .and_then(Value::as_object_mut)
-                    {
-                        install_string_constraints_in_object(
-                            member,
-                            1,
-                            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-                            SECRET_REFERENCE_SCHEMA_PATTERN,
-                        );
-                    }
-                }
-            }
-        }
     }
     for pointer in [
         "/properties/eventDestinations",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",
         "/$defs/RawEventDestinationConfig/properties/tls",
-        "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef",
-        "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef",
         "/$defs/RawOidcVerifierConfig/properties/allowedClients",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
         "/$defs/RawOidcVerifierConfig/properties/jwksSource",
@@ -3254,12 +3260,6 @@ fn install_schema_constraints(schema: &mut Value) {
 
     for (pointer, minimum, maximum, pattern) in [
         (
-            "/$defs/RawListenerConfig/properties/publicOrigin",
-            1,
-            MAX_PUBLIC_ORIGIN_BYTES,
-            r"^https?://[^/@?#\s]+/?$",
-        ),
-        (
             "/$defs/RawDeploymentIdentity/properties/environment",
             1,
             MAX_DEPLOYMENT_VALUE_BYTES,
@@ -3282,18 +3282,6 @@ fn install_schema_constraints(schema: &mut Value) {
             1,
             MAX_DEPLOYMENT_VALUE_BYTES,
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawDatabaseConfig/properties/runtimeUrlRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawDatabaseConfig/properties/migrationUrlRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
         ),
         (
             "/$defs/RawSqlRoles/properties/migration",
@@ -3356,12 +3344,6 @@ fn install_schema_constraints(schema: &mut Value) {
             CLAIM_NAME_SCHEMA_PATTERN,
         ),
         (
-            "/$defs/RawCursorConfig/properties/secretRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
             "/$defs/RawEventDestinationConfig/properties/origin",
             1,
             MAX_DESTINATION_ORIGIN_URL_BYTES,
@@ -3372,24 +3354,6 @@ fn install_schema_constraints(schema: &mut Value) {
             1,
             MAX_DESTINATION_TARGET_BYTES,
             EVENT_DESTINATION_PATH_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawEventDestinationConfig/properties/hmacSha256KeyRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef",
-            1,
-            MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-            SECRET_REFERENCE_SCHEMA_PATTERN,
         ),
     ] {
         install_schema_string_constraints(schema, pointer, minimum, maximum, pattern);
@@ -3434,6 +3398,7 @@ fn install_schema_constraints(schema: &mut Value) {
         .pointer_mut("/$defs/RawOidcVerifierConfig/properties/assertionIssuers")
         .and_then(Value::as_object_mut)
     {
+        member.insert("minProperties".to_owned(), Value::from(1_u64));
         member.insert("maxProperties".to_owned(), Value::from(MAX_LIST_ITEMS));
     }
     install_schema_array_constraints(
@@ -3579,28 +3544,8 @@ fn install_schema_tls_presence_constraint(schema: &mut Value) {
     member.insert(
         "anyOf".to_owned(),
         serde_json::json!([
-            {
-                "required": ["caBundleRef"],
-                "properties": {
-                    "caBundleRef": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-                        "pattern": SECRET_REFERENCE_SCHEMA_PATTERN
-                    }
-                }
-            },
-            {
-                "required": ["clientIdentityRef"],
-                "properties": {
-                    "clientIdentityRef": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_SECRET_REFERENCE_SCHEMA_LENGTH,
-                        "pattern": SECRET_REFERENCE_SCHEMA_PATTERN
-                    }
-                }
-            }
+            {"required": ["caBundleRef"]},
+            {"required": ["clientIdentityRef"]}
         ]),
     );
 }

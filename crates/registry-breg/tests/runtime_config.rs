@@ -1569,11 +1569,15 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
                 "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:",
                 &replacement,
             );
+        let error = parse_runtime_config_with_env(&raw, env_lookup)
+            .expect_err("unsafe database material refused");
         assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup)
-                .expect_err("unsafe database material refused"),
-            RuntimeConfigError::InvalidDatabase
+            reader_refusal(&error),
+            ("config.invalid-value", "/database/runtimeUrlRef")
         );
+        let rendered = format!("{error:?} {error} {}", error.render_human(None));
+        assert!(!rendered.contains("raw-secret"), "{rendered}");
+        assert!(!rendered.contains("lowercase"), "{rendered}");
     }
     for (member, line) in [
         ("plaintext", "plaintext: true"),
@@ -1887,6 +1891,44 @@ fn invalid_assertion_issuer_shapes_are_refused() {
             "{name}"
         );
     }
+
+    // CFG-EMPTY-2: assertionIssuers restricts which authority each client
+    // may exchange from, so an empty mapping is refused; omitting the member
+    // is how a file applies no assertion-issuer rule.
+    let error = parse_runtime_config_with_env(&insert("    assertionIssuers: {}\n"), env_lookup)
+        .expect_err("an empty assertion-issuer mapping is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        (
+            "config.invalid-value",
+            "/authentication/oidc/assertionIssuers"
+        )
+    );
+    assert!(
+        error.render_human(None).contains("omit assertionIssuers"),
+        "the refusal names its fix"
+    );
+
+    // One client's list grants authorities, so `[]` grants none, as leaving
+    // the client out does.
+    let config = parse_runtime_config_with_env(
+        &insert(concat!(
+            "    assertionIssuers:\n",
+            "      registry-client: []\n",
+            "      other-client:\n",
+            "        - https://issuer-a.example\n",
+        )),
+        env_lookup,
+    )
+    .expect("an empty per-client list is accepted");
+    let verifier = config.authentication().oidc().token_verifier_config();
+    assert_eq!(
+        verifier
+            .assertion_issuers
+            .get("registry-client")
+            .map(Vec::len),
+        Some(0)
+    );
 }
 
 #[test]
@@ -2830,10 +2872,6 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
             "    allowedPrivateCidrs: [192.168.0.0/16, 10.0.0.0/8]\n",
         ),
         valid.replace(
-            "secret:file/event-hmac-key",
-            "secret:file/../event-hmac-key",
-        ),
-        valid.replace(
             "attemptTimeoutMilliseconds: 4000",
             "attemptTimeoutMilliseconds: 99",
         ),
@@ -2855,6 +2893,26 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
             RuntimeConfigError::InvalidEventDestination
         );
     }
+
+    // CFG-SEC-1: a key reference that is not an exact secret reference is
+    // refused by the shared reader at the member, never echoing it.
+    let error = parse_runtime_config_with_env(
+        &valid.replace(
+            "secret:file/event-hmac-key",
+            "secret:file/../event-hmac-key",
+        ),
+        env_lookup,
+    )
+    .expect_err("a traversing key reference is refused");
+    assert_eq!(
+        reader_refusal(&error),
+        (
+            "config.invalid-value",
+            "/eventDestinations/case-operations/hmacSha256KeyRef"
+        )
+    );
+    let rendered = format!("{error:?} {error} {}", error.render_human(None));
+    assert!(!rendered.contains("../event-hmac-key"), "{rendered}");
 
     for raw in [
         valid.replace("productionHttps", "privateServiceHttp"),

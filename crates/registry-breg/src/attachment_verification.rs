@@ -81,7 +81,7 @@ pub(crate) enum RawAttachmentVerificationConfig {
     Http {
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 2048)))]
         endpoint: String,
-        authorization_ref: String,
+        authorization_ref: SecretReference,
         /// Non-secret identity of the external scanner and rules generation.
         #[cfg_attr(
             feature = "schema",
@@ -149,8 +149,7 @@ impl AttachmentVerificationConfig {
         }
         Ok(Self(Some(HttpVerifierConfig {
             endpoint: url,
-            authorization_ref: SecretReference::parse(authorization_ref)
-                .map_err(|_| AttachmentVerificationError::InvalidConfiguration)?,
+            authorization_ref,
             policy_id,
             timeout: Duration::from_millis(timeout_milliseconds),
         })))
@@ -397,8 +396,13 @@ mod tests {
                 AttachmentVerificationError::InvalidConfiguration
             );
         }
+        let mut input = raw("https://verification-canary.example/verify");
+        input["authorizationRef"] = json!("inline-token-canary");
+        let error = serde_json::from_value::<RawAttachmentVerificationConfig>(input)
+            .err()
+            .expect("an inline token is not a secret reference");
+        assert!(!error.to_string().contains("inline-token-canary"));
         for (key, value) in [
-            ("authorizationRef", json!("inline-token-canary")),
             ("policyId", json!("")),
             ("policyId", json!("contains whitespace")),
             ("timeoutMilliseconds", json!(0)),
@@ -605,11 +609,13 @@ mod tests {
     #[test]
     #[cfg(feature = "schema")]
     fn verification_schema_requires_policy_and_secret_reference() {
-        let schema = crate::runtime_config::runtime_config_schema().unwrap();
-        let schema = schema
+        let root = crate::runtime_config::runtime_config_schema().unwrap();
+        let mut schema = root
             .pointer("/$defs/RawAttachmentVerificationConfig")
-            .unwrap();
-        let validator = jsonschema::JSONSchema::compile(schema).unwrap();
+            .unwrap()
+            .clone();
+        schema["$defs"] = root["$defs"].clone();
+        let validator = jsonschema::JSONSchema::compile(&schema).unwrap();
         let mut input = raw("https://example/verify");
         assert!(validator.is_valid(&input));
         input["authorizationRef"] = json!("inline-token-canary");

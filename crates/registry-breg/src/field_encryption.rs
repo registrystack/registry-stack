@@ -825,8 +825,9 @@ pub(crate) enum RawFieldEncryptionProvider {
         timeout_milliseconds: u64,
     },
     LocalFile {
-        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 140)))]
-        dek_ref: String,
+        /// The data encryption key, named by a `secret:file/NAME` reference;
+        /// an environment reference is refused.
+        dek_ref: SecretReference,
     },
 }
 
@@ -873,8 +874,6 @@ impl FieldEncryptionConfig {
                 ))
             }
             Some(RawFieldEncryptionProvider::LocalFile { dek_ref }) => {
-                let dek_ref =
-                    SecretReference::parse(dek_ref).map_err(|_| InvalidFieldEncryptionConfig)?;
                 if dek_ref.provider() != SecretProvider::File {
                     return Err(InvalidFieldEncryptionConfig);
                 }
