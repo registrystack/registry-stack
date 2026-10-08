@@ -660,8 +660,10 @@ pub fn reject_environment_expressions_in_authored_yaml(
         .map_err(RuntimeConfigError::from_authored_report)
 }
 
-/// Refuses every environment expression in an authored file.
-struct AuthoredExpressions;
+/// Refuses every environment expression in a key or text value of an
+/// authored file (CFG-SEC-2), as a [`ScalarHook`] a product passes to the
+/// shared reader that decodes the file.
+pub struct AuthoredExpressions;
 
 impl AuthoredExpressions {
     fn check(text: &str) -> Result<(), Refusal> {

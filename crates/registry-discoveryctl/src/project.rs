@@ -18,9 +18,8 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_discovery::{check_runtime, RUNTIME_KIND};
 use registry_platform_yaml::{
-    Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, NodeValue, Position, Reader, Refusal,
-    Related, Report, ScalarHook, ScalarSite, Severity, Source, UniqueList, Url,
-    MAXIMUM_DOCUMENT_BYTES,
+    Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, NodeValue, Position, Reader, Related,
+    Report, Severity, Source, UniqueList, Url, MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,8 +43,6 @@ const ORIGIN_ID_PATTERN: &str = "^[A-Za-z0-9._-]+$";
 const IDENTIFIER_PATTERN: &str = "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$";
 #[cfg(feature = "schema")]
 const CATALOG_URL_PATTERN: &str = "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$";
-
-const SUBSTITUTION_NOT_ALLOWED: &str = "config.substitution-not-allowed";
 
 const ORIGINS_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ORIGINS_KIND,
@@ -424,7 +421,7 @@ fn read_document<T: serde::de::DeserializeOwned>(
         }
     };
     findings.files += 1;
-    let mut hook = AuthoredText;
+    let mut hook = registry_platform_config::AuthoredExpressions;
     match Reader::new(path.display().to_string())
         .with_hook(&mut hook)
         .decode::<T>(&bytes, &Expect::one(format))
@@ -437,35 +434,6 @@ fn read_document<T: serde::de::DeserializeOwned>(
             findings.extend(report.into_diagnostics());
             None
         }
-    }
-}
-
-/// Refuses a `${...}` expression in any key or text value of an authored
-/// file (CFG-SEC-2). There is no escape for a literal `${NAME}`.
-struct AuthoredText;
-
-impl AuthoredText {
-    fn check(text: &str) -> Result<(), Refusal> {
-        if registry_platform_config::contains_environment_expression(text) {
-            return Err(Refusal {
-                code: SUBSTITUTION_NOT_ALLOWED.to_owned(),
-                message: "a `${...}` expression is written in an authored file; substitution \
-                          applies to runtime.yaml only"
-                    .to_owned(),
-                suggested_action: "Write the value in the authored file directly.".to_owned(),
-            });
-        }
-        Ok(())
-    }
-}
-
-impl ScalarHook for AuthoredText {
-    fn key(&mut self, site: &ScalarSite<'_>) -> Result<(), Refusal> {
-        Self::check(site.text)
-    }
-
-    fn value(&mut self, site: &ScalarSite<'_>) -> Result<Option<String>, Refusal> {
-        Self::check(site.text).map(|()| None)
     }
 }
 
@@ -994,6 +962,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    const SUBSTITUTION_NOT_ALLOWED: &str = "config.substitution-not-allowed";
 
     /// A temporary directory named by its resolved path: the runtime loader
     /// refuses a path through a symbolic link, and macOS reaches its
