@@ -1111,7 +1111,10 @@ fn import_refuses_the_previous_export_manifest_at_each_key() {
     members.insert("formatVersion".to_owned(), Value::from(1));
     assert_eq!(
         export_refusal(&fixture, "headerless", &headerless),
-        [("config.missing-envelope".to_owned(), String::new())]
+        [
+            ("config.missing-envelope".to_owned(), String::new()),
+            ("config.removed-key".to_owned(), "/formatVersion".to_owned())
+        ]
     );
 
     let mut version = current_manifest();
