@@ -1525,7 +1525,9 @@ authority grants.
 Create explicit `deployment-targets/<environment>/` directories containing
 complete `governance.yaml` and `runtime.yaml` documents plus every governed
 public JWK referenced by governance under `public-keys/`. `governance.yaml` is
-closed, has `version: 1`, and supplies the existing bundle-shaped service,
+closed, opens with `apiVersion:
+id.registrystack.org/formats/evidence/target-governance/v1alpha1` and `kind:
+EvidenceTargetGovernance`, and supplies the existing bundle-shaped service,
 issuer, authentication, audit, subject-binding, rate-limit, signing,
 response-format, and authority-profile values. It may not contain selectors,
 sources, or requirements, which the compiler obtains from the editable

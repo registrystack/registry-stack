@@ -1462,7 +1462,6 @@ fn valid_access_policy_state(
             .iter()
             .all(|question| question_aliases.contains(question.as_str()))
         && crate::authoring::access_policy_requester_tag_for(&AccessPolicy {
-            version: 1,
             id: policy.id.clone(),
             questions: policy.questions.clone(),
             task_grant: policy.task_grant.clone(),
@@ -1571,8 +1570,12 @@ fn state_matches_sealed_bundle(
     if bytes.len() > 1024 * 1024 {
         return Ok(false);
     }
-    let bundle: Value =
-        serde_norway::from_slice(&bytes).context("the sealed local bundle is invalid")?;
+    // The bundle is this command's own generated output, read back through
+    // the shared YAML subset; its grammar is the runtime's to check.
+    let bundle = registry_platform_yaml::Reader::new("evidence.yaml")
+        .scan(&bytes)
+        .map(crate::authored::node_value)
+        .map_err(|_| anyhow!("the sealed local bundle is invalid"))?;
     let requirements = bundle
         .get("requirements")
         .and_then(Value::as_array)
@@ -2013,7 +2016,9 @@ fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
         let Ok(bytes) = fs::read(&path) else {
             continue;
         };
-        let Ok(source) = serde_norway::from_slice::<Value>(&bytes) else {
+        let Ok(source) = registry_evidence_authoring::formats::scan_authored(source_id, &bytes)
+            .map(crate::authored::node_value)
+        else {
             continue;
         };
         if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {

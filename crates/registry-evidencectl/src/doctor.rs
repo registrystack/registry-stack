@@ -1169,7 +1169,9 @@ fn collect_secret_references(value: &YamlValue, names: &mut Vec<String>) {
 
 fn read_yaml(path: &Path) -> Result<YamlValue> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    serde_norway::from_slice(&bytes).with_context(|| format!("failed to parse {}", path.display()))
+    let document = crate::authored::runtime_document(&path.to_string_lossy(), &bytes)?;
+    serde_norway::to_value(document)
+        .with_context(|| format!("failed to convert {}", path.display()))
 }
 
 /// Print one line per check, every finding beneath it, and a summary line.

@@ -1,4 +1,4 @@
-//! Strict, versioned materialized source-mock plan.
+//! Strict materialized source-mock plan.
 //!
 //! This module owns only the authored storage contract. OpenAPI discovery,
 //! generation, and response-schema validation remain with their respective
@@ -13,12 +13,13 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use chrono::{Datelike as _, NaiveDate};
-use registry_evidence_authoring::valid_local_identifier;
+use registry_evidence_authoring::{
+    formats::{decode_authored, envelope_lines, MOCK_PLAN, MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND},
+    valid_local_identifier,
+};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-/// The only materialized plan version this implementation accepts.
-pub(super) const PLAN_VERSION: u32 = 1;
 /// The generator contract written by initial V1 materialization.
 pub(super) const GENERATOR_CONTRACT: &str = "evidencectl-source-mock-v1";
 /// A plan is authoring metadata, not a bulk-data container.
@@ -31,11 +32,11 @@ pub(super) const MAX_PATH_BYTES: usize = 512;
 pub(super) const MAX_PATH_PARAMETERS: usize = 16;
 pub(super) const MAX_PATH_PARAMETER_BYTES: usize = 4096;
 
-/// One strict `mocks/source.yaml` document.
+/// One strict `mocks/source.yaml` document. Its format version is the
+/// document's `apiVersion`, which the shared reader checks.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct MockPlan {
-    pub version: u32,
     pub openapi: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openapi_digest: Option<Digest>,
@@ -159,20 +160,20 @@ impl<'de> Deserialize<'de> for Digest {
     }
 }
 
-/// Decode and structurally validate one complete plan.
-pub(super) fn parse_plan(bytes: &[u8]) -> Result<MockPlan> {
-    if bytes.is_empty() || bytes.len() > MAX_PLAN_BYTES {
-        bail!("mock plan must be a non-empty bounded YAML document");
-    }
-    let plan: MockPlan = serde_norway::from_slice(bytes).context("mock plan YAML is invalid")?;
+/// Read one complete plan through the shared reader, then validate its
+/// structure.
+pub(super) fn parse_plan(file: &str, bytes: &[u8]) -> Result<MockPlan> {
+    let plan = decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN)?.value;
     validate_plan(&plan)?;
     Ok(plan)
 }
 
-/// Render the stable authored YAML spelling, with one trailing newline.
+/// Render the stable authored YAML spelling, envelope first, with one
+/// trailing newline.
 pub(super) fn render_plan(plan: &MockPlan) -> Result<Vec<u8>> {
     validate_plan(plan)?;
-    let mut rendered = serde_norway::to_string(plan).context("failed to render mock plan")?;
+    let mut rendered = envelope_lines(MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND);
+    rendered.push_str(&serde_norway::to_string(plan).context("failed to render mock plan")?);
     if !rendered.ends_with('\n') {
         rendered.push('\n');
     }
@@ -184,9 +185,6 @@ pub(super) fn render_plan(plan: &MockPlan) -> Result<Vec<u8>> {
 
 /// Validate the closed V1 structure without reading any referenced artifact.
 pub(super) fn validate_plan(plan: &MockPlan) -> Result<()> {
-    if plan.version != PLAN_VERSION {
-        bail!("mock plan version must be 1");
-    }
     validate_config_reference(&plan.openapi, "openapi")?;
     if let Some(generation) = &plan.generation {
         if generation.contract != GENERATOR_CONTRACT {
@@ -413,7 +411,6 @@ mod tests {
 
     fn plan() -> MockPlan {
         MockPlan {
-            version: 1,
             openapi: "../source.openapi.yaml".to_owned(),
             openapi_digest: Some(
                 format!("sha256:{}", "a".repeat(64))
@@ -451,7 +448,7 @@ mod tests {
     #[test]
     fn plan_round_trips_in_a_stable_strict_spelling() {
         let first = render_plan(&plan()).expect("render");
-        let parsed = parse_plan(&first).expect("parse");
+        let parsed = parse_plan("source.yaml", &first).expect("parse");
         let second = render_plan(&parsed).expect("render again");
 
         assert_eq!(first, second);
@@ -462,17 +459,37 @@ mod tests {
     }
 
     #[test]
-    fn unknown_fields_and_non_v1_versions_are_refused() {
-        let mut rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
-        rendered.push_str("unknown: true\n");
-        assert!(parse_plan(rendered.as_bytes()).is_err());
-
-        let mut wrong = plan();
-        wrong.version = 2;
-        assert!(render_plan(&wrong).is_err());
-
-        let duplicate = "version: 1\nversion: 1\nopenapi: ../source.openapi.yaml\noperations: []\n";
-        assert!(parse_plan(duplicate.as_bytes()).is_err());
+    fn unknown_retired_and_duplicate_keys_are_refused_by_the_reader() {
+        let codes = |text: &str| {
+            let error = parse_plan("source.yaml", text.as_bytes()).expect_err("refused");
+            crate::authored::report_in(&error)
+                .expect("the reader's report")
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+                .collect::<Vec<_>>()
+        };
+        let rendered = String::from_utf8(render_plan(&plan()).expect("render")).unwrap();
+        assert!(rendered.starts_with(
+            "apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1\nkind: EvidenceMockPlan\n"
+        ));
+        assert_eq!(
+            codes(&format!("{rendered}unknown: true\n")),
+            [("config.unknown-key".to_owned(), "/unknown".to_owned())]
+        );
+        assert_eq!(
+            codes(&format!("{rendered}version: 1\n")),
+            [("config.removed-key".to_owned(), "/version".to_owned())]
+        );
+        assert_eq!(
+            codes("version: 1\nopenapi: ../source.openapi.yaml\noperations: []\n"),
+            [("config.missing-envelope".to_owned(), String::new())]
+        );
+        let duplicate = rendered.replace(
+            "openapi: ../source.openapi.yaml\n",
+            "openapi: ../source.openapi.yaml\nopenapi: ../source.openapi.yaml\n",
+        );
+        assert_eq!(codes(&duplicate)[0].0, "yaml.duplicate-key");
     }
 
     #[test]

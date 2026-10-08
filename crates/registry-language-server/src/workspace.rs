@@ -225,7 +225,9 @@ impl ProjectFamily {
     /// symbol kind.
     pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
         match self {
-            Self::Evidence => Some(format!("{}/{rule}", self.diagnostic_source())),
+            Self::Evidence => Some(registry_evidence_authoring::formats::finding_code(
+                "project", rule,
+            )),
             Self::Product(_) => Some(format!("{}/{rule}", self.diagnostic_source())),
         }
     }
@@ -1115,7 +1117,7 @@ mod tests {
                 .iter()
                 .map(|diagnostic| diagnostic.code.as_deref())
                 .collect::<Vec<_>>(),
-            vec![Some("evidence/question-shape")]
+            vec![Some("config.missing-envelope")]
         );
     }
 
@@ -1177,8 +1179,7 @@ mod tests {
     }
 
     /// The role ceilings are the authoring form's, so the fixtures below build a question past
-    /// `MAX_QUESTION_BYTES` rather than past the workspace-wide limit: a document under 1 MiB and
-    /// over 64 KiB is exactly the document the two limits disagree about.
+    /// `MAX_QUESTION_BYTES`, which is the shared reader's one-mebibyte bound.
     fn oversized_question() -> String {
         let mut text = String::from("version: 1\nid: adult-status\n#");
         text.push_str(&" ".repeat(MAX_QUESTION_BYTES as usize));
@@ -1242,7 +1243,7 @@ mod tests {
         );
         assert_eq!(
             ceiling_messages(&state),
-            vec!["This question exceeds the 65536-byte limit the editor indexes"]
+            vec!["This question exceeds the 1048576-byte limit the editor indexes"]
         );
     }
 
@@ -1257,7 +1258,7 @@ mod tests {
         assert!(!state.documents.contains_key(&question));
         assert_eq!(
             ceiling_messages(&state),
-            vec!["This question exceeds the 65536-byte limit the editor indexes"]
+            vec!["This question exceeds the 1048576-byte limit the editor indexes"]
         );
     }
 
@@ -1294,7 +1295,7 @@ paths:
         assert_eq!(state.index.diagnostics().len(), 1);
         assert_eq!(
             state.index.diagnostics()[0].code.as_deref(),
-            Some("evidence/project-ceiling")
+            Some("evidence.project.ceiling")
         );
         assert!(state.index.workspace_symbols("adult-status").is_empty());
         assert!(state.index.workspace_symbols("profile-").is_empty());
@@ -1313,7 +1314,7 @@ paths:
             .index
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/project-ceiling")));
+            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence.project.ceiling")));
     }
 
     #[test]
@@ -1379,13 +1380,13 @@ paths:
         assert!(!state.documents.contains_key(&question));
         assert_eq!(
             reported_at(&state, &question),
-            vec!["This question exceeds the 65536-byte limit the editor indexes"]
+            vec!["This question exceeds the 1048576-byte limit the editor indexes"]
         );
         assert!(state
             .index
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/project-ceiling")));
+            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence.project.ceiling")));
     }
 
     #[test]
@@ -1423,7 +1424,10 @@ paths:
         fs::create_dir_all(&policies).unwrap();
         fs::write(
             policies.join("admissions.yaml"),
-            format!("version: 1\nid: admissions\nquestions: [{admitted}]\n"),
+            format!(
+                "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
+                 kind: EvidenceAccessPolicy\nid: admissions\nquestions: [{admitted}]\n"
+            ),
         )
         .unwrap();
         let state = RootState::load(directory, ProjectFamily::Evidence).unwrap();
@@ -1463,7 +1467,9 @@ paths:
             .index
             .diagnostics()
             .iter()
-            .filter(|diagnostic| diagnostic.code.as_deref() == Some("evidence/unknown-question"))
+            .filter(|diagnostic| {
+                diagnostic.code.as_deref() == Some("evidence.project.unknown-question")
+            })
             .map(|diagnostic| diagnostic.message.as_str())
             .collect()
     }
@@ -1488,7 +1494,9 @@ paths:
     /// silence this fixture exists to tell apart from the real one.
     fn question_naming_absent_files(name: &str) -> String {
         format!(
-            r#"id: {name}
+            r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: {name}
 question: Is the person at least 18 years old?
 purpose: fixture-eligibility
 subject:
@@ -1668,7 +1676,7 @@ governance:
             .index
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/project-ceiling")));
+            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence.project.ceiling")));
     }
 
     /// Both ceilings the editor applies name the rule they report under.
@@ -1693,11 +1701,11 @@ governance:
             ceiling_rules(&state),
             vec![
                 (
-                    Some("evidence/document-ceiling"),
-                    "This question exceeds the 65536-byte limit the editor indexes"
+                    Some("evidence.project.document-ceiling"),
+                    "This question exceeds the 1048576-byte limit the editor indexes"
                 ),
                 (
-                    Some("evidence/directory-ceiling"),
+                    Some("evidence.project.directory-ceiling"),
                     "This project directory holds more than the 128 documents the editor indexes; this file and the ones after it are not indexed"
                 ),
             ]

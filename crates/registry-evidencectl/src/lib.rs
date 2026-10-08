@@ -12,6 +12,7 @@ use clap::{
 
 mod access;
 mod audit_view;
+mod authored;
 mod authoring;
 mod build;
 mod check;
@@ -147,10 +148,13 @@ struct CheckArgs {
     #[arg(long)]
     target: Option<PathBuf>,
     /// Require a production or evidence-grade target and complete deployment closure.
-    #[arg(long)]
+    #[arg(long, requires = "target")]
     production: bool,
-    /// Refuse an otherwise valid but incomplete authoring project.
+    /// Refuse a project whose check reports any warning.
     #[arg(long)]
+    deny_warnings: bool,
+    /// The flag's former spelling, accepted only to name `--deny-warnings`.
+    #[arg(long, hide = true)]
     deny_findings: bool,
 }
 
@@ -430,6 +434,10 @@ fn run_entry() -> ExitCode {
             return ExitCode::from(report::USAGE_EXIT);
         }
     }
+    if matches!(&cli.command, Command::Check(args) if args.deny_findings) {
+        write_report_failure(&command_path, report::USAGE_EXIT, &renamed_flag(), format);
+        return ExitCode::from(report::USAGE_EXIT);
+    }
     let result = match cli.command {
         Command::Init(args) => {
             let artifact = args.directory.display().to_string();
@@ -463,6 +471,7 @@ fn run_entry() -> ExitCode {
         }
         Command::Test(args) => {
             let artifact = args.project.display().to_string();
+            let project = args.project.clone();
             safe_command(
                 fixtures::run(fixtures::FixturesCommand::Run(fixtures::RunArgs {
                     project: args.project,
@@ -476,7 +485,8 @@ fn run_entry() -> ExitCode {
                     command: "test",
                     explain: args.explain,
                     legacy_project: None,
-                })),
+                }))
+                .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.test.failed",
                 artifact,
                 "Evidence could not complete the selected offline fixture run.",
@@ -485,6 +495,7 @@ fn run_entry() -> ExitCode {
         }
         Command::Package(args) => {
             let artifact = args.project.display().to_string();
+            let project = args.project.clone();
             safe_command(
                 build::run_package_with_format(
                     build::BuildArgs {
@@ -494,7 +505,8 @@ fn run_entry() -> ExitCode {
                         revision: args.revision,
                     },
                     format,
-                ),
+                )
+                .map_err(|error| authored::project_refusal(error, &project, &project)),
                 "evidence.package.failed",
                 artifact,
                 "Evidence could not compile the selected deployment candidate.",
@@ -561,6 +573,13 @@ fn run_entry() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(error) => {
+            if let Some(found) = authored::report_in(&error) {
+                if junit {
+                    write_junit_setup_failure(&command_path, &found.summary());
+                }
+                write_report_failure(&command_path, report::DOMAIN_REFUSAL_EXIT, found, format);
+                return ExitCode::from(report::DOMAIN_REFUSAL_EXIT);
+            }
             if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
                 if junit {
                     write_junit_setup_failure(
@@ -839,6 +858,38 @@ fn write_usage_failure(format: OutputFormat) {
     }
 }
 
+/// The usage refusal for `--deny-findings`, which names its new spelling.
+fn renamed_flag() -> registry_platform_yaml::Report {
+    registry_platform_yaml::Report::new(vec![registry_platform_yaml::Diagnostic::error(
+        "evidence.usage.flag-renamed",
+        "",
+        "--deny-findings was renamed to --deny-warnings",
+        "Rerun the command with --deny-warnings in place of --deny-findings.",
+    )])
+}
+
+/// Write a refusal that is a report of diagnostics: the diagnostics and the
+/// summary line on standard error, or the failure envelope carrying them.
+fn write_report_failure(
+    command: &str,
+    exit: u8,
+    found: &registry_platform_yaml::Report,
+    format: OutputFormat,
+) {
+    match format {
+        OutputFormat::Human => eprint!("{}", found.render_human()),
+        OutputFormat::Json => print_report(&report::failure(
+            command,
+            exit,
+            found
+                .to_json_value()
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        )),
+    }
+}
+
 fn safe_command(
     result: anyhow::Result<ExitCode>,
     code: &'static str,
@@ -847,7 +898,8 @@ fn safe_command(
     suggested_action: &'static str,
 ) -> anyhow::Result<ExitCode> {
     result.map_err(|error| {
-        if error.downcast_ref::<SafeCliFailure>().is_some() {
+        if error.downcast_ref::<SafeCliFailure>().is_some() || authored::report_in(&error).is_some()
+        {
             return error;
         }
         if let Some(diagnostic) = error
@@ -1151,49 +1203,53 @@ fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
-    match check::check(
+    let checked = check::check(
         &args.project,
         args.target.as_deref(),
         args.production,
-        args.deny_findings,
-    ) {
-        Ok(report) => {
-            write_check_report(&report, format)?;
-            Ok(ExitCode::SUCCESS)
-        }
-        Err(error) => match error.downcast::<check::DeniedFindings>() {
-            Ok(denied) => {
-                let report =
-                    check::refused_check_report(&args.project, args.target.as_deref(), denied.0);
-                write_check_report(&report, format)?;
-                Ok(ExitCode::from(report::DOMAIN_REFUSAL_EXIT))
-            }
-            Err(error) => Err(error),
-        },
-    }
+        args.deny_warnings,
+    );
+    write_checked(checked, format, |found| {
+        check::refused_check_report(&args.project, args.target.as_deref(), found)
+    })
 }
 
 fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
-    match check::explain(&args.project, args.target.as_deref()) {
-        Ok(report) => {
-            write_check_report(&report, format)?;
+    let checked = check::explain(&args.project, args.target.as_deref());
+    write_checked(checked, format, |found| {
+        check::refused_explain_report(&args.project, args.target.as_deref(), found)
+    })
+}
+
+/// Write a check or explain verdict: its report when it was reached, or the
+/// refused report carrying every diagnostic that refused it.
+fn write_checked(
+    checked: anyhow::Result<check::Checked>,
+    format: OutputFormat,
+    refused: impl FnOnce(&registry_platform_yaml::Report) -> serde_json::Value,
+) -> anyhow::Result<ExitCode> {
+    match checked {
+        Ok(checked) => {
+            write_check_report(&checked.report, &checked.diagnostics, format)?;
             Ok(ExitCode::SUCCESS)
         }
-        Err(error) => match error.downcast::<check::DeniedFindings>() {
-            Ok(denied) => {
-                let report =
-                    check::refused_explain_report(&args.project, args.target.as_deref(), denied.0);
-                write_check_report(&report, format)?;
+        Err(error) => match authored::report_in(&error) {
+            Some(found) => {
+                write_check_report(&refused(found), found, format)?;
                 Ok(ExitCode::from(report::DOMAIN_REFUSAL_EXIT))
             }
-            Err(error) => Err(error),
+            None => Err(error),
         },
     }
 }
 
-fn write_check_report(report: &serde_json::Value, format: OutputFormat) -> anyhow::Result<()> {
+fn write_check_report(
+    report: &serde_json::Value,
+    diagnostics: &registry_platform_yaml::Report,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
     match format {
-        OutputFormat::Human => check::render_human(report, &mut std::io::stdout())?,
+        OutputFormat::Human => check::render_human(report, diagnostics, &mut std::io::stdout())?,
         OutputFormat::Json => report::print(report)?,
     }
     Ok(())
@@ -1465,7 +1521,18 @@ mod tests {
 
     #[test]
     fn production_check_and_runtime_doctor_require_explicit_inputs() {
-        assert!(Cli::try_parse_from(["evidencectl", "check", "project", "--production"]).is_ok());
+        let error = Cli::try_parse_from(["evidencectl", "check", "project", "--production"])
+            .expect_err("--production names the target it holds to production");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "check",
+            "project",
+            "--production",
+            "--target",
+            "target"
+        ])
+        .is_ok());
 
         assert!(Cli::try_parse_from([
             "evidencectl",

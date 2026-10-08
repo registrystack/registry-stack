@@ -82,8 +82,8 @@ deployment repository. Copy the local settings to a separate file for editing:
 cp ./evidence/targets/local/settings.yaml ./production-settings.yaml
 ```
 
-The settings document contains `formatVersion: 1`, the complete `governance` and
-`runtime` documents, and a `publicKeys` map. This is a packaging format for the
+The settings document opens with `apiVersion` and `kind: EvidenceTargetSettings`, then holds the
+complete `governance` and `runtime` documents and a `publicKeys` map. This is a packaging format for the
 existing configuration, not an overlay. Review every environment-dependent field:
 
 | Area | Operated value and owner |

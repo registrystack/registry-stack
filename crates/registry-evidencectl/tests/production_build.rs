@@ -468,7 +468,8 @@ fn package_refuses_a_package_root_inside_the_output() {
     let message = stderr(&output);
     assert!(message.contains("evidence.package.root-unstable"));
     assert!(message.contains("runtime.yaml:/package/root"));
-    assert!(message.contains(&unstable_package_directory));
+    // The refusal names the member, never the value written there.
+    assert!(!message.contains(&unstable_package_directory), "{message}");
     fixture.assert_no_staging_residue();
 }
 
@@ -722,7 +723,7 @@ fn check_production_reports_the_same_review_marker_package_would_refuse() {
     let fixture = Fixture::new();
     fs::write(
         fixture.project.join("evidence-project.yaml"),
-        "version: 1\nproject: evidence-authoring\n",
+        registry_evidence_authoring::default_project_marker_document(),
     )
     .expect("project marker");
     fs::write(
@@ -738,11 +739,12 @@ fn check_production_reports_the_same_review_marker_package_would_refuse() {
     assert_value_free(&output);
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("JSON check report");
-    let findings = report["findings"].as_array().expect("findings array");
+    assert!(report.get("findings").is_none(), "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
     assert!(
-        findings.iter().any(
-            |finding| finding["code"] == "evidence.package.review-marker"
-                && finding["path"] == "bundle/fixtures/answer.yaml"
+        diagnostics.iter().any(
+            |diagnostic| diagnostic["code"] == "evidence.package.review-marker"
+                && diagnostic["source"]["file"] == "bundle/fixtures/answer.yaml"
         ),
         "{report}"
     );
@@ -1041,7 +1043,7 @@ impl Fixture {
             .arg("--target")
             .arg(&self.target)
             .arg("--production")
-            .arg("--deny-findings")
+            .arg("--deny-warnings")
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
             .env(
@@ -1250,7 +1252,9 @@ fn make_tree_writable(path: &Path) -> std::io::Result<()> {
 
 fn question(id: &str) -> String {
     format!(
-        r#"id: {id}
+        r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: {id}
 question: Is the governed condition satisfied?
 purpose: eligibility
 subject:
@@ -1427,7 +1431,8 @@ extractScript: adapters/source-extract.rhai
 factSchema: schemas/facts.schema.yaml
 "#;
 
-const GOVERNANCE: &str = r#"version: 1
+const GOVERNANCE: &str = r#"apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
+kind: EvidenceTargetGovernance
 assuranceProfile: production
 service: {providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:evidence}
 issuer: {id: urn:example:issuers:evidence}

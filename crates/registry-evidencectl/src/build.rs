@@ -19,6 +19,8 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use registry_evidence_authoring::formats::{decode_authored, TARGET_GOVERNANCE};
+
 use crate::{authoring, evidence_binary, source_import::ProjectLock, OutputFormat};
 
 const MAX_TARGET_BYTES: u64 = 1024 * 1024;
@@ -54,10 +56,13 @@ pub struct BuildArgs {
     pub revision: Option<String>,
 }
 
+/// A deployment target's governance, decoded by the shared reader. Its
+/// members are carried into the bundle as written, where the runtime's own
+/// bundle check holds each one to its closed shape; the format version is the
+/// document's `apiVersion`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TargetGovernance {
-    version: u32,
     assurance_profile: String,
     service: Value,
     issuer: Value,
@@ -92,14 +97,6 @@ impl std::error::Error for TargetDocumentDiagnostic {}
 
 impl TargetGovernance {
     pub(crate) fn into_bundle(self) -> Result<Value> {
-        if self.version != 1 {
-            return Err(TargetDocumentDiagnostic {
-                code: "evidence.target.governance-version",
-                path: "governance.yaml:/version".to_owned(),
-                message: "deployment governance version must be 1".to_owned(),
-            }
-            .into());
-        }
         if !matches!(
             self.assurance_profile.as_str(),
             "local" | "production" | "evidence-grade"
@@ -125,7 +122,9 @@ impl TargetGovernance {
             .into());
         }
         let mut object = Map::from_iter([
-            ("version".to_owned(), json!(self.version)),
+            // The bundle's own grammar version, which governance compiles
+            // into; it is not the governance format version.
+            ("version".to_owned(), json!(1)),
             (
                 "assuranceProfile".to_owned(),
                 Value::String(self.assurance_profile),
@@ -334,7 +333,7 @@ pub(crate) fn local_dev_target_inputs(target: &Path) -> Result<(Value, Value)> {
     if !source_connections.is_object() {
         bail!("deployment governance sourceConnections must be a mapping");
     }
-    let runtime: Value = serde_norway::from_slice(&target.runtime)
+    let runtime = runtime_value(&target.runtime)
         .context("deployment runtime is not a readable native runtime document")?;
     let mut outbound_tls = runtime
         .get("outboundTls")
@@ -378,6 +377,17 @@ impl BuildInterruption {
     }
 }
 
+/// A target's `runtime.yaml` as a JSON value, read through the shared YAML
+/// subset. The runtime document's envelope and members are the runtime's to
+/// check, by `evidencectl doctor --runtime-config` and the `evidence` binary.
+pub(crate) fn runtime_value(
+    bytes: &[u8],
+) -> std::result::Result<Value, registry_platform_yaml::Report> {
+    registry_platform_yaml::Reader::new("runtime.yaml")
+        .scan(bytes)
+        .map(crate::authored::node_value)
+}
+
 pub(crate) struct TargetDocuments {
     pub(crate) root: PathBuf,
     pub(crate) runtime: Vec<u8>,
@@ -396,29 +406,17 @@ pub(crate) fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
         MAX_TARGET_BYTES,
         "deployment runtime",
     )?;
-    let deserializer = serde_norway::Deserializer::from_slice(&governance_bytes);
-    let governance: TargetGovernance =
-        serde_path_to_error::deserialize(deserializer).map_err(|error| {
-            TargetDocumentDiagnostic {
-                code: "evidence.target.governance-shape",
-                path: target_member_path("governance.yaml", &error.path().to_string()),
-                message: "deployment governance does not match the closed Version 1 target shape"
-                    .to_owned(),
-            }
-        })?;
+    let governance = decode_authored::<TargetGovernance>(
+        "governance.yaml",
+        &governance_bytes,
+        &TARGET_GOVERNANCE,
+    )?
+    .value;
     Ok(TargetDocuments {
         root,
         runtime,
         governed_bundle: governance.into_bundle()?,
     })
-}
-
-fn target_member_path(artifact: &str, member: &str) -> String {
-    if member.is_empty() {
-        artifact.to_owned()
-    } else {
-        format!("{artifact}:/{member}")
-    }
 }
 
 pub(crate) struct TargetCompilation {
@@ -495,7 +493,7 @@ fn prepare_candidate(
 /// a runtime document that is otherwise malformed is still caught there
 /// rather than reported twice.
 fn verify_stable_package_root(runtime_bytes: &[u8], candidate: &Path) -> Result<()> {
-    let Ok(document) = serde_norway::from_slice::<Value>(runtime_bytes) else {
+    let Ok(document) = runtime_value(runtime_bytes) else {
         return Ok(());
     };
     let Some(package_root) = document.pointer("/package/root").and_then(Value::as_str) else {
@@ -507,10 +505,7 @@ fn verify_stable_package_root(runtime_bytes: &[u8], candidate: &Path) -> Result<
     Err(TargetDocumentDiagnostic {
         code: "evidence.package.root-unstable",
         path: "runtime.yaml:/package/root".to_owned(),
-        message: format!(
-            "deployment runtime package.root {package_root} is inside this one package output; select a stable installed package path outside {}",
-            candidate.display()
-        ),
+        message: "deployment runtime package.root is inside the output directory of this package run; set it to a stable installed package path outside that directory".to_owned(),
     }
     .into())
 }
@@ -1062,13 +1057,34 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_evidence_authoring::formats::{
+        envelope_lines, TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND,
+    };
     use std::os::unix::fs::symlink;
+
+    /// A governance document with its envelope.
+    fn governance(body: &str) -> String {
+        format!(
+            "{}{body}",
+            envelope_lines(TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND)
+        )
+    }
+
+    fn decoded(
+        body: &str,
+    ) -> std::result::Result<TargetGovernance, registry_platform_yaml::Report> {
+        decode_authored::<TargetGovernance>(
+            "governance.yaml",
+            governance(body).as_bytes(),
+            &TARGET_GOVERNANCE,
+        )
+        .map(|decoded| decoded.value)
+    }
 
     #[test]
     fn production_governance_is_closed_at_the_target_boundary() {
-        let unknown = serde_norway::from_str::<TargetGovernance>(
-            r#"version: 1
-assuranceProfile: production
+        let unknown = decoded(
+            r#"assuranceProfile: production
 service: {}
 issuer: {}
 authentication: {}
@@ -1079,8 +1095,61 @@ signing: {}
 authorityProfiles: {}
 requirements: []
 "#,
-        );
-        assert!(unknown.is_err());
+        )
+        .unwrap_err();
+        let codes: Vec<_> = unknown
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(codes, [("config.unknown-key", "/requirements")]);
+    }
+
+    #[test]
+    fn a_governance_version_names_the_envelope_that_replaced_it() {
+        let report = decoded(
+            r#"version: 1
+assuranceProfile: production
+service: {}
+issuer: {}
+authentication: {}
+audit: {}
+subjectBinding: {}
+rateLimits: {}
+signing: {}
+authorityProfiles: {}
+"#,
+        )
+        .unwrap_err();
+        let codes: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(codes, [("config.removed-key", "/version")]);
+    }
+
+    #[test]
+    fn a_governance_file_with_a_byte_order_mark_is_read() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let target = fs::canonicalize(temporary.path()).expect("canonical target");
+        let target = target.as_path();
+        fs::write(
+            target.join("governance.yaml"),
+            format!(
+                "\u{feff}{}",
+                governance(
+                    "assuranceProfile: local\nservice: {}\nissuer: {}\nauthentication: {}\n\
+                     audit: {}\nsubjectBinding: {}\nrateLimits: {}\nsigning: {}\n\
+                     authorityProfiles:\n  local: {}\n"
+                )
+            ),
+        )
+        .expect("governance");
+        fs::write(target.join("runtime.yaml"), "outboundTls: {}\n").expect("runtime");
+        let documents = read_target_documents(target).expect("governance with a BOM");
+        assert_eq!(documents.governed_bundle["assuranceProfile"], "local");
+        assert_eq!(documents.governed_bundle["version"], 1);
     }
 
     #[test]
@@ -1092,8 +1161,8 @@ requirements: []
         fs::write(target.join("trust/local-ca.pem"), "ca").expect("ca bundle");
         fs::write(
             target.join("governance.yaml"),
-            r#"version: 1
-assuranceProfile: local
+            governance(
+                r#"assuranceProfile: local
 service: {}
 issuer: {}
 authentication: {}
@@ -1107,6 +1176,7 @@ sourceConnections:
 authorityProfiles:
   local: {}
 "#,
+            ),
         )
         .expect("governance");
         fs::write(
@@ -1147,9 +1217,8 @@ outboundTls:
 
     #[test]
     fn production_governance_passes_source_connections_to_the_compiler() {
-        let governance: TargetGovernance = serde_norway::from_str(
-            r#"version: 1
-assuranceProfile: production
+        let governance = decoded(
+            r#"assuranceProfile: production
 service: {}
 issuer: {}
 authentication: {}

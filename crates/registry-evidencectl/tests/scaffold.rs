@@ -307,12 +307,20 @@ fn target_check_refuses_a_requirement_validity_above_the_target_signing_maximum(
         "{printed}"
     );
     assert!(
-        printed.contains("questions/record-status.yaml:/governance/validitySeconds"),
+        printed.contains("questions/record-status.yaml:"),
         "{printed}"
     );
     assert!(
-        printed.contains("the deployment target's 300 second signing maximum"),
+        printed.contains(" /governance/validitySeconds"),
         "{printed}"
+    );
+    assert!(
+        printed.contains("the deployment target's signing maximum"),
+        "{printed}"
+    );
+    assert!(
+        !printed.contains("900") && !printed.contains(" 300 "),
+        "the refusal repeats no configured value: {printed}"
     );
 
     fs::write(
@@ -1098,7 +1106,7 @@ fn write_local_starter(root: &Path) -> PathBuf {
         ),
         (
             "targets/local/settings.example.yaml",
-            b"formatVersion: 1\n".as_slice(),
+            b"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1\nkind: EvidenceTargetSettings\n".as_slice(),
         ),
     ] {
         let path = starter.join(relative);

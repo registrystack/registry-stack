@@ -19,6 +19,10 @@
 //! still be wrong in ways only [`crate::validate`] can name, and an editor
 //! should keep asking that question after the schema has stopped complaining.
 //!
+//! Every document states the envelope its format is read with: `apiVersion`
+//! and `kind` as constants, both required, so an editor offers them first and
+//! flags a file of another format before the reader does.
+//!
 //! Rendering is canonical so the committed artifact reproduces byte for byte:
 //! keys sort, indentation is `serde_json`'s pretty form, and every document
 //! ends with exactly one newline. Writing the bytes stays with the caller, as
@@ -28,16 +32,17 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::{marker::ProjectMarker, model::Question};
+use crate::{
+    formats::{
+        schema_id, AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND, QUESTION_API_VERSION,
+        QUESTION_KIND,
+    },
+    marker::ProjectMarker,
+    model::Question,
+};
 
 /// The JSON Schema dialect every generated document declares.
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
-
-/// The stable identifier space the generated documents live in.
-///
-/// The host is a reserved example domain on purpose: an identifier is how a
-/// tool tells two schemas apart, not an address it should fetch.
-const SCHEMA_ID_PREFIX: &str = "https://registrystack.example/schemas/evidence-authoring/";
 
 /// The schema for one authored question, the documents under `questions/`.
 pub const QUESTION_SCHEMA_FILE: &str = "question.schema.json";
@@ -56,22 +61,56 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
         (
             QUESTION_SCHEMA_FILE,
             "Evidence authored question",
-            "question.v1.json",
+            "question",
+            (QUESTION_API_VERSION, QUESTION_KIND),
             serde_json::to_value(schemars::schema_for!(Question))?,
         ),
         (
             PROJECT_MARKER_SCHEMA_FILE,
             "Evidence authoring project marker",
-            "project-marker.v1.json",
+            "authoring-project",
+            (AUTHORING_PROJECT_API_VERSION, AUTHORING_PROJECT_KIND),
             serde_json::to_value(schemars::schema_for!(ProjectMarker))?,
         ),
     ];
     entries
         .into_iter()
-        .map(|(file, title, identifier, derived)| {
-            Ok((file, render(published(derived, title, identifier))?))
+        .map(|(file, title, format, envelope, derived)| {
+            let enveloped = with_envelope(derived, envelope);
+            Ok((
+                file,
+                render(published(enveloped, title, &schema_id(format)))?,
+            ))
         })
         .collect()
+}
+
+/// State the envelope a format is read with: `apiVersion` and `kind`, each a
+/// required constant, ahead of the members the Rust type derives.
+fn with_envelope(derived: Value, (api_version, kind): (&str, &str)) -> Value {
+    let Value::Object(mut object) = derived else {
+        return derived;
+    };
+    let mut properties = Map::new();
+    for (name, expected) in [("apiVersion", api_version), ("kind", kind)] {
+        let mut member = Map::new();
+        member.insert("type".to_owned(), Value::String("string".to_owned()));
+        member.insert("const".to_owned(), Value::String(expected.to_owned()));
+        properties.insert(name.to_owned(), Value::Object(member));
+    }
+    if let Some(Value::Object(derived_properties)) = object.remove("properties") {
+        properties.extend(derived_properties);
+    }
+    object.insert("properties".to_owned(), Value::Object(properties));
+    let mut required = vec![
+        Value::String("apiVersion".to_owned()),
+        Value::String("kind".to_owned()),
+    ];
+    if let Some(Value::Array(derived_required)) = object.remove("required") {
+        required.extend(derived_required);
+    }
+    object.insert("required".to_owned(), Value::Array(required));
+    Value::Object(object)
 }
 
 /// Give one derived schema the dialect, identifier, and title a published
@@ -94,10 +133,7 @@ fn published(derived: Value, title: &str, identifier: &str) -> Value {
         "$schema".to_owned(),
         Value::String(SCHEMA_DIALECT.to_owned()),
     );
-    object.insert(
-        "$id".to_owned(),
-        Value::String(format!("{SCHEMA_ID_PREFIX}{identifier}")),
-    );
+    object.insert("$id".to_owned(), Value::String(identifier.to_owned()));
     object.insert("title".to_owned(), Value::String(title.to_owned()));
     Value::Object(object)
 }
@@ -119,6 +155,35 @@ mod tests {
         assert!(documents.contains_key(QUESTION_SCHEMA_FILE));
         assert!(documents.contains_key(PROJECT_MARKER_SCHEMA_FILE));
         assert_eq!(documents.len(), 2);
+    }
+
+    #[test]
+    fn every_document_states_its_envelope_and_published_identifier() {
+        let documents = documents().expect("the authoring schemas generate");
+        for (file, format, kind) in [
+            (QUESTION_SCHEMA_FILE, "question", "EvidenceQuestion"),
+            (
+                PROJECT_MARKER_SCHEMA_FILE,
+                "authoring-project",
+                "EvidenceAuthoringProject",
+            ),
+        ] {
+            let document: serde_json::Value =
+                serde_json::from_str(&documents[file]).expect("the schema is JSON");
+            assert_eq!(
+                document["$id"],
+                format!(
+                    "https://id.registrystack.org/schemas/evidence/{format}/{format}.v1alpha1.schema.json"
+                )
+            );
+            assert_eq!(document["properties"]["kind"]["const"], kind);
+            assert_eq!(
+                document["properties"]["apiVersion"]["const"],
+                format!("id.registrystack.org/formats/evidence/{format}/v1alpha1")
+            );
+            assert_eq!(document["required"][0], "apiVersion");
+            assert_eq!(document["required"][1], "kind");
+        }
     }
 
     #[test]

@@ -19,11 +19,16 @@
 
 use jsonschema::{Draft, JSONSchema};
 use registry_evidence_authoring::{
-    model::Question,
+    formats::check_question,
     schema::{documents, PROJECT_MARKER_SCHEMA_FILE, QUESTION_SCHEMA_FILE},
-    validate::validate_question,
 };
+use registry_platform_yaml::Reader;
 use serde_json::Value;
+
+/// The envelope every question below is read with. The corpus states only the
+/// members after it, so each departure stays visible.
+const QUESTION_ENVELOPE: &str =
+    "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\n";
 
 /// A question that satisfies both the schema and the checks, and the base every
 /// rejected document below departs from in exactly one way.
@@ -233,13 +238,20 @@ disclosure:
 const REJECTED_MARKERS: &[(&str, &str)] = &[
     (
         "an unknown key",
-        "version: 1\nproject: evidence-authoring\nextra: true\n",
+        "apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: EvidenceAuthoringProject\nextra: true\n",
     ),
     (
         "a project kind the marker does not name",
-        "version: 1\nproject: relay-authoring\n",
+        "apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\nkind: RelayAuthoringProject\n",
     ),
-    ("a missing project kind", "version: 1\n"),
+    (
+        "a missing kind",
+        "apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1\n",
+    ),
+    (
+        "the members the envelope replaced",
+        "version: 1\nproject: evidence-authoring\n",
+    ),
 ];
 
 fn compile(document: &str) -> JSONSchema {
@@ -251,14 +263,26 @@ fn compile(document: &str) -> JSONSchema {
 }
 
 fn yaml_as_json(document: &str) -> Value {
-    serde_norway::from_str(document).expect("the corpus is well-formed YAML")
+    Reader::new("corpus.yaml")
+        .scan(document.as_bytes())
+        .expect("the corpus is well-formed YAML")
+        .expect("the corpus is not empty")
+        .to_json_value()
 }
 
-/// Read one authored question the way adopter tooling does: parse it into the
-/// closed model, then run the checks. Either step may turn the document away.
+fn question_as_json(document: &str) -> Value {
+    yaml_as_json(&format!("{QUESTION_ENVELOPE}{document}"))
+}
+
+/// Read one authored question the way adopter tooling does: read it through
+/// the shared reader into the closed model, then run the checks. Either step
+/// may turn the document away.
 fn question_is_accepted_by_the_checks(document: &str) -> bool {
-    serde_norway::from_str::<Question>(document)
-        .is_ok_and(|question| validate_question(&question).is_empty())
+    check_question(
+        "questions/adult-status.yaml",
+        format!("{QUESTION_ENVELOPE}{document}").as_bytes(),
+    )
+    .is_ok()
 }
 
 #[test]
@@ -341,6 +365,8 @@ fn the_question_schema_closes_its_shape_and_requires_the_authored_keys() {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     for key in [
+        "apiVersion",
+        "kind",
         "answers",
         "derivation",
         "disclosure",
@@ -367,7 +393,7 @@ fn the_project_marker_schema_names_the_one_project_kind() {
     let documents = documents().expect("the authoring schemas generate");
     let document = &documents[PROJECT_MARKER_SCHEMA_FILE];
     assert!(
-        document.contains("evidence-authoring"),
+        document.contains("\"EvidenceAuthoringProject\""),
         "the marker schema does not offer the one project kind this crate names",
     );
     let value: Value = serde_json::from_str(document).expect("the marker schema is JSON");
@@ -379,7 +405,7 @@ fn the_base_question_satisfies_both_the_schema_and_the_checks() {
     let documents = documents().expect("the authoring schemas generate");
     let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
     assert!(
-        schema.is_valid(&yaml_as_json(VALID_QUESTION)),
+        schema.is_valid(&question_as_json(VALID_QUESTION)),
         "the corpus base must satisfy the schema, or every rejection below proves nothing",
     );
     assert!(
@@ -394,7 +420,7 @@ fn a_question_the_schema_turns_away_is_turned_away_by_the_checks() {
     let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
     for (departure, document) in REJECTED_QUESTIONS {
         assert!(
-            !schema.is_valid(&yaml_as_json(document)),
+            !schema.is_valid(&question_as_json(document)),
             "the schema accepts {departure}, so this case tests nothing",
         );
         assert!(
@@ -414,7 +440,11 @@ fn a_marker_the_schema_turns_away_is_turned_away_by_the_parser() {
             "the schema accepts {departure}, so this case tests nothing",
         );
         assert!(
-            registry_evidence_authoring::parse_project_marker(document.as_bytes()).is_err(),
+            registry_evidence_authoring::parse_project_marker(
+                "evidence-project.yaml",
+                document.as_bytes()
+            )
+            .is_err(),
             "the schema turns away {departure} but the marker parser accepts it",
         );
     }
@@ -424,11 +454,11 @@ fn a_marker_the_schema_turns_away_is_turned_away_by_the_parser() {
 fn a_question_the_schema_accepts_may_still_be_turned_away_by_the_checks() {
     let documents = documents().expect("the authoring schemas generate");
     let schema = compile(&documents[QUESTION_SCHEMA_FILE]);
-    // A capitalized identifier is a string of the right type in the right
+    // A capitalized purpose is a string of the right type in the right
     // place, so the schema has nothing to say about it. The form does.
-    let document = VALID_QUESTION.replace("id: adult-status", "id: AdultStatus");
+    let document = VALID_QUESTION.replace("purpose: age-check", "purpose: AgeCheck");
     assert!(
-        schema.is_valid(&yaml_as_json(&document)),
+        schema.is_valid(&question_as_json(&document)),
         "the asymmetry case must satisfy the schema, or it does not show the asymmetry",
     );
     assert!(

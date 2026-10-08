@@ -1,0 +1,3 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
+kind: EvidenceAuthoringProject

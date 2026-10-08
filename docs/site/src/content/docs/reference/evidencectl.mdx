@@ -29,10 +29,10 @@ The canonical adopter commands do not change the numeric Evidence Gateway Versio
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
-| `evidencectl check <project>` | Editable project | Reports authoring completeness and field-addressed findings | Claim deployment closure, run fixtures, resolve secrets, or contact a dependency |
+| `evidencectl check <project>` | Editable project | Reports authoring completeness and field-addressed warnings | Claim deployment closure, run fixtures, resolve secrets, or contact a dependency |
 | `evidencectl check <project> --target <target>` | Editable project and one explicit target | Adds the target's governance, runtime structure, public keys, source connections, and governed-bundle validation | Require target-host paths or secrets to exist, run fixtures, or contact a dependency |
 | `evidencectl check <project> --target <target> --production` | Editable project and one explicit production or evidence-grade target | Refuses incomplete deployment closure under that target's own assurance profile | Select a target, upgrade its profile, or prove live readiness |
-| `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, findings, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
+| `evidencectl explain <project> [--target <target>]` | Editable project and optional explicit target | Applies the same offline authoring validation, then reports status, diagnostics, revision, and the authored inventory; includes target governance only when selected | Contact sources or expose secret and subject values |
 | `evidencectl package <project> --target <target> --output <new-package>` | Editable project and one explicit production target | Creates one closed package with `SHA256SUMS`; runtime remains in the target | Overwrite output, contact source services or OIDC, create production secrets, or start a listener |
 | `evidencectl test <editable-project> [--target <deployment-target>]` | An editable project with `questions/`, `sources/`, and referenced synthetic fixtures; an optional target supplies complete deployment governance | Privately compiles the project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
 | `evidencectl test <editable-project> --target <deployment-target> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--format json` | Print a response, fact, derived, or selector value, or explain a served request |
@@ -54,7 +54,7 @@ outside the allowed project directories. A failed package publishes no candidate
 
 `check`, `test`, `package`, `source diff`, and `source update`, plus the compatibility spelling
 `fixtures run`, refuse a derivation whose `answer` reads a fact its question's source
-does not declare, with `evidence.authoring.derivation-fact-undeclared` against the derivation
+does not declare, with `evidence.derivation.fact-undeclared` against the derivation
 file. A source declares an inline operation's `source.facts[].name`, or the properties of a
 referenced source's closed `factSchema`. A registry field rename that a derivation still reads
 under its old name therefore fails before `source update` installs anything. The check reads the
@@ -67,9 +67,12 @@ derivation reads a fact the check should not see. It, a read inside a helper fun
 `answer` that rebinds or writes its first parameter, and an open fact schema are left to the
 fixtures.
 
-An ordinary `check` can succeed with `status: incomplete` and visible findings. Add
-`--deny-findings` when any finding must refuse the command. All findings carry `severity`, `code`,
-`artifact`, `path`, `message`, and `suggestedAction`. Human output is the default. Add the global
+An ordinary `check` can succeed with `status: incomplete` and visible warnings. Add
+`--deny-warnings` when any warning must refuse the command; the former `--deny-findings` spelling
+is a usage error that names it. Every diagnostic carries `severity`, `code`, `artifact`, `path`,
+`message`, `suggestedAction`, and the `source` file, line, and column it names, and the JSON report
+lists them under `diagnostics`. `check` exits 0 when it passes, 1 when it refuses the project, 2
+for a usage error, and 3 when it could not finish. Human output is the default. Add the global
 `--format json` option for the same result as structured JSON. A command that provides no JSON
 report accepts only `--format human`, and the CLI reference shows which commands those are;
 `--format json` on one of them is the usage error `evidencectl.format.unsupported`.
@@ -86,7 +89,7 @@ one of the statuses `refused`, `failed`, `domain-refusal`, `usage-error`, or
 `command: "usage"`. Pending changes, such as a `source add` preview, are a `status`, never an exit
 code.
 
-The workflow exit classes are `0` for success, `1` for a domain refusal, denied finding, or failing
+The workflow exit classes are `0` for success, `1` for a domain refusal, denied warning, or failing
 fixture, `2` for command-line usage, and `3` for an operational failure, such as a file, process,
 or local session the command depends on being unavailable. These classes belong to adopter tooling;
 they do not change the Evidence Gateway runtime verifier's frozen exit contract.

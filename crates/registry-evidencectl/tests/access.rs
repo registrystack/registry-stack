@@ -23,7 +23,9 @@ fn write_question(project: &Path, id: &str) {
     fs::create_dir_all(project.join("questions")).expect("questions directory");
     fs::write(
         project.join("questions").join(format!("{id}.yaml")),
-        format!("id: {id}\n"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: {id}\n"
+        ),
     )
     .expect("question");
 }
@@ -89,7 +91,12 @@ fn adds_reviewable_policy_and_public_client_while_isolating_private_key() {
 
     let policy: Value =
         serde_norway::from_slice(&fs::read(policy_path).expect("policy")).expect("policy yaml");
-    assert_eq!(policy["version"], 1);
+    assert_eq!(
+        policy["apiVersion"],
+        "id.registrystack.org/formats/evidence/access-policy/v1alpha1"
+    );
+    assert_eq!(policy["kind"], "EvidenceAccessPolicy");
+    assert!(policy.get("version").is_none());
     assert_eq!(policy["id"], "age-checks");
     assert_eq!(policy["questions"], serde_json::json!(["adult-status"]));
 

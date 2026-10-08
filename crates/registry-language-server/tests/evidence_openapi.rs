@@ -107,7 +107,7 @@ fn an_operation_the_description_does_not_publish_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-operation")
+        Some("evidence.project.unknown-operation")
     );
 }
 
@@ -138,7 +138,7 @@ fn an_operation_identifier_two_operations_publish_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/ambiguous-operation")
+        Some("evidence.project.ambiguous-operation")
     );
 }
 
@@ -229,7 +229,8 @@ fn an_operation_published_under_another_method_still_resolves() {
         index
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code.as_deref() != Some("evidence/unknown-operation")),
+            .all(|diagnostic| diagnostic.code.as_deref()
+                != Some("evidence.project.unknown-operation")),
         "{:?}",
         index.diagnostics()
     );
@@ -264,7 +265,7 @@ fn a_subject_selector_the_operation_has_no_path_parameter_for_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/subject-selector")
+        Some("evidence.question.subject-selector")
     );
 }
 
@@ -335,7 +336,7 @@ fn a_fact_path_the_response_does_not_offer_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unselectable-fact-path")
+        Some("evidence.question.unselectable-fact-path")
     );
 }
 
@@ -363,7 +364,7 @@ fn a_fact_path_at_something_that_is_not_a_scalar_leaf_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unselectable-fact-path")
+        Some("evidence.question.unselectable-fact-path")
     );
 }
 
@@ -430,7 +431,7 @@ fn a_collection_bound_no_fact_visits_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-collection")
+        Some("evidence.project.unknown-collection")
     );
 }
 
@@ -457,7 +458,7 @@ fn a_collection_no_bound_names_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/undeclared-collection")
+        Some("evidence.question.undeclared-collection")
     );
 }
 
@@ -530,7 +531,7 @@ fn an_unresolved_operation_reports_nothing_about_the_fields_that_read_it() {
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-operation")
+        Some("evidence.project.unknown-operation")
     );
 }
 
@@ -559,7 +560,7 @@ fn a_question_the_form_refuses_reports_only_its_own_problem() {
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/operation-identifier")
+        Some("evidence.question.operation-identifier")
     );
 }
 
@@ -624,7 +625,7 @@ fn a_project_with_no_description_leaves_every_edge_alone() {
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
 }
 
@@ -644,7 +645,7 @@ fn a_description_past_the_ceiling_the_authoring_form_sets_leaves_every_edge_alon
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
     assert!(index
         .definitions_at(
@@ -659,7 +660,7 @@ fn a_description_past_the_ceiling_the_authoring_form_sets_leaves_every_edge_alon
 ///
 /// The degradation cases assert that the editor says nothing, and a project the compiler accepts
 /// says nothing either way: the silence would prove only that the fixture was correct. This one
-/// reports `evidence/unknown-operation` the moment the description is read at all
+/// reports `evidence.project.unknown-operation` the moment the description is read at all
 /// (`an_operation_the_description_does_not_publish_is_reported` is the same question against a
 /// description that reads), so silence over it means the edge was never drawn.
 fn speaks_when_the_description_is_read() -> Vec<ProjectFile> {
@@ -755,7 +756,7 @@ fn one_question_naming_an_operation_makes_the_description_a_prerequisite() {
     assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
     assert_eq!(
         reported[0].message,
@@ -781,7 +782,7 @@ fn a_question_the_form_refuses_does_not_make_the_description_a_prerequisite() {
     assert_eq!(reported[0].path, project.path(QUESTION_PATH));
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/answer-concept-identifier")
+        Some("evidence.question.answer-concept-identifier")
     );
 }
 
@@ -802,7 +803,7 @@ fn a_linked_description_is_refused_whatever_the_questions_name() {
     assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/openapi-prerequisite")
+        Some("evidence.openapi.prerequisite")
     );
     assert_eq!(
         reported[0].message,

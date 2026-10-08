@@ -481,12 +481,12 @@ fn selected_clients_require_an_explicit_current_policy_generation() {
 
     private_file(
         &explicit.root.join("questions/age-bracket.yaml"),
-        b"id: age-bracket\n",
+        b"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: age-bracket\n",
         0o644,
     );
     private_file(
         &explicit.root.join("access/policies/age-checks.yaml"),
-        b"version: 1\nid: age-checks\nquestions: [adult-status, age-bracket]\n",
+        b"apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: age-checks\nquestions: [adult-status, age-bracket]\n",
         0o644,
     );
     let output = explicit.prepare_as("age-checker", "drifted-policy");
@@ -1127,14 +1127,14 @@ impl Fixture {
         fs::create_dir_all(&questions).expect("authored question directory");
         private_file(
             &questions.join("adult-status.yaml"),
-            b"id: adult-status\n",
+            b"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: adult-status\n",
             0o644,
         );
         let policies = self.root.join("access/policies");
         fs::create_dir_all(&policies).expect("editable policy directory");
         private_file(
             &policies.join("age-checks.yaml"),
-            b"version: 1\nid: age-checks\nquestions: [adult-status]\n",
+            b"apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\nkind: EvidenceAccessPolicy\nid: age-checks\nquestions: [adult-status]\n",
             0o644,
         );
         let clients = self.root.join("access/clients");
@@ -1142,7 +1142,8 @@ impl Fixture {
         private_file(
             &clients.join(format!("{client_id}.yaml")),
             format!(
-                "version: 1\n\
+                "apiVersion: id.registrystack.org/formats/evidence/access-client/v1alpha1\n\
+                 kind: EvidenceAccessClient\n\
                  clientId: {client_id}\n\
                  status: {status}\n\
                  principal: urn:registrystack:evidence:local:client:{client_id}\n\

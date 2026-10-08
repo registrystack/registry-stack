@@ -102,7 +102,7 @@ fn a_refused_check_report_keeps_the_passing_report_top_level_keys() {
         .expect("run check");
     assert_eq!(output.status.code(), Some(1));
     let report = json_of(&output);
-    for key in ["command", "ok", "status", "proof", "project", "findings"] {
+    for key in ["command", "ok", "status", "proof", "project", "diagnostics"] {
         assert!(
             report.get(key).is_some(),
             "refused report lacks {key}: {report}"
@@ -110,7 +110,49 @@ fn a_refused_check_report_keeps_the_passing_report_top_level_keys() {
     }
     assert_eq!(report["ok"], Value::Bool(false));
     assert_eq!(report["status"], "refused");
-    assert!(report["findings"].as_array().is_some_and(|f| !f.is_empty()));
+    assert!(report.get("findings").is_none(), "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "yaml.syntax");
+    assert_eq!(diagnostics[0]["severity"], "error");
+}
+
+/// `--deny-findings` is the former spelling of `--deny-warnings`. It is still
+/// parsed so the refusal can name the flag to use, and it is a usage error in
+/// both output formats, before any project is read.
+#[test]
+fn the_former_deny_findings_spelling_is_a_usage_error_naming_its_replacement() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let project = workspace.path().join("absent-project");
+    let project = project.display().to_string();
+
+    let output = evidencectl()
+        .args(["check", &project, "--deny-findings"])
+        .output()
+        .expect("run check");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error[evidence.usage.flag-renamed]"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("--deny-warnings"), "{stderr}");
+
+    let output = evidencectl()
+        .args(["--format", "json", "check", &project, "--deny-findings"])
+        .output()
+        .expect("run check");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let report = json_of(&output);
+    assert_eq!(report["ok"], Value::Bool(false));
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "evidence.usage.flag-renamed");
+    assert!(diagnostics[0]["suggestedAction"]
+        .as_str()
+        .is_some_and(|action| action.contains("--deny-warnings")));
 }
 
 /// `tooling editor` reuses its versioned setup report inside the shared JSON

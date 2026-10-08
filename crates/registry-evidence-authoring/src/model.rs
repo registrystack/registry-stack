@@ -7,17 +7,22 @@
 
 use std::collections::BTreeMap;
 
+use registry_platform_yaml::{BoundedU64, Invalid, LocalId, UniqueList};
 use serde::{Deserialize, Serialize};
 
-/// One authored access policy: its format version, stable identifier, and the
-/// questions a caller assigned this policy may ask.
+/// The longest validity window a question may declare, in seconds: one year,
+/// the ceiling the signed bundle holds every requirement to.
+pub const MAX_VALIDITY_SECONDS: u64 = 31_536_000;
+
+/// One authored access policy: its stable identifier and the questions a
+/// caller assigned this policy may ask. The format version is the document's
+/// `apiVersion`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccessPolicy {
-    pub version: u8,
     pub id: String,
     pub questions: Vec<String>,
-    #[serde(rename = "taskGrant", default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "taskGrant", skip_serializing_if = "Option::is_none")]
     pub task_grant: Option<AccessTaskGrant>,
 }
 
@@ -52,10 +57,9 @@ pub struct AccessTaskBinding {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Question {
-    pub id: String,
+    pub id: LocalId,
     pub question: String,
     pub purpose: String,
-    #[serde(default)]
     pub subject: Option<QuestionSubject>,
     #[serde(default)]
     pub subjects: Vec<QuestionSubject>,
@@ -64,13 +68,12 @@ pub struct Question {
     pub derivation: String,
     pub disclosure: QuestionDisclosure,
     #[serde(rename = "responseFormats", default = "default_response_formats")]
-    pub response_formats: Vec<QuestionResponseFormat>,
-    #[serde(default)]
+    pub response_formats: UniqueList<QuestionResponseFormat>,
     pub governance: Option<QuestionGovernance>,
 }
 
 /// A serialization an answer may be returned in.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum QuestionResponseFormat {
@@ -91,8 +94,8 @@ impl QuestionResponseFormat {
 
 /// The response formats a question offers when it names none.
 #[must_use]
-pub fn default_response_formats() -> Vec<QuestionResponseFormat> {
-    vec![QuestionResponseFormat::SignedJws]
+pub fn default_response_formats() -> UniqueList<QuestionResponseFormat> {
+    UniqueList::new(vec![QuestionResponseFormat::SignedJws]).expect("one response format is a set")
 }
 
 /// The published description of what a question decides and under what rules.
@@ -104,7 +107,7 @@ pub struct QuestionGovernance {
     pub kind: RequirementKind,
     pub reference_frameworks: Vec<String>,
     pub evidence_type: String,
-    pub validity_seconds: u64,
+    pub validity_seconds: BoundedU64<1, MAX_VALIDITY_SECONDS>,
     pub observation_timezone: String,
     pub fixtures: String,
     pub disclosure_families: Vec<String>,
@@ -141,7 +144,6 @@ pub struct QuestionSubject {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(skip_serializing_if = "String::is_empty"))]
     pub selector: String,
-    #[serde(default)]
     pub profile: Option<String>,
     /// Explicit alternative profiles from the project's selector definitions.
     /// Each profile supplies its complete field set, including composite keys.
@@ -155,7 +157,6 @@ pub struct QuestionSubject {
     ///
     /// Omission keeps the unambiguous single-role shorthand. An explicit
     /// value is useful when multiple roles use the same selector field name.
-    #[serde(default)]
     pub source: Option<bool>,
     #[serde(default)]
     pub derivation: bool,
@@ -167,9 +168,10 @@ where
 {
     let profiles = Vec::<String>::deserialize(deserializer)?;
     if profiles.is_empty() {
-        return Err(serde::de::Error::custom(
-            "subject.profiles must not be empty",
-        ));
+        return Err(serde::de::Error::custom(Invalid::expected(
+            "at least one selector profile",
+            "Name the selector profiles the subject may be identified by, or remove `profiles`.",
+        )));
     }
     Ok(profiles)
 }
@@ -182,12 +184,11 @@ where
 pub struct QuestionSource {
     #[serde(rename = "ref")]
     pub source_ref: Option<String>,
-    #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
     pub facts: Vec<QuestionFact>,
     #[serde(rename = "collectionBounds", default)]
-    pub collection_bounds: BTreeMap<String, u64>,
+    pub collection_bounds: BTreeMap<String, BoundedU64<1, 256>>,
 }
 
 /// One value projected out of a source response and handed to the derivation.
@@ -215,7 +216,6 @@ pub enum FactCombination {
 #[serde(deny_unknown_fields)]
 pub struct QuestionAnswer {
     pub concept: String,
-    #[serde(default)]
     pub id: Option<String>,
     #[serde(rename = "type")]
     pub answer_type: AnswerType,
@@ -225,12 +225,12 @@ pub struct QuestionAnswer {
     pub maximum: Option<i64>,
     pub prefix: Option<String>,
     #[serde(rename = "minimumBytes")]
-    pub minimum_bytes: Option<u64>,
+    pub minimum_bytes: Option<BoundedU64<1, 1_024>>,
     #[serde(rename = "maximumBytes")]
-    pub maximum_bytes: Option<u64>,
+    pub maximum_bytes: Option<BoundedU64<1, 1_024>>,
     pub schema: Option<String>,
     #[serde(rename = "maximumSerializedBytes")]
-    pub maximum_serialized_bytes: Option<u64>,
+    pub maximum_serialized_bytes: Option<BoundedU64<1, 65_536>>,
     #[serde(rename = "sdJwtVc")]
     pub sd_jwt_vc: Option<QuestionSdJwtVc>,
 }

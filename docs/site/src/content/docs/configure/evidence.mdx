@@ -72,9 +72,9 @@ evidencectl check "<editable-project>"
 evidencectl explain "<editable-project>"
 ```
 
-The offline check reports incomplete authoring as field-addressed findings and can still exit
-successfully. Add `--deny-findings` when any gap must refuse the command. Explain applies the same
-authoring validation, then reports its status, findings, revision, and inventory of questions,
+The offline check reports incomplete authoring as field-addressed warnings and can still exit
+successfully. Add `--deny-warnings` when any gap must refuse the command. Explain applies the same
+authoring validation, then reports its status, diagnostics, revision, and inventory of questions,
 sources, selectors, derivations, and local access without reading secrets or contacting a
 dependency.
 

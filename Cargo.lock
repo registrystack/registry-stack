@@ -5514,6 +5514,7 @@ version = "0.40.0"
 dependencies = [
  "anyhow",
  "jsonschema",
+ "registry-platform-yaml",
  "rhai",
  "schemars",
  "serde",
@@ -5712,6 +5713,7 @@ dependencies = [
  "anyhow",
  "futures",
  "registry-evidence-authoring",
+ "registry-platform-yaml",
  "rustix 1.1.5",
  "serde_json",
  "serde_norway",

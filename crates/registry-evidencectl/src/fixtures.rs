@@ -11,7 +11,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use serde_norway::Value as YamlValue;
 
 use crate::authoring::{
     compile_fixture_project, compile_fixture_project_with_connections, CompiledFixtureProject,
@@ -480,12 +479,7 @@ fn resolve_bundle_directory(runtime_path: &Path, project: &Path) -> Result<PathB
             runtime_path.display()
         )
     })?;
-    let document: YamlValue = serde_norway::from_slice(&bytes).with_context(|| {
-        format!(
-            "failed to parse runtime configuration at {}",
-            runtime_path.display()
-        )
-    })?;
+    let document = crate::authored::runtime_document(&runtime_path.to_string_lossy(), &bytes)?;
     match document
         .get("package")
         .and_then(|package| package.get("root"))
@@ -517,15 +511,11 @@ fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
             bundle_config_path.display()
         )
     })?;
-    let document: YamlValue = serde_norway::from_slice(&bytes).with_context(|| {
-        format!(
-            "failed to parse bundle configuration at {}",
-            bundle_config_path.display()
-        )
-    })?;
+    let document =
+        crate::authored::runtime_document(&bundle_config_path.to_string_lossy(), &bytes)?;
     let requirements = document
         .get("requirements")
-        .and_then(YamlValue::as_sequence)
+        .and_then(serde_json::Value::as_array)
         .ok_or_else(|| {
             anyhow!(
                 "bundle configuration at {} has no requirements list",
@@ -537,7 +527,7 @@ fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
     for requirement in requirements {
         let fixture_path = requirement
             .get("fixtures")
-            .and_then(YamlValue::as_str)
+            .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
                 anyhow!(
                     "a requirement in {} has no fixtures path",

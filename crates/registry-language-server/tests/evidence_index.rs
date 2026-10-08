@@ -14,7 +14,7 @@ mod support;
 use std::path::PathBuf;
 
 use registry_evidence_authoring::{
-    layout::MAX_QUESTION_BYTES, model::Question, testing::ProjectFile, validate::validate_question,
+    formats::check_question, layout::MAX_QUESTION_BYTES, testing::ProjectFile,
 };
 use registry_language_server::{EvidenceKind, SymbolKind};
 use support::{
@@ -40,8 +40,8 @@ fn the_worked_project_reports_nothing() {
 
 /// Every test in this file reads "the compiler accepts this project" off the shared fixture, so the
 /// part of that claim the authoring library can settle is settled here rather than asserted in
-/// prose. `registry-evidencectl` reads a question with this deserializer and judges it with these
-/// checks, so a fixture question that drifts out of the authoring form fails here instead of
+/// prose. `registry-evidencectl` reads and judges a question with `check_question`, so a fixture
+/// question that drifts out of the authoring form fails here instead of
 /// quietly turning every test below into a test about a document the compiler refuses.
 ///
 /// The source, selector, and access policy documents are paired by citation instead: the rules that
@@ -59,10 +59,9 @@ fn the_shared_fixture_questions_are_ones_the_authoring_form_accepts() {
             without_cursors(&structured_answer_question()),
         ),
     ] {
-        let question = serde_norway::from_str::<Question>(&document)
-            .unwrap_or_else(|error| panic!("the {form} form is a question document: {error}"));
-        let findings = validate_question(&question);
-        assert!(findings.is_empty(), "{form}: {findings:?}");
+        if let Err(report) = check_question(QUESTION_PATH, document.as_bytes()) {
+            panic!("the {form} form is a question the form accepts: {report:?}");
+        }
     }
 }
 
@@ -95,17 +94,16 @@ fn a_question_defines_the_identifier_it_writes() {
 
 /// A name the author wrote as a block scalar is still the name the compiler reads, so the project
 /// is one it accepts and the editor has nothing to say about it. The claim is settled in the test:
-/// the document goes through the deserializer and the checks `registry-evidencectl` reads a
-/// question with before any diagnostic is asked for.
+/// the document goes through the reader and the checks `registry-evidencectl` reads a question with
+/// before any diagnostic is asked for.
 #[test]
 fn names_written_as_block_scalars_are_read_as_the_compiler_reads_them() {
     let document = without_cursors(QUESTION)
         .replace("id: adult-status", "id: |-\n  adult-status")
         .replace("  ref: people", "  ref: |-\n    people");
-    let question = serde_norway::from_str::<Question>(&document)
+    let question = check_question(QUESTION_PATH, document.as_bytes())
         .expect("a question may write its names as block scalars");
-    assert_eq!(question.id, "adult-status");
-    assert!(validate_question(&question).is_empty());
+    assert_eq!(question.value.id.as_str(), "adult-status");
 
     let project = EvidenceProject::new(&replacing(
         &adult_status_project(),
@@ -139,7 +137,7 @@ fn a_question_identifier_that_is_not_the_file_name_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/question-file-name")
+        Some("evidence.question.file-name")
     );
 }
 
@@ -182,12 +180,12 @@ fn a_derivation_file_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-derivation-file")
+        Some("evidence.project.unknown-derivation-file")
     );
 }
 
 /// Edge 3: `source.ref` names a source document by its file stem. Paired with
-/// `crates/registry-evidencectl/src/authoring.rs`: "question source ref `x` has no sources/x.yaml".
+/// `crates/registry-evidencectl/src/authoring.rs`: "the source this ref names has no file under sources/".
 #[test]
 fn a_question_refers_to_the_source_it_reads() {
     let project = EvidenceProject::new(&adult_status_project());
@@ -225,7 +223,10 @@ fn a_source_that_is_not_there_is_reported() {
         project.cursor(QUESTION_PATH, "source-ref")
     );
     assert_eq!(diagnostic.message, "Unknown source reference 'people'");
-    assert_eq!(diagnostic.code.as_deref(), Some("evidence/unknown-source"));
+    assert_eq!(
+        diagnostic.code.as_deref(),
+        Some("evidence.project.unknown-source")
+    );
 }
 
 /// Edge 4: a structured answer's `schema` names a file under `schemas/`. Paired with
@@ -273,7 +274,7 @@ fn an_answer_schema_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-schema-file")
+        Some("evidence.project.unknown-schema-file")
     );
 }
 
@@ -319,7 +320,7 @@ fn a_fixture_file_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-fixture-file")
+        Some("evidence.project.unknown-fixture-file")
     );
 }
 
@@ -372,7 +373,7 @@ fn a_selector_profile_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-selector-profile")
+        Some("evidence.project.unknown-selector-profile")
     );
 }
 
@@ -399,7 +400,7 @@ fn alternative_subject_profiles_navigate_and_report_missing_profiles() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-selector-profile")
+        Some("evidence.project.unknown-selector-profile")
     );
 }
 
@@ -481,7 +482,7 @@ fn a_plural_subject_naming_a_selector_profile_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-selector-profile")
+        Some("evidence.project.unknown-selector-profile")
     );
 }
 
@@ -531,7 +532,7 @@ fn a_disclosed_concept_no_answer_produces_is_reported_once_by_the_authoring_libr
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/disclosure-allow")
+        Some("evidence.question.disclosure-allow")
     );
     assert_eq!(
         reported[0].message,
@@ -588,7 +589,7 @@ fn one_question_s_concept_does_not_answer_another_question_s_disclosure() {
     assert_eq!(reported.len(), 1, "{reported:?}");
     assert_eq!(
         reported[0].code.as_deref(),
-        Some("evidence/disclosure-allow")
+        Some("evidence.question.disclosure-allow")
     );
     assert_eq!(reported[0].path, project.path(MINOR_PATH));
 }
@@ -635,7 +636,7 @@ fn an_admitted_question_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-question")
+        Some("evidence.project.unknown-question")
     );
 }
 
@@ -666,7 +667,7 @@ fn an_access_policy_identifier_that_is_not_the_file_name_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/access-policy-file-name")
+        Some("evidence.access-policy.file-name")
     );
 }
 
@@ -707,7 +708,7 @@ fn a_source_selector_input_offering_a_profile_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-selector-profile")
+        Some("evidence.project.unknown-selector-profile")
     );
 }
 
@@ -764,7 +765,7 @@ fn a_source_schema_that_is_not_there_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-schema-file")
+        Some("evidence.project.unknown-schema-file")
     );
 }
 
@@ -864,7 +865,7 @@ fn a_source_artifact_outside_those_directories_is_reported() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-schema-file")
+        Some("evidence.project.unknown-schema-file")
     );
 }
 
@@ -917,7 +918,7 @@ fn the_same_source_is_reported_once_a_question_reads_it() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-schema-file")
+        Some("evidence.project.unknown-schema-file")
     );
 }
 
@@ -943,7 +944,7 @@ fn a_source_named_only_by_a_question_the_form_refuses_is_left_alone() {
         only_diagnostic_in(&quiet, &refused, QUESTION_PATH)
             .code
             .as_deref(),
-        Some("evidence/question-shape")
+        Some("config.unknown-variant")
     );
     assert_eq!(quiet.diagnostics().len(), 1, "{:?}", quiet.diagnostics());
 
@@ -966,7 +967,7 @@ fn a_source_named_only_by_a_question_the_form_refuses_is_left_alone() {
         only_diagnostic_in(&reported, &accepted, SOURCE_PATH)
             .code
             .as_deref(),
-        Some("evidence/unknown-schema-file")
+        Some("evidence.project.unknown-schema-file")
     );
 }
 
@@ -988,13 +989,13 @@ fn a_source_an_accepted_question_reads_keeps_its_checks_beside_a_refused_one() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-schema-file")
+        Some("evidence.project.unknown-schema-file")
     );
     assert_eq!(
         only_diagnostic_in(&index, &project, SECOND_QUESTION_PATH)
             .code
             .as_deref(),
-        Some("evidence/question-shape")
+        Some("config.unknown-variant")
     );
     assert_eq!(index.diagnostics().len(), 2, "{:?}", index.diagnostics());
 }
@@ -1043,7 +1044,7 @@ fn a_file_reference_outside_the_project_layout_is_reported() {
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/unknown-derivation-file")
+        Some("evidence.project.unknown-derivation-file")
     );
     assert_eq!(
         diagnostic.message,
@@ -1054,9 +1055,10 @@ fn a_file_reference_outside_the_project_layout_is_reported() {
 /// A question that stops parsing still defines what it has written, so the rest of the project
 /// keeps resolving against it while the author types.
 ///
-/// The half-written document reports where it stops and nothing else: every other sentence about it
-/// is read from text the author has not finished. The access policy that admits it is a different
-/// document, and it still finds the question it names.
+/// The half-written document reports where it stops and nothing else, with the code and sentence the
+/// shared reader gives `evidencectl check`: every other sentence about it is read from text the
+/// author has not finished. The access policy that admits it is a different document, and it still
+/// finds the question it names.
 #[test]
 fn a_question_that_stops_parsing_still_answers_the_access_policy() {
     let project = EvidenceProject::new(&replacing(
@@ -1067,7 +1069,7 @@ fn a_question_that_stops_parsing_still_answers_the_access_policy() {
     let index = project.index();
 
     let diagnostic = only_diagnostic_in(&index, &project, QUESTION_PATH);
-    assert_eq!(diagnostic.code.as_deref(), Some("evidence/syntax"));
+    assert_eq!(diagnostic.code.as_deref(), Some("yaml.syntax"));
     assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
     assert_eq!(
         definition_paths(&index, &project, ACCESS_POLICY_PATH, "policy-question"),
@@ -1100,7 +1102,7 @@ fn a_question_the_loader_could_not_read_still_answers_for_its_name() {
     );
     assert_eq!(
         diagnostic.code.as_deref(),
-        Some("evidence/document-ceiling"),
+        Some("evidence.project.document-ceiling"),
         "the sentence the author acts on names its rule, like every other sentence here"
     );
     assert_eq!(index.diagnostics().len(), 1, "{:?}", index.diagnostics());
@@ -1110,9 +1112,27 @@ fn a_question_the_loader_could_not_read_still_answers_for_its_name() {
     );
 }
 
-/// The shared question grown past the ceiling the authoring form sets for a question, and past
-/// nothing else: a document over 64 KiB and under the workspace-wide megabyte is the one the two
-/// limits disagree about.
+/// A question exactly at its ceiling is one the reader accepts, so the editor indexes it and has
+/// nothing to say about it: the bound refuses only what is past it.
+#[test]
+fn a_question_exactly_at_its_ceiling_is_read_like_any_other() {
+    let mut written = without_cursors(QUESTION);
+    written.push('#');
+    let padding = MAX_QUESTION_BYTES as usize - written.len() - 1;
+    written.push_str(&" ".repeat(padding));
+    written.push('\n');
+    assert_eq!(written.len() as u64, MAX_QUESTION_BYTES);
+    check_question(QUESTION_PATH, written.as_bytes()).expect("the reader accepts the bound itself");
+
+    let project =
+        EvidenceProject::new(&replacing(&adult_status_project(), QUESTION_PATH, &written));
+    let index = project.index();
+
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+}
+
+/// The shared question grown past the ceiling the authoring form sets for a question, which is the
+/// shared reader's one-mebibyte bound.
 fn question_past_its_ceiling() -> String {
     let mut written = QUESTION.to_owned();
     written.push('#');

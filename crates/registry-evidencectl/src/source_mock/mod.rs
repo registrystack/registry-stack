@@ -484,7 +484,6 @@ fn generate_initial(args: GenerateArgs) -> Result<ExitCode> {
         &openapi_relative,
     )?;
     let plan = MockPlan {
-        version: plan::PLAN_VERSION,
         openapi: config_reference,
         openapi_digest: Some(Digest::from_bytes(prepared.normalized_digest)),
         generation: Some(GenerationSettings {
@@ -742,8 +741,10 @@ struct CheckedPlan {
 }
 
 fn load_checked_plan(root: &Path, config: &Path, allow_missing: bool) -> Result<CheckedPlan> {
-    let bytes = files::read_confined(root, config, plan::MAX_PLAN_BYTES as u64, "mock plan")?;
-    let plan = plan::parse_plan(&bytes)?;
+    // One byte past the reader's limit, so an oversized plan is refused by
+    // the reader the way every other configuration file is.
+    let bytes = files::read_confined(root, config, plan::MAX_PLAN_BYTES as u64 + 1, "mock plan")?;
+    let plan = plan::parse_plan(&config.to_string_lossy(), &bytes)?;
     let openapi_bytes = files::read_openapi_reference(root, config, &plan.openapi)?;
     let mut prepared = openapi::discover(&openapi_bytes, "configured OpenAPI document", None)?;
     let configured_operations = plan
@@ -1112,17 +1113,20 @@ fn project_source_binding(
         }
         let bytes =
             files::read_confined(root, &relative, plan::MAX_PLAN_BYTES as u64, "source draft")?;
-        let value: serde_norway::Value =
-            serde_norway::from_slice(&bytes).context("source draft YAML is invalid")?;
+        let value = registry_evidence_authoring::formats::scan_authored(
+            &relative.to_string_lossy(),
+            &bytes,
+        )
+        .map(crate::authored::node_value)?;
         let method = value
             .get("request")
             .and_then(|request| request.get("method"))
-            .and_then(serde_norway::Value::as_str);
+            .and_then(serde_json::Value::as_str);
         let path = value.get("request").and_then(|request| {
             request
                 .get("pathTemplate")
                 .or_else(|| request.get("path"))
-                .and_then(serde_norway::Value::as_str)
+                .and_then(serde_json::Value::as_str)
         });
         let Some((method, source_path)) = method.zip(path) else {
             continue;
@@ -1132,7 +1136,7 @@ fn project_source_binding(
         };
         let base_url = value
             .get("baseUrl")
-            .and_then(serde_norway::Value::as_str)
+            .and_then(serde_json::Value::as_str)
             .context("applicable project sources need an explicit baseUrl")?;
         addresses.insert(loopback_origin_address(base_url)?);
         let key = (operation.0.to_owned(), operation.1.to_owned());

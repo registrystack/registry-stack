@@ -171,8 +171,8 @@ inputs, not overlays. Secret values and absolute secret paths do not belong in
 authored governance input.
 
 `evidencectl check <editable-project>` validates authoring offline and reports
-incomplete work as field-addressed findings. `--deny-findings` refuses any
-finding. Add `--target <environment-target>` to validate that explicit target's
+incomplete work as field-addressed warnings. `--deny-warnings` refuses any
+warning. Add `--target <environment-target>` to validate that explicit target's
 governance, runtime structure, public keys, source connections, and governed
 bundle. Adding `--production` requires the target itself to declare
 `production` or `evidence-grade` assurance. The check does not resolve secrets,

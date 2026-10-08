@@ -16,8 +16,13 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use clap::{Args, Subcommand};
+use registry_evidence_authoring::formats::{
+    decode_authored, envelope_lines, read_authored, ACCESS_CLIENT, ACCESS_CLIENT_API_VERSION,
+    ACCESS_CLIENT_KIND, ACCESS_POLICY, ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND, QUESTION,
+};
 use registry_platform_crypto::{PrivateJwk, PublicJwk};
-use serde::{Deserialize, Serialize};
+use registry_platform_yaml::{FormatSpec, NodeValue};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{authoring, dev, keygen, OutputFormat};
@@ -139,7 +144,6 @@ enum ClientStatus {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClientDocument {
-    version: u8,
     client_id: String,
     status: ClientStatus,
     policies: Vec<String>,
@@ -158,7 +162,7 @@ pub(crate) struct ActiveClientExchange {
     pub(crate) kind: ActiveClientExchangeKind,
     pub(crate) bootstrap_scope: String,
     /// None means the issuer owner's default resource, not the Evidence resource.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) bootstrap_resource: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) source_issuer: Option<String>,
@@ -259,12 +263,16 @@ fn add_policy(args: &PolicyAddArgs, format: OutputFormat) -> Result<ExitCode> {
     }
     let path = directory.join(format!("{}.yaml", args.policy));
     let document = AccessPolicyDocument {
-        version: 1,
         id: args.policy.clone(),
         questions,
         task_grant: None,
     };
-    write_new_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
+    write_new_yaml_atomic(
+        &path,
+        &envelope_lines(ACCESS_POLICY_API_VERSION, ACCESS_POLICY_KIND),
+        &document,
+        PUBLIC_FILE_MODE,
+    )?;
     match format {
         OutputFormat::Human => println!(
             "Added access policy {} for {}.",
@@ -390,7 +398,6 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
     fs::remove_file(&public_key_path).context("removing staged public-key copy")?;
 
     let document = ClientDocument {
-        version: 1,
         client_id: args.client.clone(),
         status: ClientStatus::Active,
         policies: policy_ids,
@@ -405,7 +412,12 @@ fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
     // rolls the newly published private directory back.
     fs::rename(staging.path(), &private_client_path)
         .context("publishing private local client key")?;
-    if let Err(error) = write_new_yaml_atomic(&public_path, &document, PUBLIC_FILE_MODE) {
+    if let Err(error) = write_new_yaml_atomic(
+        &public_path,
+        &envelope_lines(ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND),
+        &document,
+        PUBLIC_FILE_MODE,
+    ) {
         let _ = fs::remove_dir_all(&private_client_path);
         return Err(error);
     }
@@ -532,7 +544,12 @@ fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCo
         }
     };
     document.status = ClientStatus::Revoked;
-    replace_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
+    replace_yaml_atomic(
+        &path,
+        &envelope_lines(ACCESS_CLIENT_API_VERSION, ACCESS_CLIENT_KIND),
+        &document,
+        PUBLIC_FILE_MODE,
+    )?;
     match format {
         OutputFormat::Human => match &removed {
             Some(removed) => println!(
@@ -701,12 +718,10 @@ fn load_policy_documents_if_present(
     let paths = yaml_paths_if_present(&directory, MAX_POLICIES, "access policies")?;
     let mut policies = BTreeMap::new();
     for path in paths {
-        let mut document: AccessPolicyDocument = read_yaml(&path, PUBLIC_FILE_MODE)?;
+        let mut document: AccessPolicyDocument =
+            read_yaml(&path, PUBLIC_FILE_MODE, &ACCESS_POLICY)?;
         if !registry_evidence_authoring::validate::validate_access_policy(&document).is_empty() {
             bail!("access policy does not satisfy the authored policy contract");
-        }
-        if document.version != 1 {
-            bail!("access policy version must be 1");
         }
         validate_identifier(&document.id, "policy")?;
         validate_filename_id(&path, &document.id, "access policy")?;
@@ -740,11 +755,18 @@ fn load_client_documents_if_present(project: &Path) -> Result<BTreeMap<String, C
     Ok(clients)
 }
 
+/// Read one local client document's text through the shared reader, as
+/// `evidencectl check` does: its envelope and every member, without the
+/// cross-file conditions a compile settles.
+pub(crate) fn check_client_document(
+    file: &str,
+    bytes: &[u8],
+) -> std::result::Result<registry_platform_yaml::Document, registry_platform_yaml::Report> {
+    decode_authored::<ClientDocument>(file, bytes, &ACCESS_CLIENT).map(|decoded| decoded.document)
+}
+
 fn read_client_document(path: &Path) -> Result<ClientDocument> {
-    let mut document: ClientDocument = read_yaml(path, PUBLIC_FILE_MODE)?;
-    if document.version != 1 {
-        bail!("client document version must be 1");
-    }
+    let mut document: ClientDocument = read_yaml(path, PUBLIC_FILE_MODE, &ACCESS_CLIENT)?;
     validate_identifier(&document.client_id, "client")?;
     validate_filename_id(path, &document.client_id, "client")?;
     document.policies =
@@ -811,8 +833,20 @@ fn validate_authored_question(project: &Path, question_id: &str) -> Result<()> {
     let directory = project.join("questions");
     validate_visible_directory(&directory, "questions")?;
     let path = directory.join(format!("{question_id}.yaml"));
-    let value: Value = read_yaml_any_mode(&path)?;
-    if value.get("id").and_then(Value::as_str) != Some(question_id) {
+    let text = read_bounded_file(
+        &path,
+        registry_evidence_authoring::layout::MAX_QUESTION_BYTES,
+        None,
+    )?;
+    let document = read_authored(&path.display().to_string(), text.as_bytes(), &QUESTION)?;
+    let written_id = document
+        .root()
+        .pointer("/id")
+        .and_then(|node| match &node.value {
+            NodeValue::String(text) => Some(text.text.as_str()),
+            _ => None,
+        });
+    if written_id != Some(question_id) {
         bail!("question id must match its questions/<id>.yaml filename");
     }
     Ok(())
@@ -868,14 +902,11 @@ fn validate_visible_directory(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path, mode: u32) -> Result<T> {
+/// Read one authored access document through the shared reader, which
+/// reports every problem it finds with its position and fix.
+fn read_yaml<T: DeserializeOwned>(path: &Path, mode: u32, format: &FormatSpec<'_>) -> Result<T> {
     let text = read_bounded_file(path, MAX_DOCUMENT_BYTES, Some(mode))?;
-    serde_norway::from_str(&text).with_context(|| format!("parsing {}", path.display()))
-}
-
-fn read_yaml_any_mode(path: &Path) -> Result<Value> {
-    let text = read_bounded_file(path, MAX_DOCUMENT_BYTES, None)?;
-    serde_norway::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    Ok(decode_authored::<T>(&path.display().to_string(), text.as_bytes(), format)?.value)
 }
 
 fn read_bounded_file(path: &Path, maximum: u64, required_mode: Option<u32>) -> Result<String> {
@@ -909,9 +940,18 @@ fn read_bounded_file(path: &Path, maximum: u64, required_mode: Option<u32>) -> R
     Ok(text)
 }
 
-fn write_new_yaml_atomic<T: Serialize>(path: &Path, value: &T, mode: u32) -> Result<()> {
+/// Write one access document: its envelope lines, then its members.
+fn write_new_yaml_atomic<T: Serialize>(
+    path: &Path,
+    envelope: &str,
+    value: &T,
+    mode: u32,
+) -> Result<()> {
     reject_existing(path)?;
-    let bytes = serde_norway::to_string(value).context("rendering access document")?;
+    let bytes = format!(
+        "{envelope}{}",
+        serde_norway::to_string(value).context("rendering access document")?
+    );
     let parent = path.parent().context("access document has no parent")?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".access-write-")
@@ -930,9 +970,17 @@ fn write_new_yaml_atomic<T: Serialize>(path: &Path, value: &T, mode: u32) -> Res
     Ok(())
 }
 
-fn replace_yaml_atomic<T: Serialize>(path: &Path, value: &T, mode: u32) -> Result<()> {
+fn replace_yaml_atomic<T: Serialize>(
+    path: &Path,
+    envelope: &str,
+    value: &T,
+    mode: u32,
+) -> Result<()> {
     validate_path_mode(path, false, mode)?;
-    let bytes = serde_norway::to_string(value).context("rendering access document")?;
+    let bytes = format!(
+        "{envelope}{}",
+        serde_norway::to_string(value).context("rendering access document")?
+    );
     let parent = path.parent().context("access document has no parent")?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".access-write-")

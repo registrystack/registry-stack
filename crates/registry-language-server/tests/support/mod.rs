@@ -240,7 +240,9 @@ paths:
 
 /// The question [`operation_question_project`] holds: the same adult-status question written in the
 /// compact form, so it names an operation instead of a source and projects its own facts.
-pub const OPERATION_QUESTION: &str = r#"id: adult-status
+pub const OPERATION_QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: adult-status
 question: Is the person at least 18 years old?
 purpose: fixture-eligibility
 subject:
@@ -263,7 +265,9 @@ disclosure:
   allow: [<|allow|>is_adult]
 "#;
 
-pub const QUESTION: &str = r#"id: <|id|>adult-status
+pub const QUESTION: &str = r#"apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
+id: <|id|>adult-status
 question: Is the person at least 18 years old?
 purpose: fixture-eligibility
 subject:
@@ -367,4 +371,6 @@ pub const FIXTURE: &str =
     "fixture: registry.evidence.acceptance.editor/v1\nsynthetic_only: true\ncases: []\n";
 
 pub const ACCESS_POLICY: &str =
-    "version: 1\nid: <|policy-id|>adult-checks\nquestions: [<|policy-question|>adult-status]\n";
+    "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
+     kind: EvidenceAccessPolicy\n\
+     id: <|policy-id|>adult-checks\nquestions: [<|policy-question|>adult-status]\n";

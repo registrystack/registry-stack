@@ -30,12 +30,16 @@ pub const ACCESS_POLICIES_DIRECTORY: &str = "policies";
 
 /// The largest OpenAPI description a project may carry.
 pub const MAX_OPENAPI_BYTES: u64 = 16 * 1024 * 1024;
+/// The largest document the shared configuration reader accepts. Every
+/// authored YAML format holds to the same bound, so a file of exactly this
+/// size is read and one byte more is refused by the reader itself.
+const MAX_AUTHORED_DOCUMENT_BYTES: u64 = registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64;
 /// The largest project marker document.
-pub const MAX_PROJECT_MARKER_BYTES: u64 = 4 * 1024;
+pub const MAX_PROJECT_MARKER_BYTES: u64 = MAX_AUTHORED_DOCUMENT_BYTES;
 /// The largest authored question document.
-pub const MAX_QUESTION_BYTES: u64 = 64 * 1024;
+pub const MAX_QUESTION_BYTES: u64 = MAX_AUTHORED_DOCUMENT_BYTES;
 /// The largest authored access policy document.
-pub const MAX_ACCESS_POLICY_BYTES: u64 = 64 * 1024;
+pub const MAX_ACCESS_POLICY_BYTES: u64 = MAX_AUTHORED_DOCUMENT_BYTES;
 /// The largest authored derivation program.
 pub const MAX_DERIVATION_BYTES: u64 = 64 * 1024;
 /// The largest selector, source, or schema document.

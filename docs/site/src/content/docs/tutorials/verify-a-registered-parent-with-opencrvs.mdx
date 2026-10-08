@@ -467,6 +467,8 @@ fields cannot reach either derivation.
 Create `questions/registered-parent.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: registered-parent
 question: Is the candidate registered as a parent of the child?
 purpose: relationship-check
@@ -553,6 +555,8 @@ source establishes at least one authenticated parent identifier.
 Create `questions/registered-parent-identifiers.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: registered-parent-identifiers
 question: Which national IDs are recorded for the child's parents?
 purpose: family-case-record

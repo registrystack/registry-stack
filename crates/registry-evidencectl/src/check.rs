@@ -3,6 +3,12 @@
 //! These commands are adapters around the owning authoring compiler and the
 //! runtime's bundle-only validator. They never execute a fixture, resolve a
 //! secret, inspect a target-host path, or contact a dependency.
+//!
+//! Every problem they find is a diagnostic in the shared reader's one shape,
+//! naming each file from the project and target paths as the command was
+//! given them. An error refuses the command; a warning leaves the project
+//! accepted but incomplete, unless `--deny-warnings` or `--production` makes
+//! it refuse too.
 
 use std::{
     collections::BTreeSet,
@@ -16,42 +22,57 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use jsonschema::{Draft, JSONSchema};
-use registry_evidence_authoring::{parse_project_marker, PROJECT_MARKER_FILE};
+use registry_evidence_authoring::{
+    formats::{check_access_policy, check_question, scan_authored, QUESTION_KIND},
+    layout::{
+        ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, DERIVATIONS_DIRECTORY, FIXTURES_DIRECTORY,
+        MAX_DERIVATION_BYTES, MAX_OPENAPI_BYTES, MAX_SOURCE_ARTIFACT_BYTES, OPENAPI_FILE,
+        QUESTIONS_DIRECTORY, SCHEMAS_DIRECTORY, SELECTORS_DIRECTORY, SOURCES_DIRECTORY,
+    },
+    parse_project_marker, PROJECT_MARKER_FILE,
+};
+use registry_platform_yaml::{Diagnostic, Document, Report, Severity, MAXIMUM_DOCUMENT_BYTES};
 use serde_json::{json, Value};
 
-use crate::{authoring, build, evidence_binary};
+use crate::{
+    authored::{self, Gathered},
+    authoring, build, evidence_binary,
+};
 
 const RUNTIME_SCHEMA: &str =
     include_str!("../../../products/evidence/contracts/runtime.schema.yaml");
 
+/// A check or explain that reached its verdict: the report it writes, and
+/// the diagnostics that report carries, for the human renderer.
 #[derive(Debug)]
-pub(crate) struct DeniedFindings(pub Vec<Value>);
-
-impl std::fmt::Display for DeniedFindings {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("the Evidence authoring findings were denied")
-    }
+pub(crate) struct Checked {
+    pub(crate) report: Value,
+    pub(crate) diagnostics: Report,
 }
-
-impl std::error::Error for DeniedFindings {}
 
 /// Validate an editable project, optionally joined to one explicit target.
 ///
 /// A project-only success proves authoring closure under the local compiler
 /// profile. Only a supplied target can produce a deployment-closure claim.
+/// A refusal is the [`Report`] of every problem found.
 pub(crate) fn check(
     project: &Path,
     target: Option<&Path>,
     production: bool,
-    deny_findings: bool,
-) -> Result<Value> {
-    Ok(check_and_capture_target(project, target, production, deny_findings)?.report)
+    deny_warnings: bool,
+) -> Result<Checked> {
+    let outcome = check_and_capture_target(project, target, production, deny_warnings)?;
+    Ok(Checked {
+        report: outcome.report,
+        diagnostics: outcome.diagnostics,
+    })
 }
 
 struct CheckOutcome {
     report: Value,
+    diagnostics: Report,
     project_snapshot: ProjectSnapshot,
     target_documents: Option<build::TargetDocuments>,
 }
@@ -60,212 +81,318 @@ fn check_and_capture_target(
     project: &Path,
     target: Option<&Path>,
     production: bool,
-    deny_findings: bool,
+    deny_warnings: bool,
 ) -> Result<CheckOutcome> {
     if production && target.is_none() {
-        return Err(DeniedFindings(vec![diagnostic(
-            "error",
+        return Err(Report::new(vec![Diagnostic::error(
             "evidence.target.required",
-            "command_arguments",
-            "--target",
+            "",
             "--production requires an explicit Evidence deployment target",
             "Pass --target TARGET naming production or evidence-grade governance.",
         )])
         .into());
     }
 
-    let project_snapshot = capture_project(project).map_err(|error| {
-        if is_operational(&error) {
-            error
-        } else {
-            unreadable_project(error, "check")
-        }
-    })?;
+    let project_snapshot =
+        capture_project(project).map_err(|error| refusal(error, project, project))?;
     let captured_project = project_snapshot.root();
-    let mut findings = project_identity_findings(captured_project)?;
-    let inventory = match inspect_project(captured_project) {
-        Ok(inventory) => Some(inventory),
-        Err(error) => {
-            if is_operational(&error) {
-                return Err(error);
-            }
-            let path = error
-                .chain()
-                .find_map(|cause| cause.downcast_ref::<InspectionDiagnostic>())
-                .map(|diagnostic| diagnostic.path.as_str())
-                .unwrap_or(".");
-            return Err(DeniedFindings(vec![diagnostic(
-                "error",
-                "evidence.authoring.unreadable",
-                "authoring_project",
-                path,
-                "the authored project contains an unreadable or malformed artifact",
-                "Correct the named project artifact, then run evidencectl check again.",
-            )])
-            .into());
-        }
-    };
-    if inventory
-        .as_ref()
-        .is_some_and(|inventory| inventory.questions.is_empty())
-    {
-        findings.push(diagnostic(
-            "finding",
+    let mut gathered = Gathered::default();
+    read_project_marker(captured_project, &mut gathered)?;
+    let inventory = inspect_project(captured_project, &mut gathered)?;
+    let mut found = gathered.report();
+    if found.has_errors() {
+        found.set_files_checked(project_snapshot.files);
+        return Err(in_project(found, captured_project, project).into());
+    }
+    if inventory.questions.is_empty() {
+        found.push(authored::file_diagnostic(
+            Severity::Warning,
             "evidence.question.missing",
-            "authoring_project",
+            None,
             "questions",
+            "",
             "the project has no authored questions",
             "Add at least one questions/<id>.yaml document and its declared assets.",
         ));
-    }
-    if let Some(inventory) = inventory.as_ref() {
-        match declared_asset_findings(captured_project, inventory) {
-            Ok(asset_findings) => findings.extend(asset_findings),
-            Err(error) if is_operational(&error) => return Err(error),
-            Err(error) => return Err(compiler_refusal(error, "authoring_project")),
-        }
-        if !inventory.questions.is_empty() {
-            if let Err(error) = authoring::validate_offline_local_access(captured_project) {
-                return Err(classify_compiler_error(error, "authoring_project"));
-            }
-        } else if inventory.local_access["policies"]
+        if inventory.local_access["policies"]
             .as_array()
             .is_some_and(|policies| !policies.is_empty())
         {
-            findings.push(diagnostic(
-                "finding",
+            found.push(authored::file_diagnostic(
+                Severity::Warning,
                 "evidence.access.questions-missing",
-                "local_access",
+                None,
                 "access/policies",
+                "",
                 "local access policies cannot be resolved until the project has questions",
                 "Add the questions named by each local access policy.",
             ));
         }
+    } else {
+        authoring::validate_offline_local_access(captured_project)
+            .map_err(|error| refusal(error, captured_project, project))?;
+    }
+    found.extend(declared_asset_findings(captured_project, &inventory)?);
+    let mut found = in_project(found, captured_project, project);
+    if found.has_errors() {
+        found.set_files_checked(project_snapshot.files);
+        return Err(found.into());
     }
 
     let mut target_documents = None;
     let mut assurance_profile = None;
     let mut package_digest = None;
     if let Some(target) = target {
-        match build::read_target_documents(target) {
-            Ok(documents) => {
-                assurance_profile = documents
-                    .governed_bundle
-                    .get("assuranceProfile")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                if let Err(error) = validate_runtime_structure(&documents.runtime) {
-                    return Err(DeniedFindings(vec![target_finding(target, error)]).into());
-                }
-                target_documents = Some(documents);
-            }
-            Err(error) => {
-                if is_operational(&error) {
-                    return Err(error);
-                }
-                return Err(DeniedFindings(vec![target_finding(target, error)]).into());
-            }
-        }
+        let documents =
+            build::read_target_documents(target).map_err(|error| target_refusal(error, target))?;
+        assurance_profile = documents
+            .governed_bundle
+            .get("assuranceProfile")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        validate_runtime_structure(&documents.runtime)
+            .map_err(|error| target_refusal(error, target))?;
         if production && assurance_profile.as_deref() == Some("local") {
-            findings.push(diagnostic(
-                "error",
-                "evidence.target.production-profile-required",
-                "deployment_target",
-                "governance.yaml:/assuranceProfile",
-                "--production refuses a target whose assuranceProfile is local",
-                "Select an explicit production or evidence-grade target; the command never upgrades a target profile.",
+            found.extend(in_target(
+                Report::new(vec![authored::file_diagnostic(
+                    Severity::Error,
+                    "evidence.target.production-profile-required",
+                    None,
+                    "governance.yaml",
+                    "/assuranceProfile",
+                    "--production refuses a target whose assuranceProfile is local",
+                    "Select an explicit production or evidence-grade target; the command never upgrades a target profile.",
+                )]),
+                target,
             ));
         }
+        target_documents = Some(documents);
     }
-    if findings.is_empty() {
-        let target_bound_sources = match authoring::target_bound_sources(captured_project) {
-            Ok(sources) => sources,
-            Err(error) => return Err(classify_compiler_error(error, "authoring_project")),
-        };
+    if found.is_empty() {
+        let target_bound_sources = authoring::target_bound_sources(captured_project)
+            .map_err(|error| refusal(error, captured_project, project))?;
         if target_documents.is_none() {
-            findings.extend(target_bound_sources.into_iter().map(|source| {
-                diagnostic(
-                    "finding",
-                    "evidence.target.source-connection-required",
-                    "authored_source",
-                    &format!("sources/{}.yaml:/connection", source.source_id),
-                    "the source connection can be resolved only against an explicit deployment target",
-                    "Pass --target TARGET naming governance that declares the source connection.",
-                )
-            }));
+            let unresolved = Report::new(
+                target_bound_sources
+                    .into_iter()
+                    .map(|source| {
+                        authored::file_diagnostic(
+                            Severity::Warning,
+                            "evidence.target.source-connection-required",
+                            None,
+                            &format!("sources/{}.yaml", source.source_id),
+                            "/connection",
+                            "the source connection can be resolved only against an explicit deployment target",
+                            "Pass --target TARGET naming governance that declares the source connection.",
+                        )
+                    })
+                    .collect(),
+            );
+            found.extend(in_project(unresolved, captured_project, project));
         }
-        if findings.is_empty() {
+        if found.is_empty() {
             let checked = match target_documents.as_ref() {
                 Some(documents) => check_with_target(captured_project, project, documents),
                 None => check_project_only(captured_project, project),
             };
-            match checked {
-                Ok(checked) => {
-                    package_digest = Some(checked.package_digest);
-                }
-                Err(error) => {
-                    return Err(classify_compiler_error(
-                        error,
-                        if target.is_some() {
-                            "deployment_target"
-                        } else {
-                            "authoring_project"
-                        },
-                    ));
-                }
-            }
+            let checked = checked
+                .map_err(|error| compile_refusal(error, captured_project, project, target))?;
+            package_digest = Some(checked.package_digest);
         }
     }
 
-    let complete = findings.is_empty();
-    let report = json!({
-        "ok": true,
-        "command": "check",
-        "project": project,
-        "target": target,
-        "status": if complete { "complete" } else { "incomplete" },
-        "proof": if complete && target.is_some() { "deployment-closure" } else { "authoring" },
-        "assuranceProfile": assurance_profile,
-        "packageDigest": package_digest,
-        "fixtureProof": false,
-        "findings": findings,
-        "diagnostics": [],
-        "offline": true,
-        "networkAccess": false,
-        "fixtureExecution": false,
-        "secretResolution": false,
-        "targetHostPathChecks": false,
-    });
-    let findings = report["findings"].as_array().cloned().unwrap_or_default();
-    if (production || deny_findings) && !findings.is_empty() {
-        return Err(DeniedFindings(findings).into());
+    found.set_files_checked(project_snapshot.files + target.map_or(0, |_| TARGET_DOCUMENTS));
+    if found.has_errors() || ((production || deny_warnings) && found.warning_count() > 0) {
+        return Err(found.into());
     }
+    let complete = found.is_empty();
+    let report = crate::report::success(
+        "check",
+        if complete { "complete" } else { "incomplete" },
+        json!({
+            "project": project,
+            "target": target,
+            "proof": if complete && target.is_some() { "deployment-closure" } else { "authoring" },
+            "assuranceProfile": assurance_profile,
+            "packageDigest": package_digest,
+            "fixtureProof": false,
+            "diagnostics": found.to_json_value(),
+            "offline": true,
+            "networkAccess": false,
+            "fixtureExecution": false,
+            "secretResolution": false,
+            "targetHostPathChecks": false,
+        }),
+    );
     Ok(CheckOutcome {
         report,
+        diagnostics: found,
         project_snapshot,
         target_documents,
     })
 }
 
-/// The one diagnostic a denied check or explain carries: the findings name
-/// each problem, and this names the next step.
-fn refused_diagnostic(command: &str) -> Value {
-    diagnostic(
-        "error",
-        &format!("evidencectl.{command}.refused"),
-        "project",
-        "$.findings",
-        format!("The selected project has findings that refuse {command}."),
-        &format!("Correct each entry under findings, then rerun evidencectl {command}."),
-    )
+/// The two target documents a check reads: governance and runtime.
+const TARGET_DOCUMENTS: usize = 2;
+
+/// Diagnostics about files inside the captured project, placed where each
+/// member is written and named from the project path as given.
+fn in_project(report: Report, captured: &Path, project: &Path) -> Report {
+    authored::rebase(authored::place(report, captured), project)
 }
 
-/// The report a denied check writes: the passing report's members, with the
-/// findings that refused it and nothing claimed.
+/// The refusal a project read raised, as the report of every problem it
+/// found, each file named from `project`. An operational failure is returned
+/// unchanged.
+fn refusal(error: anyhow::Error, captured: &Path, project: &Path) -> anyhow::Error {
+    if let Some(inspection) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<InspectionDiagnostic>())
+    {
+        return Report::new(vec![inspection.diagnostic_in(project)]).into();
+    }
+    if is_operational(&error) {
+        return error;
+    }
+    authored::project_refusal(error, captured, project)
+}
+
+/// The refusal the offline compiler or the runtime's bundle check raised.
+/// A problem the compiler names in an authored or target file is reported
+/// there; any other refusal names the project, with the next step.
+fn compile_refusal(
+    error: anyhow::Error,
+    captured: &Path,
+    project: &Path,
+    target: Option<&Path>,
+) -> anyhow::Error {
+    if let Some(target) = target {
+        if error.chain().any(|cause| {
+            cause
+                .downcast_ref::<build::TargetDocumentDiagnostic>()
+                .is_some()
+        }) {
+            return target_refusal(error, target);
+        }
+    }
+    if is_operational(&error)
+        || authored::report_in(&error).is_some()
+        || error.chain().any(|cause| {
+            cause
+                .downcast_ref::<authoring::AuthoredDiagnostic>()
+                .is_some()
+        })
+    {
+        return refusal(error, captured, project);
+    }
+    Report::new(vec![authored::file_diagnostic(
+        Severity::Error,
+        "evidence.offline-check.refused",
+        None,
+        &project.to_string_lossy(),
+        "",
+        "offline validation refused the authored configuration",
+        "Run evidencectl test on the project for the runtime's own account, correct what it names, then rerun evidencectl check.",
+    )])
+    .into()
+}
+
+/// Diagnostics about a target's files, placed where each member is written
+/// and named from the target path as given.
+fn in_target(report: Report, target: &Path) -> Report {
+    authored::rebase(authored::place(report, target), target)
+}
+
+/// The refusal reading or checking a target raised, as a report naming the
+/// target's files from the target path as given. An operational failure is
+/// returned unchanged.
+fn target_refusal(error: anyhow::Error, target: &Path) -> anyhow::Error {
+    const ACTION: &str =
+        "Correct the target governance, runtime structure, public keys, or source connections, then retry.";
+    let diagnostic = if let Some(report) = authored::report_in(&error) {
+        return authored::rebase(report.clone(), target).into();
+    } else if let Some(runtime) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<RuntimeStructureDiagnostic>())
+    {
+        authored::file_diagnostic(
+            Severity::Error,
+            "evidence.target.runtime-structure",
+            None,
+            "runtime.yaml",
+            &runtime.pointer,
+            &runtime.to_string(),
+            ACTION,
+        )
+    } else if let Some(document) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<build::TargetDocumentDiagnostic>())
+    {
+        if document.code == "evidence.package.review-marker" {
+            // The marker is in a file the compile generated, named by its
+            // path inside the bundle; no target file holds it.
+            return Report::new(vec![authored::file_diagnostic(
+                Severity::Error,
+                document.code,
+                None,
+                &document.path,
+                "",
+                &document.message,
+                "Resolve the review marker in the authored file this bundle file is compiled from, then check the project again.",
+            )])
+            .into();
+        }
+        authored::located(
+            Severity::Error,
+            document.code,
+            None,
+            &document.path,
+            &document.message,
+            target_action(document.code),
+        )
+    } else if is_operational(&error) {
+        return error;
+    } else {
+        authored::file_diagnostic(
+            Severity::Error,
+            "evidence.target.incomplete",
+            None,
+            "",
+            "",
+            "the deployment target does not match the closed offline validation contract",
+            ACTION,
+        )
+    };
+    in_target(Report::new(vec![diagnostic]), target).into()
+}
+
+/// The change that clears a refusal about a deployment target, by its code.
+fn target_action(code: &str) -> &'static str {
+    match code {
+        "evidence.target.assurance-profile" => {
+            "Set assuranceProfile in the target's governance.yaml to local, production, or evidence-grade."
+        }
+        "evidence.target.authority-profiles" => {
+            "Declare at least one authority profile under authorityProfiles in the target's governance.yaml."
+        }
+        "evidence.package.production-profile-required" => {
+            "Package against a target whose governance.yaml sets assuranceProfile to production or evidence-grade."
+        }
+        "evidence.package.root-unstable" => {
+            "Set package.root in the target's runtime.yaml to a stable installed package path outside the package output directory."
+        }
+        _ => {
+            "Correct the target governance, runtime structure, public keys, or source connections, then retry."
+        }
+    }
+}
+
+/// The report a refused check writes: the passing report's members, with
+/// nothing claimed, and the diagnostics that refused it.
 pub(crate) fn refused_check_report(
     project: &Path,
     target: Option<&Path>,
-    findings: Vec<Value>,
+    diagnostics: &Report,
 ) -> Value {
     crate::report::refused(
         "check",
@@ -277,8 +404,7 @@ pub(crate) fn refused_check_report(
             "assuranceProfile": null,
             "packageDigest": null,
             "fixtureProof": false,
-            "findings": findings,
-            "diagnostics": [refused_diagnostic("check")],
+            "diagnostics": diagnostics.to_json_value(),
             "offline": true,
             "networkAccess": false,
             "fixtureExecution": false,
@@ -288,12 +414,12 @@ pub(crate) fn refused_check_report(
     )
 }
 
-/// The report a denied explain writes: the passing report's members, with
-/// the findings that refused it and an empty inventory.
+/// The report a refused explain writes: the passing report's members, with
+/// an empty inventory and the diagnostics that refused it.
 pub(crate) fn refused_explain_report(
     project: &Path,
     target: Option<&Path>,
-    findings: Vec<Value>,
+    diagnostics: &Report,
 ) -> Value {
     crate::report::refused(
         "explain",
@@ -303,8 +429,7 @@ pub(crate) fn refused_explain_report(
             "target": target,
             "proof": "none",
             "packageDigest": null,
-            "findings": findings,
-            "diagnostics": [refused_diagnostic("explain")],
+            "diagnostics": diagnostics.to_json_value(),
             "questions": [],
             "sources": [],
             "selectors": [],
@@ -319,44 +444,34 @@ pub(crate) fn refused_explain_report(
 }
 
 /// Explain authored inventory and, when supplied, target-owned governance.
-pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Value> {
+pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Checked> {
     let checked = check_and_capture_target(project, target, false, false)?;
     explain_captured(project, target, checked)
 }
 
-fn explain_captured(project: &Path, target: Option<&Path>, checked: CheckOutcome) -> Result<Value> {
+fn explain_captured(
+    project: &Path,
+    target: Option<&Path>,
+    checked: CheckOutcome,
+) -> Result<Checked> {
     let validation = checked.report;
     let captured_project = checked.project_snapshot.root();
-    let mut inventory = inspect_project(captured_project).map_err(|error| {
-        if is_operational(&error) {
-            error
-        } else {
-            let path = error
-                .chain()
-                .find_map(|cause| cause.downcast_ref::<InspectionDiagnostic>())
-                .map(|diagnostic| diagnostic.path.as_str())
-                .unwrap_or(".");
-            DeniedFindings(vec![diagnostic(
-                "error",
-                "evidence.authoring.unreadable",
-                "authoring_project",
-                path,
-                "the authored project contains an unreadable or malformed artifact",
-                "Correct the named project artifact, then run evidencectl explain again.",
-            )])
-            .into()
-        }
-    })?;
+    let mut gathered = Gathered::default();
+    let mut inventory = inspect_project(captured_project, &mut gathered)?;
+    gathered
+        .checkpoint()
+        .map_err(|error| refusal(error, captured_project, project))?;
     let policies = if inventory.questions.is_empty() {
         if inventory.local_access["policies"]
             .as_array()
             .is_some_and(|policies| !policies.is_empty())
         {
-            return Err(DeniedFindings(vec![diagnostic(
-                "error",
+            return Err(Report::new(vec![authored::file_diagnostic(
+                Severity::Error,
                 "evidence.access.questions-missing",
-                "local_access",
-                "access/policies",
+                None,
+                &project.join("access/policies").to_string_lossy(),
+                "",
                 "local access policies cannot be resolved until the project has questions",
                 "Add the questions named by each local access policy.",
             )])
@@ -365,7 +480,7 @@ fn explain_captured(project: &Path, target: Option<&Path>, checked: CheckOutcome
         Vec::new()
     } else {
         authoring::validate_offline_local_access(captured_project)
-            .map_err(|error| classify_compiler_error(error, "authoring_project"))?
+            .map_err(|error| refusal(error, captured_project, project))?
     };
     inventory.local_access = json!({
         "mode": if policies.is_empty() { "implicit-local-caller" } else { "explicit-policies" },
@@ -380,33 +495,64 @@ fn explain_captured(project: &Path, target: Option<&Path>, checked: CheckOutcome
         .target_documents
         .as_ref()
         .map(|documents| explain_governance(&documents.governed_bundle));
-    Ok(json!({
-        "ok": true,
-        "command": "explain",
-        "project": project,
-        "target": target,
-        "status": validation["status"],
-        "proof": validation["proof"],
-        "packageDigest": validation["packageDigest"],
-        "findings": validation["findings"],
-        "diagnostics": [],
-        "questions": inventory.questions,
-        "sources": inventory.sources,
-        "selectors": inventory.selectors,
-        "derivations": inventory.derivations,
-        "localAccess": inventory.local_access,
-        "targetGovernance": target_governance,
-        "offline": true,
-        "networkAccess": false,
-        "secretResolution": false,
-    }))
+    let report = crate::report::success(
+        "explain",
+        validation["status"].as_str().unwrap_or("complete"),
+        json!({
+            "project": project,
+            "target": target,
+            "proof": validation["proof"],
+            "packageDigest": validation["packageDigest"],
+            "diagnostics": validation["diagnostics"],
+            "questions": inventory.questions,
+            "sources": inventory.sources,
+            "selectors": inventory.selectors,
+            "derivations": inventory.derivations,
+            "localAccess": inventory.local_access,
+            "targetGovernance": target_governance,
+            "offline": true,
+            "networkAccess": false,
+            "secretResolution": false,
+        }),
+    );
+    Ok(Checked {
+        report,
+        diagnostics: checked.diagnostics,
+    })
 }
 
-/// Render the semantic parts of check and explain reports for the CLI's human
-/// output path. JSON rendering remains owned by the common CLI boundary.
-pub(crate) fn render_human(report: &Value, out: &mut dyn io::Write) -> io::Result<()> {
+/// Render a check or explain report for the CLI's human output path: what
+/// the command concluded, then every diagnostic, position first, and the
+/// summary line. JSON rendering remains owned by the common CLI boundary.
+pub(crate) fn render_human(
+    report: &Value,
+    diagnostics: &Report,
+    out: &mut dyn io::Write,
+) -> io::Result<()> {
+    let refused = report["status"].as_str() == Some("refused");
     match report["command"].as_str() {
-        Some("check") => {
+        Some("explain") => {
+            writeln!(out, "Evidence project explanation")?;
+            writeln!(
+                out,
+                "Project: {}",
+                report["project"].as_str().unwrap_or(".")
+            )?;
+            writeln!(
+                out,
+                "Status: {}",
+                report["status"].as_str().unwrap_or("unknown")
+            )?;
+            writeln!(
+                out,
+                "Proof: {}",
+                report["proof"].as_str().unwrap_or("authoring")
+            )?;
+            if !refused {
+                render_inventory(report, out)?;
+            }
+        }
+        _ => {
             writeln!(
                 out,
                 "Evidence project check: {}",
@@ -428,115 +574,80 @@ pub(crate) fn render_human(report: &Value, out: &mut dyn io::Write) -> io::Resul
             if let Some(profile) = report["assuranceProfile"].as_str() {
                 writeln!(out, "Assurance profile: {profile}")?;
             }
-            render_findings(report, out)?;
         }
-        Some("explain") => {
-            writeln!(out, "Evidence project explanation")?;
-            writeln!(
-                out,
-                "Project: {}",
-                report["project"].as_str().unwrap_or(".")
-            )?;
-            writeln!(
-                out,
-                "Status: {}",
-                report["status"].as_str().unwrap_or("unknown")
-            )?;
-            writeln!(
-                out,
-                "Proof: {}",
-                report["proof"].as_str().unwrap_or("authoring")
-            )?;
-            render_findings(report, out)?;
-            writeln!(out, "Questions:")?;
-            for item in report["questions"].as_array().into_iter().flatten() {
-                writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
-                write_optional(out, "source", &item["source"])?;
-                write_list(out, "selectors", &item["selectors"])?;
-                write_list(out, "selector profiles", &item["selectorProfiles"])?;
-                write_optional(out, "derivation", &item["derivation"])?;
-                write_list(out, "answers", &item["answers"])?;
-                write_list(out, "response formats", &item["responseFormats"])?;
-            }
-            writeln!(out, "Sources:")?;
-            for item in report["sources"].as_array().into_iter().flatten() {
-                writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
-                write_optional(out, "transport", &item["transport"])?;
-                write_optional(out, "posture", &item["posture"])?;
-                write_optional(out, "connection", &item["connectionRef"])?;
-                write_list(out, "references", &item["references"])?;
-            }
-            writeln!(out, "Selectors:")?;
-            for item in report["selectors"].as_array().into_iter().flatten() {
-                writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
-                write_list(out, "fields", &item["fields"])?;
-            }
-            writeln!(out, "Derivations:")?;
-            for item in report["derivations"].as_array().into_iter().flatten() {
-                writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
-                write_optional(out, "path", &item["path"])?;
-            }
-            writeln!(out, "Local access:")?;
-            write_optional(out, "mode", &report["localAccess"]["mode"])?;
-            for policy in report["localAccess"]["policies"]
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
-                writeln!(
-                    out,
-                    "  policy {}",
-                    policy["id"].as_str().unwrap_or("unknown")
-                )?;
-                write_list(out, "questions", &policy["questions"])?;
-            }
-            for client in report["localAccess"]["clients"]
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
-                writeln!(
-                    out,
-                    "  client {}",
-                    client["id"].as_str().unwrap_or("unknown")
-                )?;
-            }
-            if let Some(governance) = report
-                .get("targetGovernance")
-                .filter(|value| !value.is_null())
-            {
-                writeln!(
-                    out,
-                    "Target assurance profile: {}",
-                    governance["assuranceProfile"].as_str().unwrap_or("unknown")
-                )?;
-                write_optional(out, "service", &governance["serviceId"])?;
-                write_optional(out, "issuer", &governance["issuer"])?;
-                write_list(out, "authority profiles", &governance["authorityProfiles"])?;
-                write_list(out, "source connections", &governance["sourceConnections"])?;
-                write_list(out, "response formats", &governance["responseFormats"])?;
-                write_optional(out, "active public key", &governance["activePublicKeyFile"])?;
-            }
-        }
-        _ => writeln!(out, "Evidence command completed.")?,
     }
-    Ok(())
+    write!(out, "{}", diagnostics.render_human())
 }
 
-fn render_findings(report: &Value, out: &mut dyn io::Write) -> io::Result<()> {
-    for finding in report["findings"].as_array().into_iter().flatten() {
+fn render_inventory(report: &Value, out: &mut dyn io::Write) -> io::Result<()> {
+    writeln!(out, "Questions:")?;
+    for item in report["questions"].as_array().into_iter().flatten() {
+        writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
+        write_optional(out, "source", &item["source"])?;
+        write_list(out, "selectors", &item["selectors"])?;
+        write_list(out, "selector profiles", &item["selectorProfiles"])?;
+        write_optional(out, "derivation", &item["derivation"])?;
+        write_list(out, "answers", &item["answers"])?;
+        write_list(out, "response formats", &item["responseFormats"])?;
+    }
+    writeln!(out, "Sources:")?;
+    for item in report["sources"].as_array().into_iter().flatten() {
+        writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
+        write_optional(out, "transport", &item["transport"])?;
+        write_optional(out, "posture", &item["posture"])?;
+        write_optional(out, "connection", &item["connectionRef"])?;
+        write_list(out, "references", &item["references"])?;
+    }
+    writeln!(out, "Selectors:")?;
+    for item in report["selectors"].as_array().into_iter().flatten() {
+        writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
+        write_list(out, "fields", &item["fields"])?;
+    }
+    writeln!(out, "Derivations:")?;
+    for item in report["derivations"].as_array().into_iter().flatten() {
+        writeln!(out, "  {}", item["id"].as_str().unwrap_or("unknown"))?;
+        write_optional(out, "path", &item["path"])?;
+    }
+    writeln!(out, "Local access:")?;
+    write_optional(out, "mode", &report["localAccess"]["mode"])?;
+    for policy in report["localAccess"]["policies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
         writeln!(
             out,
-            "{}[{}] {} {}: {}",
-            finding["severity"].as_str().unwrap_or("finding"),
-            finding["code"].as_str().unwrap_or("evidence.finding"),
-            finding["artifact"].as_str().unwrap_or("authoring_project"),
-            finding["path"].as_str().unwrap_or("."),
-            finding["message"].as_str().unwrap_or("review required"),
+            "  policy {}",
+            policy["id"].as_str().unwrap_or("unknown")
         )?;
-        if let Some(action) = finding["suggestedAction"].as_str() {
-            writeln!(out, "  next: {action}")?;
-        }
+        write_list(out, "questions", &policy["questions"])?;
+    }
+    for client in report["localAccess"]["clients"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        writeln!(
+            out,
+            "  client {}",
+            client["id"].as_str().unwrap_or("unknown")
+        )?;
+    }
+    if let Some(governance) = report
+        .get("targetGovernance")
+        .filter(|value| !value.is_null())
+    {
+        writeln!(
+            out,
+            "Target assurance profile: {}",
+            governance["assuranceProfile"].as_str().unwrap_or("unknown")
+        )?;
+        write_optional(out, "service", &governance["serviceId"])?;
+        write_optional(out, "issuer", &governance["issuer"])?;
+        write_list(out, "authority profiles", &governance["authorityProfiles"])?;
+        write_list(out, "source connections", &governance["sourceConnections"])?;
+        write_list(out, "response formats", &governance["responseFormats"])?;
+        write_optional(out, "active public key", &governance["activePublicKeyFile"])?;
     }
     Ok(())
 }
@@ -608,111 +719,46 @@ fn check_with_target(
     })
 }
 
-fn target_finding(target: &Path, error: anyhow::Error) -> Value {
-    let runtime = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<RuntimeStructureDiagnostic>());
-    let target_document = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<build::TargetDocumentDiagnostic>());
-    let path = runtime
-        .map(|diagnostic| diagnostic.path.clone())
-        .or_else(|| target_document.map(|diagnostic| diagnostic.path.clone()))
-        .unwrap_or_else(|| target.to_string_lossy().into_owned());
-    let code = target_document
-        .map(|diagnostic| diagnostic.code.to_owned())
-        .unwrap_or_else(|| "evidence.target.incomplete".to_owned());
-    let message = runtime
-        .map(|diagnostic| diagnostic.to_string())
-        .or_else(|| target_document.map(|diagnostic| diagnostic.message.to_owned()))
-        .unwrap_or_else(|| {
-            "the deployment target does not match the closed offline validation contract".to_owned()
-        });
-    diagnostic(
-        "error",
-        &code,
-        "deployment_target",
-        &path,
-        message,
-        "Correct the target governance, runtime structure, public keys, or source connections, then retry.",
-    )
-}
-
-fn compiler_refusal(error: anyhow::Error, artifact: &str) -> anyhow::Error {
-    let authored = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<authoring::AuthoredDiagnostic>());
-    let target_document = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<build::TargetDocumentDiagnostic>());
-    let path = authored
-        .map(|diagnostic| diagnostic.path.clone())
-        .or_else(|| target_document.map(|diagnostic| diagnostic.path.clone()))
-        .unwrap_or_else(|| ".".to_owned());
-    let code = authored
-        .map(|diagnostic| diagnostic.code.to_owned())
-        .or_else(|| target_document.map(|diagnostic| diagnostic.code.to_owned()))
-        .unwrap_or_else(|| "evidence.offline-check.refused".to_owned());
-    let message = authored
-        .map(|diagnostic| diagnostic.message.clone())
-        .or_else(|| target_document.map(|diagnostic| diagnostic.message.clone()))
-        .unwrap_or_else(|| "offline validation refused the authored configuration".to_owned());
-    DeniedFindings(vec![diagnostic(
-        "error",
-        &code,
-        artifact,
-        &path,
-        message,
-        "Correct the named authored or target field, then rerun evidencectl check.",
-    )])
-    .into()
-}
-
-fn classify_compiler_error(error: anyhow::Error, artifact: &str) -> anyhow::Error {
-    if is_operational(&error) {
-        error
-    } else {
-        compiler_refusal(error, artifact)
-    }
-}
-
 fn is_operational(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.downcast_ref::<io::Error>().is_some())
 }
 
+/// Hold a target's runtime document to the published runtime contract. The
+/// document is read through the shared YAML subset; its own reader decides
+/// everything else about it when the runtime starts.
 fn validate_runtime_structure(bytes: &[u8]) -> Result<()> {
-    let runtime: Value =
-        serde_norway::from_slice(bytes).map_err(|_| RuntimeStructureDiagnostic {
-            path: "runtime.yaml".to_owned(),
-            rules: vec!["the document is not readable YAML or JSON".to_owned()],
-        })?;
-    let schema: Value = serde_norway::from_str(RUNTIME_SCHEMA)
-        .context("the embedded Evidence runtime schema is invalid")?;
+    let runtime = registry_platform_yaml::Reader::new("runtime.yaml")
+        .scan(bytes)
+        .map_err(anyhow::Error::from)?
+        .map_or(Value::Null, |node| node.to_json_value());
+    let schema = authored::embedded_document("Evidence runtime schema", RUNTIME_SCHEMA)?;
     let validator = JSONSchema::options()
         .with_draft(Draft::Draft202012)
         .should_validate_formats(true)
         .compile(&schema)
         .map_err(|_| anyhow::anyhow!("the embedded Evidence runtime schema could not compile"))?;
     if let Err(errors) = validator.validate(&runtime) {
-        let mut messages = errors
+        let mut violations = errors
             .take(8)
             .map(|error| {
-                format!(
-                    "{} violates rule {}",
-                    error.instance_path, error.schema_path
+                (
+                    error.instance_path.to_string(),
+                    format!(
+                        "{} violates rule {}",
+                        error.instance_path, error.schema_path
+                    ),
                 )
             })
             .collect::<Vec<_>>();
-        messages.sort();
-        let path = messages
-            .first()
-            .and_then(|message| message.split_once(" violates rule ").map(|(path, _)| path))
-            .unwrap_or(".");
+        violations.sort();
         return Err(RuntimeStructureDiagnostic {
-            path: format!("runtime.yaml:{path}"),
-            rules: messages,
+            pointer: violations
+                .first()
+                .map(|(pointer, _)| pointer.clone())
+                .unwrap_or_default(),
+            rules: violations.into_iter().map(|(_, rule)| rule).collect(),
         }
         .into());
     }
@@ -721,7 +767,7 @@ fn validate_runtime_structure(bytes: &[u8]) -> Result<()> {
 
 #[derive(Debug)]
 struct RuntimeStructureDiagnostic {
-    path: String,
+    pointer: String,
     rules: Vec<String>,
 }
 
@@ -741,6 +787,8 @@ struct ProjectSnapshot {
     _temporary: tempfile::TempDir,
     root: PathBuf,
     directories: Vec<PathBuf>,
+    /// The plain files captured, each of which the check reads.
+    files: usize,
 }
 
 impl ProjectSnapshot {
@@ -757,11 +805,34 @@ impl Drop for ProjectSnapshot {
     }
 }
 
+/// How much of one captured file the snapshot keeps.
+#[derive(Clone, Copy)]
+enum Bound {
+    /// A file the shared reader reads: kept up to one byte past the reader's
+    /// document limit, so an oversized document is refused by the reader,
+    /// with `yaml.too-large`, like every other configuration file.
+    ForReader,
+    /// Any other project file, refused above this many bytes.
+    Refuse(u64),
+}
+
+/// The snapshot being captured: its root, every directory created under it,
+/// and the number of plain files copied.
+struct Capture {
+    root: PathBuf,
+    directories: Vec<PathBuf>,
+    files: usize,
+}
+
 fn capture_project(project: &Path) -> Result<ProjectSnapshot> {
     let metadata = fs::symlink_metadata(project)
         .with_context(|| format!("inspecting project root {}", project.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        bail!("project root must be a plain directory");
+        return Err(InspectionDiagnostic {
+            path: String::new(),
+            condition: Inspection::NotDirectory,
+        }
+        .into());
     }
     let temporary_root = std::env::temp_dir()
         .canonicalize()
@@ -788,48 +859,56 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
         .mode(0o700)
         .create(&root)
         .context("creating private project snapshot root")?;
-    let mut directories = vec![root.clone()];
+    let mut capture = Capture {
+        directories: vec![root.clone()],
+        root,
+        files: 0,
+    };
 
-    for (relative, maximum) in [
-        (PROJECT_MARKER_FILE, authoring::MAX_PROJECT_MARKER_BYTES),
-        (authoring::OPENAPI_FILE, authoring::MAX_OPENAPI_BYTES),
+    for (relative, bound) in [
+        (PROJECT_MARKER_FILE, Bound::ForReader),
+        (OPENAPI_FILE, Bound::Refuse(MAX_OPENAPI_BYTES)),
     ] {
         capture_snapshot_entry_at(
             &project_descriptor,
-            &root,
+            &mut capture,
             OsStr::new(relative),
             Path::new(relative),
-            maximum,
-            &mut directories,
+            bound,
         )?;
     }
-    for (relative, maximum) in [
-        ("questions", authoring::MAX_QUESTION_BYTES),
-        ("sources", authoring::MAX_SOURCE_ARTIFACT_BYTES),
-        ("selectors", authoring::MAX_SOURCE_ARTIFACT_BYTES),
-        ("derivations", authoring::MAX_DERIVATION_BYTES),
-        ("schemas", authoring::MAX_SOURCE_ARTIFACT_BYTES),
-        ("fixtures", authoring::MAX_SOURCE_ARTIFACT_BYTES),
-        ("adapters", authoring::MAX_SOURCE_ARTIFACT_BYTES),
-        ("queries", authoring::MAX_SOURCE_ARTIFACT_BYTES),
-        ("codelists", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+    for (relative, bound) in [
+        (QUESTIONS_DIRECTORY, Bound::ForReader),
+        (SOURCES_DIRECTORY, Bound::ForReader),
+        (SELECTORS_DIRECTORY, Bound::ForReader),
+        (DERIVATIONS_DIRECTORY, Bound::Refuse(MAX_DERIVATION_BYTES)),
+        (SCHEMAS_DIRECTORY, Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
+        (FIXTURES_DIRECTORY, Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
+        ("adapters", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
+        ("queries", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
+        ("codelists", Bound::Refuse(MAX_SOURCE_ARTIFACT_BYTES)),
     ] {
         capture_flat_directory_at(
             &project_descriptor,
-            &root,
+            &mut capture,
             OsStr::new(relative),
             Path::new(relative),
-            maximum,
-            &mut directories,
+            bound,
         )?;
     }
-    capture_access(&project_descriptor, &root, &mut directories)?;
+    capture_access(&project_descriptor, &mut capture)?;
 
+    let Capture {
+        root,
+        mut directories,
+        files,
+    } = capture;
     directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     let snapshot = ProjectSnapshot {
         _temporary: temporary,
         root,
         directories,
+        files,
     };
     for directory in &snapshot.directories {
         fs::set_permissions(directory, fs::Permissions::from_mode(0o500)).with_context(|| {
@@ -839,59 +918,48 @@ fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSn
     Ok(snapshot)
 }
 
-fn capture_access(
-    project: &rustix::fd::OwnedFd,
-    snapshot: &Path,
-    directories: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let relative = Path::new("access");
-    let Some(access) = open_snapshot_directory(project, OsStr::new("access"), relative)? else {
+fn capture_access(project: &rustix::fd::OwnedFd, capture: &mut Capture) -> Result<()> {
+    let relative = Path::new(ACCESS_DIRECTORY);
+    let Some(access) = open_snapshot_directory(project, OsStr::new(ACCESS_DIRECTORY), relative)?
+    else {
         return Ok(());
     };
-    let destination = snapshot.join(relative);
+    let destination = capture.root.join(relative);
     fs::DirBuilder::new().mode(0o700).create(&destination)?;
-    directories.push(destination);
-    capture_flat_directory_at(
-        &access,
-        snapshot,
-        OsStr::new("policies"),
-        Path::new("access/policies"),
-        authoring::MAX_ACCESS_POLICY_BYTES,
-        directories,
-    )?;
-    capture_flat_directory_at(
-        &access,
-        snapshot,
-        OsStr::new("clients"),
-        Path::new("access/clients"),
-        authoring::MAX_SOURCE_ARTIFACT_BYTES,
-        directories,
-    )
+    capture.directories.push(destination);
+    for name in [ACCESS_POLICIES_DIRECTORY, "clients"] {
+        capture_flat_directory_at(
+            &access,
+            capture,
+            OsStr::new(name),
+            &relative.join(name),
+            Bound::ForReader,
+        )?;
+    }
+    Ok(())
 }
 
 fn capture_flat_directory_at(
     parent: &rustix::fd::OwnedFd,
-    snapshot: &Path,
+    capture: &mut Capture,
     name: &OsStr,
     relative: &Path,
-    maximum: u64,
-    directories: &mut Vec<PathBuf>,
+    bound: Bound,
 ) -> Result<()> {
     let Some(directory) = open_snapshot_directory(parent, name, relative)? else {
         return Ok(());
     };
-    let destination = snapshot.join(relative);
+    let destination = capture.root.join(relative);
     fs::DirBuilder::new().mode(0o700).create(&destination)?;
-    directories.push(destination);
-    capture_directory_contents(&directory, snapshot, relative, maximum, directories)
+    capture.directories.push(destination);
+    capture_directory_contents(&directory, capture, relative, bound)
 }
 
 fn capture_directory_contents(
     directory: &rustix::fd::OwnedFd,
-    snapshot: &Path,
+    capture: &mut Capture,
     relative: &Path,
-    maximum: u64,
-    directories: &mut Vec<PathBuf>,
+    bound: Bound,
 ) -> Result<()> {
     let mut entries = rustix::fs::Dir::read_from(directory)
         .map_err(io::Error::from)?
@@ -905,14 +973,7 @@ fn capture_directory_contents(
     entries.sort();
     for name in entries {
         let entry_relative = relative.join(&name);
-        capture_snapshot_entry_at(
-            directory,
-            snapshot,
-            &name,
-            &entry_relative,
-            maximum,
-            directories,
-        )?;
+        capture_snapshot_entry_at(directory, capture, &name, &entry_relative, bound)?;
     }
     Ok(())
 }
@@ -932,10 +993,7 @@ fn open_snapshot_directory(
         }
     };
     if !FileType::from_raw_mode(metadata.st_mode).is_dir() {
-        return Err(InspectionDiagnostic {
-            path: relative.to_string_lossy().into_owned(),
-        }
-        .into());
+        return Err(InspectionDiagnostic::at(relative, Inspection::NotPlain).into());
     }
 
     match rustix::fs::openat(
@@ -955,10 +1013,7 @@ fn snapshot_open_error(
     input_kind: &str,
 ) -> anyhow::Error {
     if snapshot_open_race(error) {
-        InspectionDiagnostic {
-            path: relative.to_string_lossy().into_owned(),
-        }
-        .into()
+        InspectionDiagnostic::at(relative, Inspection::Changed).into()
     } else {
         anyhow::Error::new(io::Error::from(error)).context(format!(
             "opening project snapshot {input_kind} {}",
@@ -976,11 +1031,10 @@ fn snapshot_open_race(error: rustix::io::Errno) -> bool {
 
 fn capture_snapshot_entry_at(
     parent: &rustix::fd::OwnedFd,
-    snapshot: &Path,
+    capture: &mut Capture,
     name: &OsStr,
     relative: &Path,
-    maximum: u64,
-    directories: &mut Vec<PathBuf>,
+    bound: Bound,
 ) -> Result<()> {
     use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 
@@ -991,14 +1045,14 @@ fn capture_snapshot_entry_at(
             return Err(io::Error::from(error)).context("inspecting project snapshot input")
         }
     };
-    let destination = snapshot.join(relative);
+    let destination = capture.root.join(relative);
     let file_type = FileType::from_raw_mode(metadata.st_mode);
     if file_type.is_symlink() {
         let target = rustix::fs::readlinkat(parent, name, Vec::new()).map_err(io::Error::from)?;
         symlink(OsStr::from_bytes(target.to_bytes()), &destination)?;
     } else if file_type.is_dir() {
         fs::DirBuilder::new().mode(0o700).create(&destination)?;
-        directories.push(destination);
+        capture.directories.push(destination);
     } else if file_type.is_file() {
         let descriptor = match rustix::fs::openat(
             parent,
@@ -1009,76 +1063,51 @@ fn capture_snapshot_entry_at(
             Ok(descriptor) => descriptor,
             Err(error) => return Err(snapshot_open_error(error, relative, "input")),
         };
-        let bytes = match read_bounded_descriptor(descriptor, maximum) {
-            Ok(bytes) => bytes,
-            Err(error) if is_operational(&error) => return Err(error),
-            Err(_) => {
-                return Err(InspectionDiagnostic {
-                    path: relative.to_string_lossy().into_owned(),
-                }
-                .into())
-            }
-        };
+        let bytes = read_bounded_descriptor(descriptor, bound, relative)?;
         fs::write(&destination, bytes)?;
         fs::set_permissions(&destination, fs::Permissions::from_mode(0o400))?;
+        capture.files += 1;
     } else {
-        return Err(InspectionDiagnostic {
-            path: relative.to_string_lossy().into_owned(),
-        }
-        .into());
+        return Err(InspectionDiagnostic::at(relative, Inspection::NotPlain).into());
     }
     Ok(())
 }
 
-fn project_identity_findings(project: &Path) -> Result<Vec<Value>> {
+/// Read the project marker from the snapshot. A project without one is
+/// accepted with a warning; a marker that is not the authoring project's
+/// envelope is reported with every problem the reader found in it.
+fn read_project_marker(project: &Path, gathered: &mut Gathered) -> Result<()> {
     let path = project.join(PROJECT_MARKER_FILE);
-    if let Ok(metadata) = fs::symlink_metadata(&path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(DeniedFindings(vec![diagnostic(
-                "error",
-                "evidence.project-marker.file-type",
-                "authoring_project",
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            gathered.push(authored::file_diagnostic(
+                Severity::Warning,
+                "evidence.project.marker-missing",
+                None,
                 PROJECT_MARKER_FILE,
-                "the Evidence project marker must be a plain file",
-                "Replace the marker with a plain Version 1 evidence-project.yaml file.",
-            )])
-            .into());
+                "",
+                "the project has no evidence-project.yaml marker",
+                "Add evidence-project.yaml with the apiVersion and kind lines evidencectl new writes.",
+            ));
+            return Ok(());
         }
+        Err(error) => return Err(error).context("inspecting the Evidence project marker"),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            gathered.push(
+                InspectionDiagnostic::at(Path::new(PROJECT_MARKER_FILE), Inspection::NotPlain)
+                    .diagnostic(),
+            );
+            return Ok(());
+        }
+        Ok(_) => {}
     }
-    match fs::read(&path) {
-        Ok(bytes) => match parse_project_marker(&bytes) {
-            Ok(_) => Ok(Vec::new()),
-            Err(finding) => Err(DeniedFindings(vec![diagnostic(
-                "error",
-                &authoring::dotted_code(finding.code),
-                "authoring_project",
-                &project_marker_finding_path(&finding.field),
-                "the Evidence project marker does not match the closed Version 1 shape",
-                "Correct the Evidence Version 1 project marker.",
-            )])
-            .into()),
-        },
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(vec![diagnostic(
-            "finding",
-            "evidence.project-marker.missing",
-            "authoring_project",
-            PROJECT_MARKER_FILE,
-            "the Evidence authoring project marker is missing",
-            "Add the unchanged Version 1 evidence-project.yaml marker.",
-        )]),
-        Err(error) => Err(error).context("reading the Evidence authoring project marker"),
+    let bytes = authored::read_authored_file(&path, "Evidence project marker")?;
+    gathered.read_one();
+    match parse_project_marker(PROJECT_MARKER_FILE, &bytes) {
+        Ok(marker) => gathered.extend(marker.document.warnings()),
+        Err(report) => gathered.extend(report),
     }
-}
-
-/// Cite a project marker finding's field the way every other diagnostic path
-/// is rendered: the marker file alone at the root, a JSON pointer after it
-/// otherwise.
-fn project_marker_finding_path(field: &registry_evidence_authoring::FieldPath) -> String {
-    if field.is_root() {
-        PROJECT_MARKER_FILE.to_owned()
-    } else {
-        format!("{PROJECT_MARKER_FILE}:{}", field.to_json_pointer())
-    }
+    Ok(())
 }
 
 struct ProjectInventory {
@@ -1087,43 +1116,122 @@ struct ProjectInventory {
     selectors: Vec<Value>,
     derivations: Vec<Value>,
     local_access: Value,
+    /// Each question read, by its file name inside the project.
+    question_documents: Vec<(String, Value)>,
+    /// Each source read, by its file name inside the project.
+    source_documents: Vec<(String, Value)>,
 }
 
+/// A project entry the check refuses before reading it as an authored
+/// document, named by its path inside the project.
 #[derive(Debug)]
 struct InspectionDiagnostic {
     path: String,
+    condition: Inspection,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Inspection {
+    /// The project root is a link or not a directory.
+    NotDirectory,
+    /// An entry is a link, a hard-linked file, or a special file.
+    NotPlain,
+    /// A file is larger than its directory takes.
+    TooLarge,
+    /// A directory holds an entry its layout does not take.
+    UnexpectedFile,
+    /// An entry changed while the project was being captured.
+    Changed,
+}
+
+impl InspectionDiagnostic {
+    fn at(relative: &Path, condition: Inspection) -> Self {
+        Self {
+            path: relative.to_string_lossy().into_owned(),
+            condition,
+        }
+    }
+
+    fn parts(&self) -> (&'static str, &'static str, &'static str) {
+        match self.condition {
+            Inspection::NotDirectory => (
+                "evidence.project.not-directory",
+                "the project path is not a plain directory",
+                "Pass the path of the project directory itself, not a link to it or a file.",
+            ),
+            Inspection::NotPlain => (
+                "evidence.project.not-plain-file",
+                "the project entry is a link, a hard-linked file, or a special file",
+                "Replace the entry with a plain file or directory of its own inside the project.",
+            ),
+            Inspection::TooLarge => (
+                "evidence.project.file-too-large",
+                "the file is larger than its project directory takes",
+                "Split or reduce the file; the authoring project reference lists each directory's limit.",
+            ),
+            Inspection::UnexpectedFile => (
+                "evidence.project.unexpected-file",
+                "the project directory holds an entry its layout does not take",
+                "Remove the entry, or rename it with the extension its directory takes.",
+            ),
+            Inspection::Changed => (
+                "evidence.project.changed",
+                "the project entry changed while the project was being read",
+                "Rerun the command once nothing else is writing to the project.",
+            ),
+        }
+    }
+
+    /// The diagnostic, naming the entry by its path inside the project.
+    fn diagnostic(&self) -> Diagnostic {
+        let (code, message, action) = self.parts();
+        authored::file_diagnostic(Severity::Error, code, None, &self.path, "", message, action)
+    }
+
+    /// The diagnostic, naming the entry from the project path as given.
+    fn diagnostic_in(&self, project: &Path) -> Diagnostic {
+        let report = authored::rebase(Report::new(vec![self.diagnostic()]), project);
+        report
+            .into_diagnostics()
+            .pop()
+            .expect("one diagnostic was rebased")
+    }
 }
 
 impl std::fmt::Display for InspectionDiagnostic {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{} does not parse as an authored YAML document",
-            self.path
-        )
+        formatter.write_str(self.parts().1)
     }
 }
 
 impl std::error::Error for InspectionDiagnostic {}
 
-fn unreadable_project(error: anyhow::Error, command: &str) -> anyhow::Error {
-    let path = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<InspectionDiagnostic>())
-        .map(|diagnostic| diagnostic.path.as_str())
-        .unwrap_or(".");
-    DeniedFindings(vec![diagnostic(
-        "error",
-        "evidence.authoring.unreadable",
-        "authoring_project",
-        path,
-        "the authored project contains an unreadable or malformed artifact",
-        &format!("Correct the named project artifact, then run evidencectl {command} again."),
-    )])
-    .into()
+/// Whether a declared project artifact is present, absent, or reached
+/// through something other than plain in-project directories and files.
+enum Asset {
+    Present,
+    Missing,
+    OutOfCustody,
 }
 
-fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Result<Vec<Value>> {
+fn asset(project: &Path, value: &str) -> Result<Asset> {
+    match authoring::plain_project_asset_exists(project, value) {
+        Ok(true) => Ok(Asset::Present),
+        Ok(false) => Ok(Asset::Missing),
+        Err(error) if is_operational(&error) => Err(error),
+        Err(_) => Ok(Asset::OutOfCustody),
+    }
+}
+
+const CUSTODY_MESSAGE: &str =
+    "declared project artifacts must use plain in-project directories and files";
+const CUSTODY_ACTION: &str =
+    "Replace the artifact, and every directory above it, with a plain file or directory inside the project.";
+
+/// Every declared reference in the project's sources and questions that
+/// names an artifact outside its directory, missing, or out of custody. A
+/// missing artifact is a warning: the project is incomplete, not wrong.
+fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Result<Report> {
     let source_ids = inventory
         .sources
         .iter()
@@ -1139,12 +1247,11 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
         .iter()
         .filter_map(|derivation| derivation["id"].as_str())
         .collect::<BTreeSet<_>>();
-    let mut findings = Vec::new();
-    for path in regular_files(project, "sources", "yaml")? {
-        let bytes = fs::read(&path)?;
-        let source: Value = serde_norway::from_slice(&bytes)
-            .with_context(|| format!("parsing {}", path.display()))?;
-        let relative = path.strip_prefix(project).unwrap_or(&path).display();
+    let mut report = Report::default();
+    for (file, source) in &inventory.source_documents {
+        let diagnostic = |severity, code: &str, pointer: &str, message: &str, action: &str| {
+            authored::file_diagnostic(severity, code, None, file, pointer, message, action)
+        };
         for pointer in [
             "/responseSchema",
             "/factSchema",
@@ -1156,119 +1263,111 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             "/batch/extractScript",
             "/batch/responseSchema",
         ] {
-            let Some(asset) = source.pointer(pointer).and_then(Value::as_str) else {
+            let Some(value) = source.pointer(pointer).and_then(Value::as_str) else {
                 continue;
             };
-            if !authoring::valid_source_artifact_reference(asset) {
-                return Err(authoring::AuthoredDiagnostic {
-                    code: "evidence.source.artifact-reference".to_owned(),
-                    path: format!("{relative}:{pointer}"),
-                    message:
-                        "source artifact references must stay in their project artifact directory"
-                            .to_owned(),
-                }
-                .into());
+            if !authoring::valid_source_artifact_reference(value) {
+                report.push(diagnostic(
+                    Severity::Error,
+                    "evidence.source.artifact-reference",
+                    pointer,
+                    "source artifact references must stay in their project artifact directory",
+                    "Name a file inside the project's schemas, adapters, queries, or codelists directory.",
+                ));
+                continue;
             }
-            let exists = plain_asset_exists(
-                project,
-                asset,
-                "evidence.source.artifact-custody",
-                &format!("{relative}:{pointer}"),
-            )?;
-            if !exists {
-                findings.push(diagnostic(
-                    "finding",
+            match asset(project, value)? {
+                Asset::Present => {}
+                Asset::Missing => report.push(diagnostic(
+                    Severity::Warning,
                     "evidence.source.asset-missing",
-                    "authored_source",
-                    &format!("{relative}:{pointer}"),
+                    pointer,
                     "the source names an artifact that is not present in this project",
                     "Add the declared project-relative source artifact or correct the reference.",
-                ));
+                )),
+                Asset::OutOfCustody => report.push(diagnostic(
+                    Severity::Error,
+                    "evidence.source.artifact-custody",
+                    pointer,
+                    CUSTODY_MESSAGE,
+                    CUSTODY_ACTION,
+                )),
             }
         }
     }
-    for path in regular_files(project, "questions", "yaml")? {
-        let bytes = fs::read(&path)?;
-        let question: Value = serde_norway::from_slice(&bytes)
-            .with_context(|| format!("parsing {}", path.display()))?;
-        let relative = path.strip_prefix(project).unwrap_or(&path).display();
+    for (file, question) in &inventory.question_documents {
+        let diagnostic = |severity, code: &str, pointer: &str, message: &str, action: &str| {
+            authored::file_diagnostic(
+                severity,
+                code,
+                Some(QUESTION_KIND),
+                file,
+                pointer,
+                message,
+                action,
+            )
+        };
         if question.get("governance").is_none() {
-            findings.push(diagnostic(
-                "finding",
+            report.push(diagnostic(
+                Severity::Warning,
                 "evidence.question.governance-missing",
-                "authored_question",
-                &format!("{relative}:/governance"),
+                "/governance",
                 "the question has no deployment governance",
                 "Add stable requirement, evidence type, fixture, and disclosure-family governance.",
             ));
         }
         if let Some(source) = question.pointer("/source/ref").and_then(Value::as_str) {
             if !source_ids.contains(source) {
-                findings.push(diagnostic(
-                    "finding",
+                report.push(diagnostic(
+                    Severity::Warning,
                     "evidence.question.source-missing",
-                    "authored_question",
-                    &format!("{relative}:/source/ref"),
+                    "/source/ref",
                     "the question names a source that is not present in this project",
                     "Add the named sources/<id>.yaml artifact or correct the reference.",
                 ));
             }
         }
-        let subjects = question
-            .get("subjects")
-            .and_then(Value::as_array)
-            .map(|values| values.iter().collect::<Vec<_>>())
-            .or_else(|| question.get("subject").map(|subject| vec![subject]))
-            .unwrap_or_default();
-        for (index, subject) in subjects.into_iter().enumerate() {
-            for selector in subject
-                .get("profiles")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .chain(subject.get("profile").and_then(Value::as_str))
-            {
-                if !selector_ids.contains(selector) {
-                    findings.push(diagnostic(
-                        "finding",
-                        "evidence.question.selector-missing",
-                        "authored_question",
-                        &format!("{relative}:/subjectProfiles/{index}"),
-                        "the question names a selector profile that is not present in this project",
-                        "Add the named selectors/<id>.yaml artifact or correct the reference.",
-                    ));
-                }
+        for (pointer, selector) in selector_profile_references(question) {
+            if !selector_ids.contains(selector) {
+                report.push(diagnostic(
+                    Severity::Warning,
+                    "evidence.question.selector-missing",
+                    &pointer,
+                    "the question names a selector profile that is not present in this project",
+                    "Add the named selectors/<id>.yaml artifact or correct the reference.",
+                ));
             }
         }
         if let Some(derivation) = question.get("derivation").and_then(Value::as_str) {
             if !authoring::valid_derivation_reference(derivation) {
-                return Err(authoring::AuthoredDiagnostic {
-                    code: "evidence.question.derivation-reference".to_owned(),
-                    path: format!("{relative}:/derivation"),
-                    message: "question derivation must stay in the project derivations directory"
-                        .to_owned(),
-                }
-                .into());
-            }
-            let id = Path::new(derivation)
-                .file_stem()
-                .and_then(|value| value.to_str());
-            let exists = plain_asset_exists(
-                project,
-                derivation,
-                "evidence.question.derivation-custody",
-                &format!("{relative}:/derivation"),
-            )?;
-            if !exists || id.is_none_or(|id| !derivation_ids.contains(id)) {
-                findings.push(diagnostic(
-                    "finding",
-                    "evidence.question.derivation-missing",
-                    "authored_question",
-                    &format!("{relative}:/derivation"),
-                    "the question's derivation artifact is missing",
-                    "Add the named derivations/<id>.rhai artifact or correct the reference.",
+                report.push(diagnostic(
+                    Severity::Error,
+                    "evidence.question.derivation-reference",
+                    "/derivation",
+                    "question derivation must stay in the project derivations directory",
+                    "Name a derivations/<id>.rhai file inside the project.",
                 ));
+            } else {
+                let id = Path::new(derivation)
+                    .file_stem()
+                    .and_then(|value| value.to_str());
+                match asset(project, derivation)? {
+                    Asset::OutOfCustody => report.push(diagnostic(
+                        Severity::Error,
+                        "evidence.question.derivation-custody",
+                        "/derivation",
+                        CUSTODY_MESSAGE,
+                        CUSTODY_ACTION,
+                    )),
+                    Asset::Present if id.is_some_and(|id| derivation_ids.contains(id)) => {}
+                    Asset::Present | Asset::Missing => report.push(diagnostic(
+                        Severity::Warning,
+                        "evidence.question.derivation-missing",
+                        "/derivation",
+                        "the question's derivation artifact is missing",
+                        "Add the named derivations/<id>.rhai artifact or correct the reference.",
+                    )),
+                }
             }
         }
         if let Some(fixture) = question
@@ -1276,29 +1375,31 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             .and_then(Value::as_str)
         {
             if !authoring::valid_fixture_reference(fixture) {
-                return Err(authoring::AuthoredDiagnostic {
-                    code: "evidence.question.fixture-reference".to_owned(),
-                    path: format!("{relative}:/governance/fixtures"),
-                    message: "question fixture must stay in the project fixtures directory"
-                        .to_owned(),
-                }
-                .into());
-            }
-            let exists = plain_asset_exists(
-                project,
-                fixture,
-                "evidence.question.fixture-custody",
-                &format!("{relative}:/governance/fixtures"),
-            )?;
-            if !exists {
-                findings.push(diagnostic(
-                    "finding",
-                    "evidence.question.fixture-missing",
-                    "authored_question",
-                    &format!("{relative}:/governance/fixtures"),
-                    "the question's declared fixture artifact is missing",
-                    "Add the named fixtures/<id>.yaml artifact or correct the reference.",
+                report.push(diagnostic(
+                    Severity::Error,
+                    "evidence.question.fixture-reference",
+                    "/governance/fixtures",
+                    "question fixture must stay in the project fixtures directory",
+                    "Name a fixtures/<id>.yaml file inside the project.",
                 ));
+            } else {
+                match asset(project, fixture)? {
+                    Asset::Present => {}
+                    Asset::Missing => report.push(diagnostic(
+                        Severity::Warning,
+                        "evidence.question.fixture-missing",
+                        "/governance/fixtures",
+                        "the question's declared fixture artifact is missing",
+                        "Add the named fixtures/<id>.yaml artifact or correct the reference.",
+                    )),
+                    Asset::OutOfCustody => report.push(diagnostic(
+                        Severity::Error,
+                        "evidence.question.fixture-custody",
+                        "/governance/fixtures",
+                        CUSTODY_MESSAGE,
+                        CUSTODY_ACTION,
+                    )),
+                }
             }
         }
         for (index, answer) in question
@@ -1309,232 +1410,298 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             .enumerate()
         {
             if answer.get("id").is_none() {
-                findings.push(diagnostic(
-                    "finding",
+                report.push(diagnostic(
+                    Severity::Warning,
                     "evidence.answer.stable-id-missing",
-                    "authored_question",
-                    &format!("{relative}:/answers/{index}/id"),
+                    &format!("/answers/{index}/id"),
                     "the answer has no stable concept id",
                     "Add the stable concept identifier required for deployment authoring.",
                 ));
             }
         }
     }
-    Ok(findings)
+    Ok(report)
 }
 
-fn plain_asset_exists(project: &Path, value: &str, code: &'static str, path: &str) -> Result<bool> {
-    match authoring::plain_project_asset_exists(project, value) {
-        Ok(exists) => Ok(exists),
-        Err(error) if is_operational(&error) => Err(error),
-        Err(_) => Err(authoring::AuthoredDiagnostic {
-            code: code.to_owned(),
-            path: path.to_owned(),
-            message: "declared project artifacts must use plain in-project directories and files"
-                .to_owned(),
-        }
-        .into()),
+/// The subjects a question declares: its `subjects` list, or its one
+/// `subject`, each with the pointer it is written at.
+fn question_subjects(question: &Value) -> Vec<(String, &Value)> {
+    match question.get("subjects").and_then(Value::as_array) {
+        Some(subjects) => subjects
+            .iter()
+            .enumerate()
+            .map(|(index, subject)| (format!("/subjects/{index}"), subject))
+            .collect(),
+        None => question
+            .get("subject")
+            .map(|subject| vec![("/subject".to_owned(), subject)])
+            .unwrap_or_default(),
     }
 }
 
-fn inspect_project(project: &Path) -> Result<ProjectInventory> {
-    let questions = yaml_inventory(project, "questions", |id, value| {
-        let subjects = value
-            .get("subjects")
+/// Every selector profile a question's subjects name, each with the pointer
+/// it is written at.
+fn selector_profile_references(question: &Value) -> Vec<(String, &str)> {
+    let mut references = Vec::new();
+    for (pointer, subject) in question_subjects(question) {
+        for (index, profile) in subject
+            .get("profiles")
             .and_then(Value::as_array)
-            .map(|subjects| subjects.iter().collect::<Vec<_>>())
-            .or_else(|| value.get("subject").map(|subject| vec![subject]))
-            .unwrap_or_default();
-        let selectors = subjects
-            .iter()
-            .filter_map(|subject| subject.get("selector").and_then(Value::as_str))
-            .collect::<Vec<_>>();
-        let selector_profiles = subjects
-            .iter()
-            .flat_map(|subject| {
-                subject
-                    .get("profiles")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .chain(subject.get("profile").and_then(Value::as_str))
-            })
-            .collect::<Vec<_>>();
-        json!({
-            "id": value.get("id").and_then(Value::as_str).unwrap_or(id),
-            "source": value.pointer("/source/ref").and_then(Value::as_str),
-            "selectors": selectors,
-            "selectorProfiles": selector_profiles,
-            "derivation": value.get("derivation").and_then(Value::as_str),
-            "answers": value.get("answers").and_then(Value::as_array).map(|answers| answers.iter().filter_map(|answer| answer.get("concept").and_then(Value::as_str)).collect::<Vec<_>>()).unwrap_or_default(),
-            "responseFormats": value.get("responseFormats").cloned().unwrap_or_else(|| json!(["signed-jws"])),
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if let Some(profile) = profile.as_str() {
+                references.push((format!("{pointer}/profiles/{index}"), profile));
+            }
+        }
+        if let Some(profile) = subject.get("profile").and_then(Value::as_str) {
+            references.push((format!("{pointer}/profile"), profile));
+        }
+    }
+    references
+}
+
+/// Read every authored file in the project through the shared reader,
+/// reporting each problem to `gathered` and describing each document read.
+fn inspect_project(project: &Path, gathered: &mut Gathered) -> Result<ProjectInventory> {
+    let question_documents =
+        authored_documents(project, QUESTIONS_DIRECTORY, gathered, |file, bytes| {
+            checked(check_question(file, bytes).map(|decoded| decoded.document))
+        })?;
+    let questions = question_documents
+        .iter()
+        .map(|(file, value)| describe_question(&file_id(file), value))
+        .collect();
+    let source_documents = authored_documents(project, SOURCES_DIRECTORY, gathered, scanned)?;
+    let sources = source_documents
+        .iter()
+        .map(|(file, value)| describe_source(&file_id(file), value))
+        .collect();
+    let selectors = authored_documents(project, SELECTORS_DIRECTORY, gathered, scanned)?
+        .iter()
+        .map(|(file, value)| {
+            let fields = value
+                .get("fields")
+                .and_then(Value::as_object)
+                .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            json!({"id": file_id(file), "fields": fields})
         })
-    })?;
-    let sources = yaml_inventory(project, "sources", |id, value| {
-        let references = [
-            "/connection",
-            "/connectionRef",
-            "/responseSchema",
-            "/factSchema",
-            "/extractScript",
-            "/request/prepareScript",
-            "/request/adapterParametersSchema",
-            "/request/statement",
-        ]
-        .into_iter()
-        .filter_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+        .collect();
+    let derivations = regular_files(project, DERIVATIONS_DIRECTORY, "rhai", gathered)?
+        .iter()
+        .map(|file| json!({"id": file_id(file), "path": file}))
         .collect::<Vec<_>>();
+    let policies_directory = format!("{ACCESS_DIRECTORY}/{ACCESS_POLICIES_DIRECTORY}");
+    let policies = authored_documents(project, &policies_directory, gathered, |file, bytes| {
+        checked(check_access_policy(file, bytes).map(|decoded| decoded.document))
+    })?
+    .iter()
+    .map(|(file, value)| {
         json!({
-            "id": id,
-            "transport": value.get("transport").and_then(Value::as_str),
-            "connectionRef": value.get("connection").or_else(|| value.get("connectionRef")).and_then(Value::as_str),
-            "posture": value.get("posture").and_then(Value::as_str),
-            "references": references,
+            "id": file_id(file),
+            "questions": value.get("questions").cloned().unwrap_or_else(|| json!([])),
         })
-    })?;
-    let selectors = yaml_inventory(project, "selectors", |id, value| {
-        let fields = value
-            .get("fields")
-            .and_then(Value::as_object)
-            .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        json!({"id": id, "fields": fields})
-    })?;
-    let derivations = file_inventory(project, "derivations", "rhai")?;
-    let policies = yaml_inventory(
-        project,
-        "access/policies",
-        |id, value| json!({"id": id, "questions": value.get("questions").cloned().unwrap_or_else(|| json!([]))}),
-    )?;
-    let clients = file_inventory(project, "access/clients", "yaml")?;
+    })
+    .collect::<Vec<_>>();
+    let clients_directory = format!("{ACCESS_DIRECTORY}/clients");
+    let clients = authored_documents(project, &clients_directory, gathered, |file, bytes| {
+        checked(crate::access::check_client_document(file, bytes))
+    })?
+    .iter()
+    .map(|(file, _)| json!({"id": file_id(file), "path": file}))
+    .collect::<Vec<_>>();
     Ok(ProjectInventory {
         questions,
         sources,
         selectors,
         derivations,
         local_access: json!({"policies": policies, "clients": clients}),
+        question_documents,
+        source_documents,
     })
 }
 
-fn yaml_inventory(
+/// A read of one authored file: the document as a value and the warnings
+/// the reader found in it, or every problem that refused it.
+type Read = std::result::Result<(Value, Report), Report>;
+
+/// A file read through the shared YAML subset alone, for a format whose
+/// grammar the compiler holds.
+fn scanned(file: &str, bytes: &[u8]) -> Read {
+    scan_authored(file, bytes).map(|node| (authored::node_value(node), Report::default()))
+}
+
+/// A file checked as one enveloped authored format, every member decoded.
+fn checked(read: std::result::Result<Document, Report>) -> Read {
+    read.map(|document| (document.to_json_value(), document.warnings()))
+}
+
+fn describe_question(id: &str, value: &Value) -> Value {
+    let subjects = question_subjects(value);
+    let selectors = subjects
+        .iter()
+        .filter_map(|(_, subject)| subject.get("selector").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let selector_profiles = selector_profile_references(value)
+        .into_iter()
+        .map(|(_, profile)| profile)
+        .collect::<Vec<_>>();
+    json!({
+        "id": value.get("id").and_then(Value::as_str).unwrap_or(id),
+        "source": value.pointer("/source/ref").and_then(Value::as_str),
+        "selectors": selectors,
+        "selectorProfiles": selector_profiles,
+        "derivation": value.get("derivation").and_then(Value::as_str),
+        "answers": value
+            .get("answers")
+            .and_then(Value::as_array)
+            .map(|answers| {
+                answers
+                    .iter()
+                    .filter_map(|answer| answer.get("concept").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        "responseFormats": value
+            .get("responseFormats")
+            .cloned()
+            .unwrap_or_else(|| json!(["signed-jws"])),
+    })
+}
+
+fn describe_source(id: &str, value: &Value) -> Value {
+    let references = [
+        "/connection",
+        "/connectionRef",
+        "/responseSchema",
+        "/factSchema",
+        "/extractScript",
+        "/request/prepareScript",
+        "/request/adapterParametersSchema",
+        "/request/statement",
+    ]
+    .into_iter()
+    .filter_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+    .collect::<Vec<_>>();
+    json!({
+        "id": id,
+        "transport": value.get("transport").and_then(Value::as_str),
+        "connectionRef": value
+            .get("connection")
+            .or_else(|| value.get("connectionRef"))
+            .and_then(Value::as_str),
+        "posture": value.get("posture").and_then(Value::as_str),
+        "references": references,
+    })
+}
+
+/// The id a file's name gives it: its name without the extension.
+fn file_id(file: &str) -> String {
+    Path::new(file)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Every YAML file in `directory`, read through `read`. A file `read`
+/// refuses is reported to `gathered` with every problem found in it, and the
+/// rest are returned by their file names inside the project, their warnings
+/// reported to `gathered` too.
+fn authored_documents(
     project: &Path,
     directory: &str,
-    describe: impl Fn(&str, &Value) -> Value,
-) -> Result<Vec<Value>> {
-    let mut entries = Vec::new();
-    let maximum = match directory {
-        "questions" => authoring::MAX_QUESTION_BYTES,
-        "access/policies" => authoring::MAX_ACCESS_POLICY_BYTES,
-        _ => authoring::MAX_SOURCE_ARTIFACT_BYTES,
-    };
-    for path in regular_files(project, directory, "yaml")? {
-        let bytes = match read_bounded_plain_file(&path, maximum) {
-            Ok(bytes) => bytes,
-            Err(error) if is_operational(&error) => return Err(error),
-            Err(_) => {
-                return Err(InspectionDiagnostic {
-                    path: path
-                        .strip_prefix(project)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .into_owned(),
-                }
-                .into())
+    gathered: &mut Gathered,
+    read: impl Fn(&str, &[u8]) -> Read,
+) -> Result<Vec<(String, Value)>> {
+    let mut documents = Vec::new();
+    for file in regular_files(project, directory, "yaml", gathered)? {
+        let bytes = authored::read_authored_file(&project.join(&file), "authored file")?;
+        gathered.read_one();
+        match read(&file, &bytes) {
+            Ok((value, warnings)) => {
+                gathered.extend(warnings);
+                documents.push((file, value));
             }
-        };
-        let value: Value = serde_norway::from_slice(&bytes).map_err(|_| InspectionDiagnostic {
-            path: path
-                .strip_prefix(project)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .into_owned(),
-        })?;
-        let id = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .context("authored file name is not UTF-8")?;
-        entries.push(describe(id, &value));
+            Err(report) => gathered.extend(report),
+        }
     }
-    Ok(entries)
+    Ok(documents)
 }
 
-fn read_bounded_plain_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
-    use rustix::fs::{Mode, OFlags};
-
-    let descriptor = rustix::fs::open(
-        path,
-        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-        Mode::empty(),
-    )
-    .map_err(io::Error::from)
-    .with_context(|| format!("opening {}", path.display()))?;
-    read_bounded_descriptor(descriptor, maximum)
-}
-
-fn read_bounded_descriptor(descriptor: rustix::fd::OwnedFd, maximum: u64) -> Result<Vec<u8>> {
+fn read_bounded_descriptor(
+    descriptor: rustix::fd::OwnedFd,
+    bound: Bound,
+    relative: &Path,
+) -> Result<Vec<u8>> {
     let mut file = File::from(descriptor);
     let metadata = file.metadata().context("inspecting authored input")?;
-    if !metadata.is_file() || metadata.nlink() != 1 || metadata.len() > maximum {
-        bail!("authored input is not a bounded plain file");
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(InspectionDiagnostic::at(relative, Inspection::NotPlain).into());
     }
+    let limit = match bound {
+        Bound::ForReader => u64::try_from(MAXIMUM_DOCUMENT_BYTES)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+        Bound::Refuse(maximum) => {
+            if metadata.len() > maximum {
+                return Err(InspectionDiagnostic::at(relative, Inspection::TooLarge).into());
+            }
+            maximum.saturating_add(1)
+        }
+    };
     let mut bytes = Vec::new();
     file.by_ref()
-        .take(maximum.saturating_add(1))
+        .take(limit)
         .read_to_end(&mut bytes)
         .context("reading authored input")?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
-        bail!("authored input exceeds its byte limit");
+    if let Bound::Refuse(maximum) = bound {
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
+            return Err(InspectionDiagnostic::at(relative, Inspection::TooLarge).into());
+        }
     }
     Ok(bytes)
 }
 
-fn file_inventory(project: &Path, directory: &str, extension: &str) -> Result<Vec<Value>> {
-    regular_files(project, directory, extension)?
-        .into_iter()
-        .map(|path| {
-            let id = path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .context("authored file name is not UTF-8")?;
-            Ok(json!({"id": id, "path": path.strip_prefix(project).unwrap_or(&path)}))
-        })
-        .collect()
-}
-
-fn regular_files(project: &Path, directory: &str, extension: &str) -> Result<Vec<PathBuf>> {
-    let directory = project.join(directory);
-    let metadata = match fs::symlink_metadata(&directory) {
+/// The plain files with `extension` in a project directory, by their names
+/// inside the project. Every other entry is reported to `gathered`.
+fn regular_files(
+    project: &Path,
+    directory: &str,
+    extension: &str,
+    gathered: &mut Gathered,
+) -> Result<Vec<String>> {
+    let path = project.join(directory);
+    let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("inspecting {}", directory.display()))
-        }
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
     };
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        anyhow::bail!("{} must be a plain directory", directory.display());
+        gathered.push(
+            InspectionDiagnostic::at(Path::new(directory), Inspection::NotPlain).diagnostic(),
+        );
+        return Ok(Vec::new());
     }
-    let mut paths = fs::read_dir(&directory)?
-        .map(|entry| entry.map(|entry| entry.path()))
+    let mut names = fs::read_dir(&path)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<io::Result<Vec<_>>>()?;
-    paths.sort();
-    for path in &paths {
-        let metadata = fs::symlink_metadata(path)?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || path.extension().and_then(|value| value.to_str()) != Some(extension)
-        {
-            return Err(InspectionDiagnostic {
-                path: path
-                    .strip_prefix(project)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .into_owned(),
-            }
-            .into());
+    names.sort();
+    let mut files = Vec::new();
+    for name in names {
+        let relative = Path::new(directory).join(&name);
+        let metadata = fs::symlink_metadata(path.join(&name))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            gathered.push(InspectionDiagnostic::at(&relative, Inspection::NotPlain).diagnostic());
+        } else if relative.extension().and_then(OsStr::to_str) != Some(extension) {
+            gathered
+                .push(InspectionDiagnostic::at(&relative, Inspection::UnexpectedFile).diagnostic());
+        } else {
+            files.push(relative.to_string_lossy().into_owned());
         }
     }
-    Ok(paths)
+    Ok(files)
 }
 
 fn explain_governance(governance: &Value) -> Value {
@@ -1561,27 +1728,10 @@ fn explain_governance(governance: &Value) -> Value {
     })
 }
 
-fn diagnostic(
-    severity: &str,
-    code: &str,
-    artifact: &str,
-    path: &str,
-    message: impl Into<String>,
-    suggested_action: &str,
-) -> Value {
-    json!({
-        "severity": severity,
-        "code": code,
-        "artifact": artifact,
-        "path": path,
-        "message": message.into(),
-        "suggestedAction": suggested_action,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_evidence_authoring::formats::{ACCESS_POLICY_API_VERSION, QUESTION_API_VERSION};
     use std::os::unix::fs::symlink;
 
     fn temporary() -> tempfile::TempDir {
@@ -1612,17 +1762,65 @@ mod tests {
         }
     }
 
-    fn rendered_denial(command: &str, project: &Path, findings: &[Value]) -> String {
-        let report = json!({
-            "command": command,
-            "status": "refused",
-            "proof": "none",
-            "project": project,
-            "findings": findings,
-        });
-        let mut output = Vec::new();
-        render_human(&report, &mut output).unwrap();
-        String::from_utf8(output).unwrap()
+    fn sqlite_template(project: &Path) {
+        copy_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
+            project,
+        );
+    }
+
+    /// A question document with its envelope, followed by `body`.
+    fn question(body: &str) -> String {
+        format!("apiVersion: {QUESTION_API_VERSION}\nkind: {QUESTION_KIND}\n{body}")
+    }
+
+    /// The diagnostics a refused check carries.
+    fn refused(error: anyhow::Error) -> Report {
+        authored::report_in(&error)
+            .cloned()
+            .unwrap_or_else(|| panic!("a refused check carries diagnostics: {error:#}"))
+    }
+
+    /// Each diagnostic's code, the file it names inside `base`, and its path.
+    fn sites(report: &Report, base: &Path) -> Vec<(String, String, String)> {
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| {
+                let file = diagnostic
+                    .source
+                    .as_ref()
+                    .map(|source| {
+                        let file = Path::new(&source.file);
+                        file.strip_prefix(base)
+                            .unwrap_or(file)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .unwrap_or_default();
+                (diagnostic.code.clone(), file, diagnostic.path.clone())
+            })
+            .collect()
+    }
+
+    fn reports(report: &Report, base: &Path, code: &str, file: &str, path: &str) -> bool {
+        sites(report, base)
+            .iter()
+            .any(|site| site.0 == code && site.1 == file && site.2 == path)
+    }
+
+    /// `report` in both output forms, for a check that a value is never
+    /// repeated.
+    fn printed(report: &Report) -> String {
+        format!("{}\n{}", report.to_json_value(), report.render_human())
+    }
+
+    #[test]
+    fn the_template_marker_is_the_marker_new_writes() {
+        assert_eq!(
+            include_str!("../templates/sqlite-extract/evidence-project.yaml"),
+            registry_evidence_authoring::default_project_marker_document()
+        );
     }
 
     #[test]
@@ -1631,22 +1829,62 @@ mod tests {
         put_marker(temporary.path());
         fs::create_dir(temporary.path().join("questions")).unwrap();
 
-        let report = check(temporary.path(), None, false, false).unwrap();
+        let checked = check(temporary.path(), None, false, false).unwrap();
 
-        assert_eq!(report["status"], "incomplete");
-        assert_eq!(report["proof"], "authoring");
-        assert_eq!(report["fixtureProof"], false);
-        assert_eq!(report["findings"][0]["path"], "questions");
+        assert_eq!(checked.report["status"], "incomplete");
+        assert_eq!(checked.report["proof"], "authoring");
+        assert_eq!(checked.report["fixtureProof"], false);
+        assert_eq!(
+            sites(&checked.diagnostics, temporary.path()),
+            [(
+                "evidence.question.missing".to_owned(),
+                "questions".to_owned(),
+                String::new()
+            )]
+        );
+        assert_eq!(checked.report["diagnostics"][0]["severity"], "warning");
+        assert_eq!(
+            checked.report["diagnostics"][0]["code"],
+            "evidence.question.missing"
+        );
+    }
+
+    #[test]
+    fn a_check_report_carries_the_shared_diagnostic_shape() {
+        let temporary = temporary();
+        put_marker(temporary.path());
+        fs::create_dir(temporary.path().join("questions")).unwrap();
+
+        let checked = check(temporary.path(), None, false, false).unwrap();
+
+        assert!(checked.report.get("findings").is_none());
+        let allowed = BTreeSet::from([
+            "artifact",
+            "code",
+            "message",
+            "path",
+            "related",
+            "severity",
+            "source",
+            "suggestedAction",
+        ]);
+        for diagnostic in checked.report["diagnostics"].as_array().unwrap() {
+            for key in diagnostic.as_object().unwrap().keys() {
+                assert!(allowed.contains(key.as_str()), "{key}");
+            }
+        }
+        let human = checked.diagnostics.render_human();
+        assert!(human.starts_with("warning[evidence.question.missing] "));
+        assert!(
+            human.ends_with("0 errors, 1 warning in 1 file\n"),
+            "{human}"
+        );
     }
 
     #[test]
     fn target_bound_source_is_valid_authoring_with_incomplete_target_closure() {
         let temporary = temporary();
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-            temporary.path(),
-        );
-        put_marker(temporary.path());
+        sqlite_template(temporary.path());
         fs::write(
             temporary.path().join("sources/record-status.yaml"),
             r#"transport: http-json
@@ -1689,51 +1927,80 @@ factSchema: schemas/record-status-facts.schema.yaml
         )
         .unwrap();
 
-        let report = check(temporary.path(), None, false, false)
+        let checked = check(temporary.path(), None, false, false)
             .expect("a valid authored connection reference is not refused");
 
-        assert_eq!(report["status"], "incomplete");
-        assert_eq!(report["proof"], "authoring");
-        assert_eq!(report["packageDigest"], Value::Null);
-        assert_eq!(report["findings"].as_array().unwrap().len(), 1);
+        assert_eq!(checked.report["status"], "incomplete");
+        assert_eq!(checked.report["proof"], "authoring");
+        assert_eq!(checked.report["packageDigest"], Value::Null);
         assert_eq!(
-            report["findings"][0]["code"],
-            "evidence.target.source-connection-required"
+            sites(&checked.diagnostics, temporary.path()),
+            [(
+                "evidence.target.source-connection-required".to_owned(),
+                "sources/record-status.yaml".to_owned(),
+                "/connection".to_owned()
+            )]
         );
-        assert_eq!(
-            report["findings"][0]["path"],
-            "sources/record-status.yaml:/connection"
-        );
-        assert!(!report["findings"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("records"));
+        assert!(!printed(&checked.diagnostics).contains("records"));
 
-        let denied = check(temporary.path(), None, false, true)
-            .expect_err("--deny-findings refuses incomplete target closure");
-        assert!(denied.downcast_ref::<DeniedFindings>().is_some());
+        let denied = refused(
+            check(temporary.path(), None, false, true)
+                .expect_err("--deny-warnings refuses incomplete target closure"),
+        );
+        assert_eq!(denied.error_count(), 0);
+        assert_eq!(denied.warning_count(), 1);
     }
 
     #[test]
-    fn a_wrong_version_project_marker_is_dotted_and_points_at_the_field() {
+    fn a_retired_project_marker_is_refused_for_its_missing_envelope() {
         let temporary = temporary();
         fs::write(
             temporary.path().join(PROJECT_MARKER_FILE),
-            "version: 2\nproject: evidence-authoring\n",
+            "version: 1\nproject: evidence-authoring\n",
         )
         .unwrap();
 
-        let error = check(temporary.path(), None, false, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
         assert_eq!(
-            denied.0[0]["code"],
-            "evidence.authoring.project-marker-version"
+            sites(&report, temporary.path()),
+            [(
+                "config.missing-envelope".to_owned(),
+                PROJECT_MARKER_FILE.to_owned(),
+                String::new()
+            )]
         );
-        assert_eq!(denied.0[0]["path"], "evidence-project.yaml:/version");
     }
 
     #[test]
-    fn an_unparseable_project_marker_is_dotted_and_points_at_the_document() {
+    fn a_marker_keeping_its_retired_keys_names_each_one() {
+        let temporary = temporary();
+        fs::write(
+            temporary.path().join(PROJECT_MARKER_FILE),
+            format!(
+                "{}version: 1\nproject: evidence-authoring\n",
+                registry_evidence_authoring::default_project_marker_document()
+            ),
+        )
+        .unwrap();
+
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        for path in ["/version", "/project"] {
+            assert!(
+                reports(
+                    &report,
+                    temporary.path(),
+                    "config.removed-key",
+                    PROJECT_MARKER_FILE,
+                    path
+                ),
+                "{:?}",
+                sites(&report, temporary.path())
+            );
+        }
+    }
+
+    #[test]
+    fn an_unparseable_project_marker_is_refused_at_the_document() {
         let temporary = temporary();
         fs::write(
             temporary.path().join(PROJECT_MARKER_FILE),
@@ -1741,13 +2008,11 @@ factSchema: schemas/record-status-facts.schema.yaml
         )
         .unwrap();
 
-        let error = check(temporary.path(), None, false, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-        assert_eq!(
-            denied.0[0]["code"],
-            "evidence.authoring.project-marker-parse"
-        );
-        assert_eq!(denied.0[0]["path"], "evidence-project.yaml");
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        let (code, file, path) = &sites(&report, temporary.path())[0];
+        assert!(code.starts_with("config."), "{code}");
+        assert_eq!(file, PROJECT_MARKER_FILE);
+        assert_eq!(path, "");
     }
 
     #[test]
@@ -1757,11 +2022,15 @@ factSchema: schemas/record-status-facts.schema.yaml
         fs::create_dir(temporary.path().join("questions")).unwrap();
         fs::write(temporary.path().join("questions/broken.yaml"), "id: [\n").unwrap();
 
-        let error = check(temporary.path(), None, false, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-        assert_eq!(denied.0[0]["severity"], "error");
-        assert_eq!(denied.0[0]["code"], "evidence.authoring.unreadable");
-        assert_eq!(denied.0[0]["path"], "questions/broken.yaml");
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(diagnostic.code.starts_with("yaml."), "{}", diagnostic.code);
+        assert_eq!(
+            sites(&report, temporary.path())[0].1,
+            "questions/broken.yaml"
+        );
+        assert!(diagnostic.source.as_ref().unwrap().line.is_some());
     }
 
     #[test]
@@ -1776,44 +2045,139 @@ factSchema: schemas/record-status-facts.schema.yaml
         )
         .unwrap();
 
-        let error = check(temporary.path(), None, false, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-        assert_eq!(denied.0[0]["severity"], "error");
-        assert_eq!(denied.0[0]["code"], "evidence.authoring.unreadable");
-        assert_eq!(denied.0[0]["path"], "sources/broken.yaml");
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert!(diagnostic.code.starts_with("yaml."), "{}", diagnostic.code);
+        assert_eq!(sites(&report, temporary.path())[0].1, "sources/broken.yaml");
     }
 
     #[test]
-    fn oversized_authored_yaml_is_a_bounded_field_addressed_refusal() {
-        for (relative, maximum) in [
-            ("questions/oversized.yaml", authoring::MAX_QUESTION_BYTES),
-            (
-                "sources/oversized.yaml",
-                authoring::MAX_SOURCE_ARTIFACT_BYTES,
+    fn every_problem_in_every_file_is_reported_in_one_run() {
+        let temporary = temporary();
+        put_marker(temporary.path());
+        fs::create_dir(temporary.path().join("questions")).unwrap();
+        fs::write(
+            temporary.path().join("questions/first.yaml"),
+            question("id: first\nfirstUnknown: 1\nsecondUnknown: 2\n"),
+        )
+        .unwrap();
+        fs::write(temporary.path().join("questions/second.yaml"), "id: [\n").unwrap();
+
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        for path in ["/firstUnknown", "/secondUnknown"] {
+            assert!(
+                reports(
+                    &report,
+                    temporary.path(),
+                    "config.unknown-key",
+                    "questions/first.yaml",
+                    path
+                ),
+                "{:?}",
+                sites(&report, temporary.path())
+            );
+        }
+        assert!(sites(&report, temporary.path())
+            .iter()
+            .any(|site| site.1 == "questions/second.yaml"));
+    }
+
+    #[test]
+    fn a_substitution_in_an_authored_file_is_refused_where_it_is_written() {
+        let temporary = temporary();
+        sqlite_template(temporary.path());
+        let path = temporary.path().join("questions/record-status.yaml");
+        let replaced = fs::read_to_string(&path).unwrap().replace(
+            "purpose: record-status-check",
+            "purpose: ${SUBSTITUTION_CANARY}",
+        );
+        fs::write(&path, replaced).unwrap();
+
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        assert!(
+            reports(
+                &report,
+                temporary.path(),
+                "config.substitution-not-allowed",
+                "questions/record-status.yaml",
+                "/purpose"
             ),
-            (
-                "selectors/oversized.yaml",
-                authoring::MAX_SOURCE_ARTIFACT_BYTES,
-            ),
-            (
-                "access/policies/oversized.yaml",
-                authoring::MAX_ACCESS_POLICY_BYTES,
-            ),
+            "{:?}",
+            sites(&report, temporary.path())
+        );
+        assert!(!printed(&report).contains("SUBSTITUTION_CANARY"));
+    }
+
+    /// The template question padded with comment lines to exactly `size`
+    /// bytes.
+    fn padded_question(size: usize) -> Vec<u8> {
+        let mut document = include_str!("../templates/sqlite-extract/questions/record-status.yaml")
+            .as_bytes()
+            .to_vec();
+        let line = format!("# {}\n", "x".repeat(61));
+        while document.len() + line.len() <= size {
+            document.extend_from_slice(line.as_bytes());
+        }
+        let rest = size - document.len();
+        if rest > 0 {
+            document.push(b'#');
+            document.extend(std::iter::repeat_n(b'x', rest - 1));
+        }
+        assert_eq!(document.len(), size);
+        document
+    }
+
+    #[test]
+    fn an_authored_file_at_the_reader_limit_is_read_and_one_byte_more_is_refused() {
+        let temporary = temporary();
+        sqlite_template(temporary.path());
+        // Without its fixture the project stops at a warning, before the
+        // compile that needs the runtime binary.
+        fs::remove_file(temporary.path().join("fixtures/record-status.yaml")).unwrap();
+        let path = temporary.path().join("questions/record-status.yaml");
+
+        fs::write(&path, padded_question(MAXIMUM_DOCUMENT_BYTES)).unwrap();
+        let checked = check(temporary.path(), None, false, false)
+            .expect("a question of exactly the reader limit is read");
+        assert!(!checked
+            .diagnostics
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "yaml.too-large"));
+
+        fs::write(&path, padded_question(MAXIMUM_DOCUMENT_BYTES + 1)).unwrap();
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        assert_eq!(
+            sites(&report, temporary.path()),
+            [(
+                "yaml.too-large".to_owned(),
+                "questions/record-status.yaml".to_owned(),
+                String::new()
+            )]
+        );
+    }
+
+    #[test]
+    fn oversized_authored_yaml_is_refused_by_the_shared_reader() {
+        for relative in [
+            "questions/oversized.yaml",
+            "sources/oversized.yaml",
+            "selectors/oversized.yaml",
+            "access/policies/oversized.yaml",
         ] {
             let temporary = temporary();
             put_marker(temporary.path());
             let path = temporary.path().join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(
-                &path,
-                vec![b'x'; usize::try_from(maximum).unwrap().saturating_add(1)],
-            )
-            .unwrap();
+            fs::write(&path, vec![b'x'; MAXIMUM_DOCUMENT_BYTES + 1]).unwrap();
 
-            let error = check(temporary.path(), None, false, false).unwrap_err();
-            let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-            assert_eq!(denied.0[0]["code"], "evidence.authoring.unreadable");
-            assert_eq!(denied.0[0]["path"], relative);
+            let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+            assert!(
+                reports(&report, temporary.path(), "yaml.too-large", relative, ""),
+                "{:?}",
+                sites(&report, temporary.path())
+            );
         }
     }
 
@@ -1821,7 +2185,7 @@ factSchema: schemas/record-status-facts.schema.yaml
     fn project_snapshot_cleanup_removes_sealed_success_and_partial_refusal_trees() {
         let temporary = temporary();
         let project = temporary.path().join("project");
-        fs::create_dir_all(project.join("questions")).unwrap();
+        fs::create_dir_all(project.join("derivations")).unwrap();
         put_marker(&project);
 
         let snapshot = capture_project_in(&project, temporary.path()).unwrap();
@@ -1831,13 +2195,8 @@ factSchema: schemas/record-status-facts.schema.yaml
         assert!(!snapshot_path.exists());
 
         fs::write(
-            project.join("questions/oversized.yaml"),
-            vec![
-                b'x';
-                usize::try_from(authoring::MAX_QUESTION_BYTES)
-                    .unwrap()
-                    .saturating_add(1)
-            ],
+            project.join("derivations/oversized.rhai"),
+            vec![b'x'; usize::try_from(MAX_DERIVATION_BYTES).unwrap() + 1],
         )
         .unwrap();
         assert!(capture_project_in(&project, temporary.path()).is_err());
@@ -1860,10 +2219,9 @@ factSchema: schemas/record-status-facts.schema.yaml
         fs::write(outside.join(format!("clients/{CANARY}.yaml")), CANARY).unwrap();
         symlink(&outside, project.join("access")).unwrap();
 
-        let error = check(&project, None, false, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-        assert_eq!(denied.0[0]["path"], "access");
-        assert!(!serde_json::to_string(&denied.0).unwrap().contains(CANARY));
+        let report = refused(check(&project, None, false, false).unwrap_err());
+        assert_eq!(sites(&report, &project)[0].1, "access");
+        assert!(!printed(&report).contains(CANARY));
     }
 
     #[test]
@@ -1919,29 +2277,29 @@ factSchema: schemas/record-status-facts.schema.yaml
         .unwrap();
         symlink(&outside, project.join("questions")).unwrap();
 
-        let mut directories = vec![snapshot.clone(), snapshot.join("questions")];
+        let mut capture = Capture {
+            root: snapshot.clone(),
+            directories: vec![snapshot.clone(), snapshot.join("questions")],
+            files: 0,
+        };
         capture_directory_contents(
             &questions,
-            &snapshot,
+            &mut capture,
             Path::new("questions"),
-            authoring::MAX_QUESTION_BYTES,
-            &mut directories,
+            Bound::ForReader,
         )
         .unwrap();
 
         assert!(snapshot.join("questions/captured.yaml").exists());
         assert!(!snapshot.join(format!("questions/{CANARY}.yaml")).exists());
+        assert_eq!(capture.files, 1);
     }
 
     #[test]
     fn typed_question_refusal_does_not_disclose_the_rejected_value() {
         const CANARY: &str = "QUESTION_SECRET_CANARY";
         let temporary = temporary();
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-            temporary.path(),
-        );
-        put_marker(temporary.path());
+        sqlite_template(temporary.path());
         let path = temporary.path().join("questions/record-status.yaml");
         let question = fs::read_to_string(&path).unwrap().replace(
             "purpose: record-status-check",
@@ -1950,21 +2308,29 @@ factSchema: schemas/record-status-facts.schema.yaml
         assert!(question.contains(CANARY));
         fs::write(&path, question).unwrap();
 
-        for (command, error) in [
-            (
-                "check",
-                check(temporary.path(), None, false, false).unwrap_err(),
-            ),
-            ("explain", explain(temporary.path(), None).unwrap_err()),
+        for error in [
+            check(temporary.path(), None, false, false).map(|_| ()),
+            explain(temporary.path(), None).map(|_| ()),
         ] {
-            let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-            let json = serde_json::to_string(&denied.0).unwrap();
-            let human = rendered_denial(command, temporary.path(), &denied.0);
-            assert!(!json.contains(CANARY));
-            assert!(!human.contains(CANARY));
-            assert_eq!(denied.0[0]["code"], "evidence.question.parse");
-            assert_eq!(denied.0[0]["path"], "questions/record-status.yaml:/purpose");
+            let report = refused(error.unwrap_err());
+            assert!(!printed(&report).contains(CANARY));
+            let (code, file, path) = &sites(&report, temporary.path())[0];
+            assert!(code.starts_with("config."), "{code}");
+            assert_eq!(file, "questions/record-status.yaml");
+            assert_eq!(path, "/purpose");
         }
+    }
+
+    fn reference_target(target: &Path, governance: impl FnOnce(String) -> String) {
+        copy_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../products/evidence/reference/deployment-targets/environments/production/evidence",
+            ),
+            target,
+        );
+        let path = target.join("governance.yaml");
+        let replaced = governance(fs::read_to_string(&path).unwrap());
+        fs::write(&path, replaced).unwrap();
     }
 
     #[test]
@@ -1974,76 +2340,55 @@ factSchema: schemas/record-status-facts.schema.yaml
         let project = temporary.path().join("project");
         let target = temporary.path().join("target");
         fs::create_dir_all(project.join("questions")).unwrap();
-        fs::create_dir(&target).unwrap();
         put_marker(&project);
-        let governance = include_str!(
-            "../../../products/evidence/reference/deployment-targets/environments/production/evidence/governance.yaml"
-        )
-        .replace(
-            "assuranceProfile: evidence-grade",
-            &format!("assuranceProfile: [{CANARY}]"),
-        );
-        assert!(governance.contains(CANARY));
-        fs::write(target.join("governance.yaml"), governance).unwrap();
-        fs::write(
-            target.join("runtime.yaml"),
-            include_str!(
-                "../../../products/evidence/reference/deployment-targets/environments/production/evidence/runtime.yaml"
-            ),
-        )
-        .unwrap();
+        reference_target(&target, |governance| {
+            let replaced = governance.replace(
+                "assuranceProfile: evidence-grade",
+                &format!("assuranceProfile: [{CANARY}]"),
+            );
+            assert!(replaced.contains(CANARY));
+            replaced
+        });
 
-        for (command, error) in [
-            (
-                "check",
-                check(&project, Some(&target), false, false).unwrap_err(),
-            ),
-            ("explain", explain(&project, Some(&target)).unwrap_err()),
+        for error in [
+            check(&project, Some(&target), false, false).map(|_| ()),
+            explain(&project, Some(&target)).map(|_| ()),
         ] {
-            let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-            let json = serde_json::to_string(&denied.0).unwrap();
-            let human = rendered_denial(command, &project, &denied.0);
-            assert!(!json.contains(CANARY));
-            assert!(!human.contains(CANARY));
-            assert_eq!(denied.0[0]["code"], "evidence.target.governance-shape");
-            assert_eq!(denied.0[0]["path"], "governance.yaml:/assuranceProfile");
+            let report = refused(error.unwrap_err());
+            assert!(!printed(&report).contains(CANARY));
+            let (code, file, path) = &sites(&report, &target)[0];
+            assert!(code.starts_with("config."), "{code}");
+            assert_eq!(file, "governance.yaml");
+            assert_eq!(path, "/assuranceProfile");
         }
     }
 
     #[test]
-    fn missing_declared_asset_is_a_finding_until_findings_are_denied() {
+    fn missing_declared_asset_is_a_warning_until_warnings_are_denied() {
         let temporary = temporary();
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-            temporary.path(),
-        );
-        put_marker(temporary.path());
+        sqlite_template(temporary.path());
         fs::remove_file(temporary.path().join("derivations/record-status.rhai")).unwrap();
         fs::remove_file(temporary.path().join("fixtures/record-status.yaml")).unwrap();
 
-        let report = check(temporary.path(), None, false, false).unwrap();
-        assert_eq!(report["status"], "incomplete");
-        assert!(report["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| {
-                finding["code"] == "evidence.question.derivation-missing"
-                    && finding["path"] == "questions/record-status.yaml:/derivation"
-            }));
+        let checked = check(temporary.path(), None, false, false).unwrap();
+        assert_eq!(checked.report["status"], "incomplete");
+        assert!(reports(
+            &checked.diagnostics,
+            temporary.path(),
+            "evidence.question.derivation-missing",
+            "questions/record-status.yaml",
+            "/derivation"
+        ));
 
-        let error = check(temporary.path(), None, false, true).unwrap_err();
-        assert!(error.downcast_ref::<DeniedFindings>().is_some());
+        let report = refused(check(temporary.path(), None, false, true).unwrap_err());
+        assert_eq!(report.error_count(), 0);
+        assert!(report.warning_count() > 0);
     }
 
     #[test]
-    fn missing_source_asset_is_an_incomplete_finding_before_compilation() {
+    fn missing_source_asset_is_an_incomplete_warning_before_compilation() {
         let temporary = temporary();
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-            temporary.path(),
-        );
-        put_marker(temporary.path());
+        sqlite_template(temporary.path());
         fs::remove_file(
             temporary
                 .path()
@@ -2051,30 +2396,24 @@ factSchema: schemas/record-status-facts.schema.yaml
         )
         .unwrap();
 
-        let report = check(temporary.path(), None, false, false).unwrap();
-        assert_eq!(report["status"], "incomplete");
-        assert!(report["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|finding| {
-                finding["code"] == "evidence.source.asset-missing"
-                    && finding["path"] == "sources/record-status.yaml:/responseSchema"
-            }));
+        let checked = check(temporary.path(), None, false, false).unwrap();
+        assert_eq!(checked.report["status"], "incomplete");
+        assert!(reports(
+            &checked.diagnostics,
+            temporary.path(),
+            "evidence.source.asset-missing",
+            "sources/record-status.yaml",
+            "/responseSchema"
+        ));
 
-        let error = check(temporary.path(), None, false, true).unwrap_err();
-        assert!(error.downcast_ref::<DeniedFindings>().is_some());
+        refused(check(temporary.path(), None, false, true).unwrap_err());
     }
 
     #[test]
     fn escaping_source_assets_are_refused_before_any_host_path_lookup() {
         for invalid in ["../outside.yaml", "/private/tmp/outside.yaml"] {
             let temporary = temporary();
-            copy_tree(
-                &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-                temporary.path(),
-            );
-            put_marker(temporary.path());
+            sqlite_template(temporary.path());
             fs::remove_file(temporary.path().join("derivations/record-status.rhai")).unwrap();
             let source_path = temporary.path().join("sources/record-status.yaml");
             let mut source: Value =
@@ -2082,42 +2421,43 @@ factSchema: schemas/record-status-facts.schema.yaml
             source["responseSchema"] = json!(invalid);
             fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
 
-            let error = check(temporary.path(), None, false, false).unwrap_err();
-            let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-            assert_eq!(denied.0[0]["code"], "evidence.source.artifact-reference");
+            let report = refused(check(temporary.path(), None, false, false).unwrap_err());
             assert_eq!(
-                denied.0[0]["path"],
-                "sources/record-status.yaml:/responseSchema"
+                sites(&report, temporary.path())[0],
+                (
+                    "evidence.source.artifact-reference".to_owned(),
+                    "sources/record-status.yaml".to_owned(),
+                    "/responseSchema".to_owned()
+                )
             );
-            assert!(!serde_json::to_string(&denied.0).unwrap().contains(invalid));
+            assert!(!printed(&report).contains(invalid));
         }
     }
 
     #[test]
     fn symlinked_declared_assets_are_domain_refusals_even_with_other_gaps() {
-        for (relative, code, path) in [
+        for (relative, code, file, path) in [
             (
                 "schemas/record-status-response.schema.yaml",
                 "evidence.source.artifact-custody",
-                "sources/record-status.yaml:/responseSchema",
+                "sources/record-status.yaml",
+                "/responseSchema",
             ),
             (
                 "derivations/record-status.rhai",
-                "evidence.authoring.unreadable",
+                "evidence.project.not-plain-file",
                 "derivations/record-status.rhai",
+                "",
             ),
             (
                 "fixtures/record-status.yaml",
                 "evidence.question.fixture-custody",
-                "questions/record-status.yaml:/governance/fixtures",
+                "questions/record-status.yaml",
+                "/governance/fixtures",
             ),
         ] {
             let temporary = temporary();
-            copy_tree(
-                &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-                temporary.path(),
-            );
-            put_marker(temporary.path());
+            sqlite_template(temporary.path());
             let outside = temporary.path().join("outside");
             fs::write(&outside, "outside").unwrap();
             let declared = temporary.path().join(relative);
@@ -2130,42 +2470,39 @@ factSchema: schemas/record-status-facts.schema.yaml
             )
             .unwrap();
 
-            let error = check(temporary.path(), None, false, false).unwrap_err();
-            let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-            assert_eq!(denied.0[0]["code"], code);
-            assert_eq!(denied.0[0]["path"], path);
+            let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+            assert!(
+                reports(&report, temporary.path(), code, file, path),
+                "{:?}",
+                sites(&report, temporary.path())
+            );
         }
     }
 
     #[test]
     fn invalid_local_access_is_checked_without_reading_secrets() {
         let temporary = temporary();
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-            temporary.path(),
-        );
-        put_marker(temporary.path());
+        sqlite_template(temporary.path());
         fs::create_dir_all(temporary.path().join("access/policies")).unwrap();
         fs::write(
             temporary.path().join("access/policies/broken.yaml"),
-            "version: 1\nid: broken\nquestions: [missing-question]\n",
+            format!(
+                "apiVersion: {ACCESS_POLICY_API_VERSION}\nkind: EvidenceAccessPolicy\nid: broken\nquestions: [missing-question]\n"
+            ),
         )
         .unwrap();
 
-        let error = check(temporary.path(), None, false, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-        assert_eq!(
-            denied.0[0]["path"],
-            "access/policies/broken.yaml:/questions"
-        );
+        let report = refused(check(temporary.path(), None, false, false).unwrap_err());
+        let (_, file, path) = &sites(&report, temporary.path())[0];
+        assert_eq!(file, "access/policies/broken.yaml");
+        assert!(path.starts_with("/questions"), "{path}");
         assert!(!temporary.path().join("secrets").exists());
     }
 
     #[test]
     fn production_requires_an_explicit_target() {
-        let error = check(Path::new("project"), None, true, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-        assert_eq!(denied.0[0]["code"], "evidence.target.required");
+        let report = refused(check(Path::new("project"), None, true, false).unwrap_err());
+        assert_eq!(report.diagnostics()[0].code, "evidence.target.required");
     }
 
     #[test]
@@ -2174,27 +2511,22 @@ factSchema: schemas/record-status-facts.schema.yaml
         let project = temporary.path().join("project");
         let target = temporary.path().join("target");
         fs::create_dir_all(project.join("questions")).unwrap();
-        fs::create_dir(&target).unwrap();
         put_marker(&project);
-        let governance = include_str!(
-            "../../../products/evidence/reference/deployment-targets/environments/production/evidence/governance.yaml"
-        )
-        .replace("assuranceProfile: evidence-grade", "assuranceProfile: local");
-        fs::write(target.join("governance.yaml"), governance).unwrap();
-        fs::write(
-            target.join("runtime.yaml"),
-            include_str!(
-                "../../../products/evidence/reference/deployment-targets/environments/production/evidence/runtime.yaml"
-            ),
-        )
-        .unwrap();
+        reference_target(&target, |governance| {
+            governance.replace(
+                "assuranceProfile: evidence-grade",
+                "assuranceProfile: local",
+            )
+        });
 
-        let error = check(&project, Some(&target), true, false).unwrap_err();
-        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-        assert!(denied.0.iter().any(|finding| {
-            finding["code"] == "evidence.target.production-profile-required"
-                && finding["path"] == "governance.yaml:/assuranceProfile"
-        }));
+        let report = refused(check(&project, Some(&target), true, false).unwrap_err());
+        assert!(reports(
+            &report,
+            &target,
+            "evidence.target.production-profile-required",
+            "governance.yaml",
+            "/assuranceProfile"
+        ));
         let unchanged = fs::read_to_string(target.join("governance.yaml")).unwrap();
         assert!(unchanged.contains("assuranceProfile: local"));
     }
@@ -2206,12 +2538,7 @@ factSchema: schemas/record-status-facts.schema.yaml
         let target = temporary.path().join("target");
         fs::create_dir_all(project.join("questions")).unwrap();
         put_marker(&project);
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join(
-                "../../products/evidence/reference/deployment-targets/environments/production/evidence",
-            ),
-            &target,
-        );
+        reference_target(&target, |governance| governance);
 
         let checked = check_and_capture_target(&project, Some(&target), false, false).unwrap();
         let governance_path = target.join("governance.yaml");
@@ -2244,30 +2571,28 @@ factSchema: schemas/record-status-facts.schema.yaml
         let checked = check_and_capture_target(temporary.path(), None, false, false).unwrap();
         fs::write(
             temporary.path().join("questions/replacement.yaml"),
-            "id: replacement\n",
+            include_str!("../templates/sqlite-extract/questions/record-status.yaml")
+                .replace("id: record-status", "id: replacement"),
         )
         .unwrap();
 
-        let report = explain_captured(temporary.path(), None, checked).unwrap();
-        assert_eq!(report["status"], "incomplete");
-        assert_eq!(report["questions"], json!([]));
-        assert_eq!(
-            inspect_project(temporary.path()).unwrap().questions.len(),
-            1
-        );
+        let explained = explain_captured(temporary.path(), None, checked).unwrap();
+        assert_eq!(explained.report["status"], "incomplete");
+        assert_eq!(explained.report["questions"], json!([]));
+        let mut gathered = Gathered::default();
+        let inventory = inspect_project(temporary.path(), &mut gathered).unwrap();
+        assert_eq!(inventory.questions.len(), 1);
+        assert!(gathered.report().is_empty());
     }
 
     #[test]
     fn explain_inventory_never_infers_target_governance() {
         let temporary = temporary();
-        copy_tree(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
-            temporary.path(),
-        );
-        put_marker(temporary.path());
+        sqlite_template(temporary.path());
         fs::remove_file(temporary.path().join("fixtures/record-status.yaml")).unwrap();
 
-        let report = explain(temporary.path(), None).unwrap();
+        let explained = explain(temporary.path(), None).unwrap();
+        let report = &explained.report;
 
         assert!(report["targetGovernance"].is_null());
         assert_eq!(report["status"], "incomplete");
@@ -2282,43 +2607,48 @@ factSchema: schemas/record-status-facts.schema.yaml
 
     #[test]
     fn question_inventory_reports_fields_and_profiles_for_both_subject_forms() {
-        let temporary = temporary();
-        fs::create_dir(temporary.path().join("questions")).unwrap();
-        fs::write(
-            temporary.path().join("questions/single.yaml"),
-            "id: single\nsubject:\n  role: record\n  selector: record_reference\n  profile: record-reference-v1\n",
-        )
-        .unwrap();
-        fs::write(
-            temporary.path().join("questions/multiple.yaml"),
-            "id: multiple\nsubjects:\n  - role: child\n    selector: child_reference\n    profile: child-reference-v1\n  - role: guardian\n    profiles: [guardian-reference-v1, guardian-composite-v1]\n",
-        )
-        .unwrap();
-
-        let inventory = inspect_project(temporary.path()).unwrap();
-
-        assert_eq!(inventory.questions[0]["id"], "multiple");
-        assert_eq!(
-            inventory.questions[0]["selectors"],
-            json!(["child_reference"])
+        let single = describe_question(
+            "single",
+            &json!({
+                "id": "single",
+                "subject": {
+                    "role": "record",
+                    "selector": "record_reference",
+                    "profile": "record-reference-v1",
+                },
+            }),
         );
+        let multiple = describe_question(
+            "multiple",
+            &json!({
+                "id": "multiple",
+                "subjects": [
+                    {
+                        "role": "child",
+                        "selector": "child_reference",
+                        "profile": "child-reference-v1",
+                    },
+                    {
+                        "role": "guardian",
+                        "profiles": ["guardian-reference-v1", "guardian-composite-v1"],
+                    },
+                ],
+            }),
+        );
+
+        assert_eq!(multiple["id"], "multiple");
+        assert_eq!(multiple["selectors"], json!(["child_reference"]));
         assert_eq!(
-            inventory.questions[0]["selectorProfiles"],
+            multiple["selectorProfiles"],
             json!([
                 "child-reference-v1",
                 "guardian-reference-v1",
                 "guardian-composite-v1"
             ])
         );
-        assert_eq!(inventory.questions[1]["id"], "single");
-        assert_eq!(
-            inventory.questions[1]["selectors"],
-            json!(["record_reference"])
-        );
-        assert_eq!(
-            inventory.questions[1]["selectorProfiles"],
-            json!(["record-reference-v1"])
-        );
+        assert_eq!(single["id"], "single");
+        assert_eq!(single["selectors"], json!(["record_reference"]));
+        assert_eq!(single["selectorProfiles"], json!(["record-reference-v1"]));
     }
 
     #[test]
@@ -2353,27 +2683,5 @@ factSchema: schemas/record-status-facts.schema.yaml
         );
         let error = validate_runtime_structure(runtime.as_bytes()).unwrap_err();
         assert!(format!("{error:#}").contains("published runtime contract"));
-    }
-
-    #[test]
-    fn diagnostics_keep_the_breg_field_set() {
-        let value = diagnostic("finding", "code", "artifact", "path", "message", "action");
-        let keys = value
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            keys,
-            BTreeSet::from([
-                "artifact".to_owned(),
-                "code".to_owned(),
-                "message".to_owned(),
-                "path".to_owned(),
-                "severity".to_owned(),
-                "suggestedAction".to_owned(),
-            ])
-        );
     }
 }

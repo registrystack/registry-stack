@@ -204,6 +204,8 @@ Later institution integrations use the reusable source, selector, adapter, and s
 Open `questions/adult-status.yaml` in your editor and add the question definition:
 
 ```yaml title="questions/adult-status.yaml" test-file
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check
@@ -278,7 +280,8 @@ mkdir -p mocks/cases
 Open `mocks/source.yaml` and add the three request cases:
 
 ```yaml title="mocks/source.yaml" test-file
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/mock-plan/v1alpha1
+kind: EvidenceMockPlan
 openapi: ../source.openapi.yaml
 operations:
   - method: GET

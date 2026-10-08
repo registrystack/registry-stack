@@ -587,6 +587,8 @@ Evidence Gateway does not convert absence into a negative answer.
 Create `questions/immunization-summary.yaml`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: immunization-summary
 question: Which immunizations are recorded for this child?
 purpose: care-continuity

@@ -84,19 +84,26 @@ pub(crate) fn build_index(
     if dropped.contains(&marker_path) {
         return empty_index(Vec::new());
     }
+    // A marker the reader refuses stops the build; one it accepts with a warning, such as a
+    // deprecated `apiVersion`, is reported and the project is indexed as usual.
+    let mut marker_warnings = Vec::new();
     if let (Some(source), Some(document)) = (documents.get(&marker_path), parsed.get(&marker_path))
     {
         let diagnostics = read_project_marker(&marker_path, source, document);
-        if !diagnostics.is_empty() {
+        if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::ERROR)
+        {
             return empty_index(diagnostics);
         }
+        marker_warnings = diagnostics;
     }
 
     let mut builder = IndexBuilder {
         root,
         symbols: Vec::new(),
         references: Vec::new(),
-        diagnostics: Vec::new(),
+        diagnostics: marker_warnings,
         choices: Vec::new(),
         referenced_files: BTreeSet::new(),
         offered: Vec::new(),
@@ -315,7 +322,7 @@ impl IndexBuilder<'_> {
             name,
             written,
             "Question",
-            "evidence/question-file-name",
+            "evidence.question.file-name",
         );
 
         for subject in subjects(value) {
@@ -399,7 +406,7 @@ impl IndexBuilder<'_> {
             .get("governance")
             .and_then(|governance| governance.get_scalar("fixtures"))
         {
-            // `evidence/unknown-fixture-file` is paired with a compiler rule that sits two crates
+            // `evidence.project.unknown-fixture-file` is paired with a compiler rule that sits two crates
             // from here, so it does not read as an editor invention beside the ones it is listed
             // with. `registry-evidencectl`'s check that this pointer is a project-relative
             // `fixtures/<name>.yaml` runs when it validates production inputs; a local compile
@@ -502,7 +509,7 @@ impl IndexBuilder<'_> {
             self.report(
                 path,
                 written.range,
-                "evidence/subject-selector",
+                "evidence.question.subject-selector",
                 format!(
                     "Subject selector '{}' is not a required string path parameter of operation '{}'",
                     bounded_value(&written.value),
@@ -551,7 +558,7 @@ impl IndexBuilder<'_> {
             self.report(
                 path,
                 written.range,
-                "evidence/unselectable-fact-path",
+                "evidence.question.unselectable-fact-path",
                 format!(
                     "Fact path '{}' is not a selectable leaf of the 200 application/json response of operation '{}'",
                     bounded_value(&written.value),
@@ -602,7 +609,7 @@ impl IndexBuilder<'_> {
             self.report(
                 path,
                 *range,
-                "evidence/undeclared-collection",
+                "evidence.question.undeclared-collection",
                 format!(
                     "This path visits the collection '{}', which source.collectionBounds does not bound",
                     bounded_value(pointer)
@@ -693,7 +700,7 @@ impl IndexBuilder<'_> {
             name,
             written,
             "Access policy",
-            "evidence/access-policy-file-name",
+            "evidence.access-policy.file-name",
         );
 
         for question in scalars(value.get("questions")) {
@@ -1095,7 +1102,7 @@ fn prerequisite(failure: &DescriptionFailure) -> IndexedDiagnostic {
         path: failure.path().to_path_buf(),
         range: DOCUMENT_START,
         severity: DiagnosticSeverity::ERROR,
-        code: Some("evidence/openapi-prerequisite".to_owned()),
+        code: Some("evidence.openapi.prerequisite".to_owned()),
         message: bounded_message(failure.message()),
     }
 }

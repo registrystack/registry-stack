@@ -1,4 +1,5 @@
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/target-governance/v1alpha1
+kind: EvidenceTargetGovernance
 assuranceProfile: local
 service: {providerId: urn:example:local:evidence, publicOrigin: http://127.0.0.1:8080, trustDomain: urn:example:local:trust-domain}
 issuer: {id: urn:example:issuer:authority}
@@ -35,8 +36,8 @@ authorityProfiles:
     kind: statutory
     requesterTags: [example-requester]
     grants:
-      - requirement: urn:example:requirement:answer:v1
-        purpose: eligibility
+      - requirement: urn:example:requirement:record-status:v1
+        purpose: record-status-check
         audienceFrom: authenticated-requester
         responseFormats: [signed-jws, sd-jwt-vc]
-        subjects: [{role: subject, selectorProfile: subject-reference-v1, valueOrigin: request}]
+        subjects: [{role: subject, selectorProfile: record-reference-v1, valueOrigin: request}]

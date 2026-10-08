@@ -227,7 +227,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
             binaries["evidencectl"], "source", command, renamed_export,
             "--project", project, "--target", target, environment=environment,
         )
-        assert 'reads fact "status"' in refused, refused
+        assert 'reads fact `status`' in refused, refused
         assert (project / source["factSchema"]).read_bytes() == installed_facts
     return {
         "exportArtifacts": len(manifest["artifacts"]),

@@ -32,7 +32,7 @@ fn an_index_read_of_an_undeclared_fact_is_named() {
     assert_eq!(
         messages(&findings),
         [
-            "derivation-fact-undeclared: authored derivation reads fact \"status\", \
+            "derivation-fact-undeclared: authored derivation reads fact `status`, \
           which the question's source does not declare"
         ]
     );
@@ -49,9 +49,9 @@ fn a_property_read_and_a_chained_read_are_named() {
     assert_eq!(
         messages(&findings),
         [
-            "derivation-fact-undeclared: authored derivation reads fact \"address\", \
+            "derivation-fact-undeclared: authored derivation reads fact `address`, \
              which the question's source does not declare",
-            "derivation-fact-undeclared: authored derivation reads fact \"missing\", \
+            "derivation-fact-undeclared: authored derivation reads fact `missing`, \
              which the question's source does not declare",
         ]
     );
@@ -139,9 +139,9 @@ fn a_fallback_with_no_declared_name_names_each_of_them() {
     assert_eq!(
         messages(&findings),
         [
-            "derivation-fact-undeclared: authored derivation reads fact \"old\", \
+            "derivation-fact-undeclared: authored derivation reads fact `old`, \
              which the question's source does not declare",
-            "derivation-fact-undeclared: authored derivation reads fact \"older\", \
+            "derivation-fact-undeclared: authored derivation reads fact `older`, \
              which the question's source does not declare",
         ]
     );

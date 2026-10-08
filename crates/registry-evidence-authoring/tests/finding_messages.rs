@@ -50,11 +50,6 @@ struct Case<T> {
 fn question_cases() -> Vec<Case<Question>> {
     vec![
         Case {
-            rule: "question id",
-            build: || question(|document| document["id"] = json!("Record")),
-            message: "question id must be a lowercase local identifier",
-        },
-        Case {
             rule: "question purpose",
             build: || question(|document| document["purpose"] = json!("Record")),
             message: "question purpose must be a lowercase local identifier",
@@ -63,8 +58,7 @@ fn question_cases() -> Vec<Case<Question>> {
             rule: "both subject forms",
             build: || {
                 question(|document| {
-                    document["subjects"] =
-                        json!([{ "role": "other", "selector": "record-key" }]);
+                    document["subjects"] = json!([{ "role": "other", "selector": "record-key" }]);
                 })
             },
             message: "question must declare either subject or subjects, not both",
@@ -81,7 +75,8 @@ fn question_cases() -> Vec<Case<Question>> {
         Case {
             rule: "subject identifier spelling",
             build: || question(|document| document["subject"]["role"] = json!("Holder")),
-            message: "question subjects must use lowercase local role, selector, and profile identifiers",
+            message:
+                "question subjects must use lowercase local role, selector, and profile identifiers",
         },
         Case {
             rule: "repeated subject role",
@@ -109,7 +104,8 @@ fn question_cases() -> Vec<Case<Question>> {
         Case {
             rule: "response formats",
             build: || question(|document| document["responseFormats"] = json!(["sd-jwt-vc"])),
-            message: "responseFormats must contain signed-jws exactly once and may add sd-jwt-vc once",
+            message:
+                "responseFormats must contain signed-jws exactly once and may add sd-jwt-vc once",
         },
         Case {
             rule: "answer concept spelling",
@@ -193,7 +189,7 @@ fn question_cases() -> Vec<Case<Question>> {
             build: || {
                 question(|document| document["source"]["facts"][0]["combine"] = json!("collect"))
             },
-            message: "source fact `marker` uses `collect` but its path visits no collection",
+            message: "this source fact uses `collect` but its path visits no collection",
         },
         Case {
             rule: "one value expected from a path that visits a collection",
@@ -203,14 +199,17 @@ fn question_cases() -> Vec<Case<Question>> {
                 })
             },
             message:
-                "source fact `marker` visits a collection and must explicitly use `combine: collect`",
+                "this source fact visits a collection and must explicitly use `combine: collect`",
         },
         Case {
             rule: "collection bounds",
             build: || {
-                question(|document| document["source"]["collectionBounds"] = json!({ "/records": 0 }))
+                question(|document| {
+                    document["source"]["collectionBounds"] = json!({ "records": 1 })
+                })
             },
-            message: "source.collectionBounds must contain bounded array pointers with values in 1..=256",
+            message:
+                "source.collectionBounds must contain bounded array pointers with values in 1..=256",
         },
         Case {
             rule: "operation identifier",
@@ -380,8 +379,7 @@ fn answer_cases() -> Vec<Case<QuestionAnswer>> {
                 answer(json!({
                     "concept": "marked",
                     "type": "reviewed-structured-value",
-                    "schema": "schemas/marker.yaml",
-                    "maximumSerializedBytes": 0
+                    "schema": "schemas/marker.yaml"
                 }))
             },
             message: "a reviewed structured answer requires maximumSerializedBytes in 1..=65536",
@@ -477,10 +475,9 @@ fn a_usable_question_and_derivation_report_nothing() {
 /// matching their text. Adding a rule is expected to change this list; renaming
 /// a code silently is not.
 ///
-/// Two pairs of cases share a code on purpose. `question-identifier` covers the
-/// same spelling rule applied to two fields, and `fact-combination` covers the
-/// two ways one fact can disagree with its own path; the field a finding names
-/// is what tells those cases apart.
+/// One pair of cases shares a code on purpose: `fact-combination` covers the
+/// two ways one fact can disagree with its own path, and the field a finding
+/// names is what tells those cases apart.
 #[test]
 fn the_set_of_rule_codes_is_the_expected_one() {
     let mut codes = Vec::new();
@@ -493,7 +490,7 @@ fn the_set_of_rule_codes_is_the_expected_one() {
     for case in derivation_cases() {
         codes.push(first(&validate_authored_answer((case.build)())).code);
     }
-    assert_eq!(codes.len(), 44, "codes were: {codes:?}");
+    assert_eq!(codes.len(), 43, "codes were: {codes:?}");
     codes.sort_unstable();
     codes.dedup();
     assert_eq!(
@@ -740,4 +737,68 @@ fn alternative_subject_profiles_are_closed_explicit_and_reference_only() {
     value["subject"] = json!({"role":"holder","profiles":["by-code"]});
     value["source"] = base_question()["source"].clone();
     assert!(!validate_question(&serde_json::from_value(value).unwrap()).is_empty());
+}
+
+/// The members a type now bounds are refused by the shared reader, where they
+/// are written, before any check runs: the identifier grammar, a collection
+/// bound, and a serialized size.
+#[test]
+fn the_reader_refuses_the_values_the_types_bound() {
+    let envelope =
+        "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\n";
+    let base = "id: record-check
+question: Does the record carry the reviewed marker?
+purpose: record-check
+subject: {role: holder, selector: record-key}
+source:
+  operation: getRecord
+  facts: [{name: marker, path: /records/*/marker, combine: collect}]
+  collectionBounds: {/records: 4}
+answers:
+  - {concept: marked, type: reviewed-structured-value, schema: schemas/marker.yaml, maximumSerializedBytes: 1024}
+derivation: derivations/record-check.rhai
+disclosure: {allow: [marked]}
+";
+    let accepted = format!("{envelope}{base}");
+    registry_evidence_authoring::formats::check_question(
+        "questions/record-check.yaml",
+        accepted.as_bytes(),
+    )
+    .expect("the base question is accepted");
+    for (from, to, code, path) in [
+        (
+            "id: record-check",
+            "id: Record",
+            "config.invalid-value",
+            "/id",
+        ),
+        (
+            "{/records: 4}",
+            "{/records: 0}",
+            "config.out-of-range",
+            "/source/collectionBounds/~1records",
+        ),
+        (
+            "maximumSerializedBytes: 1024",
+            "maximumSerializedBytes: 0",
+            "config.out-of-range",
+            "/answers/0/maximumSerializedBytes",
+        ),
+    ] {
+        let document = format!("{envelope}{}", base.replace(from, to));
+        let report = registry_evidence_authoring::formats::check_question(
+            "questions/record-check.yaml",
+            document.as_bytes(),
+        )
+        .expect_err("the reader refuses the value");
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(
+            (diagnostic.code.as_str(), diagnostic.path.as_str()),
+            (code, path)
+        );
+        assert!(diagnostic
+            .source
+            .as_ref()
+            .is_some_and(|source| source.line.is_some()));
+    }
 }

@@ -456,7 +456,7 @@ mod tests {
         for (path, text) in [
             (
                 "questions/record-active.yaml",
-                "id: record-active\nquestion: Is the record active?\npurpose: record-verification\nsubject:\n  role: subject\n  profiles: [record-code]\nsource:\n  ref: lookup\nanswers:\n- concept: active\n  type: boolean\nderivation: derivations/record-active.rhai\ndisclosure:\n  allow: [active]\n",
+                "apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1\nkind: EvidenceQuestion\nid: record-active\nquestion: Is the record active?\npurpose: record-verification\nsubject:\n  role: subject\n  profiles: [record-code]\nsource:\n  ref: lookup\nanswers:\n- concept: active\n  type: boolean\nderivation: derivations/record-active.rhai\ndisclosure:\n  allow: [active]\n",
             ),
             (
                 "derivations/record-active.rhai",
@@ -475,7 +475,7 @@ mod tests {
             let error = review_with_revisions(fixture.args(renamed), apply, &mut output, no_target)
                 .expect_err("a renamed fact the derivation still reads");
             assert!(
-                format!("{error:#}").contains("reads fact \"status\""),
+                format!("{error:#}").contains("reads fact `status`"),
                 "error was: {error:#}"
             );
             let report = parsed(&output);

@@ -21,7 +21,11 @@ mod support;
 use std::{fs, path::Path};
 
 use registry_evidence_authoring::{
-    model::Question, testing::ProjectFile, validate::validate_answer_schema_path,
+    formats::{decode_authored, QUESTION as QUESTION_FORMAT},
+    layout::MAX_QUESTION_BYTES,
+    model::Question,
+    testing::ProjectFile,
+    validate::validate_answer_schema_path,
 };
 use registry_language_server::{CompletionCandidate, ProjectIndex};
 use serde_json::{json, Value};
@@ -33,6 +37,14 @@ use support::{
     SOURCE_PATH,
 };
 use tower_lsp_server::ls_types::{Position, Range};
+
+/// A question document decoded the way `registry-evidencectl` decodes one, with the reader's
+/// diagnostics as the error.
+fn read_question(text: &str) -> Result<Question, String> {
+    decode_authored::<Question>(QUESTION_PATH, text.as_bytes(), &QUESTION_FORMAT)
+        .map(|decoded| decoded.value)
+        .map_err(|report| format!("{:?}", report.diagnostics()))
+}
 
 /// The labels one position offers, in the order they are offered.
 fn labels_at(
@@ -257,7 +269,7 @@ fn recording_a_list_neither_adds_a_report_nor_takes_one_away() {
 
     assert_eq!(
         reported_codes(&index),
-        vec!["evidence/unselectable-fact-path"],
+        vec!["evidence.question.unselectable-fact-path"],
         "one fact path is not a leaf and one is, so exactly one of them is reported"
     );
     let offered = vec![
@@ -539,7 +551,8 @@ async fn a_deleted_source_stops_being_offered_with_and_without_a_tab_over_it() {
 fn accepting_a_candidate_beside_multibyte_text_leaves_the_document_the_author_meant() {
     let unquoted = QUESTION.replace("<|source-ref|>people", "<|source-ref|>\u{1d51e}ledger");
     let quoted = QUESTION.replace("<|source-ref|>people", "'<|source-ref|>\u{1d51e}ledger'");
-    let policy = "version: 1\nid: adult-checks\nquestions: [a-\u{1d51e}dult-status, \
+    let policy = "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
+                  kind: EvidenceAccessPolicy\nid: adult-checks\nquestions: [a-\u{1d51e}dult-status, \
                   <|policy-question|>adult-statu]\n";
 
     for (relative, cursor, written, label, expected) in [
@@ -673,7 +686,7 @@ fn accepting_a_name_carrying_yaml_punctuation_leaves_the_field_holding_that_name
             edited.contains(expected),
             "accepting '{label}' over {written:?} left {edited:?}"
         );
-        let question = serde_norway::from_str::<Question>(&edited)
+        let question = read_question(&edited)
             .unwrap_or_else(|error| panic!("accepting '{label}' left {edited:?}: {error}"));
         assert_eq!(question.source.operation.as_deref(), Some(label));
     }
@@ -718,7 +731,7 @@ fn accepting_a_collection_bound_that_carries_a_separator_leaves_a_document_that_
         edited.contains("    \"/rec: ords\": 16\n"),
         "accepting '{collection}' left {edited:?}"
     );
-    let question = serde_norway::from_str::<Question>(&edited)
+    let question = read_question(&edited)
         .unwrap_or_else(|error| panic!("accepting '{collection}' left {edited:?}: {error}"));
     assert!(
         question.source.collection_bounds.contains_key(collection),
@@ -765,9 +778,11 @@ fn a_question_past_its_ceiling_still_lends_its_name_to_the_policy_that_admits_it
     let oversized = format!(
         "{}\n# {}\n",
         without_cursors(QUESTION),
-        "p".repeat(64 * 1024)
+        "p".repeat(MAX_QUESTION_BYTES as usize)
     );
-    let policy = "version: 1\nid: adult-checks\nquestions: [<|policy-question|>adult-status]\n";
+    let policy = "apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1\n\
+                  kind: EvidenceAccessPolicy\nid: adult-checks\n\
+                  questions: [<|policy-question|>adult-status]\n";
     let project = EvidenceProject::new(&replacing(
         &replacing(&adult_status_project(), QUESTION_PATH, &oversized),
         "access/policies/adult-checks.yaml",
@@ -778,7 +793,7 @@ fn a_question_past_its_ceiling_still_lends_its_name_to_the_policy_that_admits_it
     assert!(
         reported_codes(&index)
             .iter()
-            .any(|code| code.starts_with("evidence/")),
+            .any(|code| code.starts_with("evidence.")),
         "the oversized question is reported on itself: {:?}",
         reported_codes(&index)
     );
@@ -1010,7 +1025,7 @@ fn a_source_artifact_is_never_offered_at_an_answer_schema() {
     ));
     assert_eq!(
         reported_codes(&taken.index()),
-        vec!["evidence/answer-schema-path"],
+        vec!["evidence.question.answer-schema-path"],
         "a question that writes the refused path is told so at the field, which is what would keep \
          an offer a bad menu rather than a silent trap"
     );

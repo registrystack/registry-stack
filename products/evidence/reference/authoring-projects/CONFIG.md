@@ -34,16 +34,16 @@ and the ceiling each is read under.
 
 | Path | Holds | Ceiling |
 |---|---|---|
-| `evidence-project.yaml` | The project marker | 4 KiB |
+| `evidence-project.yaml` | The project marker | 1 MiB |
 | `source.openapi.yaml` | OpenAPI description required by inline operations | 16 MiB |
-| `questions/` | Authored questions, one YAML document each | 64 KiB per document, 1 to 128 when compiled |
+| `questions/` | Authored questions, one YAML document each | 1 MiB per document, 1 to 128 when compiled |
 | `sources/` | Source definitions a question may name instead of an inline operation | 1 MiB |
 | `selectors/` | Selector definitions | 1 MiB |
 | `derivations/` | Authored derivation programs, one Rhai file each | 64 KiB |
 | `schemas/` | Schemas a structured answer may name | 1 MiB |
 | `fixtures/` | Recorded request and response pairs a project is replayed against | 1 MiB |
 | `secrets/` | Key material a project needs to run locally | n/a |
-| `access/policies/` | Access policy documents | 64 KiB |
+| `access/policies/` | Access policy documents | 1 MiB |
 
 An inline operation requires `source.openapi.yaml`. A project whose questions
 all name a `source.ref` may omit it. When present, it declares
@@ -51,9 +51,11 @@ all name a `source.ref` may omit it. When present, it declares
 
 Run `evidencectl check <project>` to parse and compile these authored inputs
 offline. The command can succeed with `status: incomplete`; each gap remains a
-visible finding with `severity`, `code`, `artifact`, `path`, `message`, and
-`suggestedAction`. Add `--deny-findings` when any finding must refuse the
-command. `evidencectl explain <project>` applies the same authoring validation
+visible diagnostic with `severity: warning`, `code`, `artifact`, `path`,
+`message`, `suggestedAction`, and the `source` file, line, and column it names.
+Add `--deny-warnings` when any warning must refuse the command. The command
+exits 0 when it passes, 1 when it refuses the project, 2 for a usage error, and
+3 when it could not finish. `evidencectl explain <project>` applies the same authoring validation
 and reports its status, findings, revision, and complete inventory without
 reading secrets, contacting a dependency, or running a fixture.
 
@@ -140,22 +142,43 @@ and synthesizes `signer.privateKeyRef` as
 reference, not the private JWK, HMAC masters, or another secret value. The
 runtime validates the referenced owner-only files before serving.
 
+## Envelopes
+
+Every authored YAML document except a source and a selector opens with two
+keys that name its format: `apiVersion`, which carries the format version, and
+`kind`. A document without them is refused as `config.missing-envelope`, and a
+`version` or `formatVersion` key the format no longer takes is refused as
+`config.removed-key` with the line to delete.
+
+| File | `apiVersion` | `kind` |
+|---|---|---|
+| `evidence-project.yaml` | `id.registrystack.org/formats/evidence/authoring-project/v1alpha1` | `EvidenceAuthoringProject` |
+| `questions/<id>.yaml` | `id.registrystack.org/formats/evidence/question/v1alpha1` | `EvidenceQuestion` |
+| `access/policies/<id>.yaml` | `id.registrystack.org/formats/evidence/access-policy/v1alpha1` | `EvidenceAccessPolicy` |
+| `access/clients/<id>.yaml` | `id.registrystack.org/formats/evidence/access-client/v1alpha1` | `EvidenceAccessClient` |
+| a target's `governance.yaml` | `id.registrystack.org/formats/evidence/target-governance/v1alpha1` | `EvidenceTargetGovernance` |
+| the `settings.yaml` that `target new --settings` reads | `id.registrystack.org/formats/evidence/target-settings/v1alpha1` | `EvidenceTargetSettings` |
+| `mocks/source.yaml` | `id.registrystack.org/formats/evidence/mock-plan/v1alpha1` | `EvidenceMockPlan` |
+
+Every one of these documents is read by the shared configuration reader under
+the same rules: at most 1 MiB, one document, no anchors, aliases, tags, or
+duplicate keys, and no `${...}` expression, which is refused as
+`config.substitution-not-allowed` because nothing in an authoring project is
+substituted.
+
 ## The project marker
 
 `evidence-project.yaml` confirms that a directory holding authoring parts is
 the project a caller thinks it read. A directory without one is not an error.
+The marker is its envelope and nothing else.
 
-| Key | Required | Meaning |
-|---|---|---|
-| `version` | yes | Marker format version. `1` is the only value this crate parses. |
-| `project` | yes | The kind of project the marker names. `evidence-authoring` is the only kind today. |
-
-`evidencectl init` writes exactly two lines, held to that text by
+`evidencectl init` writes exactly these lines, held to that text by
 `crates/registry-evidence-authoring/src/marker.rs`:
 
 ```yaml
-version: 1
-project: evidence-authoring
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/authoring-project/authoring-project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/evidence/authoring-project/v1alpha1
+kind: EvidenceAuthoringProject
 ```
 
 ## An authored question
@@ -165,6 +188,8 @@ which source, and which governed concepts the answer carries. This is a
 complete question, from the fixtures in `crates/registry-evidencectl/src/authoring.rs`:
 
 ```yaml
+apiVersion: id.registrystack.org/formats/evidence/question/v1alpha1
+kind: EvidenceQuestion
 id: adult-status
 question: Is the person at least 18 years old?
 purpose: age-check
@@ -506,7 +531,7 @@ of a longer chain), must name a fact the question's source declares: a
 `source.facts[].name` for an inline operation, or a property of a referenced
 source's `factSchema` when that schema is a closed object
 (`additionalProperties: false`). A read of any other name is refused as
-`evidence.authoring.derivation-fact-undeclared` against the derivation file, by
+`evidence.derivation.fact-undeclared` against the derivation file, by
 `check`, fixture runs, `build`, `package`, and the structural check `source
 diff` and `source update` run. That is what turns a source rename, such as a
 regenerated export whose fact changed name, into an authoring refusal rather
@@ -597,16 +622,17 @@ part of the production authoring form or copied into a production target.
 The document is closed and has exactly these keys:
 
 ```yaml
-version: 1
+apiVersion: id.registrystack.org/formats/evidence/access-policy/v1alpha1
+kind: EvidenceAccessPolicy
 id: age-checks
 questions: [adult-status, age-bracket]
 ```
 
-`version` must be `1`. `id` follows the lowercase local-identifier grammar and
+`id` follows the lowercase local-identifier grammar and
 must equal the filename stem. `questions` contains 1 through 128 existing
 question ids in strictly increasing lexical order, which also makes the list
 unique. The project may contain 1 through 128 policy files, and every entry in
-`access/policies/` must be an `<id>.yaml` regular file no larger than 64 KiB.
+`access/policies/` must be an `<id>.yaml` regular file no larger than 1 MiB.
 
 Use the command when adding a policy so it validates question ids and writes
 the sorted closed document without replacing an existing file:
@@ -709,8 +735,8 @@ Every ceiling the authoring form applies, with the file that states it.
 | Limit | Value | Stated in |
 |---|---|---|
 | Questions per project | 128 | `layout.rs` |
-| Question document size | 64 KiB | `layout.rs` |
-| Project marker size | 4 KiB | `layout.rs` |
+| Question document size | 1 MiB | `layout.rs` |
+| Project marker size | 1 MiB | `layout.rs` |
 | OpenAPI description size | 16 MiB | `layout.rs` |
 | Derivation program size | 64 KiB | `layout.rs` |
 | Subjects per question | 1 to 8 | `validate.rs` |
@@ -730,7 +756,7 @@ Every ceiling the authoring form applies, with the file that states it.
 | Local public signing JWK | 64 KiB | `registry-platform-crypto` |
 | Access policies per project | 1 to 128 | `authoring.rs` |
 | Questions per access policy | 1 to 128 | `authoring.rs` |
-| Access policy document size | 64 KiB | `layout.rs` |
+| Access policy document size | 1 MiB | `layout.rs` |
 
 ## Complete key-path inventory
 
@@ -772,6 +798,7 @@ answers[].sdJwtVc.disclosure
 answers[].type
 answers[].values
 answers[].values[]
+apiVersion
 derivation
 disclosure
 disclosure.allow
@@ -788,6 +815,7 @@ governance.referenceFrameworks[]
 governance.requirement
 governance.validitySeconds
 id
+kind
 purpose
 question
 responseFormats
@@ -826,7 +854,7 @@ subjects[].source
 
 <!-- evidence-authoring-project-marker-key-paths:start -->
 ```text
-project
-version
+apiVersion
+kind
 ```
 <!-- evidence-authoring-project-marker-key-paths:end -->

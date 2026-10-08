@@ -21,11 +21,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    build,
+    authored, build,
     evidence_binary::{self, EVIDENCE_RUNTIME_API_VERSION, EVIDENCE_RUNTIME_KIND},
     source_import::ProjectLock,
 };
+use registry_evidence_authoring::formats::{
+    decode_authored, envelope_lines, read_authored, TARGET_GOVERNANCE,
+    TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND, TARGET_SETTINGS,
+};
 use registry_platform_crypto::{PublicJwk, SigningAlgorithm};
+use registry_platform_yaml::Reader;
 
 const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 const MAX_PUBLIC_KEY_BYTES: u64 = 256 * 1024;
@@ -95,10 +100,13 @@ pub(crate) struct ExplainArgs {
     pub json: bool,
 }
 
+/// The settings `target new` writes a target from, decoded by the shared
+/// reader. Governance and runtime are carried as written and held to their
+/// closed shapes by `validate_settings_documents`; the format version is the
+/// document's `apiVersion`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TargetSettings {
-    format_version: u32,
     governance: Value,
     runtime: Value,
     #[serde(default)]
@@ -182,15 +190,12 @@ fn new(args: NewArgs) -> Result<ExitCode> {
         .file_name()
         .ok_or_else(|| anyhow!("settings file must name one file"))?;
     let settings_path = settings_parent.join(settings_name);
-    let mut settings: TargetSettings = serde_norway::from_slice(&read_plain_file(
-        &settings_path,
-        MAX_SETTINGS_BYTES,
-        "target settings",
-    )?)
-    .context("target settings are not the closed Version 1 shape")?;
-    if settings.format_version != 1 {
-        bail!("target settings formatVersion must be 1");
-    }
+    let mut settings = decode_authored::<TargetSettings>(
+        &settings_arg.to_string_lossy(),
+        &read_plain_file(&settings_path, MAX_SETTINGS_BYTES, "target settings")?,
+        &TARGET_SETTINGS,
+    )?
+    .value;
     if args.local {
         fill_local_paths(project, &settings.governance, &mut settings.runtime)?;
     }
@@ -239,9 +244,7 @@ fn new(args: NewArgs) -> Result<ExitCode> {
         .context("creating public-keys directory")?;
     write_new_file(
         &staged.join("governance.yaml"),
-        serde_norway::to_string(&settings.governance)
-            .context("encoding governance.yaml")?
-            .as_bytes(),
+        governance_document(&settings.governance)?.as_bytes(),
         0o644,
     )?;
     write_new_file(
@@ -299,11 +302,7 @@ pub(crate) fn ensure_local_connection(
         return create_local_target(project, directory, serde_json::json!({name: binding}));
     }
     let path = directory.join("governance.yaml");
-    let mut governance: Value = serde_norway::from_slice(&read_plain_file(
-        &path,
-        MAX_SETTINGS_BYTES,
-        "local target governance",
-    )?)?;
+    let mut governance = read_governance(directory)?;
     let connections = governance
         .as_object_mut()
         .context("local governance must be a mapping")?
@@ -315,7 +314,7 @@ pub(crate) fn ensure_local_connection(
         return Ok(());
     }
     connections.insert(name.to_owned(), binding);
-    let bytes = serde_norway::to_string(&governance)?;
+    let bytes = governance_document(&governance)?;
     let permissions = fs::metadata(&path)?.permissions();
     let mut staged =
         tempfile::NamedTempFile::new_in(directory).context("staging local connection settings")?;
@@ -390,7 +389,7 @@ pub(crate) fn create_local_target(
     let files = [
         (
             "governance.yaml".to_owned(),
-            serde_norway::to_string(&governance)?.into_bytes(),
+            governance_document(&governance)?.into_bytes(),
         ),
         (
             "runtime.yaml".to_owned(),
@@ -422,6 +421,32 @@ pub(crate) fn create_local_target(
         write_new_file(&staging.path().join(name), &bytes, 0o644)?;
     }
     publish(staging, directory)
+}
+
+/// A target's `governance.yaml`, read by the shared reader, as the members
+/// it holds without its envelope.
+fn read_governance(target: &Path) -> Result<Value> {
+    let bytes = read_plain_file(
+        &target.join("governance.yaml"),
+        MAX_SETTINGS_BYTES,
+        "deployment governance",
+    )?;
+    let mut governance =
+        read_authored("governance.yaml", &bytes, &TARGET_GOVERNANCE)?.to_json_value();
+    if let Some(members) = governance.as_object_mut() {
+        members.remove("apiVersion");
+        members.remove("kind");
+    }
+    Ok(governance)
+}
+
+/// The `governance.yaml` text for `governance`, its envelope first.
+fn governance_document(governance: &Value) -> Result<String> {
+    Ok(format!(
+        "{}{}",
+        envelope_lines(TARGET_GOVERNANCE_API_VERSION, TARGET_GOVERNANCE_KIND),
+        serde_norway::to_string(governance).context("encoding governance.yaml")?
+    ))
 }
 
 /// Fill only omitted paths in an explicitly local target. Authored paths are
@@ -549,18 +574,14 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
     let _project_lock = ProjectLock::acquire(&args.project)
         .with_context(|| format!("locking editable project {}", args.project.display()))?;
     let evidence_bin = evidence_binary::resolve_matching(None)?;
-    let governance: Value = serde_norway::from_slice(&read_plain_file(
-        &target.join("governance.yaml"),
-        MAX_SETTINGS_BYTES,
-        "deployment governance",
-    )?)
-    .context("parsing deployment governance")?;
-    let runtime: Value = serde_norway::from_slice(&read_plain_file(
+    let governance = read_governance(&target)?;
+    // The runtime track owns the runtime document's envelope; this reads it
+    // through the shared YAML subset only, for its secret references.
+    let runtime = authored::node_value(Reader::new("runtime.yaml").scan(&read_plain_file(
         &target.join("runtime.yaml"),
         MAX_SETTINGS_BYTES,
         "deployment runtime",
-    )?)
-    .context("parsing deployment runtime")?;
+    )?)?);
     let public_key_files = expected_public_key_files(&governance)?;
     let missing_public_key_files = public_key_files
         .iter()
@@ -952,9 +973,9 @@ mod tests {
 
     fn target_settings(signing: &str, public_keys: &str) -> String {
         format!(
-            r#"formatVersion: 1
+            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
+kind: EvidenceTargetSettings
 governance:
-  version: 1
   assuranceProfile: local
   service:
     publicOrigin: http://127.0.0.1:8080
@@ -1428,9 +1449,9 @@ runtime:
         fs::write(&key_path, ES256_PUBLIC_JWK).expect("public key");
         fs::write(
             &settings_path,
-            r#"formatVersion: 1
+            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
+kind: EvidenceTargetSettings
 governance:
-  version: 1
   assuranceProfile: local
   service:
     publicOrigin: http://127.0.0.1:8080
@@ -1481,9 +1502,9 @@ publicKeys:
         let target = temporary.path().join("target");
         fs::write(
             &settings_path,
-            r#"formatVersion: 1
+            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
+kind: EvidenceTargetSettings
 governance:
-  version: 1
   assuranceProfile: local
   service:
     publicOrigin: http://127.0.0.1:8080
@@ -1639,9 +1660,9 @@ runtime:
         let target = temporary.path().join("target");
         fs::write(
             &settings_path,
-            r#"formatVersion: 1
+            r#"apiVersion: id.registrystack.org/formats/evidence/target-settings/v1alpha1
+kind: EvidenceTargetSettings
 governance:
-  version: 1
   assuranceProfile: enterprise
   service:
     publicOrigin: http://127.0.0.1:8080

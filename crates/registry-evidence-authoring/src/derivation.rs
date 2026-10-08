@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use registry_platform_yaml::LocalId;
 use rhai::module_resolvers::DummyModuleResolver;
 
 use crate::finding::{FieldPath, Finding};
@@ -180,9 +181,14 @@ pub fn validate_answer_fact_reads(source: &str, declared: &BTreeSet<String>) -> 
             Finding::new(
                 FieldPath::root(),
                 "derivation-fact-undeclared",
-                format!(
-                    "authored derivation reads fact {name:?}, which the question's source does not declare"
-                ),
+                if LocalId::new(name.as_str()).is_ok() {
+                    format!(
+                        "authored derivation reads fact `{name}`, which the question's source does not declare"
+                    )
+                } else {
+                    "authored derivation reads a fact the question's source does not declare"
+                        .to_owned()
+                },
             )
         })
         .collect()

@@ -73,7 +73,7 @@ impl SymbolKind {
     /// rule rather than the server.
     pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
         match self {
-            Self::Evidence(kind) => Some(format!("evidence/{rule}-{}", kind.slug())),
+            Self::Evidence(kind) => Some(format!("evidence.project.{rule}-{}", kind.slug())),
             Self::Product(product, _) => Some(format!("{}/{rule}", product.name())),
         }
     }
@@ -180,7 +180,7 @@ impl EvidenceKind {
     }
 
     /// The part of a diagnostic code that names this kind. It is [`Self::label`] without the
-    /// spaces, so `evidence/unknown-source` and `evidence/unknown-selector-profile` read as the
+    /// spaces, so `evidence.project.unknown-source` and `evidence.project.unknown-selector-profile` read as the
     /// sentences they accompany.
     pub(crate) fn slug(self) -> &'static str {
         match self {
@@ -484,10 +484,20 @@ impl ProjectIndex {
         // A document that does not parse cleanly reports where it stops parsing and nothing else.
         // The symbols it still yields stay in the index and keep satisfying other documents, but
         // its own references and definitions are read from text the author has not finished.
-        diagnostics.retain(|diagnostic| !syntax_errors.contains_key(&diagnostic.path));
+        // The shared configuration reader's own syntax sentence is the exception: it is what the
+        // command line prints for the same document, so it stands in for the editor's.
+        diagnostics.retain(|diagnostic| {
+            !syntax_errors.contains_key(&diagnostic.path) || is_reader_syntax_diagnostic(diagnostic)
+        });
+        let read_by_the_reader = diagnostics
+            .iter()
+            .filter(|diagnostic| is_reader_syntax_diagnostic(diagnostic))
+            .map(|diagnostic| diagnostic.path.clone())
+            .collect::<BTreeSet<_>>();
         diagnostics.extend(
             syntax_errors
                 .into_iter()
+                .filter(|(path, _)| !read_by_the_reader.contains(path))
                 .map(|(path, range)| IndexedDiagnostic {
                     path,
                     range,
@@ -880,6 +890,15 @@ impl ProjectIndex {
         diagnostics.sort_by(diagnostic_cmp);
         diagnostics
     }
+}
+
+/// Whether `diagnostic` is the shared configuration reader's report of a YAML syntax error, whose
+/// codes all sit under `yaml.`.
+fn is_reader_syntax_diagnostic(diagnostic: &IndexedDiagnostic) -> bool {
+    diagnostic
+        .code
+        .as_deref()
+        .is_some_and(|code| code.starts_with("yaml."))
 }
 
 /// The rule a document larger than the ceiling its family holds it to is refused under.
