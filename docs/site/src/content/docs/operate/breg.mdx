@@ -333,6 +333,8 @@ secretProviders:
 database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
+  # Optional: a private certificate authority for the PostgreSQL connections.
+  # trustedRootCertificateRef: secret:file/database-root.pem
   pool:
     maxSize: 8
   roles:
@@ -386,7 +388,7 @@ configured prefix and never derive their authority from request headers.
 | `listener` | The bind address and the optional public origin that generated documents cite. The runtime reads neither peer addresses nor forwarded headers, so client addresses and TLS termination are enforced at your proxy. |
 | `identity` | The environment, instance, and database this file may serve. `environment` must equal `databaseInitializationEnvironment`. The first `apply` records `databaseId` in the database; every later `plan`, `apply`, and startup refuses a file that names another. `instanceId` names the `source` of every webhook event this runtime captures, and the delivery worker dead-letters a stored event whose source names another instance, so startup refuses a changed `instanceId` while pending deliveries were captured under the previous one; keep the previous `instanceId` until they drain, then change it. |
 | `secretProviders` | The file root (owner-only files) and, when declared, the environment provider. |
-| `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. |
+| `database` | Secret references for the runtime and migration connection URLs, pool bounds, and the two role names the package's policies are written for. `trustedRootCertificateRef` is optional: a secret reference to PEM root certificates, every one of which both connections trust in place of the platform roots, for a PostgreSQL server whose certificate a private authority issued. `testOnlyPlaintext` exists for the project's own database tests; a deployment build refuses it, and the refusal asks you to remove it. |
 | `package` | The package directory the activation ledger names as active and, optionally, the `expectedDigest` it must carry. |
 | `authentication` | The OpenID Connect verifier and the names of the claims that carry the caller's principal and purpose. `oidc.allowedClients` is required: list the OAuth clients whose tokens the registry accepts, or write `unrestricted` to accept a token from every client of the issuer. A project that names clients itself, in a profile's `requesterClients`, in `authorityClaims.trustedActors`, or in a consent recipient organization, needs each of them listed here, so `unrestricted` does not start with such a project. |
 | `audit` and `cursor` | The audit destination and keyed-reference secret, and the secret that signs pagination cursors. Changing the audit key changes future pseudonyms only: spent idempotency keys are found and bound without it, so a retry after the rotation still replays or is refused. Changing the cursor secret invalidates existing cursors. |

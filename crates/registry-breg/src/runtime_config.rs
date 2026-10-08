@@ -219,6 +219,8 @@ pub enum RuntimeConfigError {
     UnsafeSecretProviderRoot,
     #[error("runtime configuration contains an invalid database binding")]
     InvalidDatabase,
+    #[error("runtime configuration asks for a plaintext database connection")]
+    PlaintextDatabase,
     #[error("runtime configuration contains an invalid package binding")]
     InvalidPackage,
     #[error("the configured package root is missing or is not a readable directory")]
@@ -265,6 +267,7 @@ impl RuntimeConfigError {
             Self::SecretProviderRootUnavailable => "breg.runtime.secret-provider-root-unavailable",
             Self::UnsafeSecretProviderRoot => "breg.runtime.unsafe-secret-provider-root",
             Self::InvalidDatabase => "breg.runtime.invalid-database",
+            Self::PlaintextDatabase => "breg.runtime.plaintext-database",
             Self::InvalidPackage => "breg.runtime.invalid-package",
             Self::PackageRootUnavailable => "breg.runtime.package-root-unavailable",
             Self::UnsafePackageRoot => "breg.runtime.unsafe-package-root",
@@ -297,6 +300,7 @@ impl RuntimeConfigError {
                 "/secretProviders/file/root"
             }
             Self::InvalidDatabase => "/database",
+            Self::PlaintextDatabase => "/database/testOnlyPlaintext",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
             Self::InvalidOidc => "/authentication/oidc",
@@ -343,7 +347,10 @@ impl RuntimeConfigError {
                 "Point secretProviders.file.root at a path with no symbolic link in it."
             }
             Self::InvalidDatabase => {
-                "Name database.runtimeUrlRef and database.migrationUrlRef by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
+                "Name database.runtimeUrlRef, database.migrationUrlRef, and database.trustedRootCertificateRef (PEM root certificates), when given, by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
+            }
+            Self::PlaintextDatabase => {
+                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
             }
             Self::InvalidPackage => {
                 "Set package.root to an absolute normal path and package.expectedDigest, when given, to the package's sha256 digest."
@@ -1120,8 +1127,23 @@ impl RuntimeConfig {
         if postgres.get_user() != Some(expected_role.as_str()) {
             return Err(RuntimeConfigError::InvalidDatabase);
         }
-        ConnectionConfig::require_tls_config(postgres, self.database.pool_bounds)
-            .map_err(|_| RuntimeConfigError::InvalidDatabase)
+        #[cfg(feature = "postgres-test")]
+        if self.database.test_only_plaintext {
+            return ConnectionConfig::from_test_config(postgres, self.database.pool_bounds)
+                .map_err(|_| RuntimeConfigError::InvalidDatabase);
+        }
+        let connection = match &self.database.trusted_root_certificate_ref {
+            Some(roots_ref) => {
+                let roots = self.secret_resolver()?.resolve_reference(roots_ref)?;
+                ConnectionConfig::require_tls_config_with_roots_pem(
+                    postgres,
+                    roots.expose_secret(),
+                    self.database.pool_bounds,
+                )
+            }
+            None => ConnectionConfig::require_tls_config(postgres, self.database.pool_bounds),
+        };
+        connection.map_err(|_| RuntimeConfigError::InvalidDatabase)
     }
 
     pub fn audit_profile(&self) -> Result<AuditProfile> {
@@ -1487,14 +1509,32 @@ impl fmt::Debug for SecretProvidersConfig {
 pub struct DatabaseConfig {
     runtime_url_ref: SecretReference,
     migration_url_ref: SecretReference,
+    trusted_root_certificate_ref: Option<SecretReference>,
+    #[cfg(feature = "postgres-test")]
+    test_only_plaintext: bool,
     pool_bounds: PoolBounds,
     roles: SqlRoles,
 }
 
 impl DatabaseConfig {
-    fn from_raw(raw: RawDatabaseConfig) -> Result<Self> {
-        let runtime_url_ref = raw.runtime_url_ref;
-        let migration_url_ref = raw.migration_url_ref;
+    fn from_raw(raw: RawRegistryDatabase) -> Result<Self> {
+        #[cfg(not(feature = "postgres-test"))]
+        if raw.database.test_only_plaintext {
+            return Err(RuntimeConfigError::PlaintextDatabase);
+        }
+        let runtime_url_ref = parse_secret_reference(
+            raw.database.runtime_url_ref,
+            RuntimeConfigError::InvalidDatabase,
+        )?;
+        let migration_url_ref = parse_secret_reference(
+            raw.database.migration_url_ref,
+            RuntimeConfigError::InvalidDatabase,
+        )?;
+        let trusted_root_certificate_ref = raw
+            .database
+            .trusted_root_certificate_ref
+            .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidDatabase))
+            .transpose()?;
         let roles = SqlRoles::from_raw(raw.roles)?;
         // One database reference logs in as one role, so two references are
         // required only when the runtime and migration roles differ.
@@ -1511,6 +1551,9 @@ impl DatabaseConfig {
         Ok(Self {
             runtime_url_ref,
             migration_url_ref,
+            trusted_root_certificate_ref,
+            #[cfg(feature = "postgres-test")]
+            test_only_plaintext: raw.database.test_only_plaintext,
             pool_bounds,
             roles,
         })
@@ -1518,6 +1561,12 @@ impl DatabaseConfig {
 
     pub fn pool_bounds(&self) -> PoolBounds {
         self.pool_bounds
+    }
+
+    /// The secret reference to the PEM root certificates the database
+    /// connections trust, when the platform roots are not used.
+    pub fn trusted_root_certificate_ref(&self) -> Option<&SecretReference> {
+        self.trusted_root_certificate_ref.as_ref()
     }
 }
 
@@ -1527,6 +1576,13 @@ impl fmt::Debug for DatabaseConfig {
             .debug_struct("DatabaseConfig")
             .field("runtime_url_ref", &"<redacted>")
             .field("migration_url_ref", &"<redacted>")
+            .field(
+                "trusted_root_certificate_ref",
+                &self
+                    .trusted_root_certificate_ref
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
             .field("pool_bounds", &self.pool_bounds)
             .finish()
     }
@@ -2613,7 +2669,7 @@ struct RawRuntimeConfig {
     listener: RawRegistryListener,
     identity: RawDeploymentIdentity,
     secret_providers: registry_platform_config::SecretProvidersConfig,
-    database: RawDatabaseConfig,
+    database: RawRegistryDatabase,
     /// Defaults to PostgreSQL; S3 requires a bucket with versioning never enabled.
     #[serde(default)]
     attachment_storage: crate::attachment_storage::RawAttachmentStorageConfig,
@@ -2699,9 +2755,12 @@ struct RawDeploymentIdentity {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawDatabaseConfig {
-    runtime_url_ref: SecretReference,
-    migration_url_ref: SecretReference,
+/// The registry's database: the shared database block and the connection
+/// pool and SQL roles the registry adds.
+struct RawRegistryDatabase {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/database"))]
+    #[cfg_attr(feature = "schema", schemars(flatten), serde(skip_serializing))]
+    database: registry_platform_config::DatabaseConfig,
     pool: RawPoolBounds,
     roles: RawSqlRoles,
 }

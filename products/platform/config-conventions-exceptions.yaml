@@ -2355,13 +2355,6 @@ exceptions:
   class: stable-move
   reason: maxModuleBytes is a refused spelling of 'Largest accepted body or file'
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Rename to maximumModuleBytes'
-- rule: CFG-SCHEMA-5
-  format: breg/runtime
-  location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawDatabaseConfig
-  class: pending
-  wp: WP3
-  reason: RawDatabaseConfig redeclares the shared block DatabaseConfig
-  resolution: Embed DatabaseConfig unchanged from the platform schema
 - rule: CFG-VAL-7
   format: breg/runtime
   location: products/breg/generated/runtime/runtime.schema.json#/$defs/RawContextualClaimNames/properties/grantSourceIssuer

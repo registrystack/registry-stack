@@ -937,9 +937,9 @@ mod tests {
         for pointer in [
             "/properties/eventDestinations/default",
             "/$defs/RawAuthorityClaimsConfig/properties/purpose/default",
-            "/$defs/RawDatabaseConfig/properties/password/default",
-            "/$defs/RawDatabaseConfig/properties/plaintext/default",
-            "/$defs/RawDatabaseConfig/properties/url/default",
+            "/$defs/RawRegistryDatabase/properties/password/default",
+            "/$defs/RawRegistryDatabase/properties/plaintext/default",
+            "/$defs/RawRegistryDatabase/properties/url/default",
             "/$defs/RawEventDestinationConfig/properties/tls/default",
             "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef/default",
             "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef/default",

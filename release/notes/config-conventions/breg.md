@@ -216,6 +216,27 @@ the document after `${...}` substitution is gone: a substituted value is held
 to the bound of the member it fills, and the environment is operator-held, as
 the file is.
 
+### The runtime `database` block takes a trusted root and a test-only plaintext switch
+
+`database` in `runtime.yaml` embeds the shared database block, so it also
+accepts two optional members. This is additive; no existing file changes
+meaning.
+
+- `trustedRootCertificateRef` is a secret reference to PEM root certificates.
+  When it is set, the runtime and the migration connection trust every
+  certificate in that file in place of the platform roots; hostname and
+  certificate validation stay on. A secret that holds no PEM certificate is
+  refused when the connection is configured, as `breg.runtime.invalid-database`.
+- `testOnlyPlaintext` is refused outside the project's test builds as
+  `breg.runtime.plaintext-database` at `/database/testOnlyPlaintext`. Remove
+  it; a deployment reaches PostgreSQL over TLS.
+
+A malformed secret reference in `database.runtimeUrlRef`,
+`database.migrationUrlRef`, or `database.trustedRootCertificateRef` is now
+refused as `breg.runtime.invalid-database` at `/database`, where the reader
+reported `config.invalid-value` at the member. The fix is the same: write the
+member as `secret:file/<name>` or `secret:env/<NAME>`.
+
 ### BREAKING: integer bounds in `runtime.yaml` are refused when read
 <!-- upgrade: already-wrong -->
 

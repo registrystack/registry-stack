@@ -598,30 +598,6 @@
       ],
       "type": "object"
     },
-    "RawDatabaseConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "migrationUrlRef": {
-          "$ref": "#/$defs/SecretReference"
-        },
-        "pool": {
-          "$ref": "#/$defs/RawPoolBounds"
-        },
-        "roles": {
-          "$ref": "#/$defs/RawSqlRoles"
-        },
-        "runtimeUrlRef": {
-          "$ref": "#/$defs/SecretReference"
-        }
-      },
-      "required": [
-        "runtimeUrlRef",
-        "migrationUrlRef",
-        "pool",
-        "roles"
-      ],
-      "type": "object"
-    },
     "RawDeploymentIdentity": {
       "additionalProperties": false,
       "properties": {
@@ -1161,6 +1137,42 @@
       ],
       "type": "object"
     },
+    "RawRegistryDatabase": {
+      "additionalProperties": false,
+      "description": "The registry's database: the shared database block and the connection\npool and SQL roles the registry adds.",
+      "properties": {
+        "migrationUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the migration connection URL."
+        },
+        "pool": {
+          "$ref": "#/$defs/RawPoolBounds"
+        },
+        "roles": {
+          "$ref": "#/$defs/RawSqlRoles"
+        },
+        "runtimeUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the least-privileged runtime connection URL."
+        },
+        "testOnlyPlaintext": {
+          "default": false,
+          "description": "Allow a plaintext connection. Refused outside test builds.",
+          "type": "boolean"
+        },
+        "trustedRootCertificateRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
+        }
+      },
+      "required": [
+        "runtimeUrlRef",
+        "migrationUrlRef",
+        "pool",
+        "roles"
+      ],
+      "type": "object"
+    },
     "RawRegistryListener": {
       "additionalProperties": false,
       "description": "The registry's listener: the shared listener block and an optional public\norigin.",
@@ -1461,7 +1473,7 @@
       "$ref": "#/$defs/RawCursorConfig"
     },
     "database": {
-      "$ref": "#/$defs/RawDatabaseConfig"
+      "$ref": "#/$defs/RawRegistryDatabase"
     },
     "eventDelivery": {
       "$ref": "#/$defs/RawEventDeliveryConfig",

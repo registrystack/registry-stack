@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `runtime.yaml` `database` embeds the shared database block, so it accepts
+  `trustedRootCertificateRef` (a secret reference to PEM root certificates that
+  both the runtime and the migration connection trust in place of the platform
+  roots) and `testOnlyPlaintext` (refused outside test builds as
+  `breg.runtime.plaintext-database`, with the fix named). A malformed secret
+  reference in `database` is now refused as `breg.runtime.invalid-database` at
+  `/database` rather than as `config.invalid-value` at the member.
 - BREAKING: `dev-clients.yaml` has a published JSON Schema, and `bregctl dev`
   decodes its identifiers, issuer and Evidence provider URLs, and mapping keys
   through the shared types. `issuer.exchangeIssuers[].mapping` is spelled

@@ -182,6 +182,34 @@ impl ConnectionConfig {
         })
     }
 
+    /// Requires TLS from an already parsed configuration, trusting every
+    /// certificate of a PEM bundle.
+    ///
+    /// Hostname and certificate validation remain enabled. The bundle is
+    /// bounded, parsed immediately, and never included in `Debug` output.
+    pub fn require_tls_config_with_roots_pem(
+        mut postgres: Config,
+        roots_pem: &[u8],
+        pool_bounds: PoolBounds,
+    ) -> Result<Self> {
+        postgres.ssl_mode(SslMode::Require);
+        name_session(&mut postgres);
+        if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
+            return Err(PostgresKernelError::Configuration(
+                "database configuration requires an explicit user and database",
+            ));
+        }
+        let connector = connector_from_roots(roots_from_pem(roots_pem)?)?;
+        Ok(Self {
+            postgres,
+            transport: Transport::Tls {
+                policy: TlsPolicy::RequireCustomCa,
+                connector,
+            },
+            pool_bounds,
+        })
+    }
+
     /// Constructs a plaintext connection for an isolated real-PostgreSQL test.
     ///
     /// Production configuration loaders must not expose this constructor.
@@ -346,6 +374,37 @@ fn custom_ca_connector(ca_der: &[u8]) -> Result<MakeRustlsConnect> {
     roots
         .add(rustls::pki_types::CertificateDer::from(ca_der.to_vec()))
         .map_err(|_| PostgresKernelError::Configuration("custom CA DER is invalid"))?;
+    connector_from_roots(roots)
+}
+
+/// Every certificate of a PEM bundle as a trust store.
+fn roots_from_pem(roots_pem: &[u8]) -> Result<rustls::RootCertStore> {
+    use rustls::pki_types::{pem::PemObject as _, CertificateDer};
+
+    if roots_pem.is_empty() || roots_pem.len() > MAX_CUSTOM_CA_DER_BYTES {
+        return Err(PostgresKernelError::Configuration(
+            "custom root certificates must be between 1 byte and 1 MiB",
+        ));
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in CertificateDer::pem_slice_iter(roots_pem) {
+        let certificate = certificate.map_err(|_| {
+            PostgresKernelError::Configuration("custom root certificates are not valid PEM")
+        })?;
+        roots.add(certificate).map_err(|_| {
+            PostgresKernelError::Configuration("custom root certificate is invalid")
+        })?;
+    }
+    if roots.is_empty() {
+        return Err(PostgresKernelError::Configuration(
+            "custom root certificates hold no PEM certificate",
+        ));
+    }
+    Ok(roots)
+}
+
+fn connector_from_roots(roots: rustls::RootCertStore) -> Result<MakeRustlsConnect> {
+    ensure_crypto_provider()?;
     let client = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
@@ -452,6 +511,34 @@ mod tests {
         for secret in ["secret_user", "secret_password", "secret_database"] {
             assert!(!debug.contains(secret));
         }
+    }
+
+    #[test]
+    fn custom_roots_pem_trusts_every_certificate_and_refuses_the_rest() {
+        let first = rcgen::generate_simple_self_signed(vec!["db.example".to_owned()]).unwrap();
+        let second = rcgen::generate_simple_self_signed(vec!["db.example".to_owned()]).unwrap();
+        let pem_of = |certificate: &rcgen::Certificate| {
+            use base64::Engine as _;
+            format!(
+                "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+                base64::engine::general_purpose::STANDARD.encode(certificate.der().as_ref())
+            )
+        };
+        let bundle = format!("{}{}", pem_of(&first.cert), pem_of(&second.cert));
+        assert_eq!(roots_from_pem(bundle.as_bytes()).unwrap().len(), 2);
+
+        let url = "postgresql://registry_runtime@registry.example/registry";
+        let config = ConnectionConfig::require_tls_config_with_roots_pem(
+            parse_connection(url).unwrap(),
+            bundle.as_bytes(),
+            valid_bounds(),
+        )
+        .unwrap();
+        assert_eq!(config.tls_policy(), TlsPolicy::RequireCustomCa);
+
+        assert!(roots_from_pem(b"").is_err());
+        assert!(roots_from_pem(b"not a certificate").is_err());
+        assert!(roots_from_pem(&vec![b'#'; MAX_CUSTOM_CA_DER_BYTES + 1]).is_err());
     }
 
     #[test]

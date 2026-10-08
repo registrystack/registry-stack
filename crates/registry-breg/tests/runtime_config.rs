@@ -498,6 +498,164 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
         .expect("cursor codec builds from protected file secret");
 }
 
+const MIGRATION_URL_REF_LINE: &str =
+    "  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n";
+
+fn pem_of(certificate: &rcgen::Certificate) -> String {
+    format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        base64::engine::general_purpose::STANDARD.encode(certificate.der().as_ref())
+    )
+}
+
+/// `valid_runtime` with `members` added to its `database` block.
+fn runtime_with_database_members(fixture: &RuntimeFixture, members: &str) -> String {
+    let runtime = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    assert!(runtime.contains(MIGRATION_URL_REF_LINE));
+    runtime.replace(
+        MIGRATION_URL_REF_LINE,
+        &format!("{MIGRATION_URL_REF_LINE}{members}"),
+    )
+}
+
+#[test]
+fn database_trusted_root_applies_to_the_runtime_and_migration_connections() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let first = rcgen::generate_simple_self_signed(vec!["db.example".to_owned()])
+        .expect("test root generates");
+    let second = rcgen::generate_simple_self_signed(vec!["db.example".to_owned()])
+        .expect("test root generates");
+    fixture.write_secret(
+        "database-roots",
+        format!("{}{}", pem_of(&first.cert), pem_of(&second.cert)).as_bytes(),
+    );
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(
+            &fixture,
+            "  trustedRootCertificateRef: secret:file/database-roots\n",
+        ),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::set_var(
+        "BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        MIGRATION_DATABASE_URL_CANARY,
+    );
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    assert!(config.database().trusted_root_certificate_ref().is_some());
+    for connection in [
+        config.runtime_database_connection_config(),
+        config.migration_database_connection_config(),
+    ] {
+        let debug = format!("{:?}", connection.expect("connection configures"));
+        assert!(debug.contains("RequireCustomCa"), "{debug}");
+    }
+}
+
+#[test]
+fn database_trusted_root_refuses_a_secret_holding_no_pem_certificate() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("database-roots", b"not a certificate");
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(
+            &fixture,
+            "  trustedRootCertificateRef: secret:file/database-roots\n",
+        ),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::set_var(
+        "BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        MIGRATION_DATABASE_URL_CANARY,
+    );
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    assert_eq!(
+        config.runtime_database_connection_config().err(),
+        Some(RuntimeConfigError::InvalidDatabase)
+    );
+}
+
+#[test]
+fn database_without_a_trusted_root_reads_as_absent() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::remove_var("BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL");
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    assert!(config.database().trusted_root_certificate_ref().is_none());
+}
+
+#[cfg(not(feature = "postgres-test"))]
+#[test]
+fn database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(&fixture, "  testOnlyPlaintext: true\n"),
+    )
+    .expect("runtime config writes");
+
+    let error = load_runtime_config(&config_path).expect_err("plaintext is refused");
+
+    assert_eq!(error, RuntimeConfigError::PlaintextDatabase);
+    let [diagnostic] =
+        <[_; 1]>::try_from(error.diagnostics(None)).expect("the refusal reports one diagnostic");
+    assert_eq!(diagnostic.code, "breg.runtime.plaintext-database");
+    assert_eq!(diagnostic.path, "/database/testOnlyPlaintext");
+    assert!(
+        diagnostic.suggested_action.contains("testOnlyPlaintext"),
+        "the refusal names the fix"
+    );
+}
+
+#[cfg(feature = "postgres-test")]
+#[test]
+fn database_test_only_plaintext_connects_without_tls_in_test_builds() {
+    let _guard = environment_lock();
+    let fixture = RuntimeFixture::new();
+    let config_path = fixture.path("runtime.yaml");
+    fs::write(
+        &config_path,
+        runtime_with_database_members(&fixture, "  testOnlyPlaintext: true\n"),
+    )
+    .expect("runtime config writes");
+    std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
+    std::env::set_var(
+        "BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+        MIGRATION_DATABASE_URL_CANARY,
+    );
+
+    let config = load_runtime_config(&config_path).expect("runtime config loads");
+
+    for connection in [
+        config.runtime_database_connection_config(),
+        config.migration_database_connection_config(),
+    ] {
+        let debug = format!("{:?}", connection.expect("connection configures"));
+        assert!(debug.contains("TestOnlyPlaintext"), "{debug}");
+    }
+}
+
 #[test]
 fn runtime_document_identity_is_required_and_exact() {
     let fixture = RuntimeFixture::new();
@@ -806,6 +964,11 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
             RuntimeConfigError::InvalidEventDestination,
             "breg.runtime.invalid-event-destination",
             "/eventDestinations",
+        ),
+        (
+            RuntimeConfigError::PlaintextDatabase,
+            "breg.runtime.plaintext-database",
+            "/database/testOnlyPlaintext",
         ),
         (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
         (
@@ -1602,7 +1765,7 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
             "runtimeUrlRef: {}\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:",
             "postgresql://registry_runtime:raw-secret@db.example/registry"
         ),
-        "runtimeUrlRef: secret:env/lowercase\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:".to_owned(),
+        "runtimeUrlRef: secret:env/lower_canary\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:".to_owned(),
     ] {
         let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
             .replace(
@@ -1611,13 +1774,10 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
             );
         let error = parse_runtime_config_with_env(&raw, env_lookup)
             .expect_err("unsafe database material refused");
-        assert_eq!(
-            reader_refusal(&error),
-            ("config.invalid-value", "/database/runtimeUrlRef")
-        );
+        assert_eq!(error, RuntimeConfigError::InvalidDatabase);
         let rendered = format!("{error:?} {error} {}", error.render_human(None));
         assert!(!rendered.contains("raw-secret"), "{rendered}");
-        assert!(!rendered.contains("lowercase"), "{rendered}");
+        assert!(!rendered.contains("lower_canary"), "{rendered}");
     }
     for (member, line) in [
         ("plaintext", "plaintext: true"),
