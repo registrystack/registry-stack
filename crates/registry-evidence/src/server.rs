@@ -141,9 +141,9 @@ fn build_app_with_tracker_at(
     #[cfg(not(test))]
     let _ = evaluation_time;
     let listener = &runtime.runtime_config().listener;
-    let maximum_request_bytes = listener.maximum_request_bytes as usize;
-    let request_timeout = Duration::from_millis(listener.request_timeout_milliseconds);
-    let maximum_concurrent_requests = listener.maximum_concurrent_requests as usize;
+    let maximum_request_bytes = listener.maximum_request_bytes.get() as usize;
+    let request_timeout = Duration::from_millis(listener.request_timeout_milliseconds.get());
+    let maximum_concurrent_requests = listener.maximum_concurrent_requests.get() as usize;
     let evaluations = EvaluationTracker::default();
     // Captured before `runtime` moves into the evidence app's state, so the
     // metrics registry can sample the same rate limiter the evidence routes
@@ -379,7 +379,7 @@ async fn serve_listener<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let grace = Duration::from_millis(config.shutdown_grace_milliseconds);
+    let grace = Duration::from_millis(config.shutdown_grace_milliseconds.get());
     let (shutdown_started_tx, shutdown_started_rx) = tokio::sync::oneshot::channel();
     let graceful = async move {
         shutdown.await;

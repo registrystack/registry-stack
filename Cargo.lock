@@ -5483,6 +5483,7 @@ dependencies = [
  "registry-platform-ratelimit",
  "registry-platform-sdjwt",
  "registry-platform-sqlite",
+ "registry-platform-yaml",
  "reqwest 0.12.28",
  "rhai",
  "rusqlite",

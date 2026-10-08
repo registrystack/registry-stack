@@ -43,6 +43,7 @@ registry-platform-oidc.workspace = true
 registry-platform-ratelimit.workspace = true
 registry-platform-sdjwt.workspace = true
 registry-platform-sqlite = { workspace = true, features = ["fixture"] }
+registry-platform-yaml.workspace = true
 reqwest.workspace = true
 rand_core.workspace = true
 rhai.workspace = true

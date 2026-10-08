@@ -9,6 +9,7 @@ pub mod audit;
 pub mod auth;
 pub mod binding;
 pub mod bundle;
+pub mod check;
 #[doc(hidden)]
 pub mod cli;
 pub mod config;

@@ -16,6 +16,7 @@ use registry_platform_crypto::{
     canonicalize_json, PublicJwk, SigningAlgorithm as ProviderSigningAlgorithm,
 };
 use registry_platform_sqlite::{CapturedSnapshot, ErrorKind as SqliteErrorKind};
+use registry_platform_yaml::Report;
 use rhai::{Engine, AST};
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -26,8 +27,9 @@ use thiserror::Error;
 use url::Url;
 
 use crate::config::{
-    ArtifactPath, ConceptConfig, ConceptForm, EvidenceConfig, OrderedMap, RequirementConfig,
-    RuntimeConfig, SchemaFault, SelectorField, TextLocation, SOURCE_BATCH_CAPABILITY,
+    ArtifactPath, ConceptConfig, ConceptForm, ConfigError, EvidenceConfig, OrderedMap,
+    RequirementConfig, RuntimeConfig, SchemaFault, SelectorField, TextLocation,
+    SOURCE_BATCH_CAPABILITY,
 };
 
 pub const MAX_BUNDLE_FILES: usize = 1_024;
@@ -53,7 +55,7 @@ const OIDC: &str = "oidc";
 const ACTIVE_PUBLIC_JWK_FILE: &str = "activePublicJwkFile";
 const PUBLISHED_PUBLIC_JWK_FILES: &str = "publishedPublicJwkFiles";
 const REVOKED_KEY_IDS: &str = "revokedKeyIds";
-const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 /// Bytes folded into an extract's digest per read. An extract is sized by the
 /// register it holds rather than by a byte cap, so it is digested in chunks of
 /// this size and never held whole.
@@ -87,6 +89,11 @@ pub enum BundleError {
     Package(PackageError),
     #[error("the Evidence deployment configuration is invalid: {0}")]
     Config(ArtifactFault),
+    /// The shared configuration reader refused a configuration file. The
+    /// report carries the reader's diagnostics unchanged, each naming the
+    /// file as it was given or found, the path, the position, and the fix.
+    #[error("{}", crate::config::render_refusal(.0))]
+    Refused(Box<Report>),
     #[error("an Evidence bundle artifact is invalid: {0}")]
     InvalidArtifact(ArtifactFault),
     #[error("an Evidence Rhai script is invalid: {0}")]
@@ -186,6 +193,15 @@ impl fmt::Display for ArtifactFault {
             return fmt::Display::fmt(&self.fault, formatter);
         }
         write!(formatter, "artifact {}: {}", self.artifact, self.fault)
+    }
+}
+
+/// A configuration refusal from `file`, or the value-free fault of `artifact`
+/// when the failure is not the reader's.
+fn configuration_error(artifact: &str, file: &Path, error: ConfigError) -> BundleError {
+    match error.in_file(&file.display().to_string()) {
+        ConfigError::Refused(report) => BundleError::Refused(report),
+        other => BundleError::Config(ArtifactFault::new(artifact, other.fault())),
     }
 }
 
@@ -418,9 +434,7 @@ impl RuntimeDocument {
         // `${NAME}` in a string value reads the process environment; the
         // loader refuses it in a secret reference and under secretProviders.
         let loaded = RuntimeConfig::parse_yaml_with(&bytes, |name| std::env::var(name).ok())
-            .map_err(|error| {
-                BundleError::Config(ArtifactFault::new(RUNTIME_FILE, error.fault()))
-            })?;
+            .map_err(|error| configuration_error(RUNTIME_FILE, path, error))?;
         let config = loaded.config;
         if let Some(file) = &config.secret_providers.file {
             validate_secret_root(&file.root)?;
@@ -529,11 +543,27 @@ impl Bundle {
         Self::load_verified(root, &verified)
     }
 
+    /// Load a verified package as it is found, without requiring it to be
+    /// frozen, for an offline check.
+    ///
+    /// Everything else deployment applies to the package applies here.
+    pub fn load_as_found(root: &Path, verified: &VerifiedPackage) -> Result<Self, BundleError> {
+        Self::load_captured(root, verified, Capture::AsFound)
+    }
+
     fn load_verified(root: &Path, verified: &VerifiedPackage) -> Result<Self, BundleError> {
-        let files = capture_bundle_files(root, verified)?;
+        Self::load_captured(root, verified, Capture::Frozen)
+    }
+
+    fn load_captured(
+        root: &Path,
+        verified: &VerifiedPackage,
+        capture: Capture,
+    ) -> Result<Self, BundleError> {
+        let files = capture_bundle_files(root, verified, capture)?;
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
         let config = EvidenceConfig::parse_yaml(config_bytes)
-            .map_err(|error| BundleError::Config(ArtifactFault::new(CONFIG_FILE, error.fault())))?;
+            .map_err(|error| configuration_error(CONFIG_FILE, &root.join(CONFIG_FILE), error))?;
         validate_file_closure(&config, &files)?;
         let expected_description = crate::discovery::render(&config)
             .map_err(|_| invalid_artifact("the provider discovery description is invalid"))?;
@@ -653,15 +683,29 @@ fn package_error(error: PackageError) -> BundleError {
     BundleError::Package(error.naming_root_as("package.root"))
 }
 
+/// Whether capture refuses a writable bundle.
+///
+/// Deployment serves only a frozen package. An offline check reads the package
+/// as it is found, so an operator can check it before freezing it; the digest
+/// checks against the verified package apply either way.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum Capture {
+    Frozen,
+    AsFound,
+}
+
 fn capture_bundle_files(
     root: &Path,
     verified: &VerifiedPackage,
+    capture: Capture,
 ) -> Result<BTreeMap<String, Vec<u8>>, BundleError> {
     let root_metadata = fs::symlink_metadata(root).map_err(|_| BundleError::Unavailable)?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
         return Err(BundleError::InvalidPath);
     }
-    let filesystem_read_only = filesystem_is_read_only(root)?;
+    // An as-found capture treats the package as if its filesystem were read
+    // only, which is what every writability check below already honours.
+    let filesystem_read_only = capture == Capture::AsFound || filesystem_is_read_only(root)?;
     validate_read_only(
         &root_metadata,
         filesystem_read_only,
@@ -2554,15 +2598,53 @@ fn validate_runtime_bindings(
     bundle: &EvidenceConfig,
     runtime: &RuntimeConfig,
 ) -> Result<(), BundleError> {
+    match runtime_binding_findings(bundle, runtime).into_iter().next() {
+        Some(finding) => Err(finding.error),
+        None => Ok(()),
+    }
+}
+
+/// One way the runtime file fails to bind the bundle it names.
+///
+/// The pointer is the runtime-file member the operator edits to repair it, and
+/// the action says how. The error is the one deployment refuses with.
+#[derive(Debug, Clone)]
+pub struct BindingFinding {
+    pub code: &'static str,
+    pub pointer: String,
+    pub error: BundleError,
+    pub action: &'static str,
+}
+
+/// Every way the runtime file fails to bind the bundle, in the order deployment
+/// checks them, so an offline check reports them all and deployment refuses
+/// with the first.
+pub fn runtime_binding_findings(
+    bundle: &EvidenceConfig,
+    runtime: &RuntimeConfig,
+) -> Vec<BindingFinding> {
+    let mut findings = Vec::new();
+    let mut find =
+        |code: &'static str, pointer: String, error: BundleError, action: &'static str| {
+            findings.push(BindingFinding {
+                code,
+                pointer,
+                error,
+                action,
+            });
+        };
     let signer_matches_assurance = match bundle.assurance_profile {
         crate::config::AssuranceProfile::Local => runtime.signer.is_local_jwk(),
         crate::config::AssuranceProfile::Production
         | crate::config::AssuranceProfile::EvidenceGrade => runtime.signer.is_transit(),
     };
     if !signer_matches_assurance {
-        return Err(invalid_artifact(
-            "runtime signer kind does not match the bundle assurance profile",
-        ));
+        find(
+            "evidence.runtime.signer-assurance-mismatch",
+            "/signer/kind".to_owned(),
+            invalid_artifact("runtime signer kind does not match the bundle assurance profile"),
+            "Write kind: local-jwk for a local bundle, or kind: transit for a production or evidence-grade bundle.",
+        );
     }
     // A governed reference resolves only through a provider the operator
     // enabled, so the bundle cannot reach the process environment unless the
@@ -2582,24 +2664,33 @@ fn validate_runtime_bindings(
             &bundle.audit.key.hash_key_ref,
             &bundle.subject_binding.secret_ref,
         ]);
-    for reference in governed_refs {
-        if runtime
+    if governed_refs.into_iter().any(|reference| {
+        runtime
             .secret_providers
             .check_reference("secretProviders", reference.as_str())
             .is_err()
-        {
-            return Err(invalid_artifact(
+    }) {
+        find(
+            "evidence.runtime.secret-provider-not-enabled",
+            "/secretProviders".to_owned(),
+            invalid_artifact(
                 "a bundle secret reference names a provider the runtime secretProviders does not enable",
-            ));
-        }
+            ),
+            "Enable every provider the bundle's secret references name under secretProviders.",
+        );
     }
     let audit_ref = &bundle.audit.key.hash_key_ref;
     let subject_ref = &bundle.subject_binding.secret_ref;
     if let Some(signing_ref) = runtime.signer.private_key_ref() {
         if signing_ref == audit_ref || signing_ref == subject_ref {
-            return Err(invalid_artifact(
-                "the local signing key reference must be distinct from audit and subject-binding references",
-            ));
+            find(
+                "evidence.runtime.signing-key-shared",
+                "/signer/privateKeyRef".to_owned(),
+                invalid_artifact(
+                    "the local signing key reference must be distinct from audit and subject-binding references",
+                ),
+                "Reference a signing key no other bundle secret reference names.",
+            );
         }
     }
     let secret_root = runtime
@@ -2621,9 +2712,14 @@ fn validate_runtime_bindings(
             .into_iter()
             .any(|path| path == audit_path)
         {
-            return Err(invalid_artifact(
-                "the audit file path must not resolve to configured secret material",
-            ));
+            find(
+                "evidence.runtime.audit-path-is-secret",
+                "/audit/path".to_owned(),
+                invalid_artifact(
+                    "the audit file path must not resolve to configured secret material",
+                ),
+                "Write an audit path outside the secret root.",
+            );
         }
     }
     // The binding is exact in both directions, but the two directions are
@@ -2644,17 +2740,30 @@ fn validate_runtime_bindings(
         .trust_profiles
         .keys()
         .collect::<BTreeSet<_>>();
-    if let Some(unbound) = required.difference(&configured).next() {
-        return Err(trust_profile_fault(
-            unbound,
-            "the runtime configuration does not bind a TLS trust profile the bundle names",
-        ));
+    for unbound in required.difference(&configured) {
+        find(
+            "evidence.runtime.trust-profile-unbound",
+            "/outboundTls/trustProfiles".to_owned(),
+            trust_profile_fault(
+                unbound,
+                "the runtime configuration does not bind a TLS trust profile the bundle names",
+            ),
+            "Bind the trust profile the bundle names under outboundTls.trustProfiles, with its CA bundle file.",
+        );
     }
-    if let Some(unused) = configured.difference(&required).next() {
-        return Err(trust_profile_fault(
-            unused,
-            "the runtime configuration binds a TLS trust profile the bundle does not name",
-        ));
+    for unused in configured.difference(&required) {
+        find(
+            "evidence.runtime.trust-profile-unused",
+            format!(
+                "/outboundTls/trustProfiles/{}",
+                registry_platform_yaml::escape_pointer_segment(unused)
+            ),
+            trust_profile_fault(
+                unused,
+                "the runtime configuration binds a TLS trust profile the bundle does not name",
+            ),
+            "Remove the trust profile, or name it from a bundle source or the issuer.",
+        );
     }
     // Extracts bind exactly, in both directions, and each direction says which
     // profile is at fault. An unbound profile is a deployment that cannot
@@ -2666,17 +2775,30 @@ fn validate_runtime_bindings(
         .filter_map(|(_, source)| source.extract_profile())
         .collect::<BTreeSet<_>>();
     let bound_extracts = runtime.source_extracts.keys().collect::<BTreeSet<_>>();
-    if let Some(unbound) = named_extracts.difference(&bound_extracts).next() {
-        return Err(invalid_artifact(
-            "the runtime configuration binds no file for a source extract profile the bundle names",
-        )
-        .in_artifact(&source_extract_artifact(unbound)));
+    for unbound in named_extracts.difference(&bound_extracts) {
+        find(
+            "evidence.runtime.source-extract-unbound",
+            "/sourceExtracts".to_owned(),
+            invalid_artifact(
+                "the runtime configuration binds no file for a source extract profile the bundle names",
+            )
+            .in_artifact(&source_extract_artifact(unbound)),
+            "Bind the extract profile the bundle names under sourceExtracts, with the path of its extract file.",
+        );
     }
-    if let Some(unused) = bound_extracts.difference(&named_extracts).next() {
-        return Err(invalid_artifact(
-            "the runtime configuration binds a source extract profile no bundle source names",
-        )
-        .in_artifact(&source_extract_artifact(unused)));
+    for unused in bound_extracts.difference(&named_extracts) {
+        find(
+            "evidence.runtime.source-extract-unused",
+            format!(
+                "/sourceExtracts/{}",
+                registry_platform_yaml::escape_pointer_segment(unused)
+            ),
+            invalid_artifact(
+                "the runtime configuration binds a source extract profile no bundle source names",
+            )
+            .in_artifact(&source_extract_artifact(unused)),
+            "Remove the extract binding, or name the profile from a bundle source.",
+        );
     }
     // The operator half of the acquisition gate, and the half that gates.
     // A bundle declaring the kinds it needs states an intent beside the
@@ -2684,28 +2806,28 @@ fn validate_runtime_bindings(
     // may serve them. Silence means no, so a deployment that never heard of a
     // gated form refuses the bundle here, before it serves anything, rather
     // than acquiring from sources nobody enabled it to reach.
-    for requirement in &bundle.requirements {
-        if requirement
+    let requirement_capability_missing = bundle.requirements.iter().any(|requirement| {
+        requirement
             .acquisition
             .required_capability()
             .is_some_and(|capability| !runtime.enables_acquisition_capability(capability))
-        {
-            return Err(invalid_artifact(
-                "the runtime configuration does not enable an acquisition capability the bundle requires",
-            ));
-        }
-    }
-    if bundle
+    });
+    let batch_capability_missing = bundle
         .acquisition_capabilities
         .iter()
         .any(|capability| capability == SOURCE_BATCH_CAPABILITY)
-        && !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY)
-    {
-        return Err(invalid_artifact(
-            "the runtime configuration does not enable an acquisition capability the bundle requires",
-        ));
+        && !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY);
+    if requirement_capability_missing || batch_capability_missing {
+        find(
+            "evidence.runtime.acquisition-capability-missing",
+            "/acquisitionCapabilities".to_owned(),
+            invalid_artifact(
+                "the runtime configuration does not enable an acquisition capability the bundle requires",
+            ),
+            "List every gated acquisition kind the bundle requires under acquisitionCapabilities.",
+        );
     }
-    Ok(())
+    findings
 }
 
 /// The secret root is the one immutability check whose subject is outside the
@@ -2735,7 +2857,7 @@ fn validate_secret_root(path: &Path) -> Result<(), BundleError> {
     Ok(())
 }
 
-fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
+pub(crate) fn validate_ca_bundle(bytes: &[u8]) -> Result<(), BundleError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| invalid_artifact("TLS CA bundle is not UTF-8 PEM"))?;
     let mut in_certificate = false;
@@ -3389,7 +3511,7 @@ mod tests {
         )
         .expect("replace a verified artifact");
         set_tree_mode(directory.path(), 0o555, 0o444);
-        let error = capture_bundle_files(directory.path(), &verified)
+        let error = capture_bundle_files(directory.path(), &verified, Capture::Frozen)
             .expect_err("consumer capture refuses replaced bytes");
         let fault = error.artifact_fault().expect("the artifact is named");
         assert_eq!(fault.artifact(), "derivations/adult-status.rhai");

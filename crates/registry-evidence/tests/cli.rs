@@ -320,7 +320,8 @@ fn set_burst(project: &ReferenceProject, burst: u32) {
 /// A burst below the largest request cost the bundle admits makes some
 /// requests permanently unadmittable. `check` says so, naming both numbers and
 /// the key to change, and still passes: a smaller burst is a legitimate way to
-/// cap batch size, so it is a warning rather than a refusal.
+/// cap batch size, so it is a warning rather than a refusal, and
+/// `--deny-warnings` turns it into one.
 #[test]
 fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
     let project = ReferenceProject::stage();
@@ -329,14 +330,37 @@ fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
     assert!(below.status.success(), "a low burst is not a refusal");
     let stdout = std::str::from_utf8(&below.stdout).expect("stdout is UTF-8");
     assert!(stdout.ends_with(" passed check (3 requirements)\n"));
-    assert_eq!(
-        std::str::from_utf8(&below.stderr).expect("stderr is UTF-8"),
-        "evidence: warning: rateLimits.burstPerPrincipal is 10, below 16, the largest request \
-         cost this bundle admits: a request batch or holder-bound release that costs more than \
-         the burst is always refused as evidence.invalid_request. Raise \
-         rateLimits.burstPerPrincipal to at least 16 unless capping those requests below 16 is \
-         intended\n"
+    let stderr = std::str::from_utf8(&below.stderr).expect("stderr is UTF-8");
+    let lines = stderr.lines().collect::<Vec<_>>();
+    let bundle = project.root.path().join("bundle/evidence.yaml");
+    assert_eq!(lines.len(), 4, "one warning and the summary: {stderr}");
+    assert!(
+        lines[0].starts_with(&format!(
+            "warning[evidence.bundle.burst-below-largest-request] {}:",
+            bundle.display()
+        )) && lines[0].ends_with(" /rateLimits/burstPerPrincipal"),
+        "the warning names the key's position and path: {stderr}"
     );
+    assert_eq!(
+        lines[1],
+        "  the burst is below 16, the largest request cost this bundle admits: a request batch \
+         or holder-bound release that costs more than the burst is always refused as \
+         evidence.invalid_request"
+    );
+    assert_eq!(
+        lines[2],
+        "  next: Raise rateLimits.burstPerPrincipal to at least 16, unless capping those \
+         requests is intended."
+    );
+    assert!(lines[3].starts_with("0 errors, 1 warning in "), "{stderr}");
+
+    let denied = project.sealed(|runtime| invoke(runtime, &["check", "--deny-warnings"]));
+    assert_eq!(
+        denied.status.code(),
+        Some(1),
+        "--deny-warnings refuses a warning"
+    );
+    assert!(denied.stdout.is_empty(), "a refused check wrote output");
 
     set_burst(&project, 16);
     let covered = project.sealed(|runtime| invoke(runtime, &["check"]));
@@ -344,6 +368,270 @@ fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
         &covered,
         "Evidence package ",
         " passed check (3 requirements)\n",
+    );
+}
+
+/// The offline check reads no secret material and asks nothing of the file
+/// modes: a project checks before its secrets are mounted and before its
+/// package is sealed, on any machine.
+#[test]
+fn check_passes_offline_without_secrets_or_immutable_modes() {
+    let deployment = Deployment::stage("all-definitions");
+    refresh_package_envelope(&deployment.path("bundle"));
+
+    assert_success(
+        &invoke(&deployment.path("runtime.yaml"), &["check"]),
+        "Evidence package ",
+        " passed check (4 requirements)\n",
+    );
+}
+
+/// Every problem the reader finds is reported in one run, each with the line
+/// and column of the member it is about.
+#[test]
+fn check_reports_every_runtime_finding_with_its_position_in_one_run() {
+    let deployment = Deployment::stage("all-definitions");
+    let runtime = deployment.path("runtime.yaml");
+    deployment.replace(
+        "runtime.yaml",
+        "  bind: 127.0.0.1:8080\n",
+        "  bind: 127.0.0.1:8080\n  port: 8080\n",
+    );
+    deployment.append("runtime.yaml", "unknownField: true\n");
+
+    let output = invoke(&runtime, &["check"]);
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    assert_eq!(output.status.code(), Some(1), "check exit code: {stderr}");
+    assert!(output.stdout.is_empty(), "a refused check wrote output");
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 7, "two errors and the summary: {stderr}");
+    assert_eq!(
+        lines[0],
+        format!(
+            "error[config.removed-key] {}:7:3 /listener/port",
+            runtime.display()
+        )
+    );
+    assert_eq!(lines[1], "  `port` is no longer accepted");
+    assert_eq!(
+        lines[2],
+        "  next: Declare listener.bind as host:port, such as 127.0.0.1:8080."
+    );
+    assert_eq!(
+        lines[3],
+        format!(
+            "error[config.unknown-key] {}:25:1 /unknownField",
+            runtime.display()
+        )
+    );
+    assert_eq!(lines[4], "  `unknownField` is not a member of this mapping");
+    assert!(lines[5].starts_with("  next: "), "{stderr}");
+    assert_eq!(lines[6], "2 errors, 0 warnings in 1 file");
+}
+
+/// `--format json` writes one ctl report on stdout and nothing on stderr, in
+/// both outcomes, and the diagnostics are the CFG-DIAG-1 objects.
+#[test]
+fn check_as_json_reports_the_envelope_on_success_and_refusal() {
+    let deployment = Deployment::stage("all-definitions");
+    refresh_package_envelope(&deployment.path("bundle"));
+    let runtime = deployment.path("runtime.yaml");
+
+    let passed = invoke(&runtime, &["check", "--format", "json"]);
+    assert!(passed.status.success(), "the check passed");
+    assert!(passed.stderr.is_empty(), "the JSON form wrote to stderr");
+    let report: Value = serde_json::from_slice(&passed.stdout).expect("one JSON document");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["command"], "check");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["requirements"], 4);
+    assert!(
+        report["packageDigest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "the report names the package digest: {report}"
+    );
+    assert!(
+        report["filesChecked"]
+            .as_u64()
+            .is_some_and(|files| files > 1),
+        "the runtime file and the package were checked: {report}"
+    );
+    assert_eq!(report["diagnostics"], json!([]));
+
+    deployment.append("runtime.yaml", "unknownField: true\n");
+    let refused = invoke(&runtime, &["check", "--format", "json"]);
+    assert_eq!(refused.status.code(), Some(1), "the check refused");
+    assert!(refused.stderr.is_empty(), "the JSON form wrote to stderr");
+    let report: Value = serde_json::from_slice(&refused.stdout).expect("one JSON document");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "domain-refusal");
+    assert!(report.get("packageDigest").is_none(), "{report}");
+    assert!(report.get("requirements").is_none(), "{report}");
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("a diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["code"], "config.unknown-key");
+    assert_eq!(diagnostic["path"], "/unknownField");
+    assert_eq!(
+        diagnostic["source"],
+        json!({"file": runtime.display().to_string(), "line": 24, "column": 1})
+    );
+    assert!(diagnostic["suggestedAction"].is_string(), "{report}");
+}
+
+/// A runtime file the check cannot read was not refused: the command depends
+/// on it, so the check exits 3.
+#[test]
+fn check_reports_a_runtime_file_it_cannot_read_as_unavailable() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let output = invoke(&root.path().join("runtime.yaml"), &["check"]);
+    assert_one_check_error(
+        &output,
+        3,
+        "evidence.runtime.unavailable",
+        "the runtime file could not be read",
+    );
+
+    let json = invoke(
+        &root.path().join("runtime.yaml"),
+        &["check", "--format", "json"],
+    );
+    assert_eq!(json.status.code(), Some(3));
+    let report: Value = serde_json::from_slice(&json.stdout).expect("one JSON document");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["status"], "operational-failure");
+}
+
+/// Without `--environment` an expression is checked by its syntax and
+/// position only: no variable is read, a value check that needs the text is
+/// skipped, and a package root filled by substitution is reported as not
+/// checked. With it, the check substitutes as startup does.
+#[test]
+fn check_skips_value_checks_on_substituted_members_unless_asked_for_the_environment() {
+    let deployment = Deployment::stage("all-definitions");
+    refresh_package_envelope(&deployment.path("bundle"));
+    let runtime = deployment.path("runtime.yaml");
+    let bundle = deployment.path("bundle");
+    deployment.replace(
+        "runtime.yaml",
+        &format!("  root: {}\n", bundle.display()),
+        "  root: ${EVIDENCE_PACKAGE_ROOT}\n",
+    );
+    let audit = deployment.path("audit.jsonl");
+    deployment.replace(
+        "runtime.yaml",
+        &format!("  path: {}\n", audit.display()),
+        "  path: ${EVIDENCE_AUDIT_PATH}\n",
+    );
+    let check = |arguments: &[&str], variables: &[(&str, &Path)]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command
+            .args(arguments)
+            .arg("--runtime-config")
+            .arg(&runtime)
+            .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+            .env_remove("EVIDENCE_PACKAGE_ROOT")
+            .env_remove("EVIDENCE_AUDIT_PATH")
+            .env_remove("EVIDENCE_BIND");
+        for (name, value) in variables {
+            command.env(name, value);
+        }
+        command.output().expect("evidence binary starts")
+    };
+
+    // The audit path `${EVIDENCE_AUDIT_PATH}` stands for itself and is not an
+    // absolute path, a finding that needs the substituted text: skipped.
+    let offline = check(&["check"], &[]);
+    let stderr = std::str::from_utf8(&offline.stderr).expect("stderr is UTF-8");
+    assert_eq!(
+        offline.status.code(),
+        Some(0),
+        "nothing was refused: {stderr}"
+    );
+    assert!(
+        offline.stdout.is_empty(),
+        "an unchecked package is not reported as passing"
+    );
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 4, "one warning and the summary: {stderr}");
+    assert_eq!(
+        lines[0],
+        format!(
+            "warning[evidence.package.not-checked] {}:4:9 /package/root",
+            runtime.display()
+        )
+    );
+    assert_eq!(
+        lines[1],
+        "  package.root is filled by substitution, so the package was not checked"
+    );
+    assert_eq!(lines[3], "0 errors, 1 warning in 1 file");
+
+    let with_environment = check(
+        &["check", "--environment"],
+        &[
+            ("EVIDENCE_PACKAGE_ROOT", &bundle),
+            ("EVIDENCE_AUDIT_PATH", &audit),
+        ],
+    );
+    assert_success(
+        &with_environment,
+        "Evidence package ",
+        " passed check (4 requirements)\n",
+    );
+
+    let unset = check(
+        &["check", "--environment"],
+        &[("EVIDENCE_AUDIT_PATH", &audit)],
+    );
+    let stderr = std::str::from_utf8(&unset.stderr).expect("stderr is UTF-8");
+    assert_eq!(
+        unset.status.code(),
+        Some(1),
+        "an unset variable is refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("EVIDENCE_PACKAGE_ROOT"),
+        "the refusal names the variable: {stderr}"
+    );
+
+    // A value the decoder parses, such as the listener address, cannot be
+    // read from an expression that stands for itself. Its check is skipped,
+    // and so is the rest of the file, and a warning says so.
+    deployment.replace(
+        "runtime.yaml",
+        "  bind: 127.0.0.1:8080\n",
+        "  bind: ${EVIDENCE_BIND:-127.0.0.1:8080}\n",
+    );
+    let parsed = check(&["check"], &[]);
+    let stderr = std::str::from_utf8(&parsed.stderr).expect("stderr is UTF-8");
+    assert_eq!(
+        parsed.status.code(),
+        Some(0),
+        "nothing was refused: {stderr}"
+    );
+    assert!(
+        parsed.stdout.is_empty(),
+        "an unchecked package is not reported as passing"
+    );
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 4, "one warning and the summary: {stderr}");
+    assert_eq!(
+        lines[0],
+        format!(
+            "warning[evidence.runtime.not-checked] {}:6:9 /listener/bind",
+            runtime.display()
+        )
+    );
+    let denied = check(&["check", "--deny-warnings"], &[]);
+    assert_eq!(
+        denied.status.code(),
+        Some(1),
+        "--deny-warnings refuses an unchecked file"
     );
 }
 
@@ -385,12 +673,14 @@ fn dependency_check_refuses_an_audit_sink_outside_the_required_root() {
 
     let output = deployment.check_with_audit_under(ephemeral.path());
 
-    assert!(!output.status.success(), "containment must fail closed");
-    let stderr = String::from_utf8(output.stderr).expect("diagnostic is UTF-8");
-    assert_eq!(
-        stderr,
-        "evidence: audit destination check failed: the configured audit destination resolves outside the declared audit root\n"
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.deployment.audit-outside-root",
+        "audit destination check failed: the configured audit destination resolves outside the \
+         declared audit root",
     );
+    let stderr = String::from_utf8(output.stderr).expect("diagnostic is UTF-8");
     assert!(!stderr.contains(&deployment.path("audit.jsonl").display().to_string()));
 }
 
@@ -408,13 +698,12 @@ fn dependency_check_refuses_an_audit_sink_symlinked_out_of_the_required_root() {
 
     let output = deployment.check_with_audit_under(deployment.root.path());
 
-    assert!(
-        !output.status.success(),
-        "a symlink must not escape the root"
-    );
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: audit destination check failed: the configured audit destination resolves outside the declared audit root\n"
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.deployment.audit-outside-root",
+        "audit destination check failed: the configured audit destination resolves outside the \
+         declared audit root",
     );
 }
 
@@ -446,14 +735,11 @@ fn dependency_check_refuses_a_required_audit_root_for_a_stdout_destination() {
 
     let output = deployment.check_with_audit_under(deployment.root.path());
 
-    assert!(
-        !output.status.success(),
-        "a stdout destination satisfied an audit root requirement"
-    );
-    assert!(output.stdout.is_empty(), "a refused check wrote output");
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: --require-audit-under needs a file audit destination; this runtime writes audit to stdout\n"
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.deployment.audit-not-a-file",
+        "--require-audit-under needs a file audit destination; this runtime writes audit to stdout",
     );
 }
 
@@ -464,10 +750,12 @@ fn dependency_check_refuses_a_required_audit_root_that_is_not_an_absolute_direct
 
     let output = deployment.check_with_audit_under(Path::new("var/lib/registry-evidence"));
 
-    assert!(!output.status.success(), "a relative root must fail closed");
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: audit destination check failed: the declared audit root is not an existing absolute directory\n"
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.deployment.audit-outside-root",
+        "audit destination check failed: the declared audit root is not an existing absolute \
+         directory",
     );
 }
 
@@ -485,14 +773,11 @@ fn dependency_check_fails_closed_when_the_jwks_endpoint_is_unavailable() {
     deployment.point_authentication_to(&origin);
     let output = deployment.check_with_runtime_dependencies();
 
-    assert!(!output.status.success(), "an unavailable JWKS passed check");
-    assert!(
-        output.stdout.is_empty(),
-        "a failed dependency check wrote output"
-    );
-    assert_eq!(
-        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: a required runtime dependency is unavailable\n"
+    assert_one_check_error(
+        &output,
+        3,
+        "evidence.deployment.dependency-unavailable",
+        "a required runtime dependency is unavailable",
     );
     assert!(!String::from_utf8_lossy(&output.stderr).contains(&origin));
 }
@@ -509,13 +794,11 @@ fn dependency_check_trusts_a_private_ca_issuer_only_through_its_named_profile() 
     deployment.point_authentication_to(key_server.origin());
 
     let refused = deployment.check_with_runtime_dependencies();
-    assert!(
-        !refused.status.success(),
-        "an issuer under an untrusted private CA passed check"
-    );
-    assert_eq!(
-        std::str::from_utf8(&refused.stderr).expect("diagnostic is UTF-8"),
-        "evidence: a required runtime dependency is unavailable\n"
+    assert_one_check_error(
+        &refused,
+        3,
+        "evidence.deployment.dependency-unavailable",
+        "a required runtime dependency is unavailable",
     );
 
     deployment.trust_issuer_through("issuer-pki", &authority);
@@ -541,13 +824,11 @@ fn dependency_check_refuses_an_issuer_the_named_profile_does_not_vouch_for() {
 
     let output = deployment.check_with_runtime_dependencies();
 
-    assert!(
-        !output.status.success(),
-        "a profile naming another authority admitted the issuer"
-    );
-    assert_eq!(
-        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: a required runtime dependency is unavailable\n"
+    assert_one_check_error(
+        &output,
+        3,
+        "evidence.deployment.dependency-unavailable",
+        "a required runtime dependency is unavailable",
     );
 }
 
@@ -564,13 +845,16 @@ fn dependency_check_refuses_an_issuer_profile_that_is_not_a_certificate_bundle()
 
     let output = deployment.check_with_runtime_dependencies();
 
-    assert!(
-        !output.status.success(),
-        "a profile holding no certificate passed check"
+    assert_one_check_error(
+        &output,
+        1,
+        "evidence.runtime.invalid-ca-bundle",
+        "TLS CA bundle contains non-certificate PEM data",
     );
-    assert_eq!(
-        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: deployment artifact is invalid: artifact runtime.yaml: TLS CA bundle contains non-certificate PEM data\n"
+    let stderr = String::from_utf8(output.stderr).expect("diagnostic is UTF-8");
+    assert!(
+        stderr.contains(" /outboundTls/trustProfiles/issuer-pki/caBundleFile\n"),
+        "the refusal names the member that binds the file: {stderr}"
     );
 }
 
@@ -593,18 +877,12 @@ async fn dependency_check_fails_when_an_audit_writer_already_holds_the_destinati
 
     let output = deployment.check_with_runtime_dependencies();
 
-    assert!(
-        !output.status.success(),
-        "a second audit writer passed check"
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "a failed dependency check wrote output"
-    );
-    assert_eq!(
-        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: runtime audit initialization failed: another process holds the single-writer \
-         lock beside the audit file; stop it before starting this one\n"
+    assert_one_check_error(
+        &output,
+        3,
+        "evidence.deployment.audit-unavailable",
+        "runtime audit initialization failed: another process holds the single-writer lock \
+         beside the audit file; stop it before starting this one",
     );
     drop(writer);
 }
@@ -740,17 +1018,13 @@ async fn dependency_check_without_the_audit_lock_still_refuses_an_unusable_audit
             "{}: the lock-free check accepted an unusable audit boundary",
             case.label
         );
-        assert!(
-            output.stdout.is_empty(),
-            "{}: a failed dependency check wrote output",
-            case.label
-        );
-        assert_eq!(
-            std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-            case.expected,
-            "{}: unexpected diagnostic",
-            case.label
-        );
+        // `check` reports the sentence `serve` prints, as a diagnostic.
+        let message = case
+            .expected
+            .strip_prefix("evidence: ")
+            .and_then(|message| message.strip_suffix('\n'))
+            .expect("the expected text is the serve-form sentence");
+        assert_one_check_error(&output, 3, "evidence.deployment.audit-unavailable", message);
     }
 }
 
@@ -764,14 +1038,12 @@ fn dependency_check_refuses_an_audit_directory_the_candidate_could_not_write() {
     let output = deployment.check_without_audit_lock();
     set_mode(deployment.root.path(), 0o700);
 
-    assert!(
-        !output.status.success(),
-        "the lock-free check accepted an audit directory it could not write"
-    );
-    assert_eq!(
-        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: runtime audit initialization failed: the audit file could not be opened: \
-         audit directory is not readable, writable, and searchable\n"
+    assert_one_check_error(
+        &output,
+        3,
+        "evidence.deployment.audit-unavailable",
+        "runtime audit initialization failed: the audit file could not be opened: audit \
+         directory is not readable, writable, and searchable",
     );
 }
 
@@ -872,15 +1144,16 @@ fn check_refuses_an_already_stale_bound_extract_with_only_the_governed_source() 
     set_tree_mode(&bundle, 0o555, 0o444);
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).expect("seal runtime");
 
-    let output = invoke(&runtime_path, &["check"]);
+    let output = invoke(&runtime_path, &["check", "--require-runtime-dependencies"]);
 
     set_tree_mode(&bundle, 0o755, 0o644);
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o644)).expect("unseal runtime");
     fs::set_permissions(&extract_path, fs::Permissions::from_mode(0o644)).expect("unseal extract");
-    assert!(!output.status.success(), "a stale extract passed check");
-    assert_eq!(
-        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
-        "evidence: bound extract is stale for source licence-register\n"
+    assert_one_check_error(
+        &output,
+        3,
+        "evidence.deployment.stale-extract",
+        "bound extract is stale for source licence-register",
     );
     let diagnostic = String::from_utf8_lossy(&output.stderr);
     assert!(!diagnostic.contains("2000-01-01"));
@@ -1874,6 +2147,9 @@ struct FailureCase {
     prefix: &'static str,
     suffix: &'static str,
     needs_runtime: bool,
+    /// The code and the message `check` reports for the case, as one
+    /// CFG-DIAG-2 diagnostic.
+    check: (&'static str, &'static str),
 }
 
 /// The shared failure-class table `check` and `bundle-check` both iterate.
@@ -1893,6 +2169,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: document is not well-formed YAML (line ",
             suffix: ")\n",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-configuration",
+                "document is not well-formed YAML",
+            ),
         },
         FailureCase {
             label: "unknown bundle field",
@@ -1907,6 +2187,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: unknown field at authentication.oidc (line ",
             suffix: ")\n",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-configuration",
+                "unknown field",
+            ),
         },
         FailureCase {
             label: "wrong bundle field type",
@@ -1921,6 +2205,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field has the wrong type at version (line ",
             suffix: ")\n",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-configuration",
+                "field has the wrong type",
+            ),
         },
         FailureCase {
             label: "unaccepted bundle field variant",
@@ -1935,6 +2223,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: field value is not one of the accepted variants at signing.format (line ",
             suffix: ")\n",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-configuration",
+                "field value is not one of the accepted variants",
+            ),
         },
         FailureCase {
             label: "configuration cross-reference",
@@ -1949,6 +2241,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: requirement acquisition references an unknown source\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-configuration",
+                "requirement acquisition references an unknown source",
+            ),
         },
         FailureCase {
             label: "artifact closure references a missing file",
@@ -1959,6 +2255,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment artifact closure is invalid: artifact derivations/adult-status.rhai: the configuration references an artifact the bundle does not contain\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.unknown-file",
+                "the configuration references an artifact the bundle does not contain",
+            ),
         },
         FailureCase {
             label: "artifact closure carries an unreferenced file",
@@ -1969,6 +2269,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment artifact closure is invalid: artifact schemas/orphan.schema.yaml: the bundle contains an artifact the configuration does not reference\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.unknown-file",
+                "the bundle contains an artifact the configuration does not reference",
+            ),
         },
         FailureCase {
             label: "unsafe artifact name is never echoed",
@@ -1982,6 +2286,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment artifact closure is invalid: the bundle contains an artifact the configuration does not reference\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.unknown-file",
+                "the bundle contains an artifact the configuration does not reference",
+            ),
         },
         FailureCase {
             label: "script",
@@ -1995,6 +2303,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment script is invalid: artifact derivations/adult-status.rhai: script does not compile\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-script",
+                "script does not compile",
+            ),
         },
         // The bundle loader compiles a script on a permissive engine that only
         // proves an entrypoint. The kernel is the pass that applies the
@@ -2012,6 +2324,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: bundle compilation failed: artifact derivations/adult-status.rhai: script does not compile\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.compile-refused",
+                "script does not compile",
+            ),
         },
         FailureCase {
             label: "fact schema",
@@ -2025,6 +2341,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment artifact is invalid: artifact schemas/adult-status-facts.schema.yaml: fact schema must close the root object\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-artifact",
+                "fact schema must close the root object",
+            ),
         },
         FailureCase {
             label: "codelist",
@@ -2038,6 +2358,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment artifact is invalid: artifact codelists/residence-region-map.yaml: codelist YAML is invalid\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-artifact",
+                "codelist YAML is invalid",
+            ),
         },
         FailureCase {
             label: "fixture",
@@ -2051,6 +2375,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment artifact is invalid: artifact fixtures/adult-status-cases.yaml: fixture cases are missing\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-artifact",
+                "fixture cases are missing",
+            ),
         },
         FailureCase {
             label: "unknown runtime field",
@@ -2061,6 +2389,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: unknown field at unknownField\n",
             suffix: "",
             needs_runtime: true,
+            check: (
+                "config.unknown-key",
+                "`unknownField` is not a member of this mapping",
+            ),
         },
         FailureCase {
             label: "wrong runtime field type",
@@ -2075,6 +2407,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: field has the wrong type at listener.maximumRequestBytes\n",
             suffix: "",
             needs_runtime: true,
+            check: (
+                "config.expected-integer",
+                "expected a whole number of bytes from 1024 to 1048576, not quoted text",
+            ),
         },
         FailureCase {
             label: "runtime operator path",
@@ -2089,6 +2425,10 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: package root must be an absolute path (package.root)\n",
             suffix: "",
             needs_runtime: true,
+            check: (
+                "evidence.runtime.invalid-package",
+                "package root must be an absolute path",
+            ),
         },
         // A key an earlier runtime grammar accepted is refused with the key
         // that replaced it, and the value it carried is never echoed.
@@ -2098,9 +2438,13 @@ fn failure_cases() -> Vec<FailureCase> {
             break_deployment: |deployment| {
                 deployment.append("runtime.yaml", &format!("bundleDirectory: /{CANARY}\n"));
             },
-            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: key is no longer accepted at bundleDirectory; declare package.root as the absolute path of the package directory\n",
+            prefix: "evidence: deployment configuration is invalid: artifact runtime.yaml: key is no longer accepted at bundleDirectory; Declare package.root as the absolute path of the package directory.\n",
             suffix: "",
             needs_runtime: true,
+            check: (
+                "config.removed-key",
+                "`bundleDirectory` is no longer accepted",
+            ),
         },
         FailureCase {
             label: "removed bundle key",
@@ -2112,9 +2456,13 @@ fn failure_cases() -> Vec<FailureCase> {
                     &format!("    principalClaim: sub\n    audiences: [{CANARY}]\n"),
                 );
             },
-            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: key is no longer accepted at authentication.oidc.audiences; declare the one accepted audience as authentication.oidc.audience\n",
+            prefix: "evidence: deployment configuration is invalid: artifact evidence.yaml: key is no longer accepted at authentication.oidc.audiences; Declare the one accepted audience as authentication.oidc.audience.\n",
             suffix: "",
             needs_runtime: false,
+            check: (
+                "evidence.bundle.invalid-configuration",
+                "key is no longer accepted",
+            ),
         },
         // Nothing is broken here: an operator runtime file that says nothing
         // about acquisition capabilities enables nothing beyond the frozen
@@ -2127,36 +2475,51 @@ fn failure_cases() -> Vec<FailureCase> {
             prefix: "evidence: deployment artifact is invalid: the runtime configuration does not enable an acquisition capability the bundle requires\n",
             suffix: "",
             needs_runtime: true,
+            check: (
+                "evidence.runtime.acquisition-capability-missing",
+                "the runtime configuration does not enable an acquisition capability the bundle requires",
+            ),
         },
     ]
 }
 
 #[test]
 fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() {
+    let mut mismatches = Vec::new();
     for case in failure_cases() {
         let deployment = Deployment::stage(case.bundle);
         (case.break_deployment)(&deployment);
         let output = deployment.check();
 
-        assert!(
-            !output.status.success(),
-            "{}: check accepted a broken deployment",
-            case.label
-        );
         let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
         let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
-        assert!(stdout.is_empty(), "{}: check wrote output", case.label);
-        assert!(
-            stderr.starts_with(case.prefix) && stderr.ends_with(case.suffix),
-            "{}: unexpected diagnostic {stderr:?}",
-            case.label
-        );
         assert!(
             !stdout.contains(CANARY) && !stderr.contains(CANARY),
             "{}: diagnostic disclosed a document value",
             case.label
         );
+        let (code, message) = case.check;
+        let lines = stderr.lines().collect::<Vec<_>>();
+        let reported = output.status.code() == Some(1)
+            && stdout.is_empty()
+            && lines.len() == 4
+            && lines[0].starts_with(&format!("error[{code}] "))
+            && lines[1] == format!("  {message}")
+            && lines[2].starts_with("  next: ")
+            && lines[3].starts_with("1 error, 0 warnings in ");
+        if !reported {
+            mismatches.push(format!(
+                "{}: exit {:?}, stdout {stdout:?}, stderr {stderr:?}",
+                case.label,
+                output.status.code()
+            ));
+        }
     }
+    assert!(
+        mismatches.is_empty(),
+        "check reported an unexpected diagnostic:\n{}",
+        mismatches.join("\n")
+    );
 }
 
 /// The bundle-only half of the same pin, from the seam Evidencectl uses.
@@ -2294,19 +2657,27 @@ fn check_accepts_a_gated_acquisition_kind_the_operator_enabled() {
 /// `check`, with the same fixed operator message startup produces. Each case
 /// stages the complete acceptance secret set and then breaks exactly one
 /// piece of it.
+/// The target-host proof validates deployment secret material exactly as
+/// `serve` does. A key that is served but is not the governed one is refused
+/// input (exit 1); a key or provider this host could not reach is an
+/// unavailable dependency (exit 3).
 #[test]
 fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
     struct SecretFailureCase {
         label: &'static str,
         break_secrets: fn(&Deployment),
+        exit: i32,
+        code: &'static str,
         expected: &'static str,
     }
     let cases = [
         SecretFailureCase {
             label: "signing key differs from the governed active public JWK",
             break_secrets: |deployment| deployment.write_mismatched_signing_key(),
-            expected: "evidence: runtime signing initialization failed: the signing key is not \
-                       the bundle's governed active public JWK\n",
+            exit: 1,
+            code: "evidence.deployment.signing-refused",
+            expected: "runtime signing initialization failed: the signing key is not the \
+                       bundle's governed active public JWK",
         },
         SecretFailureCase {
             label: "Transit signer socket is missing",
@@ -2329,20 +2700,25 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
                     ),
                 );
             },
-            expected: "evidence: runtime signing initialization failed: the Transit provider did \
-                       not answer on the configured Unix socket (missing socket, refused \
-                       connection, or timeout)\n",
+            exit: 3,
+            code: "evidence.deployment.signing-unavailable",
+            expected: "runtime signing initialization failed: the Transit provider did not \
+                       answer on the configured Unix socket (missing socket, refused connection, \
+                       or timeout)",
         },
         SecretFailureCase {
             label: "audit hash key below the minimum length",
             break_secrets: |deployment| deployment.write_secret("audit-hash-key", "short"),
-            expected: "evidence: runtime audit initialization failed: the audit hash key is \
-                       unusable\n",
+            exit: 3,
+            code: "evidence.deployment.audit-unavailable",
+            expected: "runtime audit initialization failed: the audit hash key is unusable",
         },
         SecretFailureCase {
             label: "subject binding key missing",
             break_secrets: |deployment| deployment.remove("secrets/subject-binding-key"),
-            expected: "evidence: runtime secret initialization failed\n",
+            exit: 3,
+            code: "evidence.deployment.secret-unavailable",
+            expected: "runtime secret initialization failed",
         },
     ];
 
@@ -2350,24 +2726,20 @@ fn check_rejects_secret_material_the_server_would_refuse_at_startup() {
         let deployment = Deployment::stage("all-definitions");
         deployment.stage_acceptance_secrets();
         (case.break_secrets)(&deployment);
-        let output = deployment.check();
+        let offline = deployment.check();
+        assert_success(
+            &offline,
+            "Evidence package ",
+            " passed check (4 requirements)\n",
+        );
+        let output = deployment.check_with_runtime_dependencies();
 
         assert!(
             !output.status.success(),
             "{}: check accepted secret material the server would refuse",
             case.label
         );
-        assert!(
-            output.stdout.is_empty(),
-            "{}: check wrote output for a refused deployment",
-            case.label
-        );
-        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
-        assert_eq!(
-            stderr, case.expected,
-            "{}: unexpected diagnostic",
-            case.label
-        );
+        assert_one_check_error(&output, case.exit, case.code, case.expected);
     }
 }
 
@@ -3999,7 +4371,11 @@ fn the_removed_runtime_inputs_are_refused_with_their_replacement_named() {
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .output()
         .expect("evidence binary starts");
-    assert!(!flag.status.success(), "the removed flag was accepted");
+    assert_eq!(
+        flag.status.code(),
+        Some(2),
+        "the removed flag is a usage error"
+    );
     assert_eq!(
         std::str::from_utf8(&flag.stderr).expect("stderr is UTF-8"),
         "evidence: --runtime is no longer accepted; pass --runtime-config FILE\n"
@@ -4018,9 +4394,10 @@ fn the_removed_runtime_inputs_are_refused_with_their_replacement_named() {
         )
         .output()
         .expect("evidence binary starts");
-    assert!(
-        !environment.status.success(),
-        "the removed environment variable was ignored"
+    assert_eq!(
+        environment.status.code(),
+        Some(2),
+        "the removed environment variable is a usage error"
     );
     assert_eq!(
         std::str::from_utf8(&environment.stderr).expect("stderr is UTF-8"),
@@ -4055,14 +4432,49 @@ fn invoke_bundle_check(bundle: &Path) -> Output {
 
 fn assert_success(output: &Output, prefix: &str, suffix: &str) {
     assert!(output.status.success(), "evidence command failed");
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
     assert!(
-        output.stderr.is_empty(),
-        "evidence command wrote diagnostics"
+        stderr.is_empty() || is_clean_check_summary(stderr),
+        "evidence command wrote diagnostics: {stderr}"
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
     assert!(
         stdout.starts_with(prefix) && stdout.ends_with(suffix),
         "evidence command output shape changed"
+    );
+}
+
+/// `check` ends its human report with one summary line even when it found
+/// nothing to report.
+fn is_clean_check_summary(stderr: &str) -> bool {
+    stderr
+        .strip_prefix("0 errors, 0 warnings in ")
+        .and_then(|rest| rest.strip_suffix(" files\n"))
+        .is_some_and(|count| count.parse::<usize>().is_ok())
+}
+
+/// Assert that a refused `check` exited `exit`, wrote nothing to stdout, and
+/// reported exactly one error: `code` on its position line, then `message`, a
+/// `next:` action, and the summary line.
+fn assert_one_check_error(output: &Output, exit: i32, code: &str, message: &str) {
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    assert_eq!(
+        output.status.code(),
+        Some(exit),
+        "check exit code: {stderr}"
+    );
+    assert!(output.stdout.is_empty(), "a refused check wrote output");
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 4, "check reported one error: {stderr}");
+    assert!(
+        lines[0].starts_with(&format!("error[{code}] ")),
+        "check reported {code}: {stderr}"
+    );
+    assert_eq!(lines[1], format!("  {message}"), "check message: {stderr}");
+    assert!(lines[2].starts_with("  next: "), "check action: {stderr}");
+    assert!(
+        lines[3].starts_with("1 error, 0 warnings in "),
+        "check summary: {stderr}"
     );
 }
 

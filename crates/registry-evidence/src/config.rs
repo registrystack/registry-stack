@@ -15,9 +15,10 @@ use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDest
 pub use registry_platform_config::SecretReference;
 use registry_platform_config::{
     reject_environment_expressions_in_authored_yaml, AuditKeyConfig, JwksSource, ListenerBind,
-    LoadedRuntimeConfig, OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigError,
-    RuntimeConfigErrorKind, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
+    LoadedRuntimeConfig, OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigErrorKind,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
 };
+use registry_platform_yaml::{BoundedU32, BoundedU64, Reader, Report};
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
@@ -45,6 +46,12 @@ pub enum SourceBatchPlan {
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum ConfigError {
+    /// The shared configuration reader refused the document. The report
+    /// carries the reader's diagnostics unchanged (CFG-DIAG-1): each names
+    /// the file, the pointer, the line and column, and the fix, and none
+    /// repeats a value from the document or the environment.
+    #[error("{}", render_refusal(.0))]
+    Refused(Box<Report>),
     #[error("configuration YAML does not match the Evidence Version 1 schema: {0}")]
     InvalidYaml(SchemaFault),
     #[error("configuration exceeds the Evidence Version 1 size limit")]
@@ -65,12 +72,69 @@ impl ConfigError {
     /// every configuration failure carries the same safe shape.
     pub fn fault(&self) -> SchemaFault {
         match self {
+            Self::Refused(_) => {
+                SchemaFault::because("the configuration reader refused the document")
+            }
             Self::InvalidYaml(fault) => fault.clone(),
             Self::TooLarge => SchemaFault::because("document exceeds the Version 1 size limit"),
             Self::Invalid(cause) => SchemaFault::because(cause),
             Self::InvalidField(cause, field) => SchemaFault::because_in_field(cause, field),
         }
     }
+}
+
+impl ConfigError {
+    /// The reader's diagnostics, when the shared configuration reader refused
+    /// the document.
+    pub fn report(&self) -> Option<&Report> {
+        match self {
+            Self::Refused(report) => Some(report),
+            _ => None,
+        }
+    }
+
+    /// The same refusal with every diagnostic naming `file`, the path the
+    /// document was read from as the command was given it (CFG-DIAG-1).
+    #[must_use]
+    pub fn in_file(self, file: &str) -> Self {
+        match self {
+            Self::Refused(report) => Self::Refused(Box::new(report_in_file(*report, file))),
+            other => other,
+        }
+    }
+}
+
+/// Every diagnostic in the human form (CFG-DIAG-2), ending in the summary
+/// line and without a trailing newline.
+pub(crate) fn render_refusal(report: &Report) -> String {
+    let mut rendered = report.render_human();
+    rendered.truncate(rendered.trim_end().len());
+    rendered
+}
+
+/// The report with every diagnostic's file, and every related location's
+/// file, renamed to `file`. A document read from bytes carries the name it
+/// was read under; the command knows the path it was given.
+pub(crate) fn report_in_file(report: Report, file: &str) -> Report {
+    let files_checked = report.files_checked();
+    let diagnostics = report
+        .into_diagnostics()
+        .into_iter()
+        .map(|mut diagnostic| {
+            if let Some(source) = diagnostic.source.as_mut() {
+                source.file = file.to_owned();
+            }
+            for related in &mut diagnostic.related {
+                related.file = file.to_owned();
+            }
+            diagnostic
+        })
+        .collect();
+    let mut renamed = Report::new(diagnostics);
+    if let Some(files) = files_checked {
+        renamed.set_files_checked(files);
+    }
+    renamed
 }
 
 /// A one-based text position inside a deployment artifact.
@@ -354,85 +418,85 @@ fn decode_yaml<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, ConfigEr
 const REMOVED_BUNDLE_KEYS: &[(&str, &str)] = &[
     (
         "authentication.kind",
-        "Evidence accepts OIDC access tokens only; declare the rules under authentication.oidc",
+        "Evidence accepts OIDC access tokens only; declare the rules under authentication.oidc.",
     ),
     (
         "authentication.issuer",
-        "declare authentication.oidc.issuer instead",
+        "Declare authentication.oidc.issuer instead.",
     ),
     (
         "authentication.audiences",
-        "declare the one accepted audience as authentication.oidc.audience",
+        "Declare the one accepted audience as authentication.oidc.audience.",
     ),
     (
         "authentication.jwksUri",
-        "declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>",
+        "Declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>.",
     ),
     (
         "authentication.tokenTypes",
-        "declare authentication.oidc.tokenTypes instead",
+        "Declare authentication.oidc.tokenTypes instead.",
     ),
     (
         "authentication.algorithms",
-        "declare authentication.oidc.algorithms instead",
+        "Declare authentication.oidc.algorithms instead.",
     ),
     (
         "authentication.principalClaim",
-        "declare authentication.oidc.principalClaim instead",
+        "Declare authentication.oidc.principalClaim instead.",
     ),
     (
         "authentication.requesterTagsClaim",
-        "declare authentication.oidc.requesterTagsClaim instead",
+        "Declare authentication.oidc.requesterTagsClaim instead.",
     ),
     (
         "authentication.evidenceAudienceClaim",
-        "declare authentication.oidc.evidenceAudienceClaim instead",
+        "Declare authentication.oidc.evidenceAudienceClaim instead.",
     ),
     (
         "authentication.claims",
-        "declare authentication.oidc.claims instead",
+        "Declare authentication.oidc.claims instead.",
     ),
     (
         "authentication.maximumTokenLifetimeSeconds",
-        "declare authentication.oidc.maximumTokenLifetimeSeconds instead",
+        "Declare authentication.oidc.maximumTokenLifetimeSeconds instead.",
     ),
     (
         "authentication.revokedKeyIds",
-        "declare authentication.oidc.revokedKeyIds instead",
+        "Declare authentication.oidc.revokedKeyIds instead.",
     ),
     (
         "authentication.allowedClients",
-        "declare authentication.oidc.allowedClients instead",
+        "Declare authentication.oidc.allowedClients instead.",
     ),
     (
         "authentication.assertionIssuers",
-        "declare authentication.oidc.assertionIssuers instead",
+        "Declare authentication.oidc.assertionIssuers instead.",
     ),
     (
         "authentication.requiredScopes",
-        "declare authentication.oidc.requiredScopes instead",
+        "Declare authentication.oidc.requiredScopes instead.",
     ),
     (
         "authentication.actorClaim",
-        "declare authentication.oidc.actorClaim instead",
+        "Declare authentication.oidc.actorClaim instead.",
     ),
     (
         "authentication.tlsTrustProfile",
-        "declare authentication.oidc.tlsTrustProfile instead",
+        "Declare authentication.oidc.tlsTrustProfile instead.",
     ),
     (
         "authentication.oidc.kind",
-        "Evidence accepts OIDC access tokens only; remove kind",
+        "Evidence accepts OIDC access tokens only; remove kind.",
     ),
     (
         "authentication.oidc.audiences",
-        "declare the one accepted audience as authentication.oidc.audience",
+        "Declare the one accepted audience as authentication.oidc.audience.",
     ),
     (
         "authentication.oidc.jwksUri",
-        "declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>",
+        "Declare authentication.oidc.jwksSource with kind: uri and uri: <JWKS URL>.",
     ),
-    ("audit.hashSecretRef", "declare audit.hashKeyRef instead"),
+    ("audit.hashSecretRef", "Declare audit.hashKeyRef instead."),
 ];
 
 /// Refuse a bundle key an earlier grammar accepted, naming its replacement.
@@ -482,100 +546,6 @@ fn reject_bundle_environment_expressions(text: &str) -> Result<(), ConfigError> 
             }))
         }
         _ => Ok(()),
-    }
-}
-
-/// Reduce a shared-loader refusal of the runtime file to a value-free fault.
-///
-/// The loader's message is never read: the cause is static and chosen by the
-/// code of the diagnostic that decided the refusal, the path is kept only
-/// when it matches the structural path grammar, and a removed key or a wrong
-/// envelope carries the fixed sentence naming what to write instead.
-fn runtime_fault(error: &RuntimeConfigError) -> SchemaFault {
-    let field = error.field();
-    let fault = match error.kind() {
-        RuntimeConfigErrorKind::RemovedKey => {
-            let remedy = EVIDENCE_RUNTIME_REMOVED_KEYS
-                .iter()
-                .find(|removed| removed.path == field)
-                .map_or(EVIDENCE_RUNTIME_ENVELOPE_REMEDY, |removed| {
-                    removed.replacement
-                });
-            SchemaFault::because("key is no longer accepted").with_remedy(remedy)
-        }
-        RuntimeConfigErrorKind::Envelope => {
-            SchemaFault::because("document does not declare the Evidence runtime envelope")
-                .with_remedy(EVIDENCE_RUNTIME_ENVELOPE_REMEDY)
-        }
-        RuntimeConfigErrorKind::Syntax | RuntimeConfigErrorKind::InvalidValue => {
-            let deciding = error.deciding_diagnostic();
-            SchemaFault::because(runtime_cause(&deciding.code, &deciding.path))
-        }
-        RuntimeConfigErrorKind::Substitution => {
-            SchemaFault::because("environment expression cannot be substituted")
-        }
-        RuntimeConfigErrorKind::SubstitutionInReference => SchemaFault::because(
-            "environment expressions are not accepted in secret references or secretProviders",
-        ),
-        RuntimeConfigErrorKind::Bounds => {
-            SchemaFault::because("document exceeds the Version 1 size limit")
-        }
-        RuntimeConfigErrorKind::Encoding => SchemaFault::because("document is not UTF-8"),
-        RuntimeConfigErrorKind::Path
-        | RuntimeConfigErrorKind::UnsafeFile
-        | RuntimeConfigErrorKind::Unavailable
-        | RuntimeConfigErrorKind::AuthoredExpression
-        | RuntimeConfigErrorKind::AuthoredSyntax => {
-            SchemaFault::because("document could not be read as a runtime configuration")
-        }
-    };
-    if field == "/" {
-        fault
-    } else {
-        fault.at_path(field)
-    }
-}
-
-/// The value-free cause of a shared-reader diagnostic, chosen by its code
-/// and, for an invalid value, by the member it sits at.
-///
-/// In the runtime document a member named `bind` is a listener address and a
-/// member ending in `Ref` is a secret reference, so an invalid value there
-/// names the grammar that member follows.
-fn runtime_cause(code: &str, pointer: &str) -> &'static str {
-    let member = pointer.rsplit('/').next().unwrap_or_default();
-    match code {
-        "yaml.duplicate-key" | "config.duplicate-key" => "duplicate mapping key",
-        "yaml.multiple-documents" => "document contains more than one YAML document",
-        "yaml.too-deep" => "document nests too deeply",
-        "yaml.tag" => "document carries a YAML tag",
-        "yaml.non-string-key" => "mapping key is not a string",
-        "yaml.anchor" | "yaml.alias" | "yaml.merge-key" => {
-            "document uses a YAML anchor, alias, or merge key"
-        }
-        "config.invalid-type" if pointer.is_empty() => "document is not a YAML mapping",
-        "config.unknown-key" => "unknown field",
-        "config.missing-key" => "required field is missing",
-        "config.invalid-type"
-        | "config.expected-string"
-        | "config.expected-integer"
-        | "config.expected-number"
-        | "config.expected-boolean" => "field has the wrong type",
-        "config.null-value" => "field has no value",
-        "config.unknown-variant" => "field value is not one of the accepted variants",
-        "config.invalid-length" => "field has the wrong length",
-        "config.duplicate-item" | "config.duplicate-id" => "list repeats an entry",
-        "config.invalid-value" if member == "bind" => {
-            "listener bind must be host:port with an IP address host"
-        }
-        "config.invalid-value" if member.ends_with("Ref") => {
-            "secret reference does not use an exact permitted grammar"
-        }
-        "config.invalid-value" | "config.out-of-range" | "yaml.ambiguous-number" => {
-            "field value is not accepted"
-        }
-        code if code.starts_with("yaml.") => "document is not well-formed YAML",
-        _ => "document does not match the closed schema",
     }
 }
 
@@ -1621,39 +1591,147 @@ pub const EVIDENCE_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     kind: EVIDENCE_RUNTIME_KIND,
 };
 
-/// What an operator writes when the envelope is missing or wrong.
-const EVIDENCE_RUNTIME_ENVELOPE_REMEDY: &str = "declare apiVersion: \
-     registry.registrystack.org/evidence-runtime/v1alpha1 and kind: EvidenceRuntimeConfig";
+/// The name the shared loader gives a runtime document read from bytes. The
+/// command that read the file renames it to the path it was given.
+const RUNTIME_DOCUMENT_NAME: &str = "runtime.yaml";
+
+/// The reader's refusal of bytes that are not text it can read: larger than
+/// its bound or not UTF-8.
+fn unreadable_document(file: &str, bytes: &[u8]) -> ConfigError {
+    match Reader::new(file).scan(bytes) {
+        Err(report) => ConfigError::Refused(Box::new(report)),
+        Ok(_) => ConfigError::Invalid("document is not UTF-8"),
+    }
+}
 
 /// Keys an earlier Evidence runtime file accepted, each refused with the key
 /// that replaced it.
 pub const EVIDENCE_RUNTIME_REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "version",
-        replacement: "declare apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1 \
-             and kind: EvidenceRuntimeConfig",
+        replacement: "Declare apiVersion: registry.registrystack.org/evidence-runtime/v1alpha1 \
+             and kind: EvidenceRuntimeConfig.",
     },
     RemovedKey {
         path: "bundleDirectory",
-        replacement: "declare package.root as the absolute path of the package directory",
+        replacement: "Declare package.root as the absolute path of the package directory.",
     },
     RemovedKey {
         path: "listener.bindHost",
-        replacement: "declare listener.bind as host:port, such as 127.0.0.1:8080",
+        replacement: "Declare listener.bind as host:port, such as 127.0.0.1:8080.",
     },
     RemovedKey {
         path: "listener.port",
-        replacement: "declare listener.bind as host:port, such as 127.0.0.1:8080",
+        replacement: "Declare listener.bind as host:port, such as 127.0.0.1:8080.",
     },
     RemovedKey {
         path: "metricsListener.bindHost",
-        replacement: "declare metricsListener.bind as host:port, such as 127.0.0.1:9090",
+        replacement: "Declare metricsListener.bind as host:port, such as 127.0.0.1:9090.",
     },
     RemovedKey {
         path: "metricsListener.port",
-        replacement: "declare metricsListener.bind as host:port, such as 127.0.0.1:9090",
+        replacement: "Declare metricsListener.bind as host:port, such as 127.0.0.1:9090.",
     },
 ];
+
+/// The codes a runtime file's semantic findings carry (CFG-DIAG-3), one per
+/// block of the file.
+pub const RUNTIME_PACKAGE_CODE: &str = "evidence.runtime.invalid-package";
+pub const RUNTIME_LISTENER_CODE: &str = "evidence.runtime.invalid-listener";
+pub const RUNTIME_METRICS_LISTENER_CODE: &str = "evidence.runtime.invalid-metrics-listener";
+pub const RUNTIME_SECRET_PROVIDERS_CODE: &str = "evidence.runtime.invalid-secret-providers";
+pub const RUNTIME_SIGNER_CODE: &str = "evidence.runtime.invalid-signer";
+pub const RUNTIME_AUDIT_CODE: &str = "evidence.runtime.invalid-audit";
+pub const RUNTIME_OUTBOUND_TLS_CODE: &str = "evidence.runtime.invalid-outbound-tls";
+pub const RUNTIME_SOURCE_EXTRACT_CODE: &str = "evidence.runtime.invalid-source-extract";
+pub const RUNTIME_ACQUISITION_CAPABILITIES_CODE: &str =
+    "evidence.runtime.invalid-acquisition-capabilities";
+
+const ABSOLUTE_PATH_ACTION: &str =
+    "Write an absolute path of at most 512 bytes, without . or .. segments.";
+const LOCAL_ID_ACTION: &str = "Write a local identifier of at most 128 bytes: a lowercase ASCII letter, then lowercase letters, digits, dots, underscores, or hyphens.";
+const LISTENER_PORT_ACTION: &str = "Name a port from 1 to 65535 after the host.";
+
+/// One rule a decoded runtime document breaks, naming the member it
+/// concerns. The message is the error's fixed cause and the action a fixed
+/// sentence, so neither repeats a value from the document (CFG-SEC-3).
+#[derive(Debug)]
+pub struct RuntimeFinding {
+    pub code: &'static str,
+    /// RFC 6901 pointer of the member the finding concerns.
+    pub pointer: String,
+    /// Whether the finding points at the member's key, as it does for a
+    /// member that is missing or not allowed, rather than at its value.
+    pub at_key: bool,
+    pub error: ConfigError,
+    pub action: String,
+}
+
+impl RuntimeFinding {
+    fn at_value(code: &'static str, pointer: &str, error: ConfigError, action: &str) -> Self {
+        Self {
+            code,
+            pointer: pointer.to_owned(),
+            at_key: false,
+            error,
+            action: action.to_owned(),
+        }
+    }
+
+    fn at_key(code: &'static str, pointer: &str, error: ConfigError, action: &str) -> Self {
+        Self {
+            at_key: true,
+            ..Self::at_value(code, pointer, error, action)
+        }
+    }
+
+    /// The fixed cause the finding reports.
+    pub fn message(&self) -> &'static str {
+        self.error.fault().cause()
+    }
+}
+
+/// The findings of a named map whose entries each bind one absolute path:
+/// at most 64 entries, each named by a local identifier.
+fn absolute_path_map_findings<T>(
+    map: &OrderedMap<T>,
+    pointer: &str,
+    code: &'static str,
+    member: &str,
+    path_of: impl Fn(&T) -> &String,
+    findings: &mut Vec<RuntimeFinding>,
+) {
+    if let Err(error) = validate_len(map.len(), 0, 64, "named configuration map") {
+        findings.push(RuntimeFinding::at_key(
+            code,
+            pointer,
+            error,
+            "Bind at most 64 entries.",
+        ));
+    }
+    for (name, value) in map.iter() {
+        let entry = format!(
+            "{pointer}/{}",
+            registry_platform_yaml::escape_pointer_segment(name)
+        );
+        if !valid_local_id(name) {
+            findings.push(RuntimeFinding::at_key(
+                code,
+                &entry,
+                ConfigError::Invalid("local identifier is invalid"),
+                LOCAL_ID_ACTION,
+            ));
+        }
+        if let Err(error) = validate_absolute_path(path_of(value)) {
+            findings.push(RuntimeFinding::at_value(
+                code,
+                &format!("{entry}/{member}"),
+                error,
+                ABSOLUTE_PATH_ACTION,
+            ));
+        }
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1710,53 +1788,128 @@ impl RuntimeConfig {
         bytes: &[u8],
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
-        if bytes.len() > MAX_CONFIG_BYTES {
-            return Err(ConfigError::TooLarge);
-        }
-        let text = std::str::from_utf8(bytes)
-            .map_err(|_| ConfigError::InvalidYaml(SchemaFault::because("document is not UTF-8")))?;
-        let loaded = Self::loader()
-            .parse_str::<Self>(text, lookup)
-            .map_err(|error| ConfigError::InvalidYaml(runtime_fault(&error)))?;
+        let loaded = Self::decode_yaml_with(bytes, lookup)?;
         loaded.config.validate()?;
         Ok(loaded)
     }
 
+    /// Read and decode one runtime document through the shared loader,
+    /// substituting environment expressions in string values from `lookup`,
+    /// without the semantic checks [`RuntimeConfig::findings`] applies.
+    pub fn decode_yaml_with(
+        bytes: &[u8],
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
+        // The reader refuses a document over its size bound or not in UTF-8
+        // with its own diagnostic; text it can read goes to the loader, which
+        // substitutes environment expressions while the reader builds it.
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return Err(unreadable_document(RUNTIME_DOCUMENT_NAME, bytes));
+        };
+        Self::loader()
+            .parse_str::<Self>(text, lookup)
+            .map_err(|error| {
+                ConfigError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
+            })
+    }
+
+    /// Refuse the document with the first rule it breaks, as startup does.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        self.package.check().map_err(|error| match error.kind() {
-            registry_platform_config::ConfigBlockErrorKind::InvalidDigest => {
-                ConfigError::InvalidField(
-                    "package expectedDigest must be sha256: followed by 64 lowercase hex digits",
-                    "package.expectedDigest",
-                )
+        match self.findings().into_iter().next() {
+            Some(finding) => Err(finding.error),
+            None => Ok(()),
+        }
+    }
+
+    /// Every rule this decoded document breaks, each naming the member it
+    /// concerns, in the order startup checks them: the first is the refusal
+    /// [`RuntimeConfig::validate`] returns.
+    pub fn findings(&self) -> Vec<RuntimeFinding> {
+        let mut findings = Vec::new();
+        match self.package.check() {
+            Err(error)
+                if error.kind()
+                    == registry_platform_config::ConfigBlockErrorKind::InvalidDigest =>
+            {
+                findings.push(RuntimeFinding::at_value(
+                    RUNTIME_PACKAGE_CODE,
+                    "/package/expectedDigest",
+                    ConfigError::InvalidField(
+                        "package expectedDigest must be sha256: followed by 64 lowercase hex digits",
+                        "package.expectedDigest",
+                    ),
+                    "Write the digest `evidencectl package` printed, sha256: followed by 64 lowercase hex digits.",
+                ));
             }
-            _ => ConfigError::InvalidField("package root must be an absolute path", "package.root"),
-        })?;
-        validate_absolute_path(&self.package.root.to_string_lossy())?;
-        self.listener.validate()?;
+            Err(_) => findings.push(RuntimeFinding::at_value(
+                RUNTIME_PACKAGE_CODE,
+                "/package/root",
+                ConfigError::InvalidField("package root must be an absolute path", "package.root"),
+                ABSOLUTE_PATH_ACTION,
+            )),
+            Ok(()) => {
+                if let Err(error) = validate_absolute_path(&self.package.root.to_string_lossy()) {
+                    findings.push(RuntimeFinding::at_value(
+                        RUNTIME_PACKAGE_CODE,
+                        "/package/root",
+                        error,
+                        ABSOLUTE_PATH_ACTION,
+                    ));
+                }
+            }
+        }
+        self.listener.findings(&mut findings);
         if let Some(metrics) = &self.metrics_listener {
-            metrics.validate(&self.listener)?;
+            metrics.findings(&self.listener, &mut findings);
         }
-        self.secret_providers.check().map_err(|_| {
-            ConfigError::InvalidField(
-                "secretProviders must enable file, environment, or both, and a file root must be absolute",
-                "secretProviders",
-            )
-        })?;
+        let providers_enabled = self.secret_providers.check().is_ok();
+        if !providers_enabled {
+            findings.push(RuntimeFinding::at_key(
+                RUNTIME_SECRET_PROVIDERS_CODE,
+                "/secretProviders",
+                ConfigError::InvalidField(
+                    "secretProviders must enable file, environment, or both, and a file root must be absolute",
+                    "secretProviders",
+                ),
+                "Enable file with an absolute root, environment, or both.",
+            ));
+        }
         if let Some(file) = &self.secret_providers.file {
-            validate_absolute_path(&file.root.to_string_lossy())?;
+            if let Err(error) = validate_absolute_path(&file.root.to_string_lossy()) {
+                findings.push(RuntimeFinding::at_value(
+                    RUNTIME_SECRET_PROVIDERS_CODE,
+                    "/secretProviders/file/root",
+                    error,
+                    ABSOLUTE_PATH_ACTION,
+                ));
+            }
         }
-        self.signer.validate(&self.secret_providers)?;
-        self.audit.validate()?;
-        self.outbound_tls.validate()?;
-        validate_named_map(&self.source_extracts, 0, 64, SourceExtractBinding::validate)?;
-        declared_acquisition_capabilities(
+        self.signer
+            .findings(&self.secret_providers, providers_enabled, &mut findings);
+        self.audit.findings(&mut findings);
+        self.outbound_tls.findings(&mut findings);
+        absolute_path_map_findings(
+            &self.source_extracts,
+            "/sourceExtracts",
+            RUNTIME_SOURCE_EXTRACT_CODE,
+            "path",
+            |binding| &binding.path,
+            &mut findings,
+        );
+        if let Err(error) = declared_acquisition_capabilities(
             &self.acquisition_capabilities,
             "runtime acquisition capabilities name an unknown acquisition kind",
             "runtime acquisition capabilities must be unique",
             "runtime acquisition capabilities",
-        )?;
-        Ok(())
+        ) {
+            findings.push(RuntimeFinding::at_key(
+                RUNTIME_ACQUISITION_CAPABILITIES_CODE,
+                "/acquisitionCapabilities",
+                error,
+                "Name each gated acquisition kind this deployment serves once.",
+            ));
+        }
+        findings
     }
 
     /// Whether the operator enabled one gated acquisition kind on this
@@ -1771,37 +1924,41 @@ impl RuntimeConfig {
 
 /// Closed process-local signer binding. Production deployments reach Transit
 /// only over a workload-local Unix socket and never receive a provider token.
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+///
+/// The `kind` member names the variant. The shared reader chooses the variant
+/// from the node itself, so a refusal inside a variant keeps its full path,
+/// line, and column.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum RuntimeSignerConfig {
     LocalJwk {
-        #[serde(rename = "privateKeyRef")]
         private_key_ref: SecretReference,
     },
     Transit {
-        #[serde(rename = "unixSocketPath")]
         unix_socket_path: String,
         mount: String,
-        #[serde(rename = "keyName")]
         key_name: String,
-        #[serde(rename = "keyVersion")]
-        key_version: u32,
-        #[serde(rename = "timeoutMilliseconds")]
-        timeout_milliseconds: u64,
+        key_version: BoundedU32<1, { u32::MAX }>,
+        timeout_milliseconds: BoundedU64<1, 30_000>,
     },
 }
+registry_platform_yaml::tagged_union!(RuntimeSignerConfig, tag = "kind");
 
-impl RuntimeSignerConfig {
-    fn validate(&self, secret_providers: &SecretProvidersConfig) -> Result<(), ConfigError> {
+/// The tagged form the file is written in: `kind` beside the variant's
+/// members.
+impl Serialize for RuntimeSignerConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
         match self {
-            Self::LocalJwk { private_key_ref } => secret_providers
-                .check_reference("signer.privateKeyRef", private_key_ref.as_str())
-                .map_err(|_| {
-                    ConfigError::InvalidField(
-                        "the secret reference names a provider secretProviders does not enable",
-                        "signer.privateKeyRef",
-                    )
-                }),
+            Self::LocalJwk { private_key_ref } => {
+                map.serialize_entry("kind", "local-jwk")?;
+                map.serialize_entry("privateKeyRef", private_key_ref)?;
+            }
             Self::Transit {
                 unix_socket_path,
                 mount,
@@ -1809,19 +1966,72 @@ impl RuntimeSignerConfig {
                 key_version,
                 timeout_milliseconds,
             } => {
-                validate_absolute_path(unix_socket_path)?;
-                if !valid_local_id(mount) || !valid_local_id(key_name) {
-                    return invalid("Transit signer mount and keyName must be local identifiers");
+                map.serialize_entry("kind", "transit")?;
+                map.serialize_entry("unixSocketPath", unix_socket_path)?;
+                map.serialize_entry("mount", mount)?;
+                map.serialize_entry("keyName", key_name)?;
+                map.serialize_entry("keyVersion", key_version)?;
+                map.serialize_entry("timeoutMilliseconds", timeout_milliseconds)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl RuntimeSignerConfig {
+    /// The signer's findings. A secret reference is checked against the
+    /// enabled providers only when `secretProviders` itself is valid, so one
+    /// mistake there is not reported twice.
+    fn findings(
+        &self,
+        secret_providers: &SecretProvidersConfig,
+        providers_enabled: bool,
+        findings: &mut Vec<RuntimeFinding>,
+    ) {
+        match self {
+            Self::LocalJwk { private_key_ref } => {
+                if providers_enabled
+                    && secret_providers
+                        .check_reference("signer.privateKeyRef", private_key_ref.as_str())
+                        .is_err()
+                {
+                    findings.push(RuntimeFinding::at_value(
+                        RUNTIME_SIGNER_CODE,
+                        "/signer/privateKeyRef",
+                        ConfigError::InvalidField(
+                            "the secret reference names a provider secretProviders does not enable",
+                            "signer.privateKeyRef",
+                        ),
+                        "Enable the provider the reference names under secretProviders, or reference the key through an enabled provider.",
+                    ));
                 }
-                if *key_version == 0 {
-                    return invalid("Transit signer keyVersion must be positive");
+            }
+            Self::Transit {
+                unix_socket_path,
+                mount,
+                key_name,
+                ..
+            } => {
+                if let Err(error) = validate_absolute_path(unix_socket_path) {
+                    findings.push(RuntimeFinding::at_value(
+                        RUNTIME_SIGNER_CODE,
+                        "/signer/unixSocketPath",
+                        error,
+                        ABSOLUTE_PATH_ACTION,
+                    ));
                 }
-                validate_range(
-                    *timeout_milliseconds,
-                    1,
-                    30_000,
-                    "Transit signer timeoutMilliseconds",
-                )
+                for (pointer, name) in [("/signer/mount", mount), ("/signer/keyName", key_name)] {
+                    if !valid_local_id(name) {
+                        findings.push(RuntimeFinding::at_value(
+                            RUNTIME_SIGNER_CODE,
+                            pointer,
+                            ConfigError::Invalid(
+                                "Transit signer mount and keyName must be local identifiers",
+                            ),
+                            LOCAL_ID_ACTION,
+                        ));
+                    }
+                }
             }
         }
     }
@@ -1859,40 +2069,104 @@ pub struct RuntimeAuditConfig {
 }
 
 impl RuntimeAuditConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if let Some(path) = &self.path {
-            validate_absolute_path(path)?;
+    fn findings(&self, findings: &mut Vec<RuntimeFinding>) {
+        if let Some(Err(error)) = self.path.as_deref().map(validate_absolute_path) {
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_AUDIT_CODE,
+                "/audit/path",
+                error,
+                ABSOLUTE_PATH_ACTION,
+            ));
+            return;
         }
-        self.destination().map(|_| ())
+        if let Err(error) = self.settings() {
+            let refusal = audit_refusal(&error);
+            findings.push(RuntimeFinding {
+                code: RUNTIME_AUDIT_CODE,
+                pointer: refusal.pointer,
+                at_key: refusal.at_key,
+                error: ConfigError::Invalid(refusal.cause),
+                action: refusal.action,
+            });
+        }
     }
 
-    /// The destination the writer opens, with the platform defaults applied
-    /// and file-only settings refused for `stdout`.
-    pub fn destination(&self) -> Result<AuditDestination, ConfigError> {
+    fn settings(&self) -> Result<AuditDestination, AuditDestinationError> {
         AuditDestination::from_settings(
             self.destination,
             self.path.as_deref().map(PathBuf::from),
             self.rotate_bytes,
             self.retain_days,
         )
-        .map_err(|error| {
-            ConfigError::Invalid(match error {
-                AuditDestinationError::MissingPath => {
-                    "audit path is required when audit destination is file"
-                }
-                AuditDestinationError::RelativePath => "audit path must be absolute",
-                AuditDestinationError::FileOnlyField { .. } => {
-                    "audit path, rotateBytes, and retainDays apply only when audit destination is file"
-                }
-                AuditDestinationError::RotateBytesOutOfRange { .. } => {
-                    "audit rotateBytes is outside the platform bounds"
-                }
-                AuditDestinationError::RetainDaysOutOfRange { .. } => {
-                    "audit retainDays is outside the platform bounds"
-                }
-                _ => "audit destination is invalid",
-            })
-        })
+    }
+
+    /// The destination the writer opens, with the platform defaults applied
+    /// and file-only settings refused for `stdout`.
+    pub fn destination(&self) -> Result<AuditDestination, ConfigError> {
+        self.settings()
+            .map_err(|error| ConfigError::Invalid(audit_refusal(&error).cause))
+    }
+}
+
+/// How a refused audit destination is reported: the fixed cause, the member
+/// it concerns, and the fix.
+struct AuditRefusal {
+    cause: &'static str,
+    pointer: String,
+    at_key: bool,
+    action: String,
+}
+
+fn audit_refusal(error: &AuditDestinationError) -> AuditRefusal {
+    let refusal = |cause, pointer: &str, at_key, action: &str| AuditRefusal {
+        cause,
+        pointer: pointer.to_owned(),
+        at_key,
+        action: action.to_owned(),
+    };
+    match error {
+        AuditDestinationError::MissingPath => refusal(
+            "audit path is required when audit destination is file",
+            "/audit",
+            true,
+            "Add audit.path, the absolute path of the audit file, or write destination: stdout.",
+        ),
+        AuditDestinationError::RelativePath => refusal(
+            "audit path must be absolute",
+            "/audit/path",
+            false,
+            ABSOLUTE_PATH_ACTION,
+        ),
+        AuditDestinationError::FileOnlyField { field } => refusal(
+            "audit path, rotateBytes, and retainDays apply only when audit destination is file",
+            &format!("/audit/{field}"),
+            true,
+            "Remove the key, or write destination: file.",
+        ),
+        AuditDestinationError::RotateBytesOutOfRange { minimum, maximum } => AuditRefusal {
+            action: format!("Write a whole number of bytes from {minimum} to {maximum}."),
+            ..refusal(
+                "audit rotateBytes is outside the platform bounds",
+                "/audit/rotateBytes",
+                false,
+                "",
+            )
+        },
+        AuditDestinationError::RetainDaysOutOfRange { maximum } => AuditRefusal {
+            action: format!("Write a whole number of days from 1 to {maximum}."),
+            ..refusal(
+                "audit retainDays is outside the platform bounds",
+                "/audit/retainDays",
+                false,
+                "",
+            )
+        },
+        _ => refusal(
+            "audit destination is invalid",
+            "/audit/path",
+            false,
+            "Write the absolute path of the audit file, ending in a short file name.",
+        ),
     }
 }
 
@@ -1904,11 +2178,23 @@ pub struct OutboundTlsConfig {
 }
 
 impl OutboundTlsConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
+    fn findings(&self, findings: &mut Vec<RuntimeFinding>) {
         if !self.system_roots {
-            return invalid("outbound TLS system roots must remain enabled");
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_OUTBOUND_TLS_CODE,
+                "/outboundTls/systemRoots",
+                ConfigError::Invalid("outbound TLS system roots must remain enabled"),
+                "Write true; a trust profile adds its CA bundle beside the system roots.",
+            ));
         }
-        validate_named_map(&self.trust_profiles, 0, 64, TrustProfileBinding::validate)
+        absolute_path_map_findings(
+            &self.trust_profiles,
+            "/outboundTls/trustProfiles",
+            RUNTIME_OUTBOUND_TLS_CODE,
+            "caBundleFile",
+            |binding| &binding.ca_bundle_file,
+            findings,
+        );
     }
 }
 
@@ -1916,12 +2202,6 @@ impl OutboundTlsConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TrustProfileBinding {
     pub ca_bundle_file: String,
-}
-
-impl TrustProfileBinding {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_absolute_path(&self.ca_bundle_file)
-    }
 }
 
 /// One logical extract name bound to the process-local file that holds it.
@@ -1935,12 +2215,6 @@ pub struct SourceExtractBinding {
     pub path: String,
 }
 
-impl SourceExtractBinding {
-    fn validate(&self) -> Result<(), ConfigError> {
-        validate_absolute_path(&self.path)
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListenerConfig {
@@ -1950,50 +2224,44 @@ pub struct ListenerConfig {
     pub network_exposure: ListenerNetworkExposure,
     pub tls_termination: TlsTermination,
     pub trust_proxy_identity_headers: bool,
-    pub maximum_request_bytes: u64,
-    pub maximum_concurrent_requests: u32,
-    pub request_timeout_milliseconds: u64,
-    pub shutdown_grace_milliseconds: u64,
+    pub maximum_request_bytes: BoundedU64<1_024, 1_048_576>,
+    pub maximum_concurrent_requests: BoundedU32<1, 4_096>,
+    pub request_timeout_milliseconds: BoundedU64<1, 30_000>,
+    pub shutdown_grace_milliseconds: BoundedU64<1, 120_000>,
 }
 
 impl ListenerConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        match self.network_exposure {
-            ListenerNetworkExposure::PrivateAddress => {
-                validate_private_bind_host(self.bind.ip())?;
-            }
+    fn findings(&self, findings: &mut Vec<RuntimeFinding>) {
+        let host = match self.network_exposure {
+            ListenerNetworkExposure::PrivateAddress => validate_private_bind_host(self.bind.ip()),
             ListenerNetworkExposure::ContainerPrivate => {
-                validate_container_private_bind_host(self.bind.ip())?;
+                validate_container_private_bind_host(self.bind.ip())
             }
+        };
+        if let Err(error) = host {
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_LISTENER_CODE,
+                "/listener/bind",
+                error,
+                "Bind a loopback or private address, or declare networkExposure: container-private on a container network.",
+            ));
         }
-        validate_listener_port(self.bind.socket_addr().port())?;
+        if let Err(error) = validate_listener_port(self.bind.socket_addr().port()) {
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_LISTENER_CODE,
+                "/listener/bind",
+                error,
+                LISTENER_PORT_ACTION,
+            ));
+        }
         if self.trust_proxy_identity_headers {
-            return invalid("proxy identity headers must not be trusted");
+            findings.push(RuntimeFinding::at_value(
+                RUNTIME_LISTENER_CODE,
+                "/listener/trustProxyIdentityHeaders",
+                ConfigError::Invalid("proxy identity headers must not be trusted"),
+                "Write false; Evidence authenticates every request itself.",
+            ));
         }
-        validate_range(
-            self.maximum_request_bytes,
-            1_024,
-            1_048_576,
-            "maximumRequestBytes",
-        )?;
-        validate_range(
-            u64::from(self.maximum_concurrent_requests),
-            1,
-            4_096,
-            "maximumConcurrentRequests",
-        )?;
-        validate_range(
-            self.request_timeout_milliseconds,
-            1,
-            30_000,
-            "requestTimeoutMilliseconds",
-        )?;
-        validate_range(
-            self.shutdown_grace_milliseconds,
-            1,
-            120_000,
-            "shutdownGraceMilliseconds",
-        )
     }
 }
 
@@ -2024,9 +2292,33 @@ pub struct MetricsListenerConfig {
 }
 
 impl MetricsListenerConfig {
-    fn validate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
-        validate_private_bind_host(self.bind.ip())?;
-        validate_listener_port(self.bind.socket_addr().port())?;
+    fn findings(&self, evidence_listener: &ListenerConfig, findings: &mut Vec<RuntimeFinding>) {
+        for (error, action) in [
+            (
+                validate_private_bind_host(self.bind.ip()),
+                "Bind the metrics listener to a loopback or private address.",
+            ),
+            (
+                validate_listener_port(self.bind.socket_addr().port()),
+                LISTENER_PORT_ACTION,
+            ),
+            (
+                self.validate_separate(evidence_listener),
+                "Bind the metrics listener to a port the evidence listener does not use.",
+            ),
+        ] {
+            if let Err(error) = error {
+                findings.push(RuntimeFinding::at_value(
+                    RUNTIME_METRICS_LISTENER_CODE,
+                    "/metricsListener/bind",
+                    error,
+                    action,
+                ));
+            }
+        }
+    }
+
+    fn validate_separate(&self, evidence_listener: &ListenerConfig) -> Result<(), ConfigError> {
         // Sharing the evidence binding would publish the counters on the
         // listener the public contract describes, which is the separation this
         // block exists to enforce.
@@ -9545,17 +9837,17 @@ outboundTls:
             candidate.extend_from_slice(format!("{governed_key}: {{}}\n").as_bytes());
             let rejection = RuntimeConfig::parse_yaml(&candidate)
                 .expect_err("runtime accepted governed bundle key {governed_key}");
-            let ConfigError::InvalidYaml(fault) = &rejection else {
+            let ConfigError::Refused(report) = &rejection else {
                 panic!("runtime accepted governed bundle key {governed_key}: {rejection}");
             };
+            let diagnostic = &report.diagnostics()[0];
             assert_eq!(
-                fault.cause(),
-                "unknown field",
+                diagnostic.code, "config.unknown-key",
                 "governed bundle key {governed_key} was rejected for the wrong reason"
             );
             assert_eq!(
-                fault.path(),
-                Some(governed_key),
+                diagnostic.path,
+                format!("/{governed_key}"),
                 "governed bundle key {governed_key} was rejected without naming it"
             );
             assert!(
@@ -10322,11 +10614,30 @@ outboundTls:
   trustProfiles: {}
 ";
 
-    fn runtime_refusal(text: &str) -> SchemaFault {
+    fn runtime_report(text: &str) -> Report {
         match RuntimeConfig::parse_yaml(text.as_bytes()) {
-            Err(ConfigError::InvalidYaml(fault)) => fault,
-            other => panic!("the runtime document was not refused as a schema fault: {other:?}"),
+            Err(ConfigError::Refused(report)) => *report,
+            other => panic!("the runtime document was not refused by the reader: {other:?}"),
         }
+    }
+
+    fn deciding(report: &Report) -> &registry_platform_yaml::Diagnostic {
+        report
+            .diagnostics()
+            .first()
+            .expect("a refusal carries a diagnostic")
+    }
+
+    fn position(diagnostic: &registry_platform_yaml::Diagnostic) -> (usize, usize) {
+        let source = diagnostic
+            .source
+            .as_ref()
+            .expect("the diagnostic names its source");
+        assert_eq!(source.file, "runtime.yaml");
+        (
+            source.line.expect("a line"),
+            source.column.expect("a column"),
+        )
     }
 
     #[test]
@@ -10340,19 +10651,22 @@ outboundTls:
                 "",
             )
             .replace("kind: EvidenceRuntimeConfig\n", "");
-        let fault = runtime_refusal(&unenveloped);
-        assert_eq!(
-            fault.cause(),
-            "document does not declare the Evidence runtime envelope"
+        let report = runtime_report(&unenveloped);
+        let diagnostic = deciding(&report);
+        assert_eq!(diagnostic.code, "config.missing-envelope");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains(EVIDENCE_RUNTIME_API_VERSION),
+            "the fix names the apiVersion to write: {diagnostic:?}"
         );
-        assert_eq!(fault.remedy(), Some(EVIDENCE_RUNTIME_ENVELOPE_REMEDY));
 
         let other_kind = LOADER_RUNTIME_DOCUMENT
             .replace("kind: EvidenceRuntimeConfig", "kind: RelayRuntimeConfig");
-        assert_eq!(
-            runtime_refusal(&other_kind).cause(),
-            "document does not declare the Evidence runtime envelope"
-        );
+        let report = runtime_report(&other_kind);
+        assert_eq!(deciding(&report).code, "config.wrong-kind");
+        assert_eq!(deciding(&report).path, "/kind");
+        assert_eq!(position(deciding(&report)), (2, 7));
     }
 
     #[test]
@@ -10365,20 +10679,21 @@ outboundTls:
             ),
         ];
         for (member, path) in cases {
-            let fault = runtime_refusal(&format!("{LOADER_RUNTIME_DOCUMENT}{member}"));
-            assert_eq!(fault.cause(), "key is no longer accepted", "{path}");
-            assert_eq!(fault.path(), Some(path));
+            let report = runtime_report(&format!("{LOADER_RUNTIME_DOCUMENT}{member}"));
+            let diagnostic = deciding(&report);
+            assert_eq!(diagnostic.code, "config.removed-key", "{path}");
+            assert_eq!(diagnostic.path, format!("/{path}"));
             let expected = EVIDENCE_RUNTIME_REMOVED_KEYS
                 .iter()
                 .find(|removed| removed.path == path)
                 .expect("the key is listed")
                 .replacement;
-            assert_eq!(fault.remedy(), Some(expected), "{path}");
+            assert!(
+                diagnostic.suggested_action.starts_with(expected),
+                "{path}: {diagnostic:?}"
+            );
         }
-        for (listener, path) in [
-            ("listener", "listener.bindHost"),
-            ("listener", "listener.port"),
-        ] {
+        for path in ["listener.bindHost", "listener.port"] {
             let member = path.rsplit('.').next().expect("a leaf");
             let value = if member == "port" {
                 "8080"
@@ -10386,38 +10701,46 @@ outboundTls:
                 "127.0.0.1"
             };
             let text = LOADER_RUNTIME_DOCUMENT.replace(
-                &format!("{listener}:\n  bind: 127.0.0.1:8080\n"),
-                &format!("{listener}:\n  bind: 127.0.0.1:8080\n  {member}: {value}\n"),
+                "listener:\n  bind: 127.0.0.1:8080\n",
+                &format!("listener:\n  bind: 127.0.0.1:8080\n  {member}: {value}\n"),
             );
-            let fault = runtime_refusal(&text);
-            assert_eq!(fault.path(), Some(path));
+            let report = runtime_report(&text);
+            let diagnostic = deciding(&report);
+            assert_eq!(diagnostic.path, format!("/listener/{member}"));
             assert!(
-                fault
-                    .remedy()
-                    .is_some_and(|remedy| remedy.contains("listener.bind")),
+                diagnostic.suggested_action.contains("listener.bind"),
                 "{path}"
             );
         }
         let metrics = format!(
             "{LOADER_RUNTIME_DOCUMENT}metricsListener:\n  bindHost: 127.0.0.1\n  port: 9090\n"
         );
-        let fault = runtime_refusal(&metrics);
-        assert!(fault
-            .remedy()
-            .is_some_and(|remedy| remedy.contains("metricsListener.bind")));
+        let report = runtime_report(&metrics);
+        let removed: Vec<_> = report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.removed-key")
+            .collect();
+        assert_eq!(removed.len(), 2, "{report:?}");
+        assert!(removed
+            .iter()
+            .all(|diagnostic| diagnostic.suggested_action.contains("metricsListener.bind")));
     }
 
     #[test]
     fn a_duplicated_runtime_key_is_refused() {
         let duplicated = format!("{LOADER_RUNTIME_DOCUMENT}kind: EvidenceRuntimeConfig\n");
-        assert!(RuntimeConfig::parse_yaml(duplicated.as_bytes()).is_err());
+        assert_eq!(
+            deciding(&runtime_report(&duplicated)).code,
+            "yaml.duplicate-key"
+        );
     }
 
-    /// Every class of runtime refusal is worded by the shared reader's code
-    /// and path, never by its message text, and no cause, path, or rendering
-    /// repeats the value that was refused.
+    /// The runtime reports the shared reader's diagnostics unchanged: the
+    /// reader's code, the RFC 6901 path, the line and column, and the fix.
+    /// No diagnostic and no rendering repeats the value that was refused.
     #[test]
-    fn every_runtime_refusal_is_classified_by_the_reader_code() {
+    fn every_runtime_refusal_carries_the_reader_diagnostic_unchanged() {
         const CANARY: &str = "canary-runtime-value-7731";
         let replaced = |from: &str, to: &str| {
             let text = LOADER_RUNTIME_DOCUMENT.replace(from, to);
@@ -10426,12 +10749,12 @@ outboundTls:
         };
         let appended = |member: &str| format!("{LOADER_RUNTIME_DOCUMENT}{member}");
         let nested = format!("{}{CANARY}{}", "[".repeat(200), "]".repeat(200));
-        let cases: Vec<(&str, String, &str, Option<&str>)> = vec![
+        let cases: Vec<(&str, String, &str, &str)> = vec![
             (
                 "unknown key",
                 appended(&format!("bogusField: {CANARY}\n")),
-                "unknown field",
-                Some("bogusField"),
+                "config.unknown-key",
+                "/bogusField",
             ),
             (
                 "missing key",
@@ -10439,8 +10762,8 @@ outboundTls:
                     "audit:\n  path: /var/lib/registry-evidence/audit/evidence.jsonl\n",
                     "",
                 ),
-                "required field is missing",
-                None,
+                "config.missing-key",
+                "",
             ),
             (
                 "wrong type",
@@ -10448,8 +10771,8 @@ outboundTls:
                     "maximumRequestBytes: 65536",
                     &format!("maximumRequestBytes: {CANARY}"),
                 ),
-                "field has the wrong type",
-                Some("listener.maximumRequestBytes"),
+                "config.expected-integer",
+                "/listener/maximumRequestBytes",
             ),
             (
                 "null member",
@@ -10457,8 +10780,8 @@ outboundTls:
                     "path: /var/lib/registry-evidence/audit/evidence.jsonl",
                     "path: ~",
                 ),
-                "field has no value",
-                Some("audit.path"),
+                "config.null-value",
+                "/audit/path",
             ),
             (
                 "unknown variant",
@@ -10466,8 +10789,8 @@ outboundTls:
                     "tlsTermination: operator-controlled-upstream",
                     &format!("tlsTermination: {CANARY}"),
                 ),
-                "field value is not one of the accepted variants",
-                Some("listener.tlsTermination"),
+                "config.unknown-variant",
+                "/listener/tlsTermination",
             ),
             (
                 "out of range",
@@ -10475,8 +10798,23 @@ outboundTls:
                     "maximumConcurrentRequests: 64",
                     "maximumConcurrentRequests: 99999999999",
                 ),
-                "field value is not accepted",
-                Some("listener.maximumConcurrentRequests"),
+                "config.out-of-range",
+                "/listener/maximumConcurrentRequests",
+            ),
+            (
+                "above the member's own bound",
+                replaced(
+                    "maximumConcurrentRequests: 64",
+                    "maximumConcurrentRequests: 4097",
+                ),
+                "config.out-of-range",
+                "/listener/maximumConcurrentRequests",
+            ),
+            (
+                "below the member's own bound",
+                replaced("maximumRequestBytes: 65536", "maximumRequestBytes: 1023"),
+                "config.out-of-range",
+                "/listener/maximumRequestBytes",
             ),
             (
                 "listener bind",
@@ -10484,38 +10822,41 @@ outboundTls:
                     "bind: 127.0.0.1:8080",
                     &format!("bind: {CANARY}.internal:8080"),
                 ),
-                "listener bind must be host:port with an IP address host",
-                Some("listener.bind"),
+                "config.invalid-value",
+                "/listener/bind",
             ),
-            // The signer is an internally tagged union, which serde buffers
-            // before decoding a variant, so the reader can place a refusal
-            // inside it only at the union itself.
             (
                 "secret reference inside the signer",
                 replaced(
                     "privateKeyRef: secret:file/signing-key",
                     &format!("privateKeyRef: {CANARY}"),
                 ),
-                "field value is not accepted",
-                Some("signer"),
+                "config.invalid-value",
+                "/signer/privateKeyRef",
+            ),
+            (
+                "unknown signer kind",
+                replaced("kind: local-jwk", &format!("kind: {CANARY}")),
+                "config.unknown-variant",
+                "/signer/kind",
             ),
             (
                 "duplicate key",
                 appended(&format!("audit: {CANARY}\n")),
-                "duplicate mapping key",
-                Some("audit"),
+                "yaml.duplicate-key",
+                "/audit",
             ),
             (
                 "more than one document",
                 appended(&format!("---\nbogusField: {CANARY}\n")),
-                "document contains more than one YAML document",
-                None,
+                "yaml.multiple-documents",
+                "",
             ),
             (
                 "nesting",
                 appended(&format!("bogusField: {nested}\n")),
-                "document nests too deeply",
-                None,
+                "yaml.too-deep",
+                "",
             ),
             (
                 "tag",
@@ -10523,14 +10864,14 @@ outboundTls:
                     "maximumRequestBytes: 65536",
                     "maximumRequestBytes: !!int 65536",
                 ),
-                "document carries a YAML tag",
-                Some("listener.maximumRequestBytes"),
+                "yaml.tag",
+                "/listener/maximumRequestBytes",
             ),
             (
                 "key that is not a string",
                 appended(&format!("7: {CANARY}\n")),
-                "mapping key is not a string",
-                Some("7"),
+                "yaml.non-string-key",
+                "",
             ),
             (
                 "anchor",
@@ -10538,48 +10879,63 @@ outboundTls:
                     "privateKeyRef: secret:file/signing-key",
                     "privateKeyRef: &key secret:file/signing-key",
                 ),
-                "document uses a YAML anchor, alias, or merge key",
-                Some("signer.privateKeyRef"),
+                "yaml.anchor",
+                "/signer/privateKeyRef",
             ),
             (
                 "not a mapping",
                 format!("- {CANARY}\n"),
-                "document is not a YAML mapping",
-                None,
-            ),
-            (
-                "not well-formed",
-                appended(&format!("bogusField: [{CANARY}\n")),
-                "document is not well-formed YAML",
-                Some("bogusField.1"),
+                "config.invalid-type",
+                "",
             ),
         ];
-        for (label, document, cause, path) in cases {
-            let fault = runtime_refusal(&document);
-            assert_eq!(fault.cause(), cause, "{label}");
-            assert_eq!(fault.path(), path, "{label}");
+        for (label, document, code, path) in cases {
+            let report = runtime_report(&document);
+            let diagnostic = deciding(&report);
+            assert_eq!(diagnostic.code, code, "{label}: {diagnostic:?}");
+            if !path.is_empty() {
+                assert_eq!(diagnostic.path, path, "{label}");
+            }
             assert!(
-                !fault.to_string().contains(CANARY),
-                "{label}: the fault repeats the refused value"
+                !diagnostic.suggested_action.is_empty(),
+                "{label}: the diagnostic names its fix"
+            );
+            let error = ConfigError::Refused(Box::new(report.clone()));
+            assert!(
+                !error.to_string().contains(CANARY)
+                    && !report.to_json_value().to_string().contains(CANARY),
+                "{label}: the refusal repeats the refused value"
             );
         }
-        assert_eq!(
-            runtime_cause("config.invalid-value", "/signer/privateKeyRef"),
-            "secret reference does not use an exact permitted grammar",
-            "a secret reference the reader can place names its grammar"
+    }
+
+    /// The signer is a tagged union the reader decodes itself, so a refusal
+    /// inside a variant keeps its full path, line, and column.
+    #[test]
+    fn a_bad_secret_reference_inside_the_signer_names_its_path_and_position() {
+        let text = LOADER_RUNTIME_DOCUMENT.replace(
+            "privateKeyRef: secret:file/signing-key",
+            "privateKeyRef: file/signing-key",
         );
-        assert_eq!(
-            runtime_cause("config.invalid-value", "/metricsListener/bind"),
-            "listener bind must be host:port with an IP address host"
+        let report = runtime_report(&text);
+        let diagnostic = deciding(&report);
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert_eq!(diagnostic.path, "/signer/privateKeyRef");
+        assert_eq!(position(diagnostic), (17, 18));
+        let rendered = ConfigError::Refused(Box::new(report)).to_string();
+        assert!(
+            rendered.contains("runtime.yaml:17:18 /signer/privateKeyRef"),
+            "{rendered}"
         );
-        assert_eq!(
-            runtime_cause("config.duplicate-item", "/acquisitionCapabilities/1"),
-            "list repeats an entry"
+
+        let transit = LOADER_RUNTIME_DOCUMENT.replace(
+            "  kind: local-jwk\n  privateKeyRef: secret:file/signing-key\n",
+            "  kind: transit\n  unixSocketPath: /run/transit.sock\n  mount: transit\n  \
+             keyName: evidence\n  keyVersion: seven\n  timeoutMilliseconds: 2000\n",
         );
-        assert_eq!(
-            runtime_cause("yaml.tab-indentation", "/listener"),
-            "document is not well-formed YAML"
-        );
+        let report = runtime_report(&transit);
+        assert_eq!(deciding(&report).path, "/signer/keyVersion");
+        assert_eq!(position(deciding(&report)), (20, 15));
     }
 
     /// Substitution fills operator values from the environment. It never
@@ -10627,12 +10983,13 @@ outboundTls:
             let refused = RuntimeConfig::parse_yaml_with(text.as_bytes(), |_| {
                 Some("secret:file/other".to_owned())
             });
-            let Err(ConfigError::InvalidYaml(fault)) = refused else {
+            let Err(ConfigError::Refused(report)) = refused else {
                 panic!("substitution into {from} was accepted");
             };
             assert_eq!(
-                fault.cause(),
-                "environment expressions are not accepted in secret references or secretProviders"
+                report.diagnostics()[0].code,
+                "config.substitution-not-allowed",
+                "{from}"
             );
         }
     }

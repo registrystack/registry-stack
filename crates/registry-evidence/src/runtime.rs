@@ -261,10 +261,11 @@ pub struct ValidatedVerificationMaterial {
 /// Resolve and validate the audit, subject-binding, and signing secret
 /// material a bundle names, with no side effects: nothing is written and no
 /// audit destination is opened. Startup builds its runtime state from the returned
-/// material, and `check` runs the same validation so a deployment whose
-/// mounted secrets the server would refuse fails check instead of first
-/// start. Source credentials are deliberately not resolved here: readiness
-/// owns them.
+/// material, and `check --require-runtime-dependencies` runs the same
+/// validation on the target host so a deployment whose mounted secrets the
+/// server would refuse fails that check instead of first start. The offline
+/// `check` reads no secret material. Source credentials are deliberately not
+/// resolved here: readiness owns them.
 pub async fn validate_secret_material(
     bundle: &Bundle,
     runtime: &RuntimeConfig,
@@ -332,9 +333,9 @@ pub async fn validate_verification_material(
                 unix_socket_path,
                 mount,
                 key_name,
-                *key_version,
+                key_version.get(),
                 bundle.active_public_jwk.clone(),
-                Duration::from_millis(*timeout_milliseconds),
+                Duration::from_millis(timeout_milliseconds.get()),
             )
             .map_err(|_| {
                 RuntimeInitializationError::Signing(

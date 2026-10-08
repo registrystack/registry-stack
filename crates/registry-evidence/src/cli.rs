@@ -58,14 +58,36 @@ where
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Validate and compile the complete immutable bundle, and validate the
-    /// mounted secret material exactly as startup does.
+    /// Check a runtime file and the package it binds, offline, and report
+    /// every problem found.
+    ///
+    /// The check reads no secret material and contacts no network service. It
+    /// reads the runtime file, verifies the package `package.root` names,
+    /// loads and compiles the bundle, reads each CA bundle a trust profile
+    /// names, and checks every binding between the runtime file and the
+    /// bundle. Freezing, secret material, extract freshness, and runtime
+    /// dependencies are proved on the target host with
+    /// `--require-runtime-dependencies`.
     Check {
         /// The closed operator runtime file that binds the governed bundle.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
-        /// Also prove audit writability, signer readiness, source credentials,
-        /// and access-token JWKS reachability in the target runtime context.
+        /// Report for a person (`human`) or as one JSON document on standard
+        /// output (`json`).
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+        /// Exit 1 when the check reports a warning.
+        #[arg(long)]
+        deny_warnings: bool,
+        /// Substitute `${...}` expressions from this process's environment, as
+        /// startup does, and check the values they fill. Without it an
+        /// expression is checked by its syntax and position only.
+        #[arg(long)]
+        environment: bool,
+        /// Also prove, on the target host, what startup proves: read-only
+        /// deployment inputs, secret material, extract freshness, audit
+        /// writability, signer readiness, source credentials, and access-token
+        /// JWKS reachability.
         #[arg(long)]
         require_runtime_dependencies: bool,
         /// Also prove the configured audit sink resolves inside this absolute
@@ -229,6 +251,16 @@ pub enum Command {
     },
 }
 
+/// Who a check report is rendered for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum OutputFormat {
+    /// Position-first diagnostic lines and a summary for a person.
+    #[default]
+    Human,
+    /// One JSON document for a machine reader.
+    Json,
+}
+
 /// Who the `--explain` trace is rendered for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum ExplainFormat {
@@ -264,6 +296,9 @@ mod tests {
         .expect("the audit root pairs with the dependency proof");
         let Command::Check {
             runtime_config: _,
+            format: _,
+            deny_warnings: _,
+            environment: _,
             require_runtime_dependencies,
             require_audit_under,
             without_audit_lock,
