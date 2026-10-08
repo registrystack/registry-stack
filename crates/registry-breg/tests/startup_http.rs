@@ -37,17 +37,6 @@ use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
-/// The document refusal with its message set aside, so a table can name it
-/// beside the refusals that carry none.
-const DOCUMENT: RuntimeConfigError = RuntimeConfigError::Document(String::new());
-
-fn refusal(error: RuntimeConfigError) -> RuntimeConfigError {
-    match error {
-        RuntimeConfigError::Document(_) => DOCUMENT,
-        other => other,
-    }
-}
-
 const RAW_PRINCIPAL_CANARY: &str = "breg-v1-25-raw-principal-canary";
 const RECORD_ID_CANARY: &str = "aaaaaaaa-aaaa-4aaa-8aaa-rsv125canary";
 const QUERY_VALUE_CANARY: &str = "breg-v1-25-query-value-canary";
@@ -503,7 +492,7 @@ fn startup_errors() -> [StartupError; 27] {
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
         // exercises the same static text, so one representative is enough here.
-        StartupError::RuntimeConfig(DOCUMENT),
+        StartupError::RuntimeConfig(RuntimeConfigError::InvalidBinding),
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection,
         StartupError::DatabaseUnready,
@@ -1101,24 +1090,30 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     let valid_runtime = runtime_without_telemetry(directory.path());
     parse_runtime_config_with_env(&valid_runtime, |_| None)
         .expect("runtime without telemetry parses");
-    for (member, expected) in [
+    for (member, expected_path) in [
         (
             format!("metrics:\n  labels:\n    principal: {RAW_PRINCIPAL_CANARY}\n"),
-            DOCUMENT,
+            "/metrics",
         ),
         (
             format!("telemetry:\n  tracestate: {TRACESTATE_CANARY}\n"),
-            RuntimeConfigError::GovernedMember,
+            "/telemetry",
         ),
     ] {
         let error =
             parse_runtime_config_with_env(&(valid_runtime.clone() + member.as_str()), |_| None)
                 .expect_err("runtime telemetry authority is absent");
-        assert_eq!(refusal(error.clone()), expected);
-        assert_forbidden_values_absent(&format!("{error:?} {error}"));
+        assert_eq!(error.code(), "config.unknown-key");
+        assert_eq!(error.path(), expected_path);
+        assert_forbidden_values_absent(&format!("{error:?} {error} {}", error.render_human(None)));
     }
 
-    let config_path = directory.path().join(FILESYSTEM_PATH_CANARY);
+    // The loader refuses a path through a symbolic link, and the temporary
+    // directory may sit under one (`/var` on macOS), so the refusal this test
+    // reads is reached through the resolved directory.
+    let config_path = fs::canonicalize(directory.path())
+        .expect("temporary directory resolves")
+        .join(FILESYSTEM_PATH_CANARY);
     fs::write(&config_path, canary_runtime_document()).expect("canary runtime config writes");
     let output = Command::new(env!("CARGO_BIN_EXE_breg"))
         .args([
@@ -1131,11 +1126,28 @@ async fn provenance_operational_logs_metrics_and_traces_are_separate_closed_and_
     assert_eq!(output.status.code(), Some(1));
     let stdout = std::str::from_utf8(&output.stdout).expect("operational stdout is UTF-8");
     let stderr = std::str::from_utf8(&output.stderr).expect("operational stderr is UTF-8");
-    let logs = format!("{stdout}{stderr}");
-    assert_forbidden_values_absent(&logs);
+    // The operational log on stdout names no path and no value.
+    assert_forbidden_values_absent(stdout);
+    // The operator reads the reader's diagnostics on stderr: the refused key
+    // with its position and fix, under the file the operator named, and no
+    // configured value.
+    let config_file = config_path.to_str().expect("config path is UTF-8");
+    let human = stderr.replace(config_file, "<runtime.yaml>");
+    assert_forbidden_values_absent(&human);
+    assert!(
+        human.starts_with("breg did not start: its runtime configuration was refused.\n"),
+        "{human}"
+    );
+    assert!(
+        human.contains("error[config.unknown-key] <runtime.yaml>:3:1 /telemetry\n"),
+        "{human}"
+    );
+    assert!(human.contains("  next: "), "{human}");
+    assert!(human.ends_with(" in 1 file\n"), "{human}");
+    let logs = format!("{stdout}{human}");
     assert!(!logs.contains("startup-http"));
     assert!(!logs.contains(&registry_revision));
-    let records = logs
+    let records = stdout
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("operational log is JSON"))
         .collect::<Vec<_>>();

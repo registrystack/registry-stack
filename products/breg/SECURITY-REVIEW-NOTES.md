@@ -2286,3 +2286,89 @@ against it; that reader already sees the raw principal beside it.
   to no current caller; finish or cancel open runs before such a change.
 - **Raw creator values stay with the run.** No run retention exists, so the
   issuer and principal stay as long as the run row does.
+
+## Runtime file decoded by the shared reader
+
+`runtime.yaml` is decoded through the shared runtime loader
+(`registry-platform-config`), which reads and types the file in one pass,
+instead of a product-side `serde_path_to_error` pass over the loader's
+generic value. It touches deployment defaults and the value-free reporting of
+operator configuration. This replaces the removed-runtime-key refusal codes
+and the unset-variable wording that "State older than the immediate
+predecessor" describes.
+
+### Threat
+
+An operator who cannot see every problem in the file, with its position,
+edits it by trial and error, and a refusal that echoes a configured value
+leaks a secret or a substituted value into logs and terminals. A product-side
+second decode also loses the reader's all-unknown-keys reporting, so an
+unknown key inside a platform block (`package`, `authentication.oidc`,
+`audit`) was reported alone or not at all.
+
+### Enforcement and defaults
+
+- `runtime_config_loader()` in `crates/registry-breg/src/runtime_config.rs`
+  declares the envelope and the removed keys (`database.url`,
+  `database.password`, `database.plaintext`), and `RawRuntimeConfig` is
+  decoded by the loader directly. The platform blocks are read through the
+  reader's shared-block recipe, not serde `flatten`.
+- Every member is closed, so a registry-project member such as `entities`,
+  `webhooks`, or `telemetry` is refused as `config.unknown-key` wherever it
+  appears. The heuristic that looked for those names across the document is
+  removed; the binding maps (`eventDestinations`, `evidenceProviders`,
+  `reviewAuthorities`, `reviewExecutors`) were already exempt from it, and a
+  logical id there is still not a governed member.
+- A listener `bind` that is not a numeric socket address and an
+  `audit.hashKeyRef` that is not a secret reference are refused by the reader
+  at their own pointer (`config.invalid-value`) rather than as the binding.
+  The semantic checks that follow (private or loopback address, distinct
+  sockets, provider roots) are unchanged.
+- `breg` that refuses its runtime file prints one fixed sentence and the
+  reader's diagnostics in the human shape on stderr. Each names the file path
+  the operator passed, as Evidence and Casework already do, and none names a
+  configured value. The JSON operational log on stdout carries only the
+  closed refusal class and no path. `ReaderRefusal`'s `Debug` prints the
+  deciding code and pointer only, so a startup error carried elsewhere never
+  prints the path.
+- The file bound is the shared 1 MiB (CFG-YAML-6), raised from 64 KiB. The
+  bound on the document after `${...}` substitution is removed: a substituted
+  value is held to the bound of the member it fills. The environment is
+  operator-held, as the file is.
+- A substitution refusal names the variable to set, as every product's does,
+  and never its value or a `${NAME:?message}` message. The variable name is
+  already written in the file the operator holds.
+
+### Tests
+
+- `crates/registry-breg/tests/runtime_config.rs`:
+  `two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions`
+  (fails when a block is read through `flatten`),
+  `a_document_refusal_names_its_field_and_never_echoes_the_refused_value`,
+  `unknown_package_keys_are_refused_as_document_errors_without_their_value`,
+  `an_unknown_package_key_holding_a_set_variable_is_refused_without_the_substituted_value`,
+  `raw_database_urls_inline_secrets_and_plaintext_posture_are_refused`
+  (the removed keys, value-free), `a_substitution_inside_a_secret_reference_is_refused`,
+  and `an_oversized_substituted_value_is_refused_by_its_member_without_echo`.
+- `crates/registry-breg/tests/startup_http.rs`:
+  `provenance_operational_logs_metrics_and_traces_are_separate_closed_and_value_free`
+  runs the `breg` binary on a refused file and proves stdout carries no path
+  or value and stderr carries the reader's diagnostic with its position and
+  fix and no value.
+- `crates/registry-bregctl/src/doctor.rs`:
+  `a_refused_runtime_file_reports_every_reader_diagnostic_unchanged`.
+
+### Accepted residuals
+
+- **Stderr names the file path.** An operator who forwards stderr into a
+  shared log forwards the path of the runtime file. The path is the one the
+  operator typed, and the stdout log stays path-free.
+- **No bound on the substituted document as a whole.** A file of many
+  `${...}` expressions that each expand to a large variable can make the
+  decoded document much larger than the file. Both the file and the
+  environment are operator-held; a bound belongs in the shared loader, for
+  every product, if one is wanted.
+- **The `bregctl` JSON report carries no line or column.** Reader
+  diagnostics keep their code, pointer, and fix in `bregctl --format json`,
+  but the tool report has no source position field; the human `breg` output
+  carries it.

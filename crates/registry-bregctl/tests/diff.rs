@@ -461,16 +461,19 @@ fn diff_help_and_selector_usage_preserve_the_closed_command_inventory_and_exit_c
     assert!(!rendered.contains(VALUE_CANARY));
     assert!(!rendered.contains(path(&malformed_runtime)));
     let report = json_stdout(&refused_runtime);
-    assert_eq!(
-        report["diagnostics"][0]["code"],
-        "diff.runtime_config.document"
-    );
-    assert_eq!(report["diagnostics"][0]["path"], "/");
-    assert_tool_diagnostic(
-        &report["diagnostics"][0],
-        "runtime_configuration",
-        "correct_runtime_configuration",
-    );
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics are a list");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["code"] == "config.unknown-key" && diagnostic["path"] == "/unexpectedSetting"
+    }));
+    for diagnostic in diagnostics {
+        assert_tool_diagnostic(
+            diagnostic,
+            "runtime_configuration",
+            "correct_runtime_configuration",
+        );
+    }
 }
 
 struct PublishedPackage {

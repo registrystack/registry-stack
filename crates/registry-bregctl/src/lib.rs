@@ -2354,24 +2354,27 @@ where
                     stdout,
                     stderr,
                 ),
-                Err(diagnostic) => {
-                    let (artifact, action) =
-                        if diagnostic.code.starts_with("startup.runtime_config") {
-                            (
-                                DiagnosticArtifact::RuntimeConfiguration,
-                                SuggestedAction::CorrectRuntimeConfiguration,
-                            )
-                        } else {
-                            (
-                                DiagnosticArtifact::StartupDependencies,
-                                SuggestedAction::VerifyStartupDependencies,
-                            )
-                        };
+                Err(refusal) => {
+                    let (artifact, action) = if refusal.runtime_configuration {
+                        (
+                            DiagnosticArtifact::RuntimeConfiguration,
+                            SuggestedAction::CorrectRuntimeConfiguration,
+                        )
+                    } else {
+                        (
+                            DiagnosticArtifact::StartupDependencies,
+                            SuggestedAction::VerifyStartupDependencies,
+                        )
+                    };
                     write_failure(
                         &FailureReport {
                             ok: false,
                             command: "doctor",
-                            diagnostics: vec![tool_diagnostic(diagnostic, artifact, action)],
+                            diagnostics: refusal
+                                .diagnostics
+                                .into_iter()
+                                .map(|diagnostic| tool_diagnostic(diagnostic, artifact, action))
+                                .collect(),
                         },
                         format,
                         stdout,
@@ -6468,23 +6471,38 @@ fn baseline_package_failure(command: &'static str, error: PackageError) -> Failu
 }
 
 fn runtime_config_diff_failure(error: RuntimeConfigError) -> FailureReport {
-    let detail = runtime_config_diagnostic("diff", error);
-    diff_failure(&detail.code, detail.path, &detail.message)
+    runtime_config_failure("diff", "diff", error)
 }
 
-struct RuntimeConfigDiagnostic {
-    code: String,
-    path: &'static str,
-    message: String,
-}
-
-fn runtime_config_diagnostic(prefix: &str, error: RuntimeConfigError) -> RuntimeConfigDiagnostic {
-    let metadata = error.metadata();
-    RuntimeConfigDiagnostic {
-        code: format!("{prefix}.{}", metadata.code()),
-        path: metadata.path(),
-        message: error.to_string(),
+/// The runtime configuration refusal as command diagnostics. A file the
+/// shared reader refused keeps every reader diagnostic's code and pointer
+/// unchanged; a rule the runtime decides itself is named under the
+/// command's prefix.
+fn runtime_config_diagnostics(prefix: &str, error: &RuntimeConfigError) -> Vec<Diagnostic> {
+    if matches!(error, RuntimeConfigError::Reader(_)) {
+        return runtime_config_reader_diagnostics(error);
     }
+    vec![diagnostic(
+        &format!("{prefix}.{}", error.code()),
+        error.path(),
+        &error.to_string(),
+    )]
+}
+
+/// Every diagnostic the shared reader reported, with its code and pointer
+/// unchanged and its fix after the message.
+fn runtime_config_reader_diagnostics(error: &RuntimeConfigError) -> Vec<Diagnostic> {
+    error
+        .diagnostics(None)
+        .into_iter()
+        .map(|reader| {
+            diagnostic(
+                &reader.code,
+                &reader.path,
+                &format!("{}; next: {}", reader.message, reader.suggested_action),
+            )
+        })
+        .collect()
 }
 
 fn runtime_config_failure(
@@ -6492,15 +6510,19 @@ fn runtime_config_failure(
     prefix: &str,
     error: RuntimeConfigError,
 ) -> FailureReport {
-    let detail = runtime_config_diagnostic(prefix, error);
     FailureReport {
         ok: false,
         command,
-        diagnostics: vec![tool_diagnostic(
-            diagnostic(&detail.code, detail.path, &detail.message),
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        )],
+        diagnostics: runtime_config_diagnostics(prefix, &error)
+            .into_iter()
+            .map(|diagnostic| {
+                tool_diagnostic(
+                    diagnostic,
+                    DiagnosticArtifact::RuntimeConfiguration,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                )
+            })
+            .collect(),
     }
 }
 

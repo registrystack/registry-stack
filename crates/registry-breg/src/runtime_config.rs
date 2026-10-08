@@ -15,9 +15,9 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    redact_refused_values, AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
-    PackageConfig as SharedPackageConfig, RuntimeConfigErrorKind, RuntimeConfigLoader,
-    RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
+    AuditKeyConfig, JwksSource, ListenerBind, OidcIssuerConfig,
+    PackageConfig as SharedPackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    SecretError, SecretReference, SecretResolver,
 };
 use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -28,6 +28,7 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
+use registry_platform_yaml::{Diagnostic, Report, Source};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -51,7 +52,6 @@ use crate::{
     postgres::{ConnectionConfig, PoolBounds, SqlIdentifier},
 };
 
-const MAX_RUNTIME_CONFIG_BYTES: u64 = 64 * 1024;
 const MAX_PATH_BYTES: usize = 512;
 const MAX_DEPLOYMENT_VALUE_BYTES: usize = 256;
 const MAX_OIDC_VALUE_BYTES: usize = 2048;
@@ -125,28 +125,71 @@ const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/breg-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "BRegRuntimeConfig";
 
+/// Keys the runtime file no longer accepts, each refused with the edit that
+/// replaces it.
+const REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "database.url",
+        replacement: "delete database.url and name the connection URL by secret reference in database.runtimeUrlRef and database.migrationUrlRef",
+    },
+    RemovedKey {
+        path: "database.password",
+        replacement: "delete database.password and put the password inside the connection URL that database.runtimeUrlRef and database.migrationUrlRef name by secret reference",
+    },
+    RemovedKey {
+        path: "database.plaintext",
+        replacement: "delete database.plaintext; the connection URL is always named by secret reference in database.runtimeUrlRef and database.migrationUrlRef",
+    },
+];
+
+/// The shared reader's refusal of a runtime configuration file: every
+/// diagnostic it reported, each with its code, pointer, line, and column.
+///
+/// `Debug` names the deciding code and pointer only, so a refusal carried in
+/// a startup error never prints the configured file path.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ReaderRefusal(registry_platform_config::RuntimeConfigError);
+
+impl ReaderRefusal {
+    /// Every diagnostic, in the order the reader reported them.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        self.0.diagnostics()
+    }
+
+    /// The diagnostic the refusal is classified by: the first error of the
+    /// earliest kind.
+    #[must_use]
+    pub fn deciding_diagnostic(&self) -> &Diagnostic {
+        self.0.deciding_diagnostic()
+    }
+
+    /// The deciding diagnostic on one line, without the file.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.0.message()
+    }
+}
+
+impl fmt::Debug for ReaderRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let deciding = self.deciding_diagnostic();
+        formatter
+            .debug_struct("ReaderRefusal")
+            .field("code", &deciding.code)
+            .field("path", &deciding.path)
+            .finish()
+    }
+}
+
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum RuntimeConfigError {
-    #[error("the runtime configuration file is unavailable")]
-    Unavailable,
-    #[error("the runtime configuration file is unsafe")]
-    UnsafeFile,
-    #[error("the runtime configuration exceeds its resource bounds")]
-    Bounds,
-    #[error("runtime configuration environment expansion was refused")]
-    EnvExpansion,
-    #[error("runtime configuration substitutes into a secret reference or secret provider")]
-    SubstitutionInReference,
-    /// The document is not YAML this runtime reads, or a member does not fit
-    /// its typed shape. The message names the field and never the value.
-    #[error("the runtime configuration document is invalid: {0}")]
-    Document(String),
-    #[error("runtime configuration uses an unsupported apiVersion")]
-    InvalidApiVersion,
-    #[error("runtime configuration uses an unsupported kind")]
-    InvalidKind,
-    #[error("runtime configuration contains a governed member")]
-    GovernedMember,
+    /// The shared reader refused the file: it could not be read, it is not
+    /// in the shared YAML subset, its envelope is wrong, a substitution
+    /// failed, or a member does not fit its typed shape. The message is the
+    /// deciding diagnostic on one line and never repeats a value.
+    #[error("{}", .0.message())]
+    Reader(ReaderRefusal),
     #[error("runtime configuration contains an invalid deployment binding")]
     InvalidBinding,
     #[error(
@@ -199,45 +242,13 @@ pub enum RuntimeConfigError {
     Secret,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RuntimeConfigErrorMetadata {
-    code: &'static str,
-    path: &'static str,
-}
-
-impl RuntimeConfigErrorMetadata {
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        self.code
-    }
-
-    #[must_use]
-    pub const fn path(self) -> &'static str {
-        self.path
-    }
-}
-
 impl RuntimeConfigError {
+    /// The code of the refusal: the deciding reader diagnostic's code, or
+    /// this runtime's code for a rule the reader cannot state.
     #[must_use]
-    pub const fn metadata(&self) -> RuntimeConfigErrorMetadata {
-        RuntimeConfigErrorMetadata {
-            code: self.code(),
-            path: self.path(),
-        }
-    }
-
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
+    pub fn code(&self) -> &str {
         match self {
-            Self::Unavailable => "runtime_config.unavailable",
-            Self::UnsafeFile => "runtime_config.unsafe_file",
-            Self::Bounds => "runtime_config.bounds",
-            Self::EnvExpansion => "runtime_config.env_expansion",
-            Self::SubstitutionInReference => "runtime_config.substitution_in_reference",
-            Self::Document(_) => "runtime_config.document",
-            Self::InvalidApiVersion => "runtime_config.invalid_api_version",
-            Self::InvalidKind => "runtime_config.invalid_kind",
-            Self::GovernedMember => "runtime_config.governed_member",
+            Self::Reader(refusal) => &refusal.deciding_diagnostic().code,
             Self::InvalidBinding => "runtime_config.invalid_binding",
             Self::InvalidInstanceId => "runtime_config.invalid_instance_id",
             Self::EnvironmentIdentityConflict => "runtime_config.environment_identity_conflict",
@@ -266,22 +277,14 @@ impl RuntimeConfigError {
         }
     }
 
+    /// The RFC 6901 pointer the refusal concerns; `""` for the whole file.
     #[must_use]
-    pub const fn path(&self) -> &'static str {
+    pub fn path(&self) -> &str {
         match self {
-            Self::Unavailable
-            | Self::UnsafeFile
-            | Self::Bounds
-            | Self::EnvExpansion
-            | Self::SubstitutionInReference
-            | Self::Document(_)
-            | Self::GovernedMember
-            | Self::InvalidBinding
-            | Self::Secret => "/",
-            Self::InvalidApiVersion => "/apiVersion",
+            Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
+            Self::InvalidBinding | Self::Secret => "",
             Self::InvalidInstanceId => "/identity/instanceId",
             Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
-            Self::InvalidKind => "/kind",
             Self::InvalidListener => "/listener",
             Self::InvalidMetricsListener => "/metricsListener",
             Self::InvalidSecretProvider => "/secretProviders",
@@ -302,6 +305,111 @@ impl RuntimeConfigError {
             Self::InvalidBounds => "/operationalTimeouts",
             Self::InvalidWasmExecution => "/wasmExecution",
         }
+    }
+
+    /// The edit that fixes a refusal this runtime decides itself
+    /// (CFG-DIAG-6). A reader refusal carries its own action in each
+    /// diagnostic.
+    fn suggested_action(&self) -> &'static str {
+        match self {
+            Self::Reader(_) => "",
+            Self::InvalidBinding => {
+                "Give every identity value as trimmed text without control characters, and declare in the runtime file, with a valid endpoint and credential, every task grant status source, Evidence provider, review authority, and review executor the package relies on."
+            }
+            Self::InvalidInstanceId => {
+                "Set identity.instanceId to a lowercase letter followed by at most 63 lowercase letters, digits, `-`, or `_`."
+            }
+            Self::EnvironmentIdentityConflict => {
+                "Set identity.environment and identity.databaseInitializationEnvironment to the environment the database was initialized in."
+            }
+            Self::InvalidListener => {
+                "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an https origin (http only on loopback) with no query, fragment, or user information."
+            }
+            Self::InvalidMetricsListener => {
+                "Set metricsListener.bind to a loopback or private numeric address with a named port, on a socket the Registry listener does not also bind."
+            }
+            Self::InvalidSecretProvider => {
+                "Declare each secret provider once, with the file provider's root an absolute normal path."
+            }
+            Self::SecretProviderRootUnavailable => {
+                "Create the file secret provider root as a readable directory, or point secretProviders.file.root at one."
+            }
+            Self::UnsafeSecretProviderRoot => {
+                "Point secretProviders.file.root at a path with no symbolic link in it."
+            }
+            Self::InvalidDatabase => {
+                "Name database.runtimeUrlRef and database.migrationUrlRef by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
+            }
+            Self::InvalidPackage => {
+                "Set package.root to an absolute normal path and package.expectedDigest, when given, to the package's sha256 digest."
+            }
+            Self::PackageRootUnavailable => {
+                "Create the package root as a readable directory, or point package.root at one."
+            }
+            Self::UnsafePackageRoot => "Point package.root at a path with no symbolic link in it.",
+            Self::InvalidOidc => {
+                "Correct authentication.oidc and authentication.authorityClaims: an https issuer (http only on loopback), bounded values with no whitespace, distinct list entries, and claim names that do not repeat."
+            }
+            Self::InvalidOidcLeeway => {
+                "Set authentication.oidc.leewayMilliseconds to a multiple of 1000 no greater than 300000."
+            }
+            Self::InvalidAudit => {
+                "Give the file audit destination an absolute path, and leave audit.path, audit.rotateBytes, and audit.retainDays out for the stdout destination."
+            }
+            Self::InvalidCursor => "Name cursor.secretRef by secret reference.",
+            Self::InvalidEventDestination => {
+                "Correct the event destination bindings: an https origin, a path that starts with `/`, and secret references for keys and TLS material."
+            }
+            Self::InvalidAttachmentStorage => {
+                "Correct attachmentStorage: name every credential by secret reference and give the S3 endpoint as an https URL."
+            }
+            Self::InvalidAttachmentVerification => {
+                "Correct attachmentVerification: give the verifier as an https URL and name its authorization by secret reference."
+            }
+            Self::InvalidFieldEncryption => {
+                "Correct fieldEncryption: name the data key by secret reference and give the transit endpoint as an https URL."
+            }
+            Self::InvalidBounds => {
+                "Keep every timeout, retention, and pool member within the bounds the runtime schema states."
+            }
+            Self::InvalidWasmExecution => {
+                "Set wasmExecution.backend to a supported backend and keep its module and guest memory ceilings within the bounds the runtime schema states."
+            }
+            Self::Secret => {
+                "Make every secret reference resolve through the declared secret providers."
+            }
+        }
+    }
+
+    /// The refusal as diagnostics in the shared shape (CFG-DIAG-1): every
+    /// diagnostic the reader reported, or one for a rule this runtime
+    /// decides itself, naming `file` as its source when one is given.
+    #[must_use]
+    pub fn diagnostics(&self, file: Option<&Path>) -> Vec<Diagnostic> {
+        if let Self::Reader(refusal) = self {
+            return refusal.diagnostics().to_vec();
+        }
+        let mut diagnostic = Diagnostic::error(
+            self.code(),
+            self.path(),
+            self.to_string(),
+            self.suggested_action(),
+        );
+        diagnostic.source = file.map(|file| Source {
+            file: file.display().to_string(),
+            line: None,
+            column: None,
+        });
+        vec![diagnostic]
+    }
+
+    /// The refusal in the shared human form (CFG-DIAG-2): every diagnostic,
+    /// then the summary line.
+    #[must_use]
+    pub fn render_human(&self, file: Option<&Path>) -> String {
+        let mut report = Report::new(self.diagnostics(file));
+        report.set_files_checked(1);
+        report.render_human()
     }
 }
 
@@ -336,15 +444,13 @@ pub fn load_runtime_config_with_env(
     path: &Path,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<RuntimeConfig> {
-    validate_absolute_lexical_path(path, RuntimeConfigError::UnsafeFile)?;
-    let substituted = runtime_config_loader()
-        .load_with::<Value>(path, lookup)
-        .map_err(|error| runtime_config_error_from_loader(&error))?
+    let raw = runtime_config_loader()
+        .load_with::<RawRuntimeConfig>(path, lookup)
+        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
         .config;
-    runtime_config_from_substituted(substituted).and_then(|config| {
-        config.validate_loaded_paths()?;
-        Ok(config)
-    })
+    let config = RuntimeConfig::from_raw(raw)?;
+    config.validate_loaded_paths()?;
+    Ok(config)
 }
 
 pub fn parse_runtime_config(raw: &str) -> Result<RuntimeConfig> {
@@ -355,154 +461,25 @@ pub fn parse_runtime_config_with_env(
     raw: &str,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<RuntimeConfig> {
-    if raw.is_empty() || raw.len() > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX)
-    {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    let substituted = runtime_config_loader()
-        .parse_str::<Value>(raw, lookup)
-        .map_err(|error| runtime_config_error_from_loader(&error))?
+    let raw = runtime_config_loader()
+        .parse_str::<RawRuntimeConfig>(raw, lookup)
+        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
         .config;
-    runtime_config_from_substituted(substituted)
+    RuntimeConfig::from_raw(raw)
 }
 
-/// The shared runtime configuration loader under BReg's envelope and bound.
-/// BReg reads the file through it: the loader holds the path,
-/// symbolic link, regular file, and bounded read checks.
+/// The shared runtime configuration loader under BReg's envelope. BReg reads
+/// the file through it: the loader holds the path, symbolic link, regular
+/// file, and bounded read checks, and the shared reader decodes the typed
+/// configuration, so every unknown key, its closest accepted key, and every
+/// position reach the operator. The file is held to the shared 1 MiB bound
+/// (CFG-YAML-6).
 const fn runtime_config_loader() -> RuntimeConfigLoader {
     RuntimeConfigLoader::new(RuntimeEnvelope {
         api_version: RUNTIME_CONFIG_API_VERSION,
         kind: RUNTIME_CONFIG_KIND,
     })
-    .max_bytes(MAX_RUNTIME_CONFIG_BYTES)
-}
-
-fn runtime_config_from_substituted(substituted: Value) -> Result<RuntimeConfig> {
-    // A substituted value may be longer than the expression it replaced, so
-    // the substituted document is held to the same bound as the file.
-    let substituted_len = serde_json::to_string(&substituted)
-        .map_err(|_| {
-            RuntimeConfigError::Document(
-                "the runtime configuration could not be measured after substitution".to_owned(),
-            )
-        })?
-        .len();
-    if substituted_len > usize::try_from(MAX_RUNTIME_CONFIG_BYTES).unwrap_or(usize::MAX) {
-        return Err(RuntimeConfigError::Bounds);
-    }
-    if contains_governed_member(&substituted) {
-        return Err(RuntimeConfigError::GovernedMember);
-    }
-    reject_invalid_binding_text(&substituted)?;
-    let raw: RawRuntimeConfig = serde_path_to_error::deserialize(substituted).map_err(|error| {
-        let field = error.path().to_string();
-        let field = if field == "." { "/".to_owned() } else { field };
-        let reason = redact_refused_values(&error.into_inner().to_string());
-        RuntimeConfigError::Document(format!("{field} is invalid: {reason}"))
-    })?;
-    RuntimeConfig::from_raw(raw)
-}
-
-/// The shared loader parses the document, checks its envelope, and substitutes
-/// `${VAR}` inside string values; each of its refusals keeps the code this
-/// runtime reported for the same cause.
-fn runtime_config_error_from_loader(
-    error: &registry_platform_config::RuntimeConfigError,
-) -> RuntimeConfigError {
-    match error.kind() {
-        RuntimeConfigErrorKind::Envelope if error.field() == "apiVersion" => {
-            RuntimeConfigError::InvalidApiVersion
-        }
-        RuntimeConfigErrorKind::Envelope => RuntimeConfigError::InvalidKind,
-        RuntimeConfigErrorKind::Substitution => RuntimeConfigError::EnvExpansion,
-        RuntimeConfigErrorKind::SubstitutionInReference => {
-            RuntimeConfigError::SubstitutionInReference
-        }
-        RuntimeConfigErrorKind::Bounds => RuntimeConfigError::Bounds,
-        RuntimeConfigErrorKind::Path | RuntimeConfigErrorKind::UnsafeFile => {
-            RuntimeConfigError::UnsafeFile
-        }
-        RuntimeConfigErrorKind::Unavailable => RuntimeConfigError::Unavailable,
-        RuntimeConfigErrorKind::RemovedKey
-        | RuntimeConfigErrorKind::Syntax
-        | RuntimeConfigErrorKind::Encoding
-        | RuntimeConfigErrorKind::InvalidValue
-        | RuntimeConfigErrorKind::AuthoredExpression
-        | RuntimeConfigErrorKind::AuthoredSyntax => {
-            RuntimeConfigError::Document(error.message().to_owned())
-        }
-    }
-}
-
-/// A listener address or an audit key reference that does not parse is
-/// refused as that binding, the code it had when the binding parsed its own
-/// text, before the typed document reports every other shape problem as a
-/// document error.
-fn reject_invalid_binding_text(document: &Value) -> Result<()> {
-    let refuses = |pointer: &str, parses: fn(&Value) -> bool| {
-        document
-            .pointer(pointer)
-            .is_some_and(|value| value.is_string() && !parses(value))
-    };
-    if refuses("/listener/bind", |value| {
-        ListenerBind::deserialize(value).is_ok()
-    }) {
-        return Err(RuntimeConfigError::InvalidListener);
-    }
-    if refuses("/metricsListener/bind", |value| {
-        ListenerBind::deserialize(value).is_ok()
-    }) {
-        return Err(RuntimeConfigError::InvalidMetricsListener);
-    }
-    if refuses("/audit/hashKeyRef", |value| {
-        SecretReference::deserialize(value).is_ok()
-    }) {
-        return Err(RuntimeConfigError::InvalidAudit);
-    }
-    Ok(())
-}
-
-fn contains_governed_member(value: &Value) -> bool {
-    const GOVERNED: &[&str] = &[
-        "entities",
-        "fields",
-        "accessProfiles",
-        "routes",
-        "hooks",
-        "packages",
-        "sources",
-        "semantics",
-        "classifications",
-        "relationships",
-        "mutationMode",
-        "readableFields",
-        "writableFields",
-        "rowBoundaries",
-        "requestVisibility",
-        "requiredScopes",
-        "requiredPurposes",
-        "retention",
-        "webhooks",
-        "telemetry",
-        "cors",
-    ];
-    match value {
-        Value::Object(mapping) => mapping.iter().any(|(key, value)| {
-            GOVERNED.contains(&key.as_str())
-                // Binding-map keys are compiler-issued logical ids. Do not
-                // reinterpret an id such as `hooks` as a governed field; the
-                // strict binding value types still reject undeployed members.
-                || (!matches!(
-                    key.as_str(),
-                    "eventDestinations"
-                        | "evidenceProviders"
-                        | "reviewAuthorities"
-                        | "reviewExecutors"
-                ) && contains_governed_member(value))
-        }),
-        Value::Array(values) => values.iter().any(contains_governed_member),
-        _ => false,
-    }
+    .removed_keys(REMOVED_KEYS)
 }
 
 #[derive(Clone)]
@@ -533,12 +510,6 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
-        if raw.api_version != RUNTIME_CONFIG_API_VERSION {
-            return Err(RuntimeConfigError::InvalidApiVersion);
-        }
-        if raw.kind != RUNTIME_CONFIG_KIND {
-            return Err(RuntimeConfigError::InvalidKind);
-        }
         let listener = ListenerConfig::from_raw(raw.listener)?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
@@ -1451,9 +1422,6 @@ pub struct DatabaseConfig {
 
 impl DatabaseConfig {
     fn from_raw(raw: RawDatabaseConfig) -> Result<Self> {
-        if raw.plaintext.is_some() || raw.url.is_some() || raw.password.is_some() {
-            return Err(RuntimeConfigError::InvalidDatabase);
-        }
         let runtime_url_ref =
             parse_secret_reference(raw.runtime_url_ref, RuntimeConfigError::InvalidDatabase)?;
         let migration_url_ref =
@@ -1608,8 +1576,7 @@ impl OidcVerifierConfig {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         // Duplicate assertion-issuer client keys are already refused before this
-        // point: the shared loader parses the whole document into a generic
-        // value first, and that parse rejects any duplicate YAML mapping key
+        // point: the shared reader refuses any duplicate YAML mapping key
         // anywhere in the document, including here.
         let assertion_issuer_clients = raw.assertion_issuers.keys().cloned().collect::<Vec<_>>();
         validate_bounded_list(&assertion_issuer_clients)?;
@@ -2592,7 +2559,11 @@ struct RawReviewExecutorConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawRuntimeConfig {
+    /// The reader checks the envelope before it decodes; the members are
+    /// declared only so the generated schema describes them.
+    #[cfg(feature = "schema")]
     api_version: String,
+    #[cfg(feature = "schema")]
     kind: String,
     listener: RawListenerConfig,
     identity: RawDeploymentIdentity,
@@ -2680,15 +2651,6 @@ struct RawDatabaseConfig {
     migration_url_ref: String,
     pool: RawPoolBounds,
     roles: RawSqlRoles,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
-    plaintext: Option<bool>,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
-    url: Option<String>,
-    #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(skip))]
-    password: Option<String>,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -2719,7 +2681,8 @@ struct RawSqlRoles {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawPackageConfig {
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/package"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     shared: SharedPackageConfig,
 }
 
@@ -2735,7 +2698,8 @@ struct RawAuthenticationConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawOidcVerifierConfig {
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     provider: OidcIssuerConfig,
     allowed_algorithm: OidcAlgorithm,
     /// The one admitted access-token `typ` semantics. Configuring the
@@ -2831,7 +2795,8 @@ impl From<RawContextualClaimNames> for ClaimNames {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuditConfig {
-    #[serde(flatten)]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/audit-key"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
     key: AuditKeyConfig,
     /// `file` (the default) writes a durable, rotated JSON Lines file at
     /// `path`; `stdout` writes one JSON line per entry to standard output.
@@ -3103,9 +3068,6 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
     for pointer in [
         "/properties/eventDestinations",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",
-        "/$defs/RawDatabaseConfig/properties/password",
-        "/$defs/RawDatabaseConfig/properties/plaintext",
-        "/$defs/RawDatabaseConfig/properties/url",
         "/$defs/RawEventDestinationConfig/properties/tls",
         "/$defs/RawEventDestinationTlsConfig/properties/caBundleRef",
         "/$defs/RawEventDestinationTlsConfig/properties/clientIdentityRef",

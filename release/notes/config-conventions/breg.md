@@ -35,3 +35,51 @@ it. A package whose sealed sources carry one of the shapes above no longer
 loads. Correct the source project, rebuild the package with `bregctl package
 --baseline-package <deployed package>`, and apply it before starting the
 upgraded runtime.
+
+### BREAKING: `runtime.yaml` is decoded by the shared reader
+
+`breg` and every `bregctl` command that takes `--runtime-config` decode
+`runtime.yaml` through the shared runtime loader rather than a second
+product-side pass. Every problem in the file is reported in one run, each
+with its code, JSON Pointer path, line, column, and fix, and an unknown key
+names the closest accepted key. The platform blocks (`package`,
+`authentication.oidc`, `audit`) are read the same way, so two unknown keys
+inside one of them are both reported.
+
+`breg` that refuses its runtime file prints one sentence, `breg did not
+start: its runtime configuration was refused.`, then the reader's
+diagnostics in the human shape on stderr, each naming the file path the
+operator gave. The JSON operational log on stdout still carries only the
+closed refusal class, with no path and no value. `bregctl doctor`, `diff`,
+`verify`, `plan`, `apply`, `status`, and the retention commands report every
+reader diagnostic, with the reader's code and path unchanged and the fix
+appended to the message.
+
+| Was refused as | Is refused as | Migrate by |
+|---|---|---|
+| `runtime_config.document` | the reader's code for the cause: `config.unknown-key`, `config.missing-key`, `config.invalid-type`, `config.invalid-value`, `config.unknown-variant`, `config.null-value`, `config.expected-string`, `config.expected-integer`, `config.expected-boolean`, `config.out-of-range`, a `yaml.*` code, or `platform.runtime-config.canonical-form` | Matching the reader codes in tooling that read `bregctl --format json`. |
+| `runtime_config.governed_member` (a registry-project member such as `entities` or `webhooks` in `runtime.yaml`) | `config.unknown-key` | Moving the member to the registry project, where it belongs, and deleting it from `runtime.yaml`. |
+| `runtime_config.env_expansion` | `config.substitution`, which names the variable to set | Setting the named variable, or writing a `${NAME:-fallback}`. |
+| `runtime_config.substitution_in_reference` | `config.substitution-not-allowed`, at the reference or provider setting | Writing the reference or provider setting as plain text. |
+| `runtime_config.bounds` | `platform.runtime-config.size` | Keeping the file at most 1 MiB. |
+| `runtime_config.unsafe_file` | `platform.runtime-config.unsafe-file` or `platform.runtime-config.path` | Giving the absolute path of a regular file with no symbolic link in it. |
+| `runtime_config.unavailable` | `platform.runtime-config.unavailable` | Making the file exist and readable by the runtime user. |
+| `runtime_config.invalid_api_version`, `runtime_config.invalid_kind` | `config.unsupported-api-version`, `config.wrong-kind`, or `config.missing-envelope` when the member is absent | Writing `apiVersion: registry.registrystack.org/breg-runtime/v1alpha1` and `kind: BRegRuntimeConfig`. |
+| `runtime_config.invalid_listener`, `runtime_config.invalid_metrics_listener` for a `bind` that is not a numeric socket address | `config.invalid-value` at `/listener/bind` or `/metricsListener/bind` | Writing a numeric `address:port`, such as `127.0.0.1:8080`. A numeric address that is public, unspecified, or on port 0 is still refused as before. |
+| `runtime_config.invalid_audit` for an `audit.hashKeyRef` that is not a secret reference | `config.invalid-value` at `/audit/hashKeyRef` | Writing `secret:file/NAME` or `secret:env/NAME`. |
+| `runtime_config.invalid_database` for `database.url`, `database.password`, or `database.plaintext` | `config.removed-key`, naming `database.runtimeUrlRef` and `database.migrationUrlRef` | Deleting the member; the connection URL, password included, is named by secret reference in `database.runtimeUrlRef` and `database.migrationUrlRef`. |
+
+In `bregctl --format json` output, a reader refusal was reported under the
+command's prefix (`doctor` as `startup.runtime_config.document`, `diff` as
+`diff.runtime_config.document`); the reader codes above are reported
+unprefixed. A refusal the runtime decides itself after the file is read keeps
+its prefixed code (for example `verify.runtime_config.environment_identity_conflict`),
+and the two whose path was `/`, `runtime_config.invalid_binding` and
+`runtime_config.secret`, now report the root pointer `""`.
+
+The runtime file may be up to 1 MiB, the shared bound every product's runtime
+file carries (CFG-YAML-6), where it was 64 KiB. No reason was recorded for the
+lower bound, and the file carries no inline documents. The separate bound on
+the document after `${...}` substitution is gone: a substituted value is held
+to the bound of the member it fills, and the environment is operator-held, as
+the file is.

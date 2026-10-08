@@ -23,33 +23,60 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
     "fieldEncryption",
 ];
 
+/// A doctor run that refused: its diagnostics, and whether the runtime
+/// configuration file itself was refused rather than a dependency it names.
+pub(crate) struct DoctorRefusal {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) runtime_configuration: bool,
+}
+
 /// Run the startup dependency check without binding a listener, keeping only
 /// the PostgreSQL baseline advisories and the role mode it decided. It verifies the dependencies
 /// preparation opens and intentionally owns no parallel readiness logic; the
 /// audit destination is checked as writable rather than opened, so doctor runs
 /// beside a serving process that holds it.
-pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, Diagnostic> {
+pub(crate) fn run(runtime_config: &Path) -> Result<CheckedStartup, DoctorRefusal> {
     if !runtime_config.is_absolute() {
-        return Err(diagnostic(
-            "startup.runtime_config.path_invalid",
-            "runtimeConfig",
-            "the runtime configuration path must be absolute",
-        ));
+        return Err(DoctorRefusal {
+            diagnostics: vec![diagnostic(
+                "startup.runtime_config.path_invalid",
+                "runtimeConfig",
+                "the runtime configuration path must be absolute",
+            )],
+            runtime_configuration: true,
+        });
     }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|_| {
-            diagnostic(
+        .map_err(|_| DoctorRefusal {
+            diagnostics: vec![diagnostic(
                 "startup.runtime.unavailable",
                 "runtime",
                 "the startup preparation runtime is unavailable",
-            )
+            )],
+            runtime_configuration: false,
         })?;
     runtime
         .block_on(check(runtime_config))
-        .map_err(startup_diagnostic)
+        .map_err(startup_refusal)
+}
+
+/// A refused runtime file reports every reader diagnostic unchanged; any
+/// other refusal names its one startup cause.
+fn startup_refusal(error: StartupError) -> DoctorRefusal {
+    let runtime_configuration = matches!(error, StartupError::RuntimeConfig(_));
+    let diagnostics = match error {
+        StartupError::RuntimeConfig(cause @ RuntimeConfigError::Reader(_)) => {
+            crate::runtime_config_reader_diagnostics(&cause)
+        }
+        other => vec![startup_diagnostic(other)],
+    };
+    DoctorRefusal {
+        diagnostics,
+        runtime_configuration,
+    }
 }
 
 fn startup_diagnostic(error: StartupError) -> Diagnostic {
@@ -295,10 +322,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
 /// names it: the closed-vocabulary code and path `RuntimeConfigError` carries,
 /// prefixed for this command instead of `verify`'s.
 fn runtime_config_diagnostic(error: RuntimeConfigError) -> Diagnostic {
-    let metadata = error.metadata();
     diagnostic(
-        &format!("startup.{}", metadata.code()),
-        metadata.path(),
+        &format!("startup.{}", error.code()),
+        error.path(),
         &error.to_string(),
     )
 }
@@ -660,56 +686,9 @@ mod tests {
         // instead of collapsing into one generic runtime-configuration refusal.
         let cases = [
             (
-                RuntimeConfigError::Unavailable,
-                "startup.runtime_config.unavailable",
-                "/",
-            ),
-            (
-                RuntimeConfigError::UnsafeFile,
-                "startup.runtime_config.unsafe_file",
-                "/",
-            ),
-            (
-                RuntimeConfigError::Bounds,
-                "startup.runtime_config.bounds",
-                "/",
-            ),
-            (
-                RuntimeConfigError::EnvExpansion,
-                "startup.runtime_config.env_expansion",
-                "/",
-            ),
-            (
-                RuntimeConfigError::SubstitutionInReference,
-                "startup.runtime_config.substitution_in_reference",
-                "/",
-            ),
-            (
-                RuntimeConfigError::Document(
-                    "cursor is invalid: missing field `secretRef`".to_owned(),
-                ),
-                "startup.runtime_config.document",
-                "/",
-            ),
-            (
-                RuntimeConfigError::InvalidApiVersion,
-                "startup.runtime_config.invalid_api_version",
-                "/apiVersion",
-            ),
-            (
-                RuntimeConfigError::InvalidKind,
-                "startup.runtime_config.invalid_kind",
-                "/kind",
-            ),
-            (
-                RuntimeConfigError::GovernedMember,
-                "startup.runtime_config.governed_member",
-                "/",
-            ),
-            (
                 RuntimeConfigError::InvalidBinding,
                 "startup.runtime_config.invalid_binding",
-                "/",
+                "",
             ),
             (
                 RuntimeConfigError::InvalidListener,
@@ -794,7 +773,7 @@ mod tests {
             (
                 RuntimeConfigError::Secret,
                 "startup.runtime_config.secret",
-                "/",
+                "",
             ),
         ];
 
@@ -805,6 +784,33 @@ mod tests {
             assert_eq!(diagnostic.path, expected_path);
             assert_eq!(diagnostic.message, message);
         }
+    }
+
+    #[test]
+    fn a_refused_runtime_file_reports_every_reader_diagnostic_unchanged() {
+        use registry_breg::runtime_config::{
+            parse_runtime_config_with_env, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
+        };
+        let refused = parse_runtime_config_with_env(
+            &format!(
+                "apiVersion: {RUNTIME_CONFIG_API_VERSION}\nkind: {RUNTIME_CONFIG_KIND}\nlistenr: {{}}\naudt: {{}}\n"
+            ),
+            |_| None,
+        )
+        .expect_err("unknown keys are refused");
+        let refusal = startup_refusal(StartupError::RuntimeConfig(refused));
+        assert!(refusal.runtime_configuration);
+        let unknown = refusal
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "config.unknown-key")
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(unknown, ["/listenr", "/audt"]);
+        assert!(refusal
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.message.contains("; next: ")));
     }
 
     #[test]

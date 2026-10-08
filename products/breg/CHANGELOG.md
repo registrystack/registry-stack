@@ -10,6 +10,16 @@
   package whose sealed sources carry such a shape must be rebuilt from a
   corrected source. Migration steps and the code table are in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: `runtime.yaml` is decoded by the shared reader. `breg` and every
+  `bregctl` command that reads it report every problem in the file with the
+  reader's code, path, line, column, and fix, and `breg` prints those
+  diagnostics on stderr when it refuses to start. Runtime refusal codes the
+  reader now decides (`runtime_config.document`,
+  `runtime_config.governed_member`, `runtime_config.env_expansion`, and the
+  file, envelope, and substitution codes) become reader codes, and
+  `database.url`, `database.password`, and `database.plaintext` are refused as
+  `config.removed-key`. The runtime file may be up to 1 MiB. The code table
+  and migration steps are in `release/notes/config-conventions/breg.md`.
 - BREAKING: governed read routes refuse `HEAD` (#1902). axum answered `HEAD`
   on every `GET` route by running the whole read, writing a subject access log
   row, and journaling a `GET` the caller did not send. A `HEAD` now receives

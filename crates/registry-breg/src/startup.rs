@@ -796,6 +796,13 @@ impl PreparedServer {
 /// database connection, OIDC discovery, audit profile, or listener bind.
 pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    prepare_loaded(config).await
+}
+
+/// Production startup over a runtime configuration the caller has already
+/// loaded, so the caller can report a refused file in full before startup
+/// begins. Everything after the load is [`prepare`].
+pub async fn prepare_loaded(config: RuntimeConfig) -> Result<PreparedServer> {
     let shared = config
         .verify_package_envelope()
         .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
@@ -1696,7 +1703,9 @@ async fn verify_attachment_storage(
         .map_err(|_| StartupError::AttachmentStorage)
 }
 
-fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
+/// The startup refusal class a runtime configuration refusal reports under in
+/// the operational log.
+pub fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
     match error {
         RuntimeConfigError::InvalidDatabase | RuntimeConfigError::Secret => {
             StartupError::DatabaseConnection
