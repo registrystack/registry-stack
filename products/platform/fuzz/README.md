@@ -48,6 +48,10 @@ entries; if a generated input is worth keeping permanently, copy it into the
 seed corpus under a descriptive name instead of committing the raw generated
 filename.
 
+Seeds nested hundreds or thousands of levels deep (the `deep-*` seeds under
+`yaml_reader/`) carry no `.yaml` extension, so repository-wide YAML tooling
+skips them: CodeQL's YAML indexer overflows its stack on them.
+
 ## CI wiring
 
 The active root workflows provide two event-specific checks:
