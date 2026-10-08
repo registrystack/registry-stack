@@ -564,6 +564,9 @@ impl StartupError {
     const fn operational_message(&self) -> &'static str {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
+            Self::PackageRefused(PackageError::RetiredApiVersion) => {
+                "the Registry package carries the retired apiVersion registry.registrystack.org/package/v2; rebuild it with this release's `bregctl package`, naming the deployed package with --baseline-package, then run `bregctl plan --package DIR` and `bregctl apply --package DIR`"
+            }
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection => "the Registry database connection was refused",

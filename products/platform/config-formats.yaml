@@ -297,8 +297,8 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: registry.registrystack.org/package/v2
-      kind: none
+      apiVersion: id.registrystack.org/formats/breg/package/v2
+      kind: BRegPackage
       checkedBy:
         file: crates/registry-breg/src/package.rs
         symbol: PACKAGE_API_VERSION

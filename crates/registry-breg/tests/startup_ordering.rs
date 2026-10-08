@@ -11,7 +11,8 @@ use registry_breg::compiler::{module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::package::{
     prepare_package, PackageBuildRequest, PackageError, PackageFileRole, PackageMigrationPlanInput,
-    PackageModuleSource, PackageSourceFile,
+    PackageModuleSource, PackageSourceFile, PACKAGE_API_VERSION, PACKAGE_KIND,
+    RETIRED_PACKAGE_API_VERSION,
 };
 use registry_breg::startup::{prepare, StartupError};
 use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
@@ -91,6 +92,30 @@ async fn a_refused_package_keeps_the_cause_that_refused_it() {
         StartupError::PackageRefused(PackageError::Integrity)
     );
     assert_ne!(tampered, refused);
+}
+
+#[tokio::test]
+async fn a_package_with_the_retired_api_version_is_refused_as_retired() {
+    // CFG-CHANGE-2: a package an earlier release built names the retired
+    // apiVersion and no kind. The runtime refuses it as retired, a cause of
+    // its own, so the operator is told to rebuild rather than that the
+    // package was tampered with.
+    let fixture = StartupFixture::new();
+    let package = PackageFixture::build(&fixture.root);
+    package.rewrite_with_retired_api_version();
+
+    let refused = match prepare(&fixture.write_config(&package)).await {
+        Ok(_) => panic!("package with the retired manifest api version prepared"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        refused,
+        StartupError::PackageRefused(PackageError::RetiredApiVersion)
+    );
+    let message = PackageError::RetiredApiVersion.to_string();
+    assert!(message.contains(RETIRED_PACKAGE_API_VERSION), "{message}");
+    assert!(message.contains(PACKAGE_API_VERSION), "{message}");
 }
 
 struct StartupFixture {
@@ -249,16 +274,28 @@ impl PackageFixture {
     /// Rewrite the published manifest under an api version this release does
     /// not read and reseal the sum file, so only the manifest format differs.
     fn rewrite_with_unknown_api_version(&self) {
+        self.rewrite_envelope(
+            &format!(r#""apiVersion":"{PACKAGE_API_VERSION}""#),
+            r#""apiVersion":"id.registrystack.org/formats/breg/package/v1""#,
+        );
+    }
+
+    /// Rewrite the published manifest into the envelope an earlier release
+    /// wrote, the retired api version and no kind, and reseal the sum file.
+    fn rewrite_with_retired_api_version(&self) {
+        self.rewrite_envelope(
+            &format!(r#""apiVersion":"{PACKAGE_API_VERSION}","kind":"{PACKAGE_KIND}""#),
+            &format!(r#""apiVersion":"{RETIRED_PACKAGE_API_VERSION}""#),
+        );
+    }
+
+    fn rewrite_envelope(&self, from: &str, to: &str) {
         let manifest_path = self.root.join("package.json");
         let manifest = fs::read_to_string(&manifest_path).expect("manifest reads");
-        let unknown = manifest.replacen(
-            "registry.registrystack.org/package/v2",
-            "registry.registrystack.org/package/v1",
-            1,
-        );
-        assert_ne!(unknown, manifest, "the manifest names its api version");
+        let rewritten = manifest.replacen(from, to, 1);
+        assert_ne!(rewritten, manifest, "the manifest names its api version");
         fs::remove_file(&manifest_path).expect("manifest removes");
-        fs::write(&manifest_path, unknown).expect("rewritten manifest writes");
+        fs::write(&manifest_path, rewritten).expect("rewritten manifest writes");
         fs::remove_file(self.root.join(SUM_FILE)).expect("sum file removes");
         write_sum_file(
             &self.root,

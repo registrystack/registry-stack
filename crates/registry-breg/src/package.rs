@@ -57,7 +57,14 @@ use crate::model::{
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
 
-pub const PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v2";
+pub const PACKAGE_API_VERSION: &str = "id.registrystack.org/formats/breg/package/v2";
+pub const PACKAGE_KIND: &str = "BRegPackage";
+/// The apiVersion packages carried before the format took its
+/// `id.registrystack.org` name. A deployed package that carries it is still
+/// read as a predecessor, so the package that replaces it can be built,
+/// planned, and applied; every other read refuses it and names the current
+/// apiVersion.
+pub const RETIRED_PACKAGE_API_VERSION: &str = "registry.registrystack.org/package/v2";
 pub const COMPILER_ID: &str = "breg";
 pub const FIXTURE_JOURNEYS_PATH: &str = "tests/journeys.yaml";
 pub const MAX_PACKAGE_SOURCE_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -79,7 +86,18 @@ const MAX_MIGRATION_BASELINE_BYTES: usize = 4 * 1024 * 1024;
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PackageEnvelope {
     pub api_version: String,
+    pub kind: String,
     pub manifest: PackageManifest,
+}
+
+/// The envelope a package carrying [`RETIRED_PACKAGE_API_VERSION`] was
+/// written with: it predates `kind`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RetiredPackageEnvelope {
+    #[serde(rename = "apiVersion")]
+    _api_version: String,
+    manifest: PackageManifest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -612,6 +630,7 @@ pub struct VerifiedPredecessorPackage {
     migration_baseline: CompiledRegistryMigrationBaseline,
     history_schema_descriptor: HistorySchemaDescriptor,
     statistical_release_store_present: bool,
+    retired_api_version: bool,
 }
 
 impl VerifiedPredecessorPackage {
@@ -652,6 +671,13 @@ impl VerifiedPredecessorPackage {
     /// when its authored model is unchanged.
     pub fn engine_features(&self) -> &BTreeSet<PackageEngineFeature> {
         &self.manifest.engine_features
+    }
+
+    /// Whether this predecessor carries [`RETIRED_PACKAGE_API_VERSION`]. The
+    /// runtime no longer starts such a package, so a successor that replaces
+    /// it has apply work even when its authored model is unchanged.
+    pub fn carries_retired_api_version(&self) -> bool {
+        self.retired_api_version
     }
 }
 
@@ -724,6 +750,14 @@ pub enum PackageError {
     MigrationPlan,
     #[error("the package permissions are unsafe")]
     Permissions,
+    /// The package carries [`RETIRED_PACKAGE_API_VERSION`]. A package is
+    /// generated and never edited, so the fix is a rebuild with this release.
+    #[error(
+        "the package apiVersion `{retired}` is retired; the current apiVersion is `{current}`",
+        retired = RETIRED_PACKAGE_API_VERSION,
+        current = PACKAGE_API_VERSION
+    )]
+    RetiredApiVersion,
     // The wrapped reason is one of `ReviewedMigrationError`'s own fixed,
     // value-free messages, so it carries no source value either.
     #[cfg(feature = "tooling")]
@@ -816,6 +850,7 @@ impl PreparedPackage {
     pub fn envelope(&self) -> PackageEnvelope {
         PackageEnvelope {
             api_version: PACKAGE_API_VERSION.to_owned(),
+            kind: PACKAGE_KIND.to_owned(),
             manifest: self.manifest.clone(),
         }
     }
@@ -3640,7 +3675,8 @@ pub fn load_package_with_verified_envelope(
     shared: &SharedVerifiedPackage,
 ) -> Result<VerifiedPackage> {
     let production = context.database_initialization_environment != "local";
-    let (manifest, loaded) = load_verified_closure(root, shared, production)?;
+    let (manifest, _, loaded) =
+        load_verified_closure(root, shared, production, EnvelopeRead::Current)?;
     let (registry, reviewed_migration_plan) = rederive(&manifest, &loaded)?;
 
     Ok(VerifiedPackage {
@@ -3697,26 +3733,57 @@ fn bind_shared_envelope_files(
     Ok(())
 }
 
-/// Parse a package manifest, refusing any api version other than the one
-/// this release writes.
-fn parse_package_envelope(bytes: &[u8]) -> Result<PackageEnvelope> {
-    let envelope: PackageEnvelope = parse_canonical(bytes)?;
-    if envelope.api_version != PACKAGE_API_VERSION
-        || envelope.manifest.files.is_empty()
-        || envelope.manifest.files.len() > MAX_PACKAGE_FILES
-    {
+/// Which package apiVersions one read accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnvelopeRead {
+    /// A package to start, check, inspect, or activate: only the apiVersion
+    /// this release writes.
+    Current,
+    /// A deployed predecessor, which the operator cannot rebuild without
+    /// losing the digest the database names: the retired apiVersion too.
+    Predecessor,
+}
+
+/// Parse a package manifest under the apiVersions `read` accepts, returning
+/// the manifest and whether it carries the retired apiVersion. A retired
+/// package outside a predecessor read is refused with the current apiVersion
+/// named; any other apiVersion, or a `kind` other than `BRegPackage`, is an
+/// integrity failure, since a package is generated and never edited.
+fn parse_package_envelope(bytes: &[u8], read: EnvelopeRead) -> Result<(PackageManifest, bool)> {
+    let value: Value = parse_canonical(bytes)?;
+    let (manifest, retired) = match value.get("apiVersion").and_then(Value::as_str) {
+        Some(PACKAGE_API_VERSION) => {
+            let envelope: PackageEnvelope =
+                serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)?;
+            if envelope.kind != PACKAGE_KIND {
+                return Err(PackageError::Integrity);
+            }
+            (envelope.manifest, false)
+        }
+        Some(RETIRED_PACKAGE_API_VERSION) if read == EnvelopeRead::Predecessor => {
+            let envelope: RetiredPackageEnvelope =
+                serde_json::from_value(value).map_err(|_| PackageError::CanonicalJson)?;
+            (envelope.manifest, true)
+        }
+        Some(RETIRED_PACKAGE_API_VERSION) => return Err(PackageError::RetiredApiVersion),
+        _ => return Err(PackageError::Integrity),
+    };
+    if manifest.files.is_empty() || manifest.files.len() > MAX_PACKAGE_FILES {
         return Err(PackageError::Integrity);
     }
-    Ok(envelope)
+    Ok((manifest, retired))
 }
 
 /// Read the manifest and every listed file of a package whose shared envelope
-/// was verified, binding each byte to the sum file and the manifest.
+/// was verified, binding each byte to the sum file and the manifest. The
+/// returned flag says whether the manifest carries the retired apiVersion,
+/// which only a predecessor read accepts.
 fn load_verified_closure(
     root: &Path,
     shared: &SharedVerifiedPackage,
     production: bool,
-) -> Result<(PackageManifest, BTreeMap<String, Vec<u8>>)> {
+    read: EnvelopeRead,
+) -> Result<(PackageManifest, bool, BTreeMap<String, Vec<u8>>)> {
     validate_root(root)?;
     if production {
         ensure_safe_permissions(root)?;
@@ -3726,16 +3793,16 @@ fn load_verified_closure(
     let manifest_path = root.join(MANIFEST_PATH);
     let manifest_bytes = read_bounded_regular(&manifest_path, MAX_MANIFEST_BYTES, production)?;
     bind_shared_file(shared, MANIFEST_PATH, &manifest_bytes)?;
-    let envelope = parse_package_envelope(&manifest_bytes)?;
-    validate_intrinsic_bindings(&envelope.manifest)?;
+    let (manifest, retired) = parse_package_envelope(&manifest_bytes, read)?;
+    validate_intrinsic_bindings(&manifest)?;
     let loaded = load_closure(
         root,
-        &envelope.manifest.files,
+        &manifest.files,
         manifest_bytes.len(),
         production,
         shared,
     )?;
-    Ok((envelope.manifest, loaded))
+    Ok((manifest, retired, loaded))
 }
 
 /// Rederive a closed package for integrity-only comparison. Safe permissions
@@ -3752,7 +3819,7 @@ pub fn inspect_package_integrity_with_verified_envelope(
     root: &Path,
     shared: &SharedVerifiedPackage,
 ) -> Result<IntegrityInspectedPackage> {
-    let (manifest, loaded) = load_verified_closure(root, shared, true)?;
+    let (manifest, _, loaded) = load_verified_closure(root, shared, true, EnvelopeRead::Current)?;
     let (registry, _reviewed_migration_plan) = rederive(&manifest, &loaded)?;
     #[cfg(feature = "tooling")]
     let migration = migration_inspection_summary(&manifest, _reviewed_migration_plan.as_ref())?;
@@ -3824,7 +3891,8 @@ fn load_predecessor_closure(
     shared: &SharedVerifiedPackage,
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     let production = context.database_initialization_environment != "local";
-    let (manifest, loaded) = load_verified_closure(root, shared, production)?;
+    let (manifest, retired_api_version, loaded) =
+        load_verified_closure(root, shared, production, EnvelopeRead::Predecessor)?;
     validate_source_inventory(&manifest)?;
     let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
@@ -3843,6 +3911,7 @@ fn load_predecessor_closure(
             migration_baseline,
             history_schema_descriptor,
             statistical_release_store_present,
+            retired_api_version,
         },
         loaded,
     ))

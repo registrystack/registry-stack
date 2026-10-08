@@ -10,8 +10,10 @@ use registry_breg::contract::parse_module_json;
 use registry_breg::fixtures::validate_fixture_journeys;
 use registry_breg::package::{
     prepare_package, PackageBuildRequest, PackageMigrationPlanInput, PackageModuleSource,
-    PackageSourceFile,
+    PackageSourceFile, RETIRED_PACKAGE_API_VERSION,
 };
+use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE};
 use serde_json::Value;
 
 const INSTANCE: &str = "instance-under-test";
@@ -317,6 +319,63 @@ fn package_closure_and_path_disclosure_threats_are_enforced_by_value_free_negati
 }
 
 #[test]
+fn a_package_under_the_retired_api_version_is_read_only_as_the_deployed_predecessor() {
+    let directory = TestDirectory::create();
+    let deployed = publish_package(&directory.path, "deployed", "internal");
+    let deployed = retire_package_api_version(deployed);
+    let candidate = write_project(&directory.path, "candidate", "public");
+
+    let checked = run(&[
+        "--format",
+        "json",
+        "check",
+        "--package",
+        path(&deployed.package),
+    ]);
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let diagnostic = &json_stdout(&checked)["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "config.retired-api-version");
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .is_some_and(|action| action.contains("--baseline-package DEPLOYED")));
+
+    let integrity_only = run(&[
+        "--format",
+        "json",
+        "diff",
+        path(&candidate),
+        "--package",
+        path(&deployed.package),
+    ]);
+    assert_eq!(integrity_only.status.code(), Some(1), "{integrity_only:?}");
+    assert_tool_diagnostic(
+        &json_stdout(&integrity_only)["diagnostics"][0],
+        "baseline_package",
+        "correct_package_build",
+    );
+    assert_eq!(
+        json_stdout(&integrity_only)["diagnostics"][0]["code"],
+        "diff.baseline.retired_api_version"
+    );
+
+    // The runtime file names the deployed package, which this release reads
+    // as the predecessor of an upgrade.
+    let runtime = write_runtime_config(&directory.path, &deployed);
+    let runtime_bound = run(&[
+        "--format",
+        "json",
+        "diff",
+        path(&candidate),
+        "--runtime-config",
+        path(&runtime),
+    ]);
+    assert!(runtime_bound.status.success(), "{runtime_bound:?}");
+    let report = json_stdout(&runtime_bound);
+    assert_eq!(report["baselineAssurance"], "runtime_bound");
+    assert_eq!(report["baselinePackageRevision"], deployed.digest);
+}
+
+#[test]
 fn a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies() {
     let directory = TestDirectory::create();
     let baseline = publish_package(&directory.path, "production-baseline", "internal");
@@ -603,6 +662,44 @@ fn publish_package(parent: &Path, name: &str, classification: &str) -> Published
         .publish_to_directory(&package)
         .expect("package publishes");
     PublishedPackage { package, digest }
+}
+
+/// Rewrite a published package's header to the retired package apiVersion an
+/// earlier `bregctl package` wrote, and close it again under new sums.
+fn retire_package_api_version(package: PublishedPackage) -> PublishedPackage {
+    let manifest_path = package.package.join("package.json");
+    let mut envelope: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("the package manifest reads"))
+            .expect("the package manifest parses");
+    let header = envelope.as_object_mut().expect("the envelope is an object");
+    header.insert(
+        "apiVersion".to_owned(),
+        Value::from(RETIRED_PACKAGE_API_VERSION),
+    );
+    header.remove("kind");
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("the retired envelope canonicalizes"),
+    )
+    .expect("the retired manifest is written");
+    fs::remove_file(package.package.join(SUM_FILE)).expect("the stale sum file is removed");
+    let closed = write_sum_file(
+        &package.package,
+        None,
+        &PackageLimits {
+            max_files: 1_026,
+            max_file_bytes: 16 * 1024 * 1024,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 16,
+            max_path_bytes: 512,
+        },
+        "test package",
+    )
+    .expect("the retired package closes");
+    PublishedPackage {
+        digest: closed.digest().to_owned(),
+        package: package.package,
+    }
 }
 
 fn write_project(parent: &Path, name: &str, classification: &str) -> PathBuf {

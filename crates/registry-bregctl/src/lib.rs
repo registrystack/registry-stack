@@ -4473,6 +4473,7 @@ fn data_lifecycle_failure(
                 PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
                 PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
                 PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+                PackageError::RetiredApiVersion => SuggestedAction::CorrectPackageBuild,
                 _ => SuggestedAction::VerifyPackageIntegrity,
             };
             (
@@ -6354,6 +6355,9 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
         }
         PackageError::Bounds | PackageError::Read => {
             ("package_refused", SuggestedAction::VerifyPackageIntegrity)
+        }
+        PackageError::RetiredApiVersion => {
+            ("retired_api_version", SuggestedAction::CorrectPackageBuild)
         }
     }
 }

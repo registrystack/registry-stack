@@ -88,6 +88,14 @@
   package, or runtime file the command cannot read exits 3 instead of 1.
   `bregctl check --runtime-config FILE` also checks a `runtime.yaml` offline.
   Migration steps are in `release/notes/config-conventions/breg.md`.
+- BREAKING: a package's `package.json` declares `apiVersion:
+  id.registrystack.org/formats/breg/package/v2` and `kind: BRegPackage`.
+  `breg` refuses a package with the retired
+  `registry.registrystack.org/package/v2` header; `bregctl` still reads one as
+  the deployed predecessor named by `--baseline-package`. Rebuild the deployed
+  package with this release against it, then `plan` and `apply` the rebuild,
+  which is recorded as a metadata-only activation. Migration steps are in
+  `release/notes/config-conventions/breg.md`.
 - The project, module, and runtime JSON Schemas admit `null` only in a
   comparison literal, as the reader does, and declare no `default: null`. The
   project schema states its `apiVersion` and `kind` as constants, an embedded

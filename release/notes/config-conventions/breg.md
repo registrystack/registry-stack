@@ -267,6 +267,56 @@ secret provider, and prints the reader's diagnostics unchanged. Without
 position only; with it, the expressions are filled from the process
 environment, and a filled value is never repeated in a diagnostic.
 
+### BREAKING: the package format is named `id.registrystack.org/formats/breg/package/v2`
+
+The `package.json` a `bregctl package` run writes declares the package format
+by its registered identifier and a kind (CFG-ENV-1, CFG-ENV-2). The rest of
+the file, its canonical JSON, and the `SHA256SUMS` digest rules are
+unchanged.
+
+| Was | Is |
+|---|---|
+| `"apiVersion": "registry.registrystack.org/package/v2"` with no `kind` | `"apiVersion": "id.registrystack.org/formats/breg/package/v2"` and `"kind": "BRegPackage"` |
+
+A package carrying the retired header is read only as the predecessor of an
+upgrade: the deployed package named by `--baseline-package`, and the active
+package a runtime file names to `bregctl plan`, `apply`, `reconcile`, and the
+field-encryption commands. Everywhere else it is refused:
+
+- `breg` refuses to start with "the Registry package carries the retired
+  apiVersion registry.registrystack.org/package/v2" and the rebuild steps
+  below.
+- `bregctl check --package` reports `config.retired-api-version`.
+- `bregctl verify` and `bregctl migration explain` report
+  `verify.package.retired_api_version` and
+  `migration.explain.package.retired_api_version`, and
+  `bregctl diff --package` reports `diff.baseline.retired_api_version`;
+  `bregctl diff PROJECT --runtime-config RUNTIME` still compares a project
+  with the deployed package the runtime file names.
+- `bregctl data validate`, `import`, and `export` report
+  `data.<command>.package.refused` with the `correct_package_build` action.
+
+Upgrade each deployed registry with this release's `bregctl`, then start
+this release's `breg`:
+
+1. Run `bregctl test PROJECT --baseline-package DEPLOYED ...` and
+   `bregctl package PROJECT --test-receipt RECEIPT --output BUILD
+   --baseline-package DEPLOYED` on the unchanged project, where `DEPLOYED` is
+   the active package directory. The rebuild carries the current header.
+2. Run `bregctl plan --runtime-config RUNTIME --package BUILD/package`, then
+   `bregctl apply` with the same arguments. The runtime file still names the
+   active package. The rebuild changes no schema; `apply` activates it and
+   records it in the migration ledger as a `metadata_only` activation whose
+   predecessor is the deployed package digest.
+3. Point `package.root` and `package.expectedDigest` in `runtime.yaml` at the
+   rebuild and start `breg`.
+
+The same upgrade may carry a project change: the rebuild then follows the
+ordinary successor path, with `--reviewed-migrations` where the change needs
+review. `test` rebuilds the deployed registry from its packaged sources with
+this release's compiler; when the stricter reader refuses those sources, it
+reports `migration.rehearsal.baseline_unavailable`.
+
 ### BREAKING: configuration diagnostic codes are named `breg.<area>.<condition>`
 
 Every code the Base Registry Engine reports for a problem in

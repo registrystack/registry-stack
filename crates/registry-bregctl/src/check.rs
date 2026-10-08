@@ -570,6 +570,7 @@ fn package_code(error: &PackageError) -> &'static str {
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => "breg.package.integrity-refused",
         PackageError::Bounds | PackageError::Read => "breg.package.refused",
+        PackageError::RetiredApiVersion => "config.retired-api-version",
     }
 }
 
@@ -578,6 +579,7 @@ fn package_action(error: &PackageError) -> &'static str {
         PackageError::UnsafePath => "Point --package at the package directory itself, by a path without symbolic links.",
         PackageError::Permissions => "Remove group and other write permission from the package directory and its files (chmod -R go-w), then check again.",
         PackageError::Read => "Point --package at a readable package directory that bregctl package wrote.",
+        PackageError::RetiredApiVersion => "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, adding --baseline-package DEPLOYED when a database runs the package DEPLOYED; then plan and apply the rebuilt package.",
         _ => REBUILD_PACKAGE,
     }
 }

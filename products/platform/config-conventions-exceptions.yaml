@@ -2573,405 +2573,336 @@ exceptions:
   class: stable-move
   reason: maxDuration holds a duration as text
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Write an integer with the unit as the last word of the key'
-- rule: CFG-ENV-1
-  format: breg/package
-  location: products/platform/config-formats.yaml#/current/kind
-  class: pending
-  wp: WP8
-  reason: the format carries no kind
-  resolution: 'Write and check kind: BRegPackage'
-- rule: CFG-ENV-2
-  format: breg/package
-  location: products/platform/config-formats.yaml#/current/apiVersion
-  class: pending
-  wp: WP8
-  reason: apiVersion is registry.registrystack.org/package/v2
-  resolution: Read and write id.registrystack.org/formats/breg/package/v2; refuse the old value with config.retired-api-version
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledAccessEntry/profile_ids
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledAccessEntry/profile_ids decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledAction/result_effects
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledAction/result_effects decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionAccessEntry/profile_ids
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionAccessEntry/profile_ids decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionEffect/depends_on
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionEffect/depends_on decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionInventory/input_vocabularies
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionInventory/input_vocabularies decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionPermission/operations
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionPermission/operations decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionPermission/requester_clients
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionPermission/requester_clients decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionPermission/required_purposes
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionPermission/required_purposes decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionPermission/required_scopes
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionPermission/required_scopes decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionPermission/results
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionPermission/results decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionTargetUse/fields
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionTargetUse/fields decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeControl/required_for
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeControl/required_for decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequest/target_entities
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequest/target_entities decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestEffect/depends_on
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestEffect/depends_on decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestPlannerWrite/fields
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestPlannerWrite/fields decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestPlannerWrite/required_fields
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestPlannerWrite/required_fields decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestReferenceSources/create_entities
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestReferenceSources/create_entities decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestReferenceSources/request_fields
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestReferenceSources/request_fields decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledConsentRecord/gives
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledConsentRecord/gives decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledConsentRecord/refusals
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledConsentRecord/refusals decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledConsentRecord/revokes
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledConsentRecord/revokes decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledDerivedRelation/source_entities
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledDerivedRelation/source_entities decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalDataset/dependency_entities
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalDataset/dependency_entities decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalDataset/live_profiles
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalDataset/live_profiles decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalDataset/referenced_fields
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalDataset/referenced_fields decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalReleases/readers
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalReleases/readers decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-ID-6
   format: breg/package
   location: crates/registry-breg/src/package.rs#PackageManifest/engine_features
-  class: pending
-  wp: WP3
+  class: decision
   reason: PackageManifest/engine_features decodes a set type that collapses duplicates
-  resolution: Use UniqueList<T> from registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its set types. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/contract.rs#FieldTypeSource
-  class: pending
-  wp: WP3
+  class: decision
   reason: FieldTypeSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/contract.rs#FieldTypeSource/Boolean
-  class: pending
-  wp: WP3
+  class: decision
   reason: FieldTypeSource/Boolean is a unit variant of a tagged union
-  resolution: Make it a struct variant (Boolean {})
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/contract.rs#FieldTypeSource/Date
-  class: pending
-  wp: WP3
+  class: decision
   reason: FieldTypeSource/Date is a unit variant of a tagged union
-  resolution: Make it a struct variant (Date {})
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/contract.rs#FieldTypeSource/Int64
-  class: pending
-  wp: WP3
+  class: decision
   reason: FieldTypeSource/Int64 is a unit variant of a tagged union
-  resolution: Make it a struct variant (Int64 {})
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/contract.rs#FieldTypeSource/Timestamp
-  class: pending
-  wp: WP3
+  class: decision
   reason: FieldTypeSource/Timestamp is a unit variant of a tagged union
-  resolution: Make it a struct variant (Timestamp {})
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/contract.rs#FieldTypeSource/Uuid
-  class: pending
-  wp: WP3
+  class: decision
   reason: FieldTypeSource/Uuid is a unit variant of a tagged union
-  resolution: Make it a struct variant (Uuid {})
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionHandlerWrite/ceiling
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionHandlerWrite/ceiling flattens CompiledChangeRequestPlannerWrite
-  resolution: Inline the members, or flatten only a platform shared block
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionMutation
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionMutation derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionTargetBinding
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionTargetBinding derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionTargetBinding/Create
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionTargetBinding/Create is a unit variant of a tagged union
-  resolution: Make it a struct variant (Create {})
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionTargetUseSource
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionTargetUseSource derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledActionValue
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledActionValue derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestEvidenceExpected
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestEvidenceExpected derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestMutation
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestMutation derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestPredicateExpected
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestPredicateExpected derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestReview
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestReview derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestSelector
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestSelector derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestTargetBinding
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestTargetBinding derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledChangeRequestValue
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledChangeRequestValue derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledDerivedField/logical
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledDerivedField/logical flattens CompiledLogicalField
-  resolution: Inline the members, or flatten only a platform shared block
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalDimensionDomain
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalDimensionDomain derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalDimensionDomain/Boolean
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalDimensionDomain/Boolean is a unit variant of a tagged union
-  resolution: Make it a struct variant (Boolean {})
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalPeriod
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalPeriod derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStatisticalValidity
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStatisticalValidity derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-breg/src/model.rs#CompiledStoredField/logical
-  class: pending
-  wp: WP3
+  class: decision
   reason: CompiledStoredField/logical flattens CompiledLogicalField
-  resolution: Inline the members, or flatten only a platform shared block
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-evidence-client/src/definitions.rs#DefinitionConceptForm
-  class: pending
-  wp: WP3
+  class: decision
   reason: DefinitionConceptForm derives an untagged union
-  resolution: Decode it with the shared reader's union helper, with variants that differ by node kind
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-SCHEMA-8
   format: breg/package
   location: crates/registry-evidence-client/src/definitions.rs#SelectorField
-  class: pending
-  wp: WP3
+  class: decision
   reason: SelectorField derives serde's tag
-  resolution: Decode it with the shared reader's union helper
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: the compiled model inside a generated package keeps its serde unions, flattened members, and unit variants. A current package is rederived from its sources and compared byte for byte, a predecessor is bound by the package digest its database records, and reshaping the model changes every registry revision.'
 - rule: CFG-YAML-1
   format: breg/package
   location: crates/registry-breg/src/package.rs#parse_package_envelope()
-  class: pending
-  wp: WP3
+  class: decision
   reason: the reader does not read through registry-platform-yaml
-  resolution: Read through registry-platform-yaml
+  resolution: 'Decision proposed 2026-10-08, awaiting maintainer review: package.json is generated canonical JSON bound by the package digest; it is read by a strict JSON parse, a byte comparison with its canonical form, and a typed decode, never through the YAML reader.'
 - rule: CFG-EMPTY-1
   format: breg/project
   location: products/breg/generated/authoring/registry-project.schema.json#/$defs/ActionRequirementSource/properties/equals

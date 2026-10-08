@@ -11,7 +11,8 @@
 //! produced before engine-owned statistical release storage changed every
 //! package DDL. It pins the compatibility contract used for successor planning:
 //! historical bytes remain a readable predecessor without being rederived as a
-//! current candidate package.
+//! current candidate package. It carries the retired package apiVersion, so it
+//! also pins that a retired package is read only as a predecessor.
 //!
 //! The loading tests read a temporary copy, so a run never touches the frozen
 //! bytes.
@@ -31,11 +32,13 @@ use std::time::{Duration, Instant};
 use registry_breg::action_handler::{evaluate_action_detailed, ActionHandlerOutcome};
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_yaml, ModuleAssetSource};
+use registry_breg::migration::{successor_plan_is_empty, successor_plan_is_empty_for_predecessor};
 use registry_breg::package::{
     change_set_to_applicable_migration_plan, compiled_registry_change_set_from_baseline,
     inspect_package_integrity, load_package, load_predecessor_package,
     prepare_package_with_project_assets, PackageBuildRequest, PackageEnvelope, PackageError,
-    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile,
+    PackageLoadContext, PackageMigrationPlanInput, PackageSourceFile, VerifiedPredecessorPackage,
+    PACKAGE_API_VERSION, PACKAGE_KIND, RETIRED_PACKAGE_API_VERSION,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_canonical_json::canonicalize_json;
@@ -450,6 +453,164 @@ fn frozen_package_remains_a_readable_predecessor() {
     let current_predecessor = load_predecessor_package(current_package.path(), &context)
         .expect("the current frozen package is also a verified predecessor");
     assert!(current_predecessor.statistical_release_store_present());
+}
+
+/// Rewrite a package copy's manifest into the envelope an earlier release
+/// wrote, the retired apiVersion and no kind, and reseal its sum file.
+fn retire_envelope(package: &Path) {
+    let manifest_path = package.join("package.json");
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(envelope["apiVersion"], PACKAGE_API_VERSION);
+    assert_eq!(envelope["kind"], PACKAGE_KIND);
+    envelope["apiVersion"] = json!(RETIRED_PACKAGE_API_VERSION);
+    envelope.as_object_mut().unwrap().remove("kind");
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("retired envelope canonicalizes"),
+    )
+    .unwrap();
+    reseal(package);
+}
+
+fn reseal(package: &Path) {
+    fs::remove_file(package.join(SUM_FILE)).unwrap();
+    write_sum_file(
+        package,
+        None,
+        &PackageLimits {
+            max_files: 1_026,
+            max_file_bytes: 16 * 1024 * 1024,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 16,
+            max_path_bytes: 512,
+        },
+        "test package",
+    )
+    .expect("rewritten package envelope is closed");
+}
+
+/// Build the frozen project as a successor of `predecessor` and load it the
+/// way `bregctl apply` loads its target.
+fn verified_successor(
+    predecessor: &VerifiedPredecessorPackage,
+) -> (tempfile::TempDir, registry_breg::package::VerifiedPackage) {
+    let candidate = prepare_frozen_package();
+    let successor = prepare_package_with_project_assets(
+        PackageBuildRequest {
+            from_package_digest: Some(predecessor.package_digest().to_owned()),
+            compiler_source_revision: SOURCE_REVISION.to_owned(),
+            schema_fingerprint: digest(candidate.registry().ddl().script().as_bytes()),
+            project: PackageSourceFile {
+                path: "source/registry.yaml".to_owned(),
+                bytes: local_project_bytes(),
+            },
+            modules: vec![],
+            fixture_journeys: fixture_journeys(),
+            migration_plan: PackageMigrationPlanInput::SuccessorFromBaseline {
+                prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+            },
+        },
+        handler_assets(),
+    )
+    .expect("the current compiler builds a successor from the predecessor baseline");
+    let directory = tempfile::Builder::new()
+        .prefix("registry-successor-package-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("temporary successor directory");
+    let root = directory.path().join("package");
+    successor
+        .publish_to_directory(&root)
+        .expect("the successor publishes");
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let verified = load_package(&root, &context).expect("the successor verifies");
+    (directory, verified)
+}
+
+#[test]
+fn a_retired_package_is_read_only_as_a_predecessor() {
+    // CFG-CHANGE-2: the pre-statistics fixture is a package an earlier
+    // release built, carrying the retired apiVersion and no kind. Starting,
+    // inspecting, or checking it is refused as retired; reading it as the
+    // deployed predecessor of a rebuild is not, so an upgrade can replace it.
+    let package = legacy_frozen_copy();
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    assert!(matches!(
+        load_package(package.path(), &context),
+        Err(PackageError::RetiredApiVersion)
+    ));
+    assert!(matches!(
+        inspect_package_integrity(package.path()),
+        Err(PackageError::RetiredApiVersion)
+    ));
+    let predecessor = load_predecessor_package(package.path(), &context)
+        .expect("a retired package is still a verified predecessor");
+    assert!(predecessor.carries_retired_api_version());
+
+    let current = frozen_copy();
+    let current_predecessor = load_predecessor_package(current.path(), &context)
+        .expect("the current frozen package is a verified predecessor");
+    assert!(!current_predecessor.carries_retired_api_version());
+}
+
+#[test]
+fn a_package_names_its_kind_and_refuses_another() {
+    let package = frozen_copy();
+    let manifest_path = package.path().join("package.json");
+    let mut envelope: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    envelope["kind"] = json!("RegistryPackage");
+    fs::write(
+        &manifest_path,
+        canonicalize_json(&envelope).expect("mutated envelope canonicalizes"),
+    )
+    .unwrap();
+    reseal(package.path());
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    assert!(matches!(
+        load_package(package.path(), &context),
+        Err(PackageError::Integrity)
+    ));
+}
+
+#[test]
+fn rebuilding_a_retired_predecessor_has_apply_work_with_an_unchanged_model() {
+    // The same package under the retired envelope: same model, same engine
+    // capabilities. Its unchanged rebuild has an empty plan, yet it is the
+    // only way off a package the runtime no longer starts, so apply must not
+    // refuse it as empty. Over a current predecessor the same rebuild is
+    // still an ordinary empty successor.
+    let context = PackageLoadContext {
+        database_initialization_environment: ENVIRONMENT,
+    };
+    let retired = frozen_copy();
+    retire_envelope(retired.path());
+    let retired_predecessor = load_predecessor_package(retired.path(), &context)
+        .expect("the retired package is a verified predecessor");
+    assert!(retired_predecessor.carries_retired_api_version());
+    let (_directory, successor) = verified_successor(&retired_predecessor);
+    assert!(successor_plan_is_empty(&successor));
+    assert!(!successor_plan_is_empty_for_predecessor(
+        &successor,
+        &retired_predecessor
+    ));
+
+    let current = frozen_copy();
+    let current_predecessor = load_predecessor_package(current.path(), &context)
+        .expect("the current frozen package is a verified predecessor");
+    let (_directory, successor) = verified_successor(&current_predecessor);
+    assert!(successor_plan_is_empty_for_predecessor(
+        &successor,
+        &current_predecessor
+    ));
 }
 
 #[test]
