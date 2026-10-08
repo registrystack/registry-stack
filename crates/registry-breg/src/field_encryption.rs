@@ -807,11 +807,12 @@ pub(crate) struct RawFieldEncryptionConfig {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Deserialize)]
 #[serde(
-    tag = "kind",
+    remote = "Self",
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub(crate) enum RawFieldEncryptionProvider {
     Transit {
         #[cfg_attr(feature = "schema", schemars(length(min = 2, max = 4096)))]
@@ -821,7 +822,11 @@ pub(crate) enum RawFieldEncryptionProvider {
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
         key_name: String,
         #[serde(default = "default_transit_timeout_milliseconds")]
-        #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 30_000)))]
+        #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 30_000>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<1, 30_000>")
+        )]
         timeout_milliseconds: u64,
     },
     LocalFile {
@@ -829,6 +834,21 @@ pub(crate) enum RawFieldEncryptionProvider {
         /// an environment reference is refused.
         dek_ref: SecretReference,
     },
+}
+registry_platform_yaml::tagged_union!(RawFieldEncryptionProvider, tag = "kind");
+
+#[cfg(feature = "schema")]
+impl serde::Serialize for RawFieldEncryptionProvider {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        crate::runtime_config::serialize_tagged_union(
+            Self::serialize(self, serde_json::value::Serializer),
+            "kind",
+            serializer,
+        )
+    }
 }
 
 fn default_transit_timeout_milliseconds() -> u64 {

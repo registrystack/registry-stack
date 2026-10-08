@@ -28,16 +28,14 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
     OidcDiscoveryConfig, TokenVerifierConfig,
 };
+#[cfg(feature = "schema")]
+use registry_platform_yaml::{BoundedU32, BoundedU64};
 use registry_platform_yaml::{Diagnostic, Report, Source, Url};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-#[cfg(feature = "schema")]
-use crate::compiler::{
-    MAX_WEBHOOK_ATTEMPTS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS, MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS,
-};
 use crate::{
     auth::AuthorityClaimConfig,
     cursor::CursorCodec,
@@ -96,8 +94,9 @@ const MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_048_576;
 const DEFAULT_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 =
     crate::wasm_handler::DEFAULT_WASM_GUEST_MEMORY_BYTES as u64;
 const MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_073_741_824;
-#[cfg(feature = "schema")]
-const MAX_DATABASE_POOL_SIZE: u64 = 128;
+const MAX_DATABASE_POOL_SIZE: u32 = 128;
+/// The longest a pool waits for, creates, or recycles a connection.
+const MAX_POOL_TIMEOUT_MILLISECONDS: u64 = 60_000;
 #[cfg(feature = "schema")]
 const SQL_IDENTIFIER_SCHEMA_PATTERN: &str = "^[_a-z][_a-z0-9]{0,62}$";
 #[cfg(feature = "schema")]
@@ -1506,9 +1505,9 @@ impl DatabaseConfig {
         }
         let pool_bounds = PoolBounds::new(
             raw.pool.max_size,
-            millis(raw.pool.wait_timeout_milliseconds)?,
-            millis(raw.pool.create_timeout_milliseconds)?,
-            millis(raw.pool.recycle_timeout_milliseconds)?,
+            Duration::from_millis(raw.pool.wait_timeout_milliseconds),
+            Duration::from_millis(raw.pool.create_timeout_milliseconds),
+            Duration::from_millis(raw.pool.recycle_timeout_milliseconds),
         )
         .map_err(|_| RuntimeConfigError::InvalidBounds)?;
         Ok(Self {
@@ -1660,7 +1659,7 @@ impl OidcVerifierConfig {
                 return Err(RuntimeConfigError::InvalidOidc);
             }
         }
-        let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 7200)?;
+        let max_token_lifetime = Duration::from_secs(raw.max_token_lifetime_seconds);
         let leeway = oidc_leeway(raw.leeway_milliseconds)?;
         let jwks_source = OidcJwksSource::from_block(raw.provider.jwks_source)?;
         Ok(Self {
@@ -2071,16 +2070,13 @@ pub struct JwksCacheConfig {
 
 impl JwksCacheConfig {
     fn from_raw(raw: RawJwksCacheConfig) -> Result<Self> {
-        if raw.max_document_bytes == 0 || raw.max_document_bytes > MAX_JWKS_DOCUMENT_BYTES {
-            return Err(RuntimeConfigError::InvalidOidc);
-        }
         Ok(Self {
-            cache_ttl: seconds_bounded(raw.cache_ttl_seconds, 1, 86_400)?,
-            negative_cache_ttl: seconds_bounded(raw.negative_cache_ttl_seconds, 1, 3_600)?,
-            refresh_cooldown: seconds_bounded(raw.refresh_cooldown_seconds, 1, 3_600)?,
+            cache_ttl: Duration::from_secs(raw.cache_ttl_seconds),
+            negative_cache_ttl: Duration::from_secs(raw.negative_cache_ttl_seconds),
+            refresh_cooldown: Duration::from_secs(raw.refresh_cooldown_seconds),
             max_document_bytes: raw.max_document_bytes,
-            request_timeout: millis_bounded(raw.request_timeout_milliseconds, 1, 30_000)?,
-            outage_tolerance: seconds_bounded(raw.outage_tolerance_seconds, 0, 86_400)?,
+            request_timeout: Duration::from_millis(raw.request_timeout_milliseconds),
+            outage_tolerance: Duration::from_secs(raw.outage_tolerance_seconds),
         })
     }
 }
@@ -2219,11 +2215,6 @@ pub struct EventDeliveryConfig {
 
 impl EventDeliveryConfig {
     fn from_raw(raw: RawEventDeliveryConfig) -> Result<Self> {
-        if raw.payload_retention_days == 0
-            || raw.payload_retention_days > MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS
-        {
-            return Err(RuntimeConfigError::InvalidBounds);
-        }
         Ok(Self {
             payload_retention: Duration::from_secs(
                 u64::from(raw.payload_retention_days) * 24 * 60 * 60,
@@ -2244,11 +2235,6 @@ pub struct IdempotencyConfig {
 
 impl IdempotencyConfig {
     fn from_raw(raw: RawIdempotencyConfig) -> Result<Self> {
-        if raw.receipt_retention_days == 0
-            || raw.receipt_retention_days > crate::idempotency::MAX_RECEIPT_RETENTION_DAYS
-        {
-            return Err(RuntimeConfigError::InvalidBounds);
-        }
         Ok(Self {
             receipt_retention_days: raw.receipt_retention_days,
         })
@@ -2265,7 +2251,7 @@ impl CursorConfig {
     fn from_raw(raw: RawCursorConfig) -> Result<Self> {
         Ok(Self {
             secret_ref: raw.secret_ref,
-            max_age: seconds_bounded(raw.max_age_seconds, 1, 86_400)?,
+            max_age: Duration::from_secs(raw.max_age_seconds),
         })
     }
 
@@ -2296,19 +2282,11 @@ pub struct OperationalTimeouts {
 impl OperationalTimeouts {
     fn from_raw(raw: RawOperationalTimeouts) -> Result<Self> {
         Ok(Self {
-            http_request: millis_bounded(
-                raw.http_request_milliseconds,
-                1,
-                MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS,
-            )?,
-            shutdown_grace: millis_bounded(raw.shutdown_grace_milliseconds, 1, 300_000)?,
-            record_lock: millis_bounded(raw.record_lock_milliseconds, 1, 30_000)?,
-            migration_lock: millis_bounded(raw.migration_lock_milliseconds, 1, 300_000)?,
-            migration_statement: millis_bounded(
-                raw.migration_statement_milliseconds,
-                1,
-                3_600_000,
-            )?,
+            http_request: Duration::from_millis(raw.http_request_milliseconds),
+            shutdown_grace: Duration::from_millis(raw.shutdown_grace_milliseconds),
+            record_lock: Duration::from_millis(raw.record_lock_milliseconds),
+            migration_lock: Duration::from_millis(raw.migration_lock_milliseconds),
+            migration_statement: Duration::from_millis(raw.migration_statement_milliseconds),
         })
     }
 }
@@ -2329,13 +2307,6 @@ impl WasmExecutionConfig {
     pub(crate) fn from_raw(raw: RawWasmExecutionConfig) -> Result<Self> {
         let backend = crate::wasm_handler::WasmExecutionBackend::parse(&raw.backend)
             .ok_or(RuntimeConfigError::InvalidWasmExecution)?;
-        if raw.max_module_bytes < MINIMUM_WASM_EXECUTION_MODULE_BYTES
-            || raw.max_module_bytes > MAXIMUM_WASM_EXECUTION_MODULE_BYTES
-            || raw.max_guest_memory_bytes < MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES
-            || raw.max_guest_memory_bytes > MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES
-        {
-            return Err(RuntimeConfigError::InvalidWasmExecution);
-        }
         Ok(Self {
             max_module_bytes: raw.max_module_bytes,
             max_guest_memory_bytes: raw.max_guest_memory_bytes,
@@ -2458,7 +2429,6 @@ impl ReviewAuthorityConfig {
             || raw.producer_id.trim().is_empty()
             || raw.producer_id.len() > 128
             || raw.producer_id.chars().any(char::is_control)
-            || !(1..=crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS).contains(&raw.recovery_days)
         {
             return Err(RuntimeConfigError::InvalidBinding);
         }
@@ -2489,7 +2459,13 @@ struct RawReviewAuthorityConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     private_key_jwt: Option<RawReviewPrivateKeyJwtConfig>,
     producer_id: String,
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3650)))]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u32::<_, 1, { crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS }>")
+    )]
     recovery_days: u32,
     /// The bearer token the review authority presents when it notifies this
     /// registry that a review completed. Written together with
@@ -2732,15 +2708,41 @@ struct RawDatabaseConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawPoolBounds {
+    #[serde(deserialize_with = "crate::contract::bounded_usize::<_, 1, MAX_DATABASE_POOL_SIZE>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, MAX_DATABASE_POOL_SIZE>")
+    )]
     max_size: usize,
     /// Defaults to the bounded PostgreSQL pool wait timeout.
     #[serde(default = "default_pool_wait_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_POOL_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_POOL_TIMEOUT_MILLISECONDS>")
+    )]
     wait_timeout_milliseconds: u64,
     /// Defaults to the bounded PostgreSQL pool connection-creation timeout.
     #[serde(default = "default_pool_create_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_POOL_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_POOL_TIMEOUT_MILLISECONDS>")
+    )]
     create_timeout_milliseconds: u64,
     /// Defaults to the bounded PostgreSQL pool connection-recycle timeout.
     #[serde(default = "default_pool_recycle_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_POOL_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_POOL_TIMEOUT_MILLISECONDS>")
+    )]
     recycle_timeout_milliseconds: u64,
 }
 
@@ -2799,7 +2801,16 @@ struct RawOidcVerifierConfig {
         deserialize_with = "non_empty_assertion_issuers"
     )]
     assertion_issuers: BTreeMap<String, Vec<String>>,
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 7_200>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 7_200>"))]
     max_token_lifetime_seconds: u64,
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 0, MAX_OIDC_LEEWAY_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<0, MAX_OIDC_LEEWAY_MILLISECONDS>")
+    )]
     leeway_milliseconds: u64,
     /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
     #[serde(default)]
@@ -2827,21 +2838,36 @@ fn non_empty_assertion_issuers<'de, D: serde::Deserializer<'de>>(
 struct RawJwksCacheConfig {
     /// Defaults to the bounded JWKS cache time-to-live.
     #[serde(default = "default_jwks_cache_ttl_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 86_400>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 86_400>"))]
     cache_ttl_seconds: u64,
     /// Defaults to the bounded JWKS negative-cache time-to-live.
     #[serde(default = "default_jwks_negative_cache_ttl_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 3_600>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 3_600>"))]
     negative_cache_ttl_seconds: u64,
     /// Defaults to the bounded JWKS refresh cooldown.
     #[serde(default = "default_jwks_refresh_cooldown_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 3_600>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 3_600>"))]
     refresh_cooldown_seconds: u64,
     /// Defaults to the bounded maximum JWKS document size.
     #[serde(default = "default_jwks_max_document_bytes")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_JWKS_DOCUMENT_BYTES>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_JWKS_DOCUMENT_BYTES>")
+    )]
     max_document_bytes: u64,
     /// Defaults to the bounded JWKS fetch timeout.
     #[serde(default = "default_jwks_request_timeout_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 30_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 30_000>"))]
     request_timeout_milliseconds: u64,
     /// Defaults to the bounded cached-key outage tolerance.
     #[serde(default = "default_jwks_outage_tolerance_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 0, 86_400>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<0, 86_400>"))]
     outage_tolerance_seconds: u64,
 }
 
@@ -2925,11 +2951,29 @@ struct RawAuditConfig {
     path: Option<String>,
     /// Size in bytes at which the active file rotates, accepted only with the
     /// `file` destination. Omitted, the file rotates at 100 MiB.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::contract::optional_bounded_u64::<_, { registry_platform_audit::MIN_AUDIT_ROTATE_BYTES }, { u32::MAX as u64 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<{ registry_platform_audit::MIN_AUDIT_ROTATE_BYTES }, { u32::MAX as u64 }>"
+        )
+    )]
     rotate_bytes: Option<u64>,
     /// Days a rotated file is retained, accepted only with the `file`
     /// destination. Omitted, a rotated file is retained for 90 days.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::contract::optional_bounded_u32::<_, 1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { registry_platform_audit::MAX_AUDIT_RETAIN_DAYS }>")
+    )]
     retain_days: Option<u32>,
 }
 
@@ -2940,6 +2984,8 @@ struct RawCursorConfig {
     secret_ref: SecretReference,
     /// Defaults to the bounded cursor validity lifetime.
     #[serde(default = "default_cursor_max_age_seconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 86_400>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 86_400>"))]
     max_age_seconds: u64,
 }
 
@@ -2949,6 +2995,13 @@ struct RawCursorConfig {
 struct RawEventDeliveryConfig {
     /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
     #[serde(default = "default_webhook_payload_retention_days")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
+    )]
     payload_retention_days: u8,
 }
 
@@ -2971,6 +3024,15 @@ struct RawIdempotencyConfig {
     /// Days a held response is kept after its commit. A retry after it is
     /// refused as expired and never executed; the key stays spent.
     #[serde(default = "default_receipt_retention_days")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u16::<_, 1, { crate::idempotency::MAX_RECEIPT_RETENTION_DAYS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU32<1, { crate::idempotency::MAX_RECEIPT_RETENTION_DAYS as u32 }>"
+        )
+    )]
     receipt_retention_days: u16,
 }
 
@@ -2992,18 +3054,33 @@ const fn default_receipt_retention_days() -> u16 {
 struct RawOperationalTimeouts {
     /// Defaults to the bounded per-request HTTP timeout.
     #[serde(default = "default_http_request_timeout_milliseconds")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, 1, MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU64<1, MAX_HTTP_REQUEST_TIMEOUT_MILLISECONDS>")
+    )]
     http_request_milliseconds: u64,
     /// Defaults to the bounded graceful-shutdown timeout.
     #[serde(default = "default_shutdown_grace_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 300_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 300_000>"))]
     shutdown_grace_milliseconds: u64,
     /// Defaults to the bounded record lock timeout.
     #[serde(default = "default_record_lock_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 30_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 30_000>"))]
     record_lock_milliseconds: u64,
     /// Defaults to the bounded migration lock timeout.
     #[serde(default = "default_migration_lock_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 300_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 300_000>"))]
     migration_lock_milliseconds: u64,
     /// Defaults to the bounded migration statement timeout.
     #[serde(default = "default_migration_statement_milliseconds")]
+    #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 1, 3_600_000>")]
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU64<1, 3_600_000>"))]
     migration_statement_milliseconds: u64,
 }
 
@@ -3026,9 +3103,27 @@ pub(crate) struct RawWasmExecutionConfig {
     /// Defaults to the default execution-time module ceiling (2 MiB); the
     /// structural admission ceiling (5 MiB) is operator-reachable here.
     #[serde(default = "default_wasm_execution_max_module_bytes")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, MINIMUM_WASM_EXECUTION_MODULE_BYTES, MAXIMUM_WASM_EXECUTION_MODULE_BYTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<MINIMUM_WASM_EXECUTION_MODULE_BYTES, MAXIMUM_WASM_EXECUTION_MODULE_BYTES>"
+        )
+    )]
     max_module_bytes: u64,
     /// Defaults to the platform guest-memory ceiling (32 MiB).
     #[serde(default = "default_wasm_execution_max_guest_memory_bytes")]
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u64::<_, MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES, MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "BoundedU64<MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES, MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES>"
+        )
+    )]
     max_guest_memory_bytes: u64,
     /// The backend handler modules are compiled and executed for: `pulley`
     /// (default, the portable interpreter target) or `native`. Any other
@@ -3168,18 +3263,6 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
 
 #[cfg(feature = "schema")]
 fn install_schema_constraints(schema: &mut Value) {
-    install_schema_integer_bounds(
-        schema,
-        "/$defs/RawAuditConfig/properties/rotateBytes",
-        registry_platform_audit::MIN_AUDIT_ROTATE_BYTES,
-        u64::from(u32::MAX),
-    );
-    install_schema_integer_bounds(
-        schema,
-        "/$defs/RawAuditConfig/properties/retainDays",
-        1,
-        u64::from(registry_platform_audit::MAX_AUDIT_RETAIN_DAYS),
-    );
     // `AuditDestination::from_settings`: the `stdout` destination refuses
     // every file setting, and the `file` destination needs an absolute path.
     if let Some(audit) = schema
@@ -3210,126 +3293,6 @@ fn install_schema_constraints(schema: &mut Value) {
                 }}
             }),
         );
-    }
-    for (pointer, minimum, maximum) in [
-        (
-            "/$defs/RawPoolBounds/properties/maxSize",
-            1,
-            MAX_DATABASE_POOL_SIZE,
-        ),
-        (
-            "/$defs/RawPoolBounds/properties/waitTimeoutMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawPoolBounds/properties/createTimeoutMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawPoolBounds/properties/recycleTimeoutMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawOidcVerifierConfig/properties/maxTokenLifetimeSeconds",
-            1,
-            7_200,
-        ),
-        (
-            "/$defs/RawOidcVerifierConfig/properties/leewayMilliseconds",
-            0,
-            MAX_OIDC_LEEWAY_MILLISECONDS,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/cacheTtlSeconds",
-            1,
-            86_400,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/negativeCacheTtlSeconds",
-            1,
-            3_600,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/refreshCooldownSeconds",
-            1,
-            3_600,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/maxDocumentBytes",
-            1,
-            MAX_JWKS_DOCUMENT_BYTES,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/requestTimeoutMilliseconds",
-            1,
-            30_000,
-        ),
-        (
-            "/$defs/RawJwksCacheConfig/properties/outageToleranceSeconds",
-            0,
-            86_400,
-        ),
-        ("/$defs/RawCursorConfig/properties/maxAgeSeconds", 1, 86_400),
-        (
-            "/$defs/RawEventDeliveryConfig/properties/payloadRetentionDays",
-            1,
-            u64::from(MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS),
-        ),
-        (
-            "/$defs/RawIdempotencyConfig/properties/receiptRetentionDays",
-            1,
-            u64::from(crate::idempotency::MAX_RECEIPT_RETENTION_DAYS),
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/httpRequestMilliseconds",
-            1,
-            60_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/shutdownGraceMilliseconds",
-            1,
-            300_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/recordLockMilliseconds",
-            1,
-            30_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/migrationLockMilliseconds",
-            1,
-            300_000,
-        ),
-        (
-            "/$defs/RawOperationalTimeouts/properties/migrationStatementMilliseconds",
-            1,
-            3_600_000,
-        ),
-        (
-            "/$defs/RawWasmExecutionConfig/properties/maxModuleBytes",
-            MINIMUM_WASM_EXECUTION_MODULE_BYTES,
-            MAXIMUM_WASM_EXECUTION_MODULE_BYTES,
-        ),
-        (
-            "/$defs/RawWasmExecutionConfig/properties/maxGuestMemoryBytes",
-            MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES,
-            MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES,
-        ),
-        (
-            "/$defs/RawEventDestinationDeliveryCeilings/properties/attemptTimeoutMilliseconds",
-            u64::from(MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS),
-            u64::from(MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS),
-        ),
-        (
-            "/$defs/RawEventDestinationDeliveryCeilings/properties/maximumAttempts",
-            1,
-            u64::from(MAX_WEBHOOK_ATTEMPTS),
-        ),
-    ] {
-        install_schema_integer_bounds(schema, pointer, minimum, maximum);
     }
 
     for (pointer, minimum, maximum, pattern) in [
@@ -3513,16 +3476,6 @@ fn install_schema_const_property(schema: &mut Value, property: &'static str, exp
     member.clear();
     member.insert("type".to_owned(), Value::String("string".to_owned()));
     member.insert("const".to_owned(), Value::String(expected.to_owned()));
-}
-
-#[cfg(feature = "schema")]
-fn install_schema_integer_bounds(schema: &mut Value, pointer: &str, minimum: u64, maximum: u64) {
-    if let Some(member) = schema.pointer_mut(pointer).and_then(Value::as_object_mut) {
-        member.insert("minimum".to_owned(), Value::from(minimum));
-        if maximum != u64::MAX {
-            member.insert("maximum".to_owned(), Value::from(maximum));
-        }
-    }
 }
 
 #[cfg(feature = "schema")]
@@ -3760,31 +3713,41 @@ fn validate_bounded_list(values: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn millis(value: u64) -> Result<Duration> {
-    millis_bounded(value, 1, 60_000)
+/// Serialize a `tagged_union!` enum in its tagged form, so the published
+/// runtime schema states a union member's default the way an operator writes
+/// it. The enum's `remote = "Self"` derive yields the externally tagged value
+/// this turns inside out.
+#[cfg(feature = "schema")]
+pub(crate) fn serialize_tagged_union<S: serde::Serializer>(
+    external: std::result::Result<serde_json::Value, serde_json::Error>,
+    tag: &str,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    use serde::ser::Error as _;
+    let serde_json::Value::Object(external) = external.map_err(S::Error::custom)? else {
+        return Err(S::Error::custom("a union variant serializes as a mapping"));
+    };
+    let mut variants = external.into_iter();
+    let (Some((name, serde_json::Value::Object(members))), None) =
+        (variants.next(), variants.next())
+    else {
+        return Err(S::Error::custom(
+            "a union variant serializes as one mapping named by its form",
+        ));
+    };
+    let mut tagged = serde_json::Map::new();
+    tagged.insert(tag.to_owned(), serde_json::Value::String(name));
+    tagged.extend(members);
+    serde::Serialize::serialize(&serde_json::Value::Object(tagged), serializer)
 }
 
 /// The token verifier applies leeway in whole seconds, so a value carrying
 /// sub-second precision would be truncated without the operator being told.
 fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
-    if milliseconds > MAX_OIDC_LEEWAY_MILLISECONDS || !milliseconds.is_multiple_of(1_000) {
+    if !milliseconds.is_multiple_of(1_000) {
         return Err(RuntimeConfigError::InvalidOidcLeeway);
     }
     Ok(Duration::from_millis(milliseconds))
-}
-
-fn millis_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {
-    if value < min || value > max {
-        return Err(RuntimeConfigError::InvalidBounds);
-    }
-    Ok(Duration::from_millis(value))
-}
-
-fn seconds_bounded(value: u64, min: u64, max: u64) -> Result<Duration> {
-    if value < min || value > max {
-        return Err(RuntimeConfigError::InvalidBounds);
-    }
-    Ok(Duration::from_secs(value))
 }
 
 #[cfg(all(test, feature = "schema"))]

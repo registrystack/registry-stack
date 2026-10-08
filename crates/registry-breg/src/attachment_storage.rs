@@ -71,11 +71,12 @@ impl fmt::Debug for AttachmentStorage {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Deserialize)]
 #[serde(
-    tag = "kind",
+    remote = "Self",
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 // Read once from `runtime.yaml` at startup and converted at once, so the size
 // of the S3 variant costs nothing worth an indirection.
 #[allow(clippy::large_enum_variant)]
@@ -97,9 +98,32 @@ pub(crate) enum RawAttachmentStorageConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ca_bundle_ref: Option<SecretReference>,
         #[serde(default = "default_timeout")]
-        #[cfg_attr(feature = "schema", schemars(range(min = 100, max = 60_000)))]
+        #[serde(
+            deserialize_with = "crate::contract::bounded_u64::<_, 100, MAXIMUM_TIMEOUT_MILLISECONDS>"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(
+                with = "registry_platform_yaml::BoundedU64<100, MAXIMUM_TIMEOUT_MILLISECONDS>"
+            )
+        )]
         timeout_milliseconds: u64,
     },
+}
+registry_platform_yaml::tagged_union!(RawAttachmentStorageConfig, tag = "kind");
+
+#[cfg(feature = "schema")]
+impl serde::Serialize for RawAttachmentStorageConfig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        crate::runtime_config::serialize_tagged_union(
+            Self::serialize(self, serde_json::value::Serializer),
+            "kind",
+            serializer,
+        )
+    }
 }
 
 impl Default for RawAttachmentStorageConfig {
@@ -173,7 +197,6 @@ impl AttachmentStorageConfig {
             || !region
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            || !(100..=MAXIMUM_TIMEOUT_MILLISECONDS).contains(&timeout_milliseconds)
         {
             return Err(AttachmentStorageError::InvalidConfiguration);
         }
@@ -745,7 +768,6 @@ mod tests {
             ("bucket", json!("../canary")),
             ("bucket", json!("127.0.0.1")),
             ("region", json!("us/east")),
-            ("timeoutMilliseconds", json!(0)),
         ] {
             let mut input = raw("https://storage.example");
             input[key] = value;
@@ -753,6 +775,10 @@ mod tests {
                 AttachmentStorageConfig::from_raw(serde_json::from_value(input).unwrap()).is_err()
             );
         }
+        // The timeout is bounded at decode.
+        let mut input = raw("https://storage.example");
+        input["timeoutMilliseconds"] = json!(0);
+        assert!(serde_json::from_value::<RawAttachmentStorageConfig>(input).is_err());
         let mut input = raw("https://storage.example");
         input["accessKeyIdRef"] = json!("inline-secret-canary");
         let error = serde_json::from_value::<RawAttachmentStorageConfig>(input)

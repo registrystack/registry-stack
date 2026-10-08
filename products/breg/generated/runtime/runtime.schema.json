@@ -641,7 +641,7 @@
         "payloadRetentionDays": {
           "default": 7,
           "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.",
-          "format": "uint8",
+          "format": "uint32",
           "maximum": 30,
           "minimum": 1,
           "type": "integer"
@@ -723,7 +723,7 @@
         },
         "maximumAttempts": {
           "description": "Maximum total attempts in one delivery generation, including the first attempt.",
-          "format": "uint8",
+          "format": "uint32",
           "maximum": 5,
           "minimum": 1,
           "type": "integer"
@@ -838,7 +838,7 @@
         "receiptRetentionDays": {
           "default": 7,
           "description": "Days a held response is kept after its commit. A retry after it is\nrefused as expired and never executed; the key stays spent.",
-          "format": "uint16",
+          "format": "uint32",
           "maximum": 365,
           "minimum": 1,
           "type": "integer"
@@ -1133,7 +1133,7 @@
           "type": "integer"
         },
         "maxSize": {
-          "format": "uint",
+          "format": "uint32",
           "maximum": 128,
           "minimum": 1,
           "type": "integer"

@@ -32,6 +32,17 @@
   `authentication.oidc.assertionIssuers: {}` is refused: delete the member to
   apply no assertion-issuer rule. Migration steps are in
   `release/notes/config-conventions/breg.md`.
+- BREAKING: every integer member of `runtime.yaml` is refused outside the
+  minimum and maximum the runtime schema states when the file is read, as
+  `config.out-of-range` at the member, rather than after decoding as
+  `runtime_config.invalid_bounds`, `invalid_oidc`, `invalid_oidc_leeway`,
+  `invalid_audit`, `invalid_wasm_execution`, `invalid_binding`,
+  `invalid_event_destination`, `invalid_attachment_storage`,
+  `invalid_attachment_verification`, or `invalid_field_encryption` at the
+  enclosing block. No value that was accepted is refused. A problem inside an
+  `attachmentStorage`, `attachmentVerification`, or `fieldEncryption.provider`
+  form is reported at its own member. The code table is in
+  `release/notes/config-conventions/breg.md`.
 - BREAKING: `registry.yaml` URLs and module digests are typed by the shared
   reader. A module lock `digest` that is not `sha256:` and 64 lowercase hex
   digits, and a `taskGrant.sourceIssuer` that is not an absolute URL, are

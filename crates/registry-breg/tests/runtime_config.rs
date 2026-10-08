@@ -581,20 +581,26 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
             base.replace(&path_line, "  destination: stdout\n  retainDays: 7\n"),
             "stdout refuses file retention",
         ),
-        (
-            base.replace(&path_line, &format!("{path_line}  rotateBytes: 1\n")),
-            "rotation is bounded",
-        ),
-        (
-            base.replace(&path_line, &format!("{path_line}  retainDays: 0\n")),
-            "retention is bounded",
-        ),
     ] {
         assert_eq!(
             parse_runtime_config_with_env(&document, env_lookup).expect_err(reason),
             RuntimeConfigError::InvalidAudit,
             "{reason}"
         );
+    }
+    for (document, pointer) in [
+        (
+            base.replace(&path_line, &format!("{path_line}  rotateBytes: 1\n")),
+            "/audit/rotateBytes",
+        ),
+        (
+            base.replace(&path_line, &format!("{path_line}  retainDays: 0\n")),
+            "/audit/retainDays",
+        ),
+    ] {
+        let error = parse_runtime_config_with_env(&document, env_lookup)
+            .expect_err("an audit bound is refused at decode");
+        assert_eq!(reader_refusal(&error), ("config.out-of-range", pointer));
     }
     assert_eq!(
         refusal(
@@ -851,12 +857,13 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
         );
     }
     for days in [0_u8, 31_u8] {
+        let error = parse_runtime_config(&format!(
+            "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
+        ))
+        .expect_err("the horizon is bounded at decode");
         assert_eq!(
-            parse_runtime_config(&format!(
-                "{base}\neventDelivery:\n  payloadRetentionDays: {days}\n"
-            ))
-            .err(),
-            Some(RuntimeConfigError::InvalidBounds)
+            reader_refusal(&error),
+            ("config.out-of-range", "/eventDelivery/payloadRetentionDays")
         );
     }
 }
@@ -883,12 +890,13 @@ fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() 
         assert_eq!(config.idempotency().receipt_retention_days(), days);
     }
     for days in [0_u16, 366_u16] {
+        let error = parse_runtime_config(&format!(
+            "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
+        ))
+        .expect_err("the horizon is bounded at decode");
         assert_eq!(
-            parse_runtime_config(&format!(
-                "{base}\nidempotency:\n  receiptRetentionDays: {days}\n"
-            ))
-            .err(),
-            Some(RuntimeConfigError::InvalidBounds)
+            reader_refusal(&error),
+            ("config.out-of-range", "/idempotency/receiptRetentionDays")
         );
     }
 }
@@ -933,21 +941,22 @@ fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
 fn wasm_execution_budgets_refuse_out_of_range_values() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    for (module_bytes, memory_bytes) in [
-        (0_u64, 32 * 1024 * 1024_u64),
-        (1023, 32 * 1024 * 1024),
-        (5 * 1024 * 1024 + 1, 32 * 1024 * 1024),
-        (2 * 1024 * 1024, 0),
-        (2 * 1024 * 1024, 1024 * 1024 - 1),
-        (2 * 1024 * 1024, 1024 * 1024 * 1024 + 1),
+    let module = "/wasmExecution/maxModuleBytes";
+    let memory = "/wasmExecution/maxGuestMemoryBytes";
+    for (module_bytes, memory_bytes, pointer) in [
+        (0_u64, 32 * 1024 * 1024_u64, module),
+        (1023, 32 * 1024 * 1024, module),
+        (5 * 1024 * 1024 + 1, 32 * 1024 * 1024, module),
+        (2 * 1024 * 1024, 0, memory),
+        (2 * 1024 * 1024, 1024 * 1024 - 1, memory),
+        (2 * 1024 * 1024, 1024 * 1024 * 1024 + 1, memory),
     ] {
         let configured = format!(
             "{base}wasmExecution:\n  maxModuleBytes: {module_bytes}\n  maxGuestMemoryBytes: {memory_bytes}\n"
         );
         let error = parse_runtime_config(&configured)
             .expect_err("out-of-range WASM execution budget is refused");
-        assert_eq!(error.code(), "runtime_config.invalid_wasm_execution");
-        assert_eq!(error.path(), "/wasmExecution");
+        assert_eq!(reader_refusal(&error), ("config.out-of-range", pointer));
     }
 }
 
@@ -1174,7 +1183,7 @@ fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
         (
             audit_path.clone(),
             format!("{audit_path}  rotateBytes: 18446744073709551615\n"),
-            ("platform.runtime-config.canonical-form", ""),
+            ("config.out-of-range", "/audit/rotateBytes"),
             "18446744073709551615",
         ),
         (
@@ -1427,10 +1436,14 @@ fn review_authority_recovery_days_match_the_casework_bound() {
     parse_runtime_config_with_env(&authority(3_650), env_lookup)
         .expect("the Casework recovery ceiling is accepted");
     for recovery_days in [0, 3_651] {
+        let error = parse_runtime_config_with_env(&authority(recovery_days), env_lookup)
+            .expect_err("a recovery window outside the Casework bound is refused");
         assert_eq!(
-            parse_runtime_config_with_env(&authority(recovery_days), env_lookup)
-                .expect_err("a recovery window outside the Casework bound is refused"),
-            RuntimeConfigError::InvalidBinding
+            reader_refusal(&error),
+            (
+                "config.out-of-range",
+                "/reviewAuthorities/casework-a/recoveryDays"
+            )
         );
     }
 }
@@ -1723,12 +1736,15 @@ fn one_role_may_serve_as_runtime_and_migration_role() {
 #[test]
 fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
     let fixture = RuntimeFixture::new();
+    let oversized_pool = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("maxSize: 4", "maxSize: 129");
+    let error = parse_runtime_config_with_env(&oversized_pool, env_lookup)
+        .expect_err("the pool size is bounded");
+    assert_eq!(
+        reader_refusal(&error),
+        ("config.out-of-range", "/database/pool/maxSize")
+    );
     for (raw, expected) in [
-        (
-            valid_runtime(&fixture.secret_root, &fixture.package_root)
-                .replace("maxSize: 4", "maxSize: 129"),
-            RuntimeConfigError::InvalidBounds,
-        ),
         (
             valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
                 "migration: registry_migration",
@@ -2687,7 +2703,19 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
             Duration::from_millis(accepted)
         );
     }
-    for refused in [1_u64, 500, 999, 1_500, 300_001] {
+    let error = parse_runtime_config_with_env(
+        &base.replace("leewayMilliseconds: 60000", "leewayMilliseconds: 301000"),
+        env_lookup,
+    )
+    .expect_err("a leeway above the documented range is refused at decode");
+    assert_eq!(
+        reader_refusal(&error),
+        (
+            "config.out-of-range",
+            "/authentication/oidc/leewayMilliseconds"
+        )
+    );
+    for refused in [1_u64, 500, 999, 1_500] {
         let error = parse_runtime_config_with_env(
             &base.replace(
                 "leewayMilliseconds: 60000",
@@ -2872,16 +2900,6 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
             "    allowedPrivateCidrs: [192.168.0.0/16, 10.0.0.0/8]\n",
         ),
         valid.replace(
-            "attemptTimeoutMilliseconds: 4000",
-            "attemptTimeoutMilliseconds: 99",
-        ),
-        valid.replace(
-            "attemptTimeoutMilliseconds: 4000",
-            "attemptTimeoutMilliseconds: 10001",
-        ),
-        valid.replace("maximumAttempts: 4", "maximumAttempts: 0"),
-        valid.replace("maximumAttempts: 4", "maximumAttempts: 21"),
-        valid.replace(
             "    deliveryCeilings:\n",
             "    tls: {}\n    deliveryCeilings:\n",
         ),
@@ -2891,6 +2909,39 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
             parse_runtime_config_with_env(&raw, env_lookup)
                 .expect_err("invalid event binding refused"),
             RuntimeConfigError::InvalidEventDestination
+        );
+    }
+
+    // The delivery ceilings are bounded at decode, at the member.
+    let ceilings = "/eventDestinations/case-operations/deliveryCeilings";
+    for (from, to, member) in [
+        (
+            "attemptTimeoutMilliseconds: 4000",
+            "attemptTimeoutMilliseconds: 99",
+            "attemptTimeoutMilliseconds",
+        ),
+        (
+            "attemptTimeoutMilliseconds: 4000",
+            "attemptTimeoutMilliseconds: 10001",
+            "attemptTimeoutMilliseconds",
+        ),
+        (
+            "maximumAttempts: 4",
+            "maximumAttempts: 0",
+            "maximumAttempts",
+        ),
+        (
+            "maximumAttempts: 4",
+            "maximumAttempts: 21",
+            "maximumAttempts",
+        ),
+    ] {
+        let error = parse_runtime_config_with_env(&valid.replace(from, to), env_lookup)
+            .expect_err("an out-of-range delivery ceiling is refused");
+        let pointer = format!("{ceilings}/{member}");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.out-of-range", pointer.as_str())
         );
     }
 
@@ -3728,10 +3779,6 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     for invalid in [
         // A relative socket path never reaches a provider.
         format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: transit.sock\n    mount: transit\n    keyName: breg-field-dek\n"),
-        // The request timeout stays at or below the provider maximum.
-        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 30001\n"),
-        // A zero timeout is not a timeout.
-        format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: 0\n"),
         // The local data key must come from a secret file.
         format!("{base}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:env/BREG_FIELD_DEK\n"),
     ] {
@@ -3739,6 +3786,19 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
         assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
         assert_eq!(error.path(), "/fieldEncryption");
         assert_eq!(error.code(), "runtime_config.invalid_field_encryption");
+    }
+    // The request timeout stays above zero and at or below the provider
+    // maximum, refused at decode where the member is.
+    for timeout in ["0", "30001"] {
+        let invalid = format!("{base}\nfieldEncryption:\n  provider:\n    kind: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    timeoutMilliseconds: {timeout}\n");
+        let error = parse_runtime_config(&invalid).unwrap_err();
+        assert_eq!(
+            reader_refusal(&error),
+            (
+                "config.out-of-range",
+                "/fieldEncryption/provider/timeoutMilliseconds"
+            )
+        );
     }
     // An unknown provider kind never parses as a document at all, so it is
     // refused before field-encryption validation runs.

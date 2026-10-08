@@ -3995,17 +3995,36 @@ pub(crate) fn bounded_u64<'de, D: Deserializer<'de>, const MIN: u64, const MAX: 
     BoundedU64::<MIN, MAX>::deserialize(deserializer).map(BoundedU64::get)
 }
 
-fn bounded_u16<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+pub(crate) fn bounded_u16<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
     deserializer: D,
 ) -> Result<u16, D::Error> {
     const { assert!(MAX <= u16::MAX as u32) };
     bounded_u32::<D, MIN, MAX>(deserializer).map(|value| value as u16)
 }
 
-fn optional_bounded_u32<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+pub(crate) fn bounded_u8<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+    deserializer: D,
+) -> Result<u8, D::Error> {
+    const { assert!(MAX <= u8::MAX as u32) };
+    bounded_u32::<D, MIN, MAX>(deserializer).map(|value| value as u8)
+}
+
+pub(crate) fn bounded_usize<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
+    deserializer: D,
+) -> Result<usize, D::Error> {
+    bounded_u32::<D, MIN, MAX>(deserializer).map(|value| value as usize)
+}
+
+pub(crate) fn optional_bounded_u32<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(
     deserializer: D,
 ) -> Result<Option<u32>, D::Error> {
     bounded_u32::<D, MIN, MAX>(deserializer).map(Some)
+}
+
+pub(crate) fn optional_bounded_u64<'de, D: Deserializer<'de>, const MIN: u64, const MAX: u64>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    bounded_u64::<D, MIN, MAX>(deserializer).map(Some)
 }
 
 fn optional_bounded_u8<'de, D: Deserializer<'de>, const MIN: u32, const MAX: u32>(

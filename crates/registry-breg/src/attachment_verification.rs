@@ -71,11 +71,12 @@ impl fmt::Debug for AttachmentVerification {
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Clone, Deserialize)]
 #[serde(
-    tag = "kind",
+    remote = "Self",
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "kind"))]
 pub(crate) enum RawAttachmentVerificationConfig {
     Disabled {},
     Http {
@@ -89,9 +90,28 @@ pub(crate) enum RawAttachmentVerificationConfig {
         )]
         policy_id: String,
         #[serde(default = "default_timeout_milliseconds")]
-        #[cfg_attr(feature = "schema", schemars(range(min = 100, max = 60_000)))]
+        #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 100, 60_000>")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::BoundedU64<100, 60_000>")
+        )]
         timeout_milliseconds: u64,
     },
+}
+registry_platform_yaml::tagged_union!(RawAttachmentVerificationConfig, tag = "kind");
+
+#[cfg(feature = "schema")]
+impl serde::Serialize for RawAttachmentVerificationConfig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        crate::runtime_config::serialize_tagged_union(
+            Self::serialize(self, serde_json::value::Serializer),
+            "kind",
+            serializer,
+        )
+    }
 }
 
 impl Default for RawAttachmentVerificationConfig {
@@ -143,7 +163,6 @@ impl AttachmentVerificationConfig {
             || policy_id.is_empty()
             || policy_id.len() > 128
             || !policy_id.bytes().all(|b| b.is_ascii_graphic())
-            || !(100..=60_000).contains(&timeout_milliseconds)
         {
             return Err(AttachmentVerificationError::InvalidConfiguration);
         }
@@ -405,8 +424,6 @@ mod tests {
         for (key, value) in [
             ("policyId", json!("")),
             ("policyId", json!("contains whitespace")),
-            ("timeoutMilliseconds", json!(0)),
-            ("timeoutMilliseconds", json!(60001)),
         ] {
             let mut input = raw("https://verification-canary.example/verify");
             input[key] = value;
@@ -414,6 +431,12 @@ mod tests {
                 AttachmentVerificationConfig::from_raw(serde_json::from_value(input).unwrap())
                     .is_err()
             );
+        }
+        // The timeout is bounded at decode.
+        for timeout in [0, 60_001] {
+            let mut input = raw("https://verification-canary.example/verify");
+            input["timeoutMilliseconds"] = json!(timeout);
+            assert!(serde_json::from_value::<RawAttachmentVerificationConfig>(input).is_err());
         }
         assert!(serde_json::from_value::<RawAttachmentVerificationConfig>(
             json!({"kind":"disabled", "endpoint":"https://ignored.example"})

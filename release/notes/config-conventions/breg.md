@@ -198,3 +198,31 @@ lower bound, and the file carries no inline documents. The separate bound on
 the document after `${...}` substitution is gone: a substituted value is held
 to the bound of the member it fills, and the environment is operator-held, as
 the file is.
+
+### BREAKING: integer bounds in `runtime.yaml` are refused when read
+
+Every integer member of `runtime.yaml` is read with the minimum and maximum
+the published runtime schema already stated, so a value outside them is
+refused when the file is read, as `config.out-of-range` at the member, rather
+than after decoding under the enclosing block's code. No value that was
+accepted before is refused now; what changes is the code and the path a tool
+matching `bregctl --format json` output sees.
+
+| A file that writes | was refused as | is refused as |
+|---|---|---|
+| `database.pool.maxSize` of 0 or above 128, or a pool `waitTimeoutMilliseconds`, `createTimeoutMilliseconds`, or `recycleTimeoutMilliseconds` of 0 or above 60000 | `runtime_config.invalid_bounds` at `/operationalTimeouts` | `config.out-of-range` at the member |
+| an `operationalTimeouts` member outside its range: `httpRequestMilliseconds` 1 to 60000, `shutdownGraceMilliseconds` and `migrationLockMilliseconds` 1 to 300000, `recordLockMilliseconds` 1 to 30000, `migrationStatementMilliseconds` 1 to 3600000 | `runtime_config.invalid_bounds` | `config.out-of-range` at the member |
+| `cursor.maxAgeSeconds`, `eventDelivery.payloadRetentionDays`, or `idempotency.receiptRetentionDays` of 0 or above 86400, 30, or 365 | `runtime_config.invalid_bounds` | `config.out-of-range` at the member |
+| `authentication.oidc.maxTokenLifetimeSeconds` of 0 or above 7200, or a `jwksCache` member outside its range | `runtime_config.invalid_bounds`, or `runtime_config.invalid_oidc` for `maxDocumentBytes` | `config.out-of-range` at the member |
+| `authentication.oidc.leewayMilliseconds` above 300000 | `runtime_config.invalid_oidc_leeway` | `config.out-of-range` at the member; a value that is not a whole number of seconds keeps `runtime_config.invalid_oidc_leeway` |
+| `audit.rotateBytes` below 1048576 or above 4294967295, or `audit.retainDays` of 0 or above 36500 | `runtime_config.invalid_audit` at `/audit` | `config.out-of-range` at the member |
+| `wasmExecution.maxModuleBytes` outside 1024 to 5242880, or `maxGuestMemoryBytes` outside 1048576 to 1073741824 | `runtime_config.invalid_wasm_execution` at `/wasmExecution` | `config.out-of-range` at the member |
+| a review authority `recoveryDays` of 0 or above 3650 | `runtime_config.invalid_binding` at `""` | `config.out-of-range` at `/reviewAuthorities/<id>/recoveryDays` |
+| an event destination `deliveryCeilings.attemptTimeoutMilliseconds` outside 100 to 5000, or `maximumAttempts` outside 1 to 5 | `runtime_config.invalid_event_destination` at `/eventDestinations` | `config.out-of-range` at the member |
+| `attachmentStorage.timeoutMilliseconds` or `attachmentVerification.timeoutMilliseconds` outside 100 to 60000 | `runtime_config.invalid_attachment_storage` or `runtime_config.invalid_attachment_verification` | `config.out-of-range` at the member |
+| a Transit `fieldEncryption.provider.timeoutMilliseconds` of 0 or above 30000 | `runtime_config.invalid_field_encryption` at `/fieldEncryption` | `config.out-of-range` at the member |
+
+`attachmentStorage`, `attachmentVerification`, and `fieldEncryption.provider`
+are read as the shared reader's tagged unions: `kind` still names the form and
+the accepted spellings are unchanged, and every problem inside the chosen form
+is now reported at its own member, line, and column rather than at the block.

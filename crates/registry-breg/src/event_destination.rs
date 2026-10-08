@@ -523,13 +523,6 @@ struct EventDestinationDeliveryCeilings {
 
 impl EventDestinationDeliveryCeilings {
     fn from_raw(raw: RawEventDestinationDeliveryCeilings) -> ConfigResult<Self> {
-        if !(MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS..=MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS)
-            .contains(&raw.attempt_timeout_milliseconds)
-            || raw.maximum_attempts == 0
-            || raw.maximum_attempts > MAX_WEBHOOK_ATTEMPTS
-        {
-            return Err(EventDestinationConfigError);
-        }
         Ok(Self {
             attempt_timeout_milliseconds: raw.attempt_timeout_milliseconds,
             maximum_attempts: raw.maximum_attempts,
@@ -645,8 +638,24 @@ struct RawEventDestinationTlsConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEventDestinationDeliveryCeilings {
     /// Maximum time allowed for one attempt, in milliseconds.
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u32::<_, MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::BoundedU32<MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS>"
+        )
+    )]
     attempt_timeout_milliseconds: u32,
     /// Maximum total attempts in one delivery generation, including the first attempt.
+    #[serde(
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_ATTEMPTS as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, { MAX_WEBHOOK_ATTEMPTS as u32 }>")
+    )]
     maximum_attempts: u8,
 }
 
