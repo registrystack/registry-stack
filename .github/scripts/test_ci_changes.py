@@ -1936,6 +1936,7 @@ class CiChangesTest(unittest.TestCase):
         for path in (
             "products/breg/generated/authoring/registry-project.schema.json",
             "products/breg/generated/runtime/runtime.schema.json",
+            "products/breg/generated/tools/journeys.v1.schema.json",
             "products/casework/generated/project/project.schema.json",
             "products/casework/generated/runtime/runtime.schema.json",
             "products/scheduling/generated/runtime/runtime.schema.json",
