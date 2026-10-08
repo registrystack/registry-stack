@@ -1249,6 +1249,7 @@ def classify(
             for prefix in (
                 "products/breg/generated/authoring/",
                 "products/breg/generated/runtime/",
+                "products/casework/generated/project/",
                 "products/casework/generated/runtime/",
                 "products/scheduling/generated/runtime/",
                 "products/scheduling/generated/project/",

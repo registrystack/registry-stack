@@ -15,6 +15,7 @@ pub const MAXIMUM_ROUTING_SOURCE_FIELDS: usize = 128;
 pub const MAXIMUM_ROUTING_SOURCE_STAGES: usize = 32;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingActivity {
     Review,
@@ -22,6 +23,7 @@ pub enum RoutingActivity {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingRule {
     pub id: String,
@@ -31,6 +33,7 @@ pub struct RoutingRule {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RoutingCondition {
     #[serde(default, skip_serializing_if = "Option::is_none")]

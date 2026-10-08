@@ -3,7 +3,7 @@ use crate::finding::{ConfigFinding, Findings};
 use crate::{
     CaseworkProject, CaseworkRole, IssuerPrincipal, OccurrenceState, SourceBinding, SubjectRef,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, fmt};
 use thiserror::Error;
@@ -13,6 +13,7 @@ pub const TASK_GRANT_LIFETIME_SECONDS: u64 = 900;
 pub const TASK_ASSERTION_LIFETIME_SECONDS: u64 = 60;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskTemplate {
     pub id: String,
@@ -27,8 +28,18 @@ pub struct TaskTemplate {
     pub review_kinds: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub item_kinds: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::unique_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<OccurrenceState>")
+    )]
     pub item_states: Vec<OccurrenceState>,
+    #[serde(deserialize_with = "template_agent")]
+    #[cfg_attr(feature = "schema", schemars(with = "TemplateAgent"))]
     pub agent: IssuerPrincipal,
     pub client: String,
     pub resource: String,
@@ -43,10 +54,39 @@ pub struct TaskTemplate {
     /// Exact token identity keys mapped to governed source logical fields.
     /// Values are extracted from the approving caller's disclosed source read.
     pub subjects: BTreeMap<String, String>,
+    #[serde(deserialize_with = "crate::typed::bounded_u64::<_, 1, TASK_GRANT_LIFETIME_SECONDS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<1, TASK_GRANT_LIFETIME_SECONDS>")
+    )]
     pub lifetime_seconds: u64,
 }
 
+/// The agent a template names, as `casework.yaml` writes it: the issuer is
+/// the URL of the token issuer that authenticates the agent (CFG-VAL-7).
+#[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TemplateAgent {
+    #[serde(deserialize_with = "crate::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    issuer: String,
+    subject: String,
+}
+
+fn template_agent<'de, D>(deserializer: D) -> Result<IssuerPrincipal, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let agent = TemplateAgent::deserialize(deserializer)?;
+    Ok(IssuerPrincipal {
+        issuer: agent.issuer,
+        subject: agent.subject,
+    })
+}
+
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceRequesterContext {
     pub requester_tags: Vec<String>,
@@ -124,6 +164,7 @@ impl Serialize for TaskGrantBounds {
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TaskPermission {
     pub collection: String,
@@ -136,6 +177,7 @@ pub struct TaskPermission {
 /// authority for governed templates, not a dependency on Scheduling's runtime
 /// or model crate.
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SchedulingTaskPermission {
     pub service: String,

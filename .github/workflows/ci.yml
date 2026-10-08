@@ -586,6 +586,10 @@ jobs:
       - name: Test affected packages
         run: python3 .github/scripts/run_cargo_packages.py test
 
+      - name: Check Casework schemas against their generators
+        if: matrix.name == 'casework'
+        run: products/casework/scripts/check-schemas.sh
+
       - name: Validate Manifest profiles
         if: matrix.name == 'manifest'
         working-directory: products/manifest

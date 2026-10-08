@@ -1183,7 +1183,12 @@ formats:
     target:
       apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
       kind: CaseworkProject
-    schema: none
+    schema:
+      path: products/casework/generated/project/project.schema.json
+      id: https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-casework-core --features schema --example project-schema -- --output products/casework/generated/project
+      driftCheck: crates/registry-casework-core/src/schema.rs
     reader:
       crate: registry-casework-core
       file: crates/registry-casework-core/src/config.rs

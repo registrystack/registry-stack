@@ -16,10 +16,13 @@ mod model;
 mod policy;
 mod review;
 mod routing;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod source_retention;
 mod task_grant;
 mod timing;
 mod transition;
+mod typed;
 
 pub use adapter::*;
 pub use assignment::*;

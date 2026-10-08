@@ -24,6 +24,7 @@ python3 products/casework/scripts/generate_cli_schemas.py --check
 python3 products/casework/scripts/check_dependency_direction.py
 python3 products/casework/scripts/check_database_test_isolation.py
 python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'
+products/casework/scripts/check-schemas.sh
 
 if [ ! -x "$caseworkctl_bin" ]; then
   echo "build caseworkctl first or set CASEWORKCTL_BIN" >&2

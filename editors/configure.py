@@ -45,6 +45,7 @@ SCHEMAS = {
     "breg-mcp": (("products/breg/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),),
     "breg-review": (("products/breg/generated/review-runtime/review-runtime.schema.json", "runtime.yaml"),),
     "casework": (
+        ("products/casework/generated/project/project.schema.json", "casework.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
     ),

@@ -4013,20 +4013,162 @@ exceptions:
   class: stable-move
   reason: no top-level project block holding id and version
   resolution: 'Apply in the release that moves promised formats to stable (WP11): Name the project in a top-level project block with the shared ProjectIdentity members'
-- rule: CFG-SCHEMA-2
+- rule: CFG-ID-1
   format: casework/project
-  location: products/platform/config-formats.yaml#/schema
-  class: pending
-  wp: WP6
-  reason: the format ships no JSON Schema
-  resolution: Generate a schema from the reader types and hold it with a drift check
-- rule: CFG-SCHEMA-6
+  location: products/casework/generated/project/project.schema.json#/$defs/AccessProfile/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from letters, digits, -, _, ., and : up to 128 bytes to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
   format: casework/project
-  location: editors/configure.py#/SCHEMAS/casework
-  class: pending
-  wp: WP6
-  reason: the format is not mapped for editors
-  resolution: Map its schema in editors/configure.py
+  location: products/casework/generated/project/project.schema.json#/$defs/CalendarPolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/CaseworkIdentity/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from any non-empty string to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ClockPolicy/oneOf/0/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ClockPolicy/oneOf/1/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ClockReminder/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ClockStep/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/PassiveTargetPolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from any non-empty string to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/QueuePolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from letters, digits, -, _, and . up to 128 bytes to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ReviewKindPolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ReviewOutcomePolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ReviewProducerPolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from letters, digits, -, _, ., and : up to 128 bytes to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ReviewStagePolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/RoutingCondition/properties/fields
+  class: stable-move
+  reason: a mapping whose keys are not typed
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Declare propertyNames: {$ref: #/$defs/LocalId}; the field names move from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/RoutingRule/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from ^[a-z][a-z0-9-]{0,63}$ to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/SourcePolicy/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from any non-empty string to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/TaskTemplate/properties/id
+  class: stable-move
+  reason: id is not typed as $defs/LocalId
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Type the member with $ref: #/$defs/LocalId; the id moves from letters, digits, -, _, and . up to 128 bytes to ^[a-z][a-z0-9_-]{0,63}$'
+- rule: CFG-ID-1
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/TaskTemplate/properties/subjects
+  class: stable-move
+  reason: a mapping whose keys are not typed
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Declare propertyNames: {$ref: #/$defs/ExternalId}; the claim names are external identifiers (CFG-ID-2) and move from letters, digits, -, _, and . up to 128 bytes to ExternalId'
+- rule: CFG-ID-7
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ClockPolicy
+  class: stable-move
+  reason: a union tagged by scope, not type
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Tag the clock variants with type: subject and type: activity; scope is refused with config.removed-key'
+- rule: CFG-NAME-2
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ActivityClockAnchor/enum/stageEnteredAt
+  class: stable-move
+  reason: value stageEnteredAt is not lowercase kebab-case
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value stage-entered-at; stageEnteredAt is refused'
+- rule: CFG-NAME-2
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/OccurrenceState/enum/waiting_applicant
+  class: stable-move
+  reason: value waiting_applicant is not lowercase kebab-case
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value waiting-applicant; waiting_applicant is refused'
+- rule: CFG-NAME-2
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/OccurrenceState/enum/waiting_application
+  class: stable-move
+  reason: value waiting_application is not lowercase kebab-case
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value waiting-application; waiting_application is refused'
+- rule: CFG-NAME-2
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/ReviewOutcomeSettlement/enum/changes_requested
+  class: stable-move
+  reason: value changes_requested is not lowercase kebab-case
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value changes-requested; changes_requested is refused'
+- rule: CFG-NAME-2
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/SubjectClockAnchor/enum/firstSubmittedAt
+  class: stable-move
+  reason: value firstSubmittedAt is not lowercase kebab-case
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value first-submitted-at; firstSubmittedAt is refused'
+- rule: CFG-NAME-2
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/SubjectClockCompletion/enum/reviewCompleted
+  class: stable-move
+  reason: value reviewCompleted is not lowercase kebab-case
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value review-completed; reviewCompleted is refused'
+- rule: CFG-NAME-2
+  format: casework/project
+  location: products/casework/generated/project/project.schema.json#/$defs/SubjectClockPause/enum/awaitingApplicant
+  class: stable-move
+  reason: value awaitingApplicant is not lowercase kebab-case
+  resolution: 'Apply in the release that moves promised formats to stable (WP11): Spell the value awaiting-applicant; awaitingApplicant is refused'
 - rule: CFG-ENV-1
   format: casework/retention-erase-report
   location: products/casework/contracts/cli/RetentionEraseReport.schema.json#/properties

@@ -40,13 +40,26 @@ const RESULT_CONSTRAINTS_PATH: &str = "$.resultConstraints";
 pub type ReviewPolicyDigest = ContentDigest;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRetentionPolicy {
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
+    )]
     pub terminal_days: u32,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
+    )]
     pub accountability_days: u32,
 }
 
 impl ReviewRetentionPolicy {
+    /// The reader refuses a file whose days are out of range; these findings
+    /// hold the same bounds for a policy built in code.
     fn findings(&self, findings: &mut Findings) {
         let message =
             format!("expected a whole number of days from 1 to {MAXIMUM_REVIEW_RETENTION_DAYS}");
@@ -121,6 +134,7 @@ impl ReviewClockCorrelation {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewKindPurpose {
     Approval,
@@ -128,6 +142,7 @@ pub enum ReviewKindPurpose {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewContextStrategy {
     Submitted,
@@ -135,6 +150,7 @@ pub enum ReviewContextStrategy {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewOutcomeSettlement {
     Rejected,
@@ -143,6 +159,7 @@ pub enum ReviewOutcomeSettlement {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewOutcomePolicy {
     pub id: String,
@@ -162,11 +179,21 @@ impl ReviewOutcomePolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewStagePolicy {
     pub id: String,
     pub queue: String,
     pub deciding_profiles: Vec<String>,
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u16::<_, 1, { MAXIMUM_REVIEW_APPROVALS_PER_STAGE as u32 }>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "registry_platform_yaml::BoundedU32<1, { MAXIMUM_REVIEW_APPROVALS_PER_STAGE as u32 }>"
+        )
+    )]
     pub required_approvals: u16,
     #[serde(default)]
     pub exclude_initiator: bool,
@@ -175,7 +202,9 @@ pub struct ReviewStagePolicy {
 }
 
 impl ReviewStagePolicy {
-    /// Identity findings and threshold findings, relative to `at`.
+    /// Identity findings and threshold findings, relative to `at`. The
+    /// reader refuses a file whose threshold is out of range; the threshold
+    /// findings hold the same bound for a policy built in code.
     fn findings(&self, at: &str) -> (Findings, Findings) {
         let mut identity = Findings::default();
         if !valid_identifier(&self.id) {
@@ -251,6 +280,7 @@ impl ReviewStagePolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewKindPolicy {
     pub id: String,
@@ -261,8 +291,16 @@ pub struct ReviewKindPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clocks: Vec<String>,
     pub retention: ReviewRetentionPolicy,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
     pub display_schema: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-foreign" = "json-schema-2020-12"))
+    )]
     pub result_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outcomes: Vec<ReviewOutcomePolicy>,

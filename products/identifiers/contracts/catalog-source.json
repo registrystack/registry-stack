@@ -194,6 +194,14 @@
       "description": "Registry Casework runtime configuration JSON Schema."
     },
     {
+      "glob": "products/casework/generated/project/*.schema.json",
+      "sourcePath": "crates/registry-casework-core/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework project JSON Schema."
+    },
+    {
       "glob": "products/scheduling/generated/runtime/*.schema.json",
       "sourcePath": "crates/registry-scheduling/src/schema.rs",
       "owner": "scheduling",

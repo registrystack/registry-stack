@@ -26,6 +26,15 @@ const CASEWORK_YAML: &str = include_str!("../templates/professional-review/casew
 const RUNTIME_SCHEMA: &str =
     include_str!("../../../products/casework/generated/runtime/runtime.schema.json");
 
+const PROJECT_SCHEMA: &str =
+    include_str!("../../../products/casework/generated/project/project.schema.json");
+
+/// The first line of a YAML file `init` writes, naming the local schema copy
+/// beside it so an editor validates the file without reaching the network.
+fn modeline(schema: &str) -> String {
+    format!("# yaml-language-server: $schema=./.casework/schemas/{schema}\n")
+}
+
 /// Where the generated runtime example expects the package
 /// `caseworkctl package . --output .casework/package` writes.
 pub(crate) const LOCAL_PACKAGE_DIRECTORY: &str = ".casework/package";
@@ -304,10 +313,18 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         .create(staging.path().join(".casework"))?;
     fs::create_dir(staging.path().join(".casework/schemas"))?;
     fs::create_dir(staging.path().join(".vscode"))?;
-    fs::write(staging.path().join("casework.yaml"), project_yaml)?;
+    fs::write(
+        staging.path().join("casework.yaml"),
+        modeline("project.schema.json") + project_yaml,
+    )?;
     fs::write(
         staging.path().join("runtime.example.yaml"),
-        runtime_example(project, template == "professional-review")?,
+        modeline("runtime.schema.json")
+            + &runtime_example(project, template == "professional-review")?,
+    )?;
+    fs::write(
+        staging.path().join(".casework/schemas/project.schema.json"),
+        PROJECT_SCHEMA,
     )?;
     fs::write(
         staging.path().join(".casework/schemas/runtime.schema.json"),
@@ -315,6 +332,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     )?;
     let mut editor_settings = serde_json::to_vec_pretty(&json!({
         "yaml.schemas": {
+            "./.casework/schemas/project.schema.json": ["casework.yaml"],
             "./.casework/schemas/runtime.schema.json": ["runtime.example.yaml", "runtime.yaml"]
         }
     }))?;
@@ -333,7 +351,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "command": "init",
         "template": template,
         "project": project,
-        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/runtime.schema.json", ".vscode/settings.json"],
+        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/project.schema.json", ".casework/schemas/runtime.schema.json", ".vscode/settings.json"],
         "next": [next]
     }))
 }
@@ -2687,9 +2705,31 @@ mod tests {
             fs::read_to_string(project.join(".casework/schemas/runtime.schema.json")).unwrap(),
             RUNTIME_SCHEMA
         );
+        assert_eq!(
+            fs::read_to_string(project.join(".casework/schemas/project.schema.json")).unwrap(),
+            PROJECT_SCHEMA
+        );
+        for (file, schema) in [
+            ("casework.yaml", "project.schema.json"),
+            ("runtime.example.yaml", "runtime.schema.json"),
+        ] {
+            let text = fs::read_to_string(project.join(file)).unwrap();
+            assert_eq!(
+                text.lines().next(),
+                Some(
+                    format!("# yaml-language-server: $schema=./.casework/schemas/{schema}")
+                        .as_str()
+                ),
+                "{file} names its schema on its first line"
+            );
+        }
         let settings: Value =
             serde_json::from_slice(&fs::read(project.join(".vscode/settings.json")).unwrap())
                 .unwrap();
+        assert_eq!(
+            settings["yaml.schemas"]["./.casework/schemas/project.schema.json"],
+            json!(["casework.yaml"])
+        );
         assert_eq!(
             settings["yaml.schemas"]["./.casework/schemas/runtime.schema.json"],
             json!(["runtime.example.yaml", "runtime.yaml"])

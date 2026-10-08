@@ -14,6 +14,7 @@ use crate::finding::{
 };
 use crate::CaseworkRole;
 use crate::ReviewKindPolicy;
+use crate::MAXIMUM_REVIEW_RETENTION_DAYS;
 use crate::{
     clock_policy_findings, routing_policy_findings, CalendarPolicy, ClockPolicy, RoutingRule,
 };
@@ -68,6 +69,7 @@ pub fn valid_directory_identifier(value: &str) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaseworkProject {
     pub api_version: String,
@@ -778,6 +780,7 @@ fn profiles_without_a_separate_scope(profiles: &[AccessProfile]) -> Vec<usize> {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaseworkIdentity {
     pub id: String,
@@ -785,22 +788,32 @@ pub struct CaseworkIdentity {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessProfile {
     pub id: String,
     pub principal_claim: String,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub required_scopes: Vec<String>,
     pub role: CaseworkRole,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewProducerPolicy {
     pub id: String,
     pub profile: String,
+    #[serde(deserialize_with = "crate::typed::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub issuer: String,
     pub subject: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub trusted_initiator_issuer: Option<String>,
     /// The requester profile a person named as this producer's initiator
     /// authenticates with to read the requester-visible history of their own
@@ -809,6 +822,11 @@ pub struct ReviewProducerPolicy {
     pub initiator_profile: Option<String>,
     pub source_namespaces: Vec<String>,
     pub kinds: Vec<String>,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_REVIEW_RETENTION_DAYS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_REVIEW_RETENTION_DAYS>")
+    )]
     pub recovery_days: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<ReviewCompletionDestinationPolicy>,
@@ -964,6 +982,7 @@ fn name_list_findings(
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewCompletionDestinationPolicy {
     pub destination_id: String,
@@ -1012,6 +1031,7 @@ fn bounded_config_text(value: &str, maximum: usize) -> bool {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QueuePolicy {
     pub id: String,
@@ -1019,6 +1039,7 @@ pub struct QueuePolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourcePolicy {
     pub id: String,
@@ -1028,6 +1049,7 @@ pub struct SourcePolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceRequestPolicy {
     pub entity: String,
@@ -1123,12 +1145,14 @@ impl SourceRequestPolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DisplayReferencePolicy {
     pub field: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PassiveTargetPolicy {
     pub id: String,
@@ -1136,6 +1160,7 @@ pub struct PassiveTargetPolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElapsedDuration {
     pub elapsed: String,
@@ -1160,17 +1185,53 @@ pub fn parse_elapsed_seconds(value: &str) -> Option<i64> {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InboxPolicy {
-    #[serde(default = "default_page_size")]
+    #[serde(
+        default = "default_page_size",
+        deserialize_with = "crate::typed::bounded_usize::<_, 1, 100>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, 100>")
+    )]
     pub default_page_size: usize,
-    #[serde(default = "default_candidate_budget")]
+    #[serde(
+        default = "default_candidate_budget",
+        deserialize_with = "crate::typed::bounded_usize::<_, 1, 10_000>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, 10_000>")
+    )]
     pub maximum_candidate_scan: usize,
-    #[serde(default = "default_source_read_budget")]
+    #[serde(
+        default = "default_source_read_budget",
+        deserialize_with = "crate::typed::bounded_usize::<_, 1, 10_000>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, 10_000>")
+    )]
     pub maximum_source_reads: usize,
-    #[serde(default = "default_concurrency")]
+    #[serde(
+        default = "default_concurrency",
+        deserialize_with = "crate::typed::bounded_usize::<_, 1, 32>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, 32>")
+    )]
     pub maximum_concurrent_source_reads: usize,
-    #[serde(default = "default_deadline_ms")]
+    #[serde(
+        default = "default_deadline_ms",
+        deserialize_with = "crate::typed::bounded_u64::<_, 100, 30_000>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU64<100, 30_000>")
+    )]
     pub page_deadline_milliseconds: u64,
 }
 
@@ -1187,6 +1248,9 @@ impl Default for InboxPolicy {
 }
 
 impl InboxPolicy {
+    /// The reader refuses a file whose member is out of range; these
+    /// findings hold the same bounds for a policy built in code, and the
+    /// bounds between members for both.
     fn findings(&self, findings: &mut Findings) {
         let mut out_of_range = |member: &str, bound: &str| {
             findings.push(
@@ -2158,6 +2222,37 @@ clocks:
         assert!(diagnostic
             .suggested_action
             .contains("runtime.yaml binds no issuer of an authored principal"));
+    }
+
+    #[test]
+    fn a_read_refuses_bounds_repeats_and_issuers_at_their_positions() {
+        for (member, code, pointer) in [
+            (
+                "inbox: {defaultPageSize: 0}\n",
+                "config.out-of-range",
+                "/inbox/defaultPageSize",
+            ),
+            (
+                "calendars:\n  - {id: office, timezone: UTC, holidaySet: national, workingWeekdays: [monday, monday]}\n",
+                "config.duplicate-item",
+                "/calendars/0/workingWeekdays/1",
+            ),
+            (
+                "reviewProducers:\n  - {id: portal, profile: staff, issuer: portal, subject: portal, kinds: [licence]}\n",
+                "config.invalid-value",
+                "/reviewProducers/0/issuer",
+            ),
+        ] {
+            let yaml = MINIMAL.replace("queues:\n", &format!("{member}queues:\n"));
+            let refused = diagnostics(&yaml);
+            assert_eq!(refused.len(), 1, "{refused:?}");
+            assert_eq!(
+                (refused[0].0.as_str(), refused[0].1.as_str()),
+                (code, pointer)
+            );
+            let line = member.lines().count() + 7;
+            assert_eq!(refused[0].2, Some(line), "{pointer}");
+        }
     }
 
     #[test]

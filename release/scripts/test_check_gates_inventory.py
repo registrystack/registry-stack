@@ -825,6 +825,11 @@ class GateInventoryTest(unittest.TestCase):
                 "Casework logical backup and restore",
             ),
             (
+                "if: matrix.name == 'casework'\n        run: products/casework/scripts/check-schemas.sh",
+                "if: matrix.name == 'casework'\n        run: true # Casework schema drift disabled",
+                "Casework generated schema drift check",
+            ),
+            (
                 "cargo test --locked -p registry-casework --features postgres-test --test postgres_transactions",
                 "true # Casework transactions disabled",
                 "Casework claim, reconciliation, and attempt suite",

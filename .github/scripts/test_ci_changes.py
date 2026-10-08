@@ -1893,6 +1893,7 @@ class CiChangesTest(unittest.TestCase):
         for path in (
             "products/breg/generated/authoring/registry-project.schema.json",
             "products/breg/generated/runtime/runtime.schema.json",
+            "products/casework/generated/project/project.schema.json",
             "products/casework/generated/runtime/runtime.schema.json",
             "products/scheduling/generated/runtime/runtime.schema.json",
             "products/scheduling/generated/project/project.schema.json",
@@ -1903,6 +1904,23 @@ class CiChangesTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["editors"])
+
+    def test_a_casework_schema_change_runs_its_drift_check_on_a_pull_request(
+        self,
+    ) -> None:
+        # The casework test shard carries the schema drift step, so a pull
+        # request that touches a committed schema has to select it.
+        for path in (
+            "products/casework/generated/project/project.schema.json",
+            "products/casework/generated/runtime/runtime.schema.json",
+            "crates/registry-casework-core/src/config.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,), pull_request=True)
+                self.assertIn(
+                    "casework",
+                    {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+                )
 
     def test_a_test_only_editor_edge_does_not_satisfy_the_authoring_routing(
         self,

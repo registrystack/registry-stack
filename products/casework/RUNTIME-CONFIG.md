@@ -222,6 +222,5 @@ Regenerate the schema from the owning Rust type with:
 ```sh
 cargo run --locked -p registry-casework --features schema \
   --example runtime-schema -- --output products/casework/generated/runtime
-cargo test --locked -p registry-casework --features schema \
-  schema::tests::committed_runtime_schema_matches_generated_bytes
+products/casework/scripts/check-schemas.sh
 ```

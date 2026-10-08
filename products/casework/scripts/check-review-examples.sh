@@ -52,8 +52,6 @@ export BREG_TEST_DATABASE_URL=$database_url
 
 python3 -m unittest products/casework/scripts/test_product_contracts.py
 
-cargo test --locked -p registry-casework --features schema --lib \
-  schema::tests::committed_runtime_schema_matches_generated_bytes
 cargo test --locked -p registry-breg --features runtime,schema --lib \
   schema::tests::committed_runtime_schema_matches_generated_bytes
 cargo test --locked -p registry-casework-core --lib \

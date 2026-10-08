@@ -11,6 +11,7 @@ use crate::finding::{
 use crate::{
     evaluate_elapsed_budget, evaluate_working_day_deadline, parse_elapsed_seconds, ElapsedBudget,
     ElapsedDuration, HolidaySetRevision, ReviewTiming, WorkingCalendar, WorkingDayDeadlineRule,
+    MAXIMUM_WORKING_DAY_OFFSET,
 };
 
 pub const MAXIMUM_CLOCKS: usize = 32;
@@ -19,15 +20,22 @@ pub const MAXIMUM_CLOCK_REMINDERS: usize = 8;
 pub const MAXIMUM_CLOCK_STEPS: usize = 8;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CalendarPolicy {
     pub id: String,
     pub timezone: String,
+    #[serde(deserialize_with = "crate::typed::unique_list")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::UniqueList<WorkingWeekday>")
+    )]
     pub working_weekdays: Vec<WorkingWeekday>,
     pub holiday_set: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum WorkingWeekday {
     Monday,
@@ -71,6 +79,11 @@ pub enum ClockPolicy {
         anchor: SubjectClockAnchor,
         complete_on: SubjectClockCompletion,
         after: ElapsedDuration,
+        #[serde(deserialize_with = "crate::typed::unique_list")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::UniqueList<SubjectClockPause>")
+        )]
         pause_while: Vec<SubjectClockPause>,
     },
     Activity {
@@ -174,49 +187,72 @@ impl ClockPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SubjectClockAnchor {
     FirstSubmittedAt,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SubjectClockCompletion {
     ReviewCompleted,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SubjectClockPause {
     AwaitingApplicant,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum ActivityClockAnchor {
     StageEnteredAt,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkingDaysAfter {
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_WORKING_DAY_OFFSET>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_WORKING_DAY_OFFSET>")
+    )]
     pub working_days: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkingDaysBefore {
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_WORKING_DAY_OFFSET>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_WORKING_DAY_OFFSET>")
+    )]
     pub working_days_before: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClockReminder {
     pub id: String,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_WORKING_DAY_OFFSET>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_WORKING_DAY_OFFSET>")
+    )]
     pub working_days_before: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClockStep {
     pub id: String,
@@ -226,18 +262,21 @@ pub struct ClockStep {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ClockStepInstant {
     Due,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClockStepAction {
     pub reassign: ClockReassignment,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClockReassignment {
     pub queue: String,

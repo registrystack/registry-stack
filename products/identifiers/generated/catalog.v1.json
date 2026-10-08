@@ -3206,6 +3206,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Registry Casework project",
+      "description": "Registry Casework project JSON Schema.",
+      "source": {
+        "path": "crates/registry-casework-core/src/schema.rs",
+        "sha256": "355ad372129ef6f00490e4b700e0b4484e2b68680cf866b53a7ee6b3a776d204"
+      },
+      "artifact": {
+        "path": "products/casework/generated/project/project.schema.json",
+        "sha256": "5f9511ec7dbc128e8913160e27dec2ebb4f60a060abb1ad9c20d8e5f2063cd56",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/casework/runtime/runtime.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",

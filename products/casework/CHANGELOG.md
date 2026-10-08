@@ -8,6 +8,13 @@
   and `null`, anchors, aliases, tags, and numbers or booleans written where
   text is expected are refused. Migration steps and the code table are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: `casework.yaml` has a published JSON Schema, which
+  `caseworkctl init` copies into the project and names in a modeline. The
+  reader refuses an out-of-range number, a repeated item in a set, and an
+  issuer that is not an `http` or `https` URL at its position, with
+  `config.out-of-range`, `config.duplicate-item`, and `config.invalid-value`.
+  Migration steps and the code table are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

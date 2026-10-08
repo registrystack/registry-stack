@@ -52,11 +52,67 @@ shares.
   Migration: a consumer that validates reports against an older copy of these
   schemas takes the regenerated ones.
 
+## BREAKING: `casework.yaml` has a schema, and the reader holds its bounds
+
+`casework.yaml` has a published JSON Schema,
+`https://id.registrystack.org/schemas/casework/project/project.v1alpha1.schema.json`,
+generated from the reader types into
+`products/casework/generated/project/project.schema.json`.
+`caseworkctl init` copies it to `.casework/schemas/project.schema.json`
+beside the runtime schema, and writes
+`# yaml-language-server: $schema=./.casework/schemas/project.schema.json` as
+the first line of `casework.yaml` (and the runtime schema's modeline as the
+first line of `runtime.example.yaml`). `python3 editors/configure.py casework`
+maps it for `casework.yaml`.
+
+The reader now refuses, at its position, what the project check reported
+after the read. Each of these files was already refused; what changes is the
+code, the position, and that the read stops at the first such member.
+
+- A number outside its bound is `config.out-of-range`:
+  `reviewProducers[].recoveryDays` (1 to 3650),
+  `reviewKinds[].retention.terminalDays` and `accountabilityDays` (1 to
+  3650), `reviewKinds[].stages[].requiredApprovals` (1 to 32),
+  `inbox.defaultPageSize` (1 to 100), `inbox.maximumCandidateScan` and
+  `inbox.maximumSourceReads` (1 to 10000),
+  `inbox.maximumConcurrentSourceReads` (1 to 32),
+  `inbox.pageDeadlineMilliseconds` (100 to 30000), a clock's
+  `after.workingDays`, `atRisk.workingDaysBefore`, and
+  `reminders[].workingDaysBefore` (1 to 3650), and
+  `taskTemplates[].lifetimeSeconds` (1 to 900). Migration: write a value
+  within the bound.
+- A repeated item in a list that is a set is `config.duplicate-item`, at the
+  second occurrence: `calendars[].workingWeekdays`, a subject clock's
+  `pauseWhile`, and `taskTemplates[].itemStates`. Migration: write each item
+  once.
+- `reviewProducers[].issuer`, `reviewProducers[].trustedInitiatorIssuer`,
+  and `taskTemplates[].agent.issuer` must be absolute `http` or `https` URLs
+  with a host and no user information, and are otherwise
+  `config.invalid-value`. These issuers are compared with the issuer of a
+  token the runtime accepted, which its OIDC configuration already requires
+  to be such a URL, so a value that is not one never matched. Migration: write
+  the issuer exactly as the token's `iss` claim carries it.
+
+The project check keeps the old codes for a project built in code, which the
+reader never sees; the table below gives the code a file now receives.
+
 ## Diagnostic codes
 
 | Old code | New code |
 |---|---|
 | `casework.project.invalid` | a reader code for the file's structure, or a `casework.<area>.<condition>` code for its meaning, both listed below |
+| `casework.review-producer.recovery-days-out-of-range` | `config.out-of-range` for a file |
+| `casework.review-kind.retention-out-of-range` | `config.out-of-range` for a file |
+| `casework.review-kind.required-approvals-out-of-range` | `config.out-of-range` for a file |
+| `casework.inbox.out-of-range` | `config.out-of-range` for a file |
+| `casework.clock.working-days-out-of-range` | `config.out-of-range` for a file |
+| `casework.task-template.lifetime-out-of-range` | `config.out-of-range` for a file |
+| `casework.calendar.duplicate-working-weekday` | `config.duplicate-item` for a file |
+| `casework.clock.unsupported-pause` | `config.duplicate-item` for a file whose `pauseWhile` repeats an item; unchanged otherwise |
+| `casework.task-template.duplicate-entry` | `config.duplicate-item` for a file whose `itemStates` repeats an item; unchanged for the template's other lists |
+| `casework.review-producer.invalid-issuer` | `config.invalid-value` for a file whose issuer is not a URL; unchanged for one longer than 512 bytes |
+| `casework.review-producer.invalid-trusted-initiator-issuer` | `config.invalid-value` for a file whose issuer is not a URL; unchanged for one longer than 256 bytes |
+| `casework.task-template.invalid-text` | `config.invalid-value` for a file whose `agent.issuer` is not a URL; unchanged otherwise |
 
 Reader codes: `config.deprecated-api-version`, `config.duplicate-id`, `config.duplicate-item`, `config.duplicate-key`, `config.expected-boolean`, `config.expected-integer`, `config.expected-number`, `config.expected-string`, `config.invalid-length`, `config.invalid-type`, `config.invalid-value`, `config.missing-envelope`, `config.missing-key`, `config.null-value`, `config.out-of-range`, `config.removed-key`, `config.retired-api-version`, `config.substitution-not-allowed`, `config.unknown-key`, `config.unknown-variant`, `config.unsupported-api-version`, `config.wrong-kind`, `yaml.alias`, `yaml.ambiguous-number`, `yaml.anchor`, `yaml.colon-in-plain-value`, `yaml.duplicate-key`, `yaml.merge-key`, `yaml.multiple-documents`, `yaml.non-string-key`, `yaml.not-utf8`, `yaml.syntax`, `yaml.tab-indentation`, `yaml.tag`, `yaml.too-deep`, `yaml.too-large`, `yaml.unclosed-quote`, `yaml.unexpected-end`.
 

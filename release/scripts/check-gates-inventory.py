@@ -278,6 +278,12 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "python3 -m unittest discover -s products/casework/scripts -p 'test_*.py'",
     ),
     (
+        # The schema drift tests need no database, so they run in the
+        # pull-request test shard rather than in the PostgreSQL job.
+        "Casework generated schema drift check",
+        "if: matrix.name == 'casework'\n        run: products/casework/scripts/check-schemas.sh",
+    ),
+    (
         "Casework offline authoring journeys",
         '"$caseworkctl_bin" test "$work/project"',
     ),
