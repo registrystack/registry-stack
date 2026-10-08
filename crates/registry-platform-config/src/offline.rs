@@ -46,6 +46,14 @@ impl<T> RuntimeFileCheck<T> {
         self.deferred.covers(pointer)
     }
 
+    /// Whether a member at, above, or below `pointer` holds an expression
+    /// the check did not substitute. A product skips a check that reads
+    /// every member of a list or mapping when one of them is deferred.
+    #[must_use]
+    pub fn defers_within(&self, pointer: &str) -> bool {
+        self.deferred.covers(pointer) || self.deferred.lies_below(pointer)
+    }
+
     /// An error positioned at the value of the member at `pointer`, naming
     /// the file as the path was given and `artifact` as the document kind.
     #[must_use]
@@ -208,6 +216,14 @@ impl Deferred {
         })
     }
 
+    fn lies_below(&self, path: &str) -> bool {
+        self.pointers.iter().any(|pointer| {
+            pointer
+                .strip_prefix(path)
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+    }
+
     fn hides(&self, diagnostic: &Diagnostic) -> bool {
         VALUE_CODES.contains(&diagnostic.code.as_str()) && self.covers(&diagnostic.path)
     }
@@ -283,6 +299,11 @@ mod tests {
         );
         assert!(deferred.defers("/bind"));
         assert!(!deferred.defers("/count"));
+        assert!(!deferred.defers(""));
+        assert!(deferred.defers_within(""));
+        assert!(deferred.defers_within("/bind"));
+        assert!(!deferred.defers_within("/count"));
+        assert!(!deferred.defers_within("/bin"));
         assert_eq!(
             deferred.loaded.unwrap().config.bind.socket_addr().port(),
             8080
