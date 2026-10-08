@@ -1050,6 +1050,29 @@ CASES = {
 HARNESS_TEXT = "formats: {}\n"
 
 
+class LoadRegistryTest(unittest.TestCase):
+    TARGET = "    target: {apiVersion: id.registrystack.org/formats/demo/project/v1alpha1, kind: DemoProject}\n"
+
+    def load(self, text: str) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / runner.REGISTRY
+            path.parent.mkdir(parents=True)
+            path.write_text(text, encoding="utf-8")
+            return {fmt.id: fmt for fmt in runner.load_registry(path)}
+
+    def test_expected_artifact_is_the_current_kind_the_reader_accepts(self) -> None:
+        current = "    current: {apiVersion: demo.example.test/v1, kind: Project}\n"
+        formats = self.load(REGISTRY_TEXT.replace(self.TARGET, current + self.TARGET, 1))
+        self.assertEqual(formats["demo/project"].kind, "Project")
+
+    def test_expected_artifact_is_the_target_kind_without_a_current_kind(self) -> None:
+        current = "    current: {apiVersion: none, kind: none}\n"
+        formats = self.load(REGISTRY_TEXT.replace(self.TARGET, current + self.TARGET, 1))
+        self.assertEqual(formats["demo/project"].kind, "DemoProject")
+        self.assertEqual(formats["demo/runtime"].kind, "DemoRuntimeConfig")
+        self.assertIsNone(formats["demo/notes"].kind)
+
+
 class EndToEndTest(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()

@@ -1410,6 +1410,12 @@ def load_registry(path: Path) -> list[Format]:
     formats = []
     for entry in document["formats"]:
         target = entry.get("target")
+        current = entry.get("current")
+        # The reader reports the kind it accepts today, which is the current
+        # kind where the registry names one and the target kind otherwise.
+        kind = none(current.get("kind")) if isinstance(current, dict) else None
+        if kind is None and isinstance(target, dict):
+            kind = target.get("kind")
         roles = entry.get("conformance")
         schema = entry.get("schema") if isinstance(entry.get("schema"), dict) else {}
         formats.append(
@@ -1419,7 +1425,7 @@ def load_registry(path: Path) -> list[Format]:
                 audience=entry.get("audience", "authored"),
                 check=none(entry.get("check")),
                 example=none(entry.get("example")),
-                kind=target.get("kind") if isinstance(target, dict) else None,
+                kind=kind,
                 roles={role: none(pointer) for role, pointer in roles.items()} if isinstance(roles, dict) else {},
                 harness={},
                 schema=str(root / schema["path"]) if isinstance(schema.get("path"), str) else None,
