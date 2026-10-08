@@ -35,6 +35,14 @@
   checks the values its `${NAME}` expressions take from the current
   environment. Migration steps and the code table are in
   `release/notes/config-conventions/casework.md`.
+- BREAKING: `caseworkctl check` and `caseworkctl test` report a
+  `diagnostics` list in the shared diagnostic shape, where they reported
+  `findings`, and count the files they read in `filesChecked`. A missing
+  imported source description is a `warning` at its line and column, with
+  the JSON pointer `/sources/N/description`, and an `error` under
+  `--production`. `--deny-warnings` replaces `--deny-findings`. Migration
+  steps and the old-to-new table are in
+  `release/notes/config-conventions/casework.md`.
 - `registry-casework-client`, which never resent a mutation, now resends an
   idempotency-keyed mutation whose outcome is unknown (a timeout or broken
   exchange after the request was sent, or a 5xx answer) byte for byte under

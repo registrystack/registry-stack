@@ -16,7 +16,7 @@ use registry_casework_core::{
     AttemptSettlement, AttemptSettlementOutcome, AttemptUncertainMarking, ConfigLoadError,
 };
 use registry_platform_config::RuntimeConfigErrorKind;
-use registry_platform_yaml::Report;
+use registry_platform_yaml::{Diagnostic, Report};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
@@ -145,9 +145,9 @@ struct CheckArgs {
     /// Require every declared source import and all deployment policy inputs.
     #[arg(long)]
     production: bool,
-    /// Exit unsuccessfully when the authoring check reports any finding.
+    /// Exit 1 when the check reports any warning.
     #[arg(long)]
-    deny_findings: bool,
+    deny_warnings: bool,
     /// Closed Base Registry Engine (BReg) package whose rederived registry
     /// revision must equal the pinned sourceRevision of a BReg source; verified
     /// by bregctl.
@@ -1187,8 +1187,10 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     }
     if let Some(fields) = report.as_object() {
         for (key, value) in fields {
-            if matches!(key.as_str(), "ok" | "command" | "findings" | "diagnostics")
-                || value.is_null()
+            if matches!(
+                key.as_str(),
+                "ok" | "command" | "findings" | "diagnostics" | "filesChecked"
+            ) || value.is_null()
             {
                 continue;
             }
@@ -1213,7 +1215,26 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             }
         }
     }
+    if let Some(diagnostics) = checked_diagnostics(report)? {
+        write!(stdout, "{}", diagnostics.render_human())?;
+    }
     Ok(())
+}
+
+/// The diagnostics a successful check reports beside its outcome, as the
+/// shared report that renders them with its summary line (CFG-DIAG-2). A
+/// refusal's diagnostics are written by [`write_failure`].
+fn checked_diagnostics(report: &Value) -> io::Result<Option<Report>> {
+    let Some(diagnostics) = report.get("diagnostics").filter(|_| report["ok"] == true) else {
+        return Ok(None);
+    };
+    let diagnostics =
+        serde_json::from_value::<Vec<Diagnostic>>(diagnostics.clone()).map_err(io::Error::other)?;
+    let mut checked = Report::new(diagnostics);
+    if let Some(files) = report["filesChecked"].as_u64() {
+        checked.set_files_checked(usize::try_from(files).map_err(io::Error::other)?);
+    }
+    Ok(Some(checked))
 }
 
 /// Command tree available to command-reference tooling.
@@ -1229,7 +1250,7 @@ fn run(cli: Cli) -> Result<Value> {
             SourceCommand::Add(args) => source_add::run(&args),
         },
         Command::Check(args) => {
-            let checked = project::check(&args.project, args.production, args.deny_findings);
+            let checked = project::check(&args.project, args.production, args.deny_warnings);
             match &args.runtime_config {
                 Some(runtime_config) => project::check_runtime_config(
                     &args.project,
@@ -1379,7 +1400,7 @@ mod tests {
             "check",
             "/tmp/project",
             "--production",
-            "--deny-findings",
+            "--deny-warnings",
         ])
         .unwrap();
         assert_eq!(cli.format, OutputFormat::Human);
@@ -1387,7 +1408,11 @@ mod tests {
             panic!("expected check")
         };
         assert!(args.production);
-        assert!(args.deny_findings);
+        assert!(args.deny_warnings);
+        assert!(
+            Cli::try_parse_from(["caseworkctl", "check", "/tmp/project", "--deny-findings"])
+                .is_err()
+        );
 
         let cli = Cli::try_parse_from([
             "caseworkctl",
@@ -1609,55 +1634,92 @@ mod tests {
     }
 
     #[test]
-    fn denied_authoring_findings_use_exit_one_and_the_same_diagnostics() {
+    fn denied_authoring_warnings_use_exit_one_and_the_same_positioned_diagnostics() {
         let root = crate::canonical_tempdir();
         let project = root.path().join("casework");
         project::init(&project, "professional-review").unwrap();
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let exit = main_entry_from(
-            [
-                OsString::from("caseworkctl"),
-                OsString::from("--format=json"),
-                OsString::from("check"),
-                project.clone().into_os_string(),
-                OsString::from("--deny-findings"),
-            ],
-            &mut stdout,
-            &mut stderr,
+        let file = project.join("casework.yaml").display().to_string();
+        let run = |arguments: &[&str]| {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut full = vec![OsString::from("caseworkctl")];
+            full.extend(arguments.iter().map(OsString::from));
+            let exit = main_entry_from(full, &mut stdout, &mut stderr);
+            (
+                exit,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        };
+        let project_argument = project.to_str().unwrap();
+
+        // Authoring reports the missing import as a warning beside a passing
+        // check, in the shared diagnostic shape.
+        let (exit, stdout, stderr) = run(&["--format=json", "check", project_argument]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["status"], "incomplete");
+        assert_eq!(report["filesChecked"], 1);
+        let warning = &report["diagnostics"][0];
+        assert_eq!(warning["severity"], "warning");
+        assert_eq!(warning["code"], "casework.source-description.missing");
+        assert_eq!(warning["artifact"], "CaseworkProject");
+        assert_eq!(warning["path"], "/sources/0/description");
+        assert_eq!(warning["source"]["file"], file.as_str());
+        assert!(warning["source"]["line"].as_u64().unwrap() > 1);
+        assert!(warning["source"]["column"].as_u64().unwrap() > 1);
+        assert!(warning["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("--source-id SOURCE_ID"));
+
+        let (exit, stdout, _) = run(&["check", project_argument]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(stdout.starts_with("Authoring check completed with incomplete inputs."));
+        assert!(
+            stdout.contains("warning[casework.source-description.missing] "),
+            "{stdout}"
         );
+        assert!(
+            stdout.ends_with("0 errors, 1 warning in 1 file\n"),
+            "{stdout}"
+        );
+
+        // --deny-warnings refuses the same warning with exit 1.
+        let (exit, stdout, stderr) = run(&[
+            "--format=json",
+            "check",
+            project_argument,
+            "--deny-warnings",
+        ]);
         assert_eq!(exit, ExitCode::from(1));
         assert!(stderr.is_empty());
-        let report: Value = serde_json::from_slice(&stdout).unwrap();
-        let diagnostic = &report["diagnostics"][0];
-        for field in [
-            "severity",
-            "code",
-            "artifact",
-            "path",
-            "message",
-            "suggestedAction",
-        ] {
-            assert!(diagnostic.get(field).is_some(), "missing {field}");
-        }
-        assert_eq!(diagnostic["code"], "casework.source-description.missing");
-        assert_eq!(diagnostic["path"], "casework.yaml:/sources/0/description");
+        let refused: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(refused["ok"], false);
+        assert_eq!(refused["status"], "domain-refusal");
+        assert_eq!(refused["diagnostics"], report["diagnostics"]);
 
-        stdout.clear();
-        let exit = main_entry_from(
-            [
-                OsString::from("caseworkctl"),
-                OsString::from("check"),
-                project.into_os_string(),
-                OsString::from("--deny-findings"),
-            ],
-            &mut stdout,
-            &mut stderr,
-        );
+        let (exit, stdout, stderr) = run(&["check", project_argument, "--deny-warnings"]);
         assert_eq!(exit, ExitCode::from(1));
         assert!(stdout.is_empty());
-        assert!(String::from_utf8_lossy(&stderr)
-            .starts_with("finding[casework.source-description.missing]"));
+        assert!(stderr.starts_with(&format!(
+            "warning[casework.source-description.missing] {file}:"
+        )));
+        assert!(
+            stderr.ends_with("0 errors, 1 warning in 1 file\n"),
+            "{stderr}"
+        );
+
+        // --production requires every import, so the same diagnostic is an
+        // error there.
+        let (exit, stdout, _) = run(&["--format=json", "check", project_argument, "--production"]);
+        assert_eq!(exit, ExitCode::from(1));
+        let refused: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(refused["diagnostics"][0]["severity"], "error");
+        assert_eq!(
+            refused["diagnostics"][0]["code"],
+            "casework.source-description.missing"
+        );
     }
 
     /// Run `caseworkctl check PROJECT`, in JSON when `json` is set, and
@@ -2693,23 +2755,34 @@ mod tests {
 
     #[test]
     fn human_reports_distinguish_incomplete_authoring_from_offline_fixture_proof() {
-        let finding = json!({
-            "severity":"finding",
+        let warning = json!({
+            "severity":"warning",
             "code":"casework.source-description.missing",
-            "artifact":"casework_project",
-            "path":"casework.yaml:/sources/0/description",
-            "message":"a declared source import is missing",
-            "suggestedAction":"Import the declared source description."
+            "artifact":"CaseworkProject",
+            "path":"/sources/0/description",
+            "message":"no source description file exists at this path, relative to casework.yaml",
+            "suggestedAction":"Import the declared source description.",
+            "source":{"file":"project/casework.yaml","line":12,"column":18}
         });
         let mut check_output = Vec::new();
         render_human(
-            &json!({"ok":true,"command":"check","status":"incomplete","findings":[finding.clone()]}),
+            &json!({
+                "ok":true,
+                "command":"check",
+                "status":"incomplete",
+                "filesChecked":1,
+                "diagnostics":[warning.clone()]
+            }),
             &mut check_output,
         )
         .unwrap();
-        assert!(String::from_utf8(check_output)
-            .unwrap()
-            .starts_with("Authoring check completed with incomplete inputs."));
+        let check_output = String::from_utf8(check_output).unwrap();
+        assert!(check_output.starts_with("Authoring check completed with incomplete inputs."));
+        assert!(check_output.contains(
+            "warning[casework.source-description.missing] project/casework.yaml:12:18 /sources/0/description\n"
+        ));
+        assert!(!check_output.contains("filesChecked"));
+        assert!(check_output.ends_with("0 errors, 1 warning in 1 file\n"));
 
         let mut test_output = Vec::new();
         render_human(
@@ -2717,7 +2790,8 @@ mod tests {
                 "ok":true,
                 "command":"test",
                 "authoringStatus":"incomplete",
-                "findings":[finding],
+                "filesChecked":2,
+                "diagnostics":[warning],
                 "proofBoundary":"offline_synthetic",
                 "productionClosure":false
             }),
@@ -2729,6 +2803,7 @@ mod tests {
             .starts_with("Offline synthetic fixtures passed with incomplete authored inputs."));
         assert!(test_output.contains("proofBoundary: offline_synthetic"));
         assert!(test_output.contains("productionClosure: false"));
+        assert!(test_output.ends_with("0 errors, 1 warning in 2 files\n"));
     }
 
     const ATTEMPT_ID: &str = "7c9e6679-7425-40de-944b-e07fc1f90ae7";

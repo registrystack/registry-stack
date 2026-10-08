@@ -16,7 +16,8 @@
         "project",
         "effective",
         "profile",
-        "findings",
+        "filesChecked",
+        "diagnostics",
         "networkAccess",
         "databaseAccess"
       ],
@@ -51,8 +52,12 @@
             "production"
           ]
         },
-        "findings": {
-          "$ref": "#/$defs/findings"
+        "filesChecked": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/warnings"
         },
         "networkAccess": {
           "const": false
@@ -226,6 +231,23 @@
             }
           }
         }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ]
       }
     },
     "findings": {

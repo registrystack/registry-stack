@@ -172,8 +172,8 @@ repeat a value from the file.
   unchecked; `--environment` fills the expressions from the current
   environment and checks the values they produce. A refusal lists the
   project's diagnostics and the runtime file's together. A passing check
-  reports the file in `runtimeConfig` and adds its warnings to `findings`.
-  `CheckReport.schema.json` allows `runtimeConfig`.
+  reports the file in `runtimeConfig` and adds its warnings to
+  `diagnostics`. `CheckReport.schema.json` allows `runtimeConfig`.
 
 | Old code | New code |
 |---|---|
@@ -184,6 +184,54 @@ repeat a value from the file.
 Runtime file codes: `casework.runtime.allowed-clients-required`, `casework.runtime.empty-value`, `casework.runtime.inactive-review-source-namespace`, `casework.runtime.invalid-assertion-issuers`, `casework.runtime.invalid-audience`, `casework.runtime.invalid-audit`, `casework.runtime.invalid-database-id`, `casework.runtime.invalid-database-reference`, `casework.runtime.invalid-digest`, `casework.runtime.invalid-listener`, `casework.runtime.invalid-metrics-listener`, `casework.runtime.invalid-oidc-claim`, `casework.runtime.invalid-review-completion-auth`, `casework.runtime.invalid-review-completion-destination`, `casework.runtime.invalid-secret-reference`, `casework.runtime.invalid-source-binding`, `casework.runtime.invalid-stranded-work-acknowledgement`, `casework.runtime.invalid-task-authority`, `casework.runtime.invalid-uri`, `casework.runtime.missing-identity`, `casework.runtime.no-secret-provider`, `casework.runtime.plaintext-database`, `casework.runtime.principal-claim-conflict`, `casework.runtime.relative-path`, `casework.runtime.secret-provider-disabled`, `casework.runtime.source-bindings-mismatch`, `casework.runtime.unconfigured-review-completion-destination`, `casework.runtime.unreadable-jwks-secret`, `casework.runtime.unsupported-api-version`, `casework.runtime.wrong-kind`.
 
 Package codes: `casework.package.digest-mismatch`, `casework.package.file-changed`, `casework.package.invalid`, `casework.package.invalid-project`, `casework.package.retired-manifest`, `casework.package.source-description-mismatch`, `casework.package.unexpected-contents`, `casework.package.unreadable-project`.
+
+## BREAKING: `caseworkctl check` and `test` report diagnostics, and `--deny-warnings` replaces `--deny-findings`
+
+`caseworkctl check` and `caseworkctl test` report what they find in the one
+diagnostic shape every Registry Stack check command shares, and exit as every
+check command does: 0 when no error was reported, warnings allowed, and 1
+when the project was refused or, under `--deny-warnings`, when a warning was
+reported.
+
+- The `--format json` check and test reports carry `diagnostics`, where they
+  carried `findings`. A passing report lists its warnings there, possibly
+  none, and `filesChecked` counts the files the command read. The warnings
+  include those the reader reports for `casework.yaml`, such as a deprecated
+  `apiVersion`. Migration: read `diagnostics` where a script read
+  `findings`.
+- A source whose imported description file does not exist is a `warning`,
+  where its severity was `finding`, and an `error` under `--production`. It
+  is reported at the source's `description` value: `path` is the JSON
+  pointer `/sources/0/description` and `source` names `casework.yaml` with
+  its line and column, where `path` was `casework.yaml:/sources/0/description`.
+  `artifact` is `CaseworkProject`, where it was `casework_project`. The
+  message no longer repeats the source id; the `suggestedAction` names the
+  `caseworkctl source add` command with `SOURCE_ID` and the pointer of the
+  id to put there.
+- `--deny-findings` is removed. `--deny-warnings` refuses the check with exit
+  1 when it reports any warning, and the refusal lists every diagnostic.
+  Migration: replace `--deny-findings` with `--deny-warnings`.
+- Human output prints each diagnostic position first,
+  `warning[casework.source-description.missing] FILE:LINE:COLUMN /sources/0/description`,
+  then the message and a `next:` line, and ends with a count such as
+  `0 errors, 1 warning in 1 file`. It printed
+  `finding[CODE] casework.yaml:/sources/0/description: MESSAGE`. A passing
+  check prints them on standard output after its outcome; a refusal prints
+  them on standard error. Migration: a script that matched `finding[` matches
+  `warning[`, or reads `--format json`.
+- `CheckReport.schema.json` and `TestReport.schema.json` require
+  `filesChecked` and `diagnostics` in place of `findings`, and every
+  diagnostic in a passing report is a warning. Migration: a consumer that
+  validates reports against an older copy of these schemas takes the
+  regenerated ones.
+
+| Old | New |
+|---|---|
+| `--deny-findings` | `--deny-warnings` |
+| `findings` in the check and test reports | `diagnostics` |
+| severity `finding` | `warning`, or `error` under `--production` |
+| `path: casework.yaml:/sources/N/description` | `path: /sources/N/description`, with `source.file`, `source.line`, and `source.column` |
+| `artifact: casework_project` | `artifact: CaseworkProject` |
 
 ## Diagnostic codes
 

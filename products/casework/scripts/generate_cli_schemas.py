@@ -20,7 +20,9 @@ ARRAY = {"type": "array"}
 STRING_ARRAY = {"type": "array", "items": {"type": "string"}}
 OBJECT_ARRAY = {"type": "array", "items": {"type": "object"}}
 DIAGNOSTICS = {"$ref": "#/$defs/diagnostics"}
+WARNINGS = {"$ref": "#/$defs/warnings"}
 FINDINGS = {"$ref": "#/$defs/findings"}
+FILES_CHECKED = {"type": "integer", "minimum": 1}
 
 
 DIGEST = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
@@ -128,7 +130,8 @@ REPORTS = {
             "project",
             "effective",
             "profile",
-            "findings",
+            "filesChecked",
+            "diagnostics",
             "networkAccess",
             "databaseAccess",
         ],
@@ -137,7 +140,8 @@ REPORTS = {
             "project": STRING,
             "effective": OBJECT,
             "profile": {"enum": ["authoring", "production"]},
-            "findings": FINDINGS,
+            "filesChecked": FILES_CHECKED,
+            "diagnostics": WARNINGS,
             "networkAccess": {"const": False},
             "databaseAccess": {"const": False},
             "runtimeConfig": STRING,
@@ -499,7 +503,8 @@ REPORTS = {
         "required": [
             "project",
             "authoringStatus",
-            "findings",
+            "filesChecked",
+            "diagnostics",
             "fixtures",
             "proofBoundary",
             "productionClosure",
@@ -509,7 +514,8 @@ REPORTS = {
         "properties": {
             "project": STRING,
             "authoringStatus": {"enum": ["complete", "incomplete"]},
-            "findings": FINDINGS,
+            "filesChecked": FILES_CHECKED,
+            "diagnostics": WARNINGS,
             "fixtures": {
                 "type": "array",
                 "minItems": 1,
@@ -659,6 +665,17 @@ DIAGNOSTIC_DEFS = {
                     },
                 },
             },
+        },
+    },
+    # A check that passed reports every warning it found, possibly none; an
+    # error would have refused it.
+    "warnings": {
+        "type": "array",
+        "items": {
+            "allOf": [
+                {"$ref": "#/$defs/diagnostic"},
+                {"properties": {"severity": {"const": "warning"}}},
+            ]
         },
     },
     "findings": {

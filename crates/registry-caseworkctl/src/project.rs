@@ -8,14 +8,15 @@ use registry_casework::{
 use registry_casework_breg::MAXIMUM_REQUEST_ENTITIES;
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, AttemptUncertainMarking,
-    AttemptUncertainMarkingReport, CaseworkProject, ReviewContextStrategy, ReviewKindPurpose,
-    SourcePolicy, SourceRequestPolicy, SourceRetentionReport, SourceRetentionSelector,
+    AttemptUncertainMarkingReport, CaseworkProject, ConfigFinding, ConfigLoadError,
+    ReviewContextStrategy, ReviewKindPurpose, SourcePolicy, SourceRequestPolicy,
+    SourceRetentionReport, SourceRetentionSelector,
 };
 use registry_platform_config::{
     plan_package, sha256_uri, write_package, SecretError, SecretProvider, SecretReference,
     SecretResolver,
 };
-use registry_platform_yaml::{Diagnostic, Report};
+use registry_platform_yaml::{Decoded, Diagnostic, Report, Severity};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
@@ -418,10 +419,14 @@ pub(super) fn check_runtime_config(
     if !report.has_errors() {
         let mut checked = checked?;
         checked["runtimeConfig"] = json!(given);
-        if let (Some(findings), Value::Array(warnings)) =
-            (checked["findings"].as_array_mut(), report.to_json_value())
-        {
-            findings.extend(warnings);
+        if let (Some(diagnostics), Value::Array(warnings)) = (
+            checked["diagnostics"].as_array_mut(),
+            report.to_json_value(),
+        ) {
+            diagnostics.extend(warnings);
+        }
+        if let Some(files) = checked["filesChecked"].as_u64() {
+            checked["filesChecked"] = json!(files + 1);
         }
         return Ok(checked);
     }
@@ -484,21 +489,40 @@ fn absolute_lexical(path: &Path) -> std::io::Result<PathBuf> {
     Ok(normal)
 }
 
-fn missing_source_findings(project: &Path, policy: &CaseworkProject) -> Vec<Value> {
-    policy
-        .sources
-        .iter()
-        .enumerate()
-        .filter(|(_, source)| !project.join(&source.description).is_file())
-        .map(|(index, source)| json!({
-            "severity": "finding",
-            "code": "casework.source-description.missing",
-            "artifact": "casework_project",
-            "path": format!("casework.yaml:/sources/{index}/description"),
-            "message": format!("source {} has no imported source description", source.id),
-            "suggestedAction": format!("Run caseworkctl source add BREG_PROJECT --project {} --source-id {} --apply.", project.display(), source.id),
-        }))
-        .collect()
+const MISSING_SOURCE_DESCRIPTION: &str = "casework.source-description.missing";
+
+/// The warnings found reading `casework.yaml`, and one diagnostic for every
+/// source whose imported description file does not exist: a warning while
+/// authoring, and an error under `--production`, which requires every import.
+fn authoring_diagnostics(
+    project: &Path,
+    decoded: &Decoded<CaseworkProject>,
+    production: bool,
+) -> Report {
+    let mut report = decoded.document.warnings();
+    let command = format!(
+        "caseworkctl source add BREG_PROJECT --project {} --source-id SOURCE_ID --apply",
+        crate::source_add::shell_word(&project.display().to_string())
+    );
+    for (index, source) in decoded.value.sources.iter().enumerate() {
+        if project.join(&source.description).is_file() {
+            continue;
+        }
+        let mut diagnostic = ConfigFinding::new(
+            MISSING_SOURCE_DESCRIPTION,
+            format!("/sources/{index}/description"),
+            "no source description file exists at this path, relative to casework.yaml",
+            format!(
+                "Import the source description with {command}, where SOURCE_ID is the id at /sources/{index}/id."
+            ),
+        )
+        .to_diagnostic(&decoded.document);
+        if !production {
+            diagnostic.severity = Severity::Warning;
+        }
+        report.push(diagnostic);
+    }
+    report
 }
 
 /// One authored request, as `check` reports it.
@@ -531,12 +555,27 @@ fn request_description(request: &SourceRequestPolicy, description: Option<&Value
     })
 }
 
-pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Result<Value> {
-    let policy = load_and_check_policy(project)?;
-    let findings = missing_source_findings(project, &policy);
-    if (production || deny_findings) && !findings.is_empty() {
-        return Err(DeniedFindings(findings).into());
+/// Check the project offline. Every diagnostic is reported; the check is
+/// refused when one is an error, or, under `--deny-warnings`, a warning
+/// (CFG-DIAG-4).
+pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Result<Value> {
+    let decoded = read_project(project)?;
+    let mut diagnostics = authoring_diagnostics(project, &decoded, production);
+    if diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0) {
+        diagnostics.set_files_checked(1);
+        return Err(diagnostics.into());
     }
+    let policy = decoded.value;
+    let pending = diagnostics
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == MISSING_SOURCE_DESCRIPTION);
+    let files_checked = 1 + policy
+        .sources
+        .iter()
+        .filter(|source| project.join(&source.description).is_file())
+        .count();
+    let diagnostics = diagnostics.to_json_value();
     if policy.sources.is_empty() {
         return Ok(json!({
             "ok": true,
@@ -553,12 +592,13 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
                 "sourceConnections": 0
             },
             "profile": if production { "production" } else { "authoring" },
-            "findings": findings,
+            "filesChecked": files_checked,
+            "diagnostics": diagnostics,
             "networkAccess": false,
             "databaseAccess": false
         }));
     }
-    let source_description = if findings.is_empty() {
+    let source_description = if !pending {
         check_source_descriptions(project)?;
         crate::policy::check(project, &policy)?;
         "checked"
@@ -570,7 +610,7 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
         .sources
         .iter()
         .map(|source| -> Result<Value> {
-            // A missing imported description is an authoring finding. Its
+            // A missing imported description is an authoring warning. Its
             // mode is unknown, never an invented manual application default.
             let description = if project.join(&source.description).is_file() {
                 let path = project_input_path(project, &source.description)?;
@@ -591,18 +631,15 @@ pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Re
             }))
         })
         .collect::<Result<Vec<_>>>()?;
-    let status = if findings.is_empty() {
-        "complete"
-    } else {
-        "incomplete"
-    };
+    let status = if pending { "incomplete" } else { "complete" };
     Ok(json!({
         "ok": true,
         "command": "check",
         "status": status,
         "project": project,
         "profile": if production { "production" } else { "authoring" },
-        "findings": findings,
+        "filesChecked": files_checked,
+        "diagnostics": diagnostics,
         "effective": {
             "projectId": policy.casework.id,
             "sources": sources,
@@ -631,6 +668,7 @@ pub(super) fn test(project: &Path) -> Result<Value> {
     if paths.is_empty() {
         bail!("test requires at least one YAML fixture");
     }
+    let files_checked = checked["filesChecked"].as_u64().unwrap_or(0) + paths.len() as u64;
     let mut reports = Vec::new();
     for path in paths {
         let fixture = load_yaml(&path, "fixture")?;
@@ -654,7 +692,8 @@ pub(super) fn test(project: &Path) -> Result<Value> {
         "command": "test",
         "project": project,
         "authoringStatus": checked["status"],
-        "findings": checked["findings"],
+        "filesChecked": files_checked,
+        "diagnostics": checked["diagnostics"],
         "fixtures": reports,
         "proofBoundary": "offline_synthetic",
         "productionClosure": false,
@@ -671,14 +710,26 @@ fn load_yaml(path: &Path, label: &str) -> Result<Value> {
     serde_norway::from_slice(&bytes).with_context(|| format!("parsing {label}"))
 }
 pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
+    read_project(project).map(|decoded| decoded.value)
+}
+
+/// `casework.yaml` of `project`, read through the shared reader and checked,
+/// with the document its diagnostics are placed in. The file is named as the
+/// project path given joined with `casework.yaml` (CFG-DIAG-1).
+fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {
     let policy_path = project.join("casework.yaml");
-    let policy =
-        CaseworkProject::load(&policy_path).context("loading and checking casework.yaml")?;
+    let bytes = fs::read(&policy_path)
+        .map_err(ConfigLoadError::Read)
+        .context("loading and checking casework.yaml")?;
+    let decoded = CaseworkProject::read(&policy_path.display().to_string(), &bytes)
+        .map_err(ConfigLoadError::Refused)
+        .context("loading and checking casework.yaml")?;
+    let policy = &decoded.value;
     if policy.sources.is_empty() {
         if policy.review_kinds.is_empty() || policy.review_producers.is_empty() {
             bail!("declare a review kind and producer or connect a source before checking the project");
         }
-        return Ok(policy);
+        return Ok(decoded);
     }
     if policy.sources.iter().any(|source| {
         source.adapter != "breg"
@@ -689,7 +740,7 @@ pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
             "each source must use the breg adapter and declare between 1 and {MAXIMUM_REQUEST_ENTITIES} request entities"
         );
     }
-    Ok(policy)
+    Ok(decoded)
 }
 
 pub(super) fn explain(project: &Path) -> Result<Value> {
@@ -2802,7 +2853,8 @@ mod tests {
         assert_eq!(checked["status"], "complete");
         let tested = test(&project).unwrap();
         assert_eq!(tested["authoringStatus"], "complete");
-        assert_eq!(tested["findings"], json!([]));
+        assert_eq!(tested["diagnostics"], json!([]));
+        assert_eq!(tested["filesChecked"], 2);
         assert_eq!(tested["proofBoundary"], "offline_synthetic");
         assert_eq!(tested["productionClosure"], false);
         let fixture = project.join("fixtures/standalone-decision.yaml");

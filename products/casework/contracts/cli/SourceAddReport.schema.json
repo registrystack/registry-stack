@@ -215,6 +215,23 @@
         }
       }
     },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ]
+      }
+    },
     "findings": {
       "type": "array",
       "items": {

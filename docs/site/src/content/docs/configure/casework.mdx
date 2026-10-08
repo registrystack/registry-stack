@@ -435,6 +435,8 @@ Five commands read the project and touch no network and no database, so run them
 | `package` | What exactly would an operator receive? |
 
 `caseworkctl check` validates the project and prints the effective policy, including the values you did not write.
+It prints each problem position first, as `warning[CODE] FILE:LINE:COLUMN /path` or `error[CODE] ...`, then the message and a `next:` line with the fix, and ends with a count of errors and warnings; `--format json` reports the same problems as a `diagnostics` list.
+It exits 1 when it reports an error, and `--deny-warnings` makes a warning fail it too.
 For the standalone project it reports standalone mode, the resolved review kind and producer admission with its schemas and retention, and the inbox defaults.
 For a project that declares sources it reports every one of them, and for each of their requests the entity, the fallback queue, the routing rule count, the clock the request names, and its target; it also reports the state of the imported source descriptions, which reads `pending_source_add` before you connect the source and `checked` after.
 
@@ -550,7 +552,7 @@ Each entry in `requests` binds one BReg entity to one fallback queue; `target` i
 One source can declare up to 32 request entities from the same register, each named once.
 `caseworkctl source add` pairs them all in one pass, and requests that share a review authority must agree on its producer admission.
 Casework discovers work entity by entity, in the order you declare them.
-Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"`.
+Until the description exists, `caseworkctl check` reports `"sourceDescription": "pending_source_add"` and a `casework.source-description.missing` warning at the source's `description`, which `--production` refuses as an error.
 
 The template's `scope-correction` review kind uses `contextStrategy: source`, so its `displaySchema` must admit exactly what the source discloses to a reviewer.
 It restates each projected field's schema under its API name, as `bregctl explain change-requests` reports it: `record` is a UUID string, not an object.

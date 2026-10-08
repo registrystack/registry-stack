@@ -15,7 +15,8 @@
         "kind",
         "project",
         "authoringStatus",
-        "findings",
+        "filesChecked",
+        "diagnostics",
         "fixtures",
         "proofBoundary",
         "productionClosure",
@@ -47,8 +48,12 @@
             "incomplete"
           ]
         },
-        "findings": {
-          "$ref": "#/$defs/findings"
+        "filesChecked": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/warnings"
         },
         "fixtures": {
           "type": "array",
@@ -199,6 +204,23 @@
             }
           }
         }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/diagnostic"
+          },
+          {
+            "properties": {
+              "severity": {
+                "const": "warning"
+              }
+            }
+          }
+        ]
       }
     },
     "findings": {
