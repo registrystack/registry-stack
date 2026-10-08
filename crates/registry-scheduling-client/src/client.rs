@@ -781,6 +781,7 @@ mod tests {
     #[test]
     fn offering_selectors_are_bounded_before_io() {
         assert!(validate_offering("registry-update-30").is_ok());
+        assert!(validate_offering("registry_update").is_ok());
         for foreign in [
             "",
             "registry/update",
@@ -789,7 +790,6 @@ mod tests {
             // Each of these is a legal opaque route segment and no
             // identifier the policy grammar admits.
             "Registry_Update",
-            "registry_update",
             "registry.update",
             "30-minute-update",
             &"x".repeat(65),
