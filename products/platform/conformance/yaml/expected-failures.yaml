@@ -72,14 +72,6 @@ expectedFailures:
   case: baseline
   reason: the report has no `diagnostics` list
   digest: ba7fd7872baa
-- format: discovery/evidence-mapping
-  case: baseline
-  reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
-  digest: 62afd6e1701f
-- format: discovery/origins
-  case: baseline
-  reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
-  digest: 62afd6e1701f
 - format: evidence/authoring-project
   case: init-modeline
   reason: 'the first line of evidence-project.yaml is not a `# yaml-language-server: $schema=` modeline'
@@ -129,10 +121,6 @@ expectedFailures:
   reason: missing yaml.anchor at /conformanceÉté 48:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 4aa465344271
 - format: evidence/question
-  case: comments-only-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: b53b1538b609
-- format: evidence/question
   case: control-character
   reason: missing yaml.control-character at /conformanceControl 48:21; missing yaml.control-character at /conformanceControlC1 49:23 (and 3 more problems)
   digest: b5628850b6eb
@@ -156,10 +144,6 @@ expectedFailures:
   case: duplicate-key-in-flow-mapping
   reason: missing yaml.duplicate-key at /conformanceFlow/a 48:25; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: bb0df48f3326
-- format: evidence/question
-  case: empty-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: b53b1538b609
 - format: evidence/question
   case: empty-value-in-required-member
   reason: missing config.null-value at /question 7:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -208,18 +192,6 @@ expectedFailures:
   case: merge-key
   reason: missing yaml.merge-key at /conformanceMerge/<< 49:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 9503e5299d9a
-- format: evidence/question
-  case: missing-api-version
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/question
-  case: missing-envelope
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/question
-  case: missing-kind
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
 - format: evidence/question
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 48:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -308,18 +280,6 @@ expectedFailures:
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 48:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 8e6c487d1089
-- format: evidence/question
-  case: wrong-api-version
-  reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: d01758b2169a
-- format: evidence/question
-  case: wrong-kind
-  reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 419c262ab056
-- format: evidence/question
-  case: wrong-kind-and-api-version
-  reason: missing config.wrong-kind at /kind 7:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: eb366f77e251
 - format: evidence/runtime
   case: baseline
   reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
@@ -349,10 +309,6 @@ expectedFailures:
   reason: missing yaml.anchor at /conformanceÉté 15:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 0be5ca095c31
 - format: evidence/selector
-  case: comments-only-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: e2d28d84d58a
-- format: evidence/selector
   case: control-character
   reason: missing yaml.control-character at /conformanceControl 15:21; missing yaml.control-character at /conformanceControlC1 16:23 (and 3 more problems)
   digest: a441a6b2a70c
@@ -373,10 +329,6 @@ expectedFailures:
   reason: missing yaml.duplicate-key at /conformanceFlow/a 15:25; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 68ff886af983
 - format: evidence/selector
-  case: empty-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: e2d28d84d58a
-- format: evidence/selector
   case: extension-field
   reason: missing config.unknown-key at /x-conformance 15:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 398e964168c7
@@ -396,18 +348,6 @@ expectedFailures:
   case: merge-key
   reason: missing yaml.merge-key at /conformanceMerge/<< 16:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 025505ce9233
-- format: evidence/selector
-  case: missing-api-version
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/selector
-  case: missing-envelope
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/selector
-  case: missing-kind
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
 - format: evidence/selector
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 15:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -468,18 +408,6 @@ expectedFailures:
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 15:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 52bc37ad1584
-- format: evidence/selector
-  case: wrong-api-version
-  reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 9fd3d8ef3099
-- format: evidence/selector
-  case: wrong-kind
-  reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 815ba0d0793b
-- format: evidence/selector
-  case: wrong-kind-and-api-version
-  reason: missing config.wrong-kind at /kind 7:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: b9614ff0f8ca
 - format: evidence/source
   case: alias
   reason: missing yaml.alias at /conformanceAlias 62:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -505,10 +433,6 @@ expectedFailures:
   reason: missing yaml.anchor at /conformanceÉté 62:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 5f1725503ba0
 - format: evidence/source
-  case: comments-only-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 14705a2d7f76
-- format: evidence/source
   case: control-character
   reason: missing yaml.control-character at /conformanceControl 62:21; missing yaml.control-character at /conformanceControlC1 63:23 (and 3 more problems)
   digest: 80fc76975bf3
@@ -533,10 +457,6 @@ expectedFailures:
   reason: missing config.duplicate-item at /request/projection/1 44:49; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: bcc2a9a728ac
 - format: evidence/source
-  case: empty-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 14705a2d7f76
-- format: evidence/source
   case: extension-field
   reason: missing config.unknown-key at /x-conformance 62:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: e85e6441aa71
@@ -556,18 +476,6 @@ expectedFailures:
   case: merge-key
   reason: missing yaml.merge-key at /conformanceMerge/<< 63:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 740024e71904
-- format: evidence/source
-  case: missing-api-version
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/source
-  case: missing-envelope
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
-- format: evidence/source
-  case: missing-kind
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 6:1
-  digest: a6c4d8d27d0e
 - format: evidence/source
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 62:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -628,18 +536,6 @@ expectedFailures:
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 62:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: b4d50d1ada0d
-- format: evidence/source
-  case: wrong-api-version
-  reason: missing config.unsupported-api-version at /apiVersion 6:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: ce089b577a27
-- format: evidence/source
-  case: wrong-kind
-  reason: missing config.wrong-kind at /kind 6:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: e08dee038af6
-- format: evidence/source
-  case: wrong-kind-and-api-version
-  reason: missing config.wrong-kind at /kind 7:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 80ece61da62a
 - format: evidence/target-governance
   case: alias
   reason: missing yaml.alias at /conformanceAlias 43:19; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -673,10 +569,6 @@ expectedFailures:
   reason: missing yaml.anchor at /conformanceÉté 43:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: b04a8d5efde8
 - format: evidence/target-governance
-  case: comments-only-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 8ade4e8fefac
-- format: evidence/target-governance
   case: control-character
   reason: missing yaml.control-character at /conformanceControl 43:21; missing yaml.control-character at /conformanceControlC1 44:23 (and 3 more problems)
   digest: 9816080552c4
@@ -696,10 +588,6 @@ expectedFailures:
   case: duplicate-key-in-flow-mapping
   reason: missing yaml.duplicate-key at /conformanceFlow/a 43:25; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 9ccf983278ac
-- format: evidence/target-governance
-  case: empty-file
-  reason: missing config.missing-envelope at the root 1:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 8ade4e8fefac
 - format: evidence/target-governance
   case: empty-value-in-required-member
   reason: missing config.null-value at /issuer/id 4:10; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -745,18 +633,6 @@ expectedFailures:
   reason: missing yaml.merge-key at /conformanceMerge/<< 44:3; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 1f9d049554c6
 - format: evidence/target-governance
-  case: missing-api-version
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
-  digest: 1d83d2739cbc
-- format: evidence/target-governance
-  case: missing-envelope
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
-  digest: 1d83d2739cbc
-- format: evidence/target-governance
-  case: missing-kind
-  reason: exit status 0, expected 1; missing config.missing-envelope at the root 1:1
-  digest: 1d83d2739cbc
-- format: evidence/target-governance
   case: multiple-documents
   reason: missing yaml.multiple-documents at the root 43:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 267966f8199b
@@ -789,10 +665,6 @@ expectedFailures:
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 36e879d93586
 - format: evidence/target-governance
-  case: substitution-in-api-version
-  reason: missing config.substitution-not-allowed at /apiVersion 1:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 45df3d0be00e
-- format: evidence/target-governance
   case: substitution-in-integer
   reason: missing config.expected-integer at /rateLimits/burstPerPrincipal 22:68; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 36e879d93586
@@ -800,10 +672,6 @@ expectedFailures:
   case: substitution-in-key
   reason: missing config.substitution-not-allowed at /${REGISTRY_CONFORMANCE_VALUE} 43:1; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 59ca4ae0b42c
-- format: evidence/target-governance
-  case: substitution-in-kind
-  reason: missing config.substitution-not-allowed at /kind 1:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 01ce5e0d81d9
 - format: evidence/target-governance
   case: substitution-in-reference
   reason: missing config.substitution-not-allowed at /conformanceRef 43:17; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
@@ -868,30 +736,22 @@ expectedFailures:
   case: unrepresentable-integer
   reason: missing config.out-of-range at /conformanceNumber 43:20; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
   digest: 18694bf7d66c
-- format: evidence/target-governance
-  case: wrong-api-version
-  reason: missing config.unsupported-api-version at /apiVersion 1:13; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 8649eb387d9f
-- format: evidence/target-governance
-  case: wrong-kind
-  reason: missing config.wrong-kind at /kind 1:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: 3cae5869d1c1
-- format: evidence/target-governance
-  case: wrong-kind-and-api-version
-  reason: missing config.wrong-kind at /kind 2:7; unexpected evidencectl.check.refused at $.findings (file) (and 2 more problems)
-  digest: e38a63d22fb0
 - format: evidence/target-settings
   case: baseline
   reason: exit status 3, expected 0; unexpected evidence.check.failed at $ (file) (and 3 more problems)
   digest: aa85fcfeb241
 - format: manifest/metadata
-  case: baseline
-  reason: the output is not one JSON document
-  digest: c3d5e54fce90
+  case: duplicate-id
+  reason: missing config.duplicate-id at /datasets/1/id 75:9; unexpected manifest.metadata.duplicate-value at /datasets/1/id 75:9
+  digest: aef067a8792d
 - format: manifest/profile
-  case: baseline
-  reason: the output is not one JSON document
-  digest: c3d5e54fce90
+  case: path-link-outside-project
+  reason: exit status 0, expected 1; missing a diagnostic of any code at /fixtures/0/path 70:11
+  digest: 891bf5db5f0b
+- format: manifest/profile
+  case: path-outside-project
+  reason: unexpected manifest.profile.unlisted-file at the root (file)
+  digest: 17bfd1cd028b
 - format: messaging/project
   case: baseline
   reason: the report has no `diagnostics` list
@@ -925,17 +785,13 @@ expectedFailures:
   reason: the format registers no schema `$id` for the modeline to name
   digest: 60e5b6a3446c
 - format: render/bundle
-  case: baseline
-  reason: 'exit status 2, expected 0: error: unexpected argument ''--format'' found; the command printed no JSON report'
-  digest: 62afd6e1701f
+  case: path-link-outside-project
+  reason: missing a diagnostic of any code at /documents/0/entryFile 7:14; unexpected render.bundle.package-mismatch at the root (file)
+  digest: 9244da84c932
 - format: render/bundle
-  case: init-modeline
-  reason: the format registers no schema `$id` for the modeline to name
-  digest: 60e5b6a3446c
-- format: render/labels
-  case: init-modeline
-  reason: the format registers no schema `$id` for the modeline to name
-  digest: 60e5b6a3446c
+  case: syntax-error
+  reason: missing yaml.syntax at the root 12:3; unexpected config.invalid-type at /documents/1 12:3
+  digest: 571b3b6370bb
 - format: scheduling/fixture
   case: baseline
   reason: the report has no `diagnostics` list
@@ -965,12 +821,10 @@ expectedFailures:
   reason: 'the first line of runtime.example.yaml is not a `# yaml-language-server: $schema=` modeline'
   digest: d5db192b6b23
 unreachedFormats:
-- format: breg/mcp-runtime
-  reason: no example
 - format: breg/package
   reason: syntax json; the corpus mutates YAML text
-- format: breg/review-runtime
-  reason: no example
+- format: discovery/index
+  reason: syntax json; the corpus mutates YAML text
 - format: evidence/access-client
   reason: no example
 - format: evidence/access-policy
@@ -983,10 +837,6 @@ unreachedFormats:
   reason: no example
 - format: evidence/oid4vci-runtime
   reason: no example
-- format: render/labels
-  reason: no example
-- format: render/runtime
-  reason: no example
-inapplicableCases:
-- case: retired-api-version
-  reason: the format declares no retired apiVersion; the format has no envelope
+- format: platform/thunderid-session
+  reason: syntax json; the corpus mutates YAML text
+inapplicableCases: []
