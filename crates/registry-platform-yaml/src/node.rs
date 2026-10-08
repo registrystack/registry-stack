@@ -176,28 +176,6 @@ impl Node {
             NodeValue::Mapping(_) => "a mapping",
         }
     }
-
-    /// Every scalar of this subtree as text, for checking that a message does
-    /// not repeat one.
-    pub(crate) fn collect_scalar_texts(&self, out: &mut Vec<String>) {
-        match &self.value {
-            NodeValue::Null => {}
-            NodeValue::Bool(_) => {}
-            NodeValue::Integer(value) => out.push(value.to_string()),
-            NodeValue::Float(value) => out.push(value.to_string()),
-            NodeValue::String(text) => out.push(text.text.clone()),
-            NodeValue::Sequence(items) => {
-                for item in items {
-                    item.collect_scalar_texts(out);
-                }
-            }
-            NodeValue::Mapping(entries) => {
-                for entry in entries {
-                    entry.value.collect_scalar_texts(out);
-                }
-            }
-        }
-    }
 }
 
 /// Escape one JSON pointer segment (RFC 6901).

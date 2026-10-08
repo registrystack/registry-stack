@@ -16,7 +16,7 @@ use std::rc::Rc;
 use serde::de::{self, DeserializeSeed, Visitor};
 use serde::forward_to_deserialize_any;
 
-use crate::messages::{self, Found, NullPlace, Problem};
+use crate::messages::{self, Found, NullPlace, Problem, EXPECT_DATA_LITERAL};
 use crate::node::{escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span};
 use crate::scalar::{resolve_plain, Resolved};
 
@@ -710,8 +710,13 @@ fn plain_found(text: &str) -> Found {
 }
 
 /// The expected text a visitor gave, in the reader's words, or `None` when
-/// it cannot be shown: it may repeat a value, or says nothing useful.
-fn safe_expected(expected: &str, node: Option<&Node>) -> Option<String> {
+/// the reader cannot vouch for it (CFG-SEC-3).
+///
+/// A visitor's `expecting` text is shown only when it comes from serde's own
+/// primitives or from the reader's types, whose texts are fixed. Any other
+/// visitor may have formatted part of the value into it, so its text gives
+/// way to the generic sentence.
+fn safe_expected(expected: &str) -> Option<String> {
     let translated = match expected {
         "map" | "a map" => Some("a mapping"),
         "a sequence" | "sequence" => Some("a list"),
@@ -721,7 +726,13 @@ fn safe_expected(expected: &str, node: Option<&Node>) -> Option<String> {
         "unit" | "unit value" => Some("an empty mapping"),
         "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128"
         | "isize" | "an integer" => Some("a whole number"),
+        "a nonzero u8" | "a nonzero u16" | "a nonzero u32" | "a nonzero u64" | "a nonzero u128"
+        | "a nonzero usize" | "a nonzero i8" | "a nonzero i16" | "a nonzero i32"
+        | "a nonzero i64" | "a nonzero i128" | "a nonzero isize" => {
+            Some("a whole number other than 0")
+        }
         "f32" | "f64" | "a number" => Some("a number"),
+        "a key" => Some("a key"),
         _ => None,
     };
     if let Some(translated) = translated {
@@ -733,28 +744,13 @@ fn safe_expected(expected: &str, node: Option<&Node>) -> Option<String> {
     if expected.starts_with("tuple") || expected.starts_with("a tuple") {
         return Some("a list".to_string());
     }
-    if expected.starts_with("enum ")
-        || expected.starts_with("variant identifier")
-        || expected.starts_with("field identifier")
-        || expected.starts_with("option")
-        || expected.contains(PROTOCOL)
-        || expected.chars().any(char::is_control)
-        || expected.is_empty()
-        || expected.chars().count() > 200
-    {
-        return None;
+    if expected == EXPECT_DATA_LITERAL {
+        return Some(EXPECT_DATA_LITERAL.to_string());
     }
-    if let Some(node) = node {
-        let mut scalars = Vec::new();
-        node.collect_scalar_texts(&mut scalars);
-        if scalars
-            .iter()
-            .any(|scalar| scalar.chars().count() >= 2 && expected.contains(scalar.as_str()))
-        {
-            return None;
-        }
+    if let Some((minimum, maximum)) = parse_bounds(expected) {
+        return Some(format!("{BOUNDED_EXPECTING}{minimum} to {maximum}"));
     }
-    Some(expected.to_string())
+    None
 }
 
 /// Turn an error a visitor raised at `site` into the reader's problem.
@@ -796,7 +792,7 @@ fn describe(site: &Site<'_>, kind: Kind, buffered: bool) -> Problem {
             }
         }
         Kind::InvalidType(expected) => {
-            let expected = safe_expected(&expected, Some(node));
+            let expected = safe_expected(&expected);
             if buffered {
                 approximate("config.invalid-type", expected.as_deref())
             } else {
@@ -810,7 +806,7 @@ fn describe(site: &Site<'_>, kind: Kind, buffered: bool) -> Problem {
             }
         }
         Kind::InvalidValue(expected) => {
-            let expected = safe_expected(&expected, Some(node));
+            let expected = safe_expected(&expected);
             if buffered {
                 approximate("config.invalid-value", expected.as_deref())
             } else {
@@ -824,7 +820,7 @@ fn describe(site: &Site<'_>, kind: Kind, buffered: bool) -> Problem {
             }
         }
         Kind::InvalidLength(expected) => {
-            let expected = safe_expected(&expected, Some(node))
+            let expected = safe_expected(&expected)
                 .unwrap_or_else(|| "a different number of items".to_string());
             site.problem("config.invalid-length", messages::invalid_length(&expected))
         }
@@ -1593,7 +1589,7 @@ impl KeyDe<'_> {
                         ),
                     },
                     Kind::InvalidType(expected) | Kind::InvalidValue(expected) => {
-                        let text = match safe_expected(&expected, None) {
+                        let text = match safe_expected(&expected) {
                             Some(expected) => messages::invalid_value(&expected, None),
                             None => messages::invalid_value_generic(),
                         };
@@ -2001,5 +1997,45 @@ impl<'de> de::VariantAccess<'de> for ShapeVariant<'_> {
             "config.invalid-type",
             messages::developer_misuse("a node-kind union variant must hold one value"),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_expected;
+
+    #[test]
+    fn cfg_sec_3_expected_text_from_serde_and_the_reader_is_shown() {
+        for (expected, shown) in [
+            ("a string", "text"),
+            ("a sequence", "a list"),
+            ("struct Duration", "a mapping"),
+            ("a nonzero u32", "a whole number other than 0"),
+            ("a key", "a key"),
+            (
+                "null, a boolean, a number, or text",
+                "null, a boolean, a number, or text",
+            ),
+            ("a whole number from 1 to 10", "a whole number from 1 to 10"),
+        ] {
+            assert_eq!(
+                safe_expected(expected).as_deref(),
+                Some(shown),
+                "{expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_sec_3_text_the_reader_cannot_vouch_for_is_dropped() {
+        for expected in [
+            "a link whose scheme is not s3cr3t",
+            "a JSON object with unique members",
+            "a mapping whose `type` member names its form",
+            "a whole number from 1 to s3cr3t",
+            "",
+        ] {
+            assert_eq!(safe_expected(expected), None, "{expected:?}");
+        }
     }
 }

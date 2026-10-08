@@ -260,6 +260,120 @@ is read through the reader.
 A member given under two spellings the type accepts (an `alias`) is
 `config.duplicate-key` at the second key.
 
+## Writing a checking type
+
+A checking type refuses a value whose shape is right but whose content the
+format does not accept. It refuses with an `Invalid` and nothing else; the
+reader then reports `config.invalid-value` (or `config.out-of-range`) at the
+value, in its own words, with the type's fix. `tests/reader_decode.rs` holds
+these examples to the output shown.
+
+```rust
+use registry_platform_yaml::Invalid;
+use serde::{Deserialize, Deserializer};
+
+/// A queue name: 1 to 32 lowercase letters or `-`.
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "String")]
+pub struct QueueName(String);
+
+impl TryFrom<String> for QueueName {
+    type Error = Invalid;
+
+    fn try_from(text: String) -> Result<QueueName, Invalid> {
+        let valid = (1..=32).contains(&text.len())
+            && text.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'-');
+        if !valid {
+            return Err(Invalid::expected(
+                "a queue name of 1 to 32 lowercase letters or `-`",
+                "Use lowercase letters and `-` only, at most 32 characters.",
+            ));
+        }
+        Ok(QueueName(text))
+    }
+}
+
+/// A worker count: a power of two, at most 64.
+#[derive(Debug)]
+pub struct Workers(u32);
+
+impl<'de> Deserialize<'de> for Workers {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Workers, D::Error> {
+        let count = u32::deserialize(deserializer)?;
+        if !(1..=64).contains(&count) {
+            return Err(Invalid::out_of_range(1, 64).into_error());
+        }
+        if !count.is_power_of_two() {
+            return Err(Invalid::expected("a power of two", "Use 1, 2, 4, 8, 16, 32, or 64.")
+                .into_error());
+        }
+        Ok(Workers(count))
+    }
+}
+```
+
+`workers: 6` on line 3 is reported as:
+
+```text
+error[config.invalid-value] runtime.yaml:3:10 /workers
+  expected a power of two
+  next: Use 1, 2, 4, 8, 16, 32, or 64.
+```
+
+The rules:
+
+- **Static text only.** `Invalid::expected` takes `&'static str`, so the
+  compiler keeps a value out of the message and the fix (CFG-SEC-3). Name
+  the grammar, the bounds, or the accepted values, never the value read.
+- **Prefer the shared types.** A bounded integer is `BoundedU32<MIN, MAX>`
+  or `BoundedU64<MIN, MAX>`, which also puts the bounds in the schema; use
+  `Invalid::out_of_range` only when the type checks more than its bounds.
+- **No other error text.** `Error::custom("...")`, `Error::custom(format!(..))`,
+  or a `TryFrom` whose error is a `String` or another error type still
+  refuses the value, but the reader cannot vouch for the text and reports
+  the generic "the value is not valid here" with "Check the value against
+  the format's reference for this member."
+- **Never a value in `expecting`.** The reader shows a visitor's `expecting`
+  text only for serde's own primitives and the reader's types; any other
+  visitor's text gives way to the same generic sentence, since it may carry
+  part of the value. A custom visitor refuses through `Invalid`.
+
+A type sees one value. A rule that relates two members (a minimum above a
+maximum) or a member to another file (a reference to an id another file
+declares) is a semantic check: decode first, check the decoded value, and
+report with the product's own code (CFG-DIAG-3) at the member whose value
+the fix changes. `Document::diagnostic_at_value` places it at the value,
+`diagnostic_at_key` at the key, and the other place goes in `related`, with
+the other file's name and position for a cross-file check:
+
+```rust
+let document = Reader::new("runtime.yaml").read(bytes, &Expect::one(&FORMAT))?;
+let runtime: Runtime = document.decode()?;
+let mut report = Report::new(Vec::new());
+if runtime.pool.minimum > runtime.pool.maximum {
+    let mut diagnostic = document.diagnostic_at_value(
+        Severity::Error,
+        "example.pool.minimum-above-maximum",
+        "/pool/minimum",
+        "the minimum is greater than the maximum",
+        "Lower `minimum` to at most `maximum`, or raise `maximum`.",
+    );
+    let maximum = document.span_of("/pool/maximum").map(|span| span.start);
+    diagnostic.related.push(Related {
+        file: document.file().to_string(),
+        line: maximum.map(|position| position.line),
+        column: maximum.map(|position| position.column),
+        path: "/pool/maximum".to_string(),
+        message: "the maximum".to_string(),
+    });
+    report.push(diagnostic);
+}
+```
+
+The message, the fix, and each `related` message follow the same rule:
+static text naming keys, bounds, and accepted values, never a value read
+from the file.
+
 ## Hooks
 
 `ScalarHook` sees every mapping key and every value that resolves to text,

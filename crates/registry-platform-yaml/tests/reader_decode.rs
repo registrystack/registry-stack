@@ -10,8 +10,8 @@ use common::*;
 use registry_platform_yaml::{
     shape_union, tagged_union, ApiVersion, BoundedU32, BoundedU64, DataLiteral, Digest,
     EnvelopeRule, Expect, ExternalId, FormatSpec, Identified, Invalid, LocalId, ProjectIdentity,
-    Reader, Refusal, Report, ScalarHook, ScalarSite, Severity, UniqueIdList, UniqueList, Url,
-    CODES, MAXIMUM_DIAGNOSTICS_PER_FILE,
+    Reader, Refusal, Related, Report, ScalarHook, ScalarSite, Severity, UniqueIdList, UniqueList,
+    Url, CODES, MAXIMUM_DIAGNOSTICS_PER_FILE,
 };
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -849,6 +849,121 @@ fn cfg_sec_3_a_message_from_a_type_is_never_passed_through() {
         "Check the value against the format's reference for this member.",
     );
     assert!(!report.render_human().contains("secret-value"));
+}
+
+/// A type whose visitor writes part of the value into its `expecting` text.
+#[derive(Debug)]
+struct LeakyExpecting;
+
+impl<'de> Deserialize<'de> for LeakyExpecting {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<LeakyExpecting, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let scheme = text.split("://").next().unwrap_or_default();
+        let expected = format!("a link whose scheme is not {scheme}");
+        Err(D::Error::invalid_value(
+            serde::de::Unexpected::Other("a link"),
+            &expected.as_str(),
+        ))
+    }
+}
+
+/// A type whose visitor describes itself in its own static words.
+#[derive(Debug)]
+struct OwnWords;
+
+impl<'de> Deserialize<'de> for OwnWords {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<OwnWords, D::Error> {
+        struct OwnWordsVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OwnWordsVisitor {
+            type Value = OwnWords;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON object with unique members")
+            }
+        }
+
+        deserializer.deserialize_any(OwnWordsVisitor)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct Expectations {
+    #[serde(default)]
+    leaky: Option<LeakyExpecting>,
+    #[serde(default)]
+    own: Option<OwnWords>,
+    #[serde(default)]
+    letter: Option<char>,
+    #[serde(default)]
+    workers: Option<std::num::NonZeroU32>,
+}
+
+#[test]
+fn cfg_sec_3_expected_text_from_a_type_outside_the_reader_is_never_shown() {
+    let generic = (
+        "the value is not valid here",
+        "Check the value against the format's reference for this member.",
+    );
+    let report = refusal::<Expectations>("leaky: s3cr3t://x\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "config.invalid-value");
+    assert_eq!(
+        (
+            diagnostic.message.as_str(),
+            diagnostic.suggested_action.as_str()
+        ),
+        generic
+    );
+    assert!(!report.render_human().contains("s3cr3t"), "{report}");
+
+    let report =
+        decode_with_hook::<Expectations>("leaky: \"${SET}://x\"\n", &mut Substitute("t0ken://x"))
+            .unwrap_err();
+    let diagnostic = only(&report);
+    assert_eq!(
+        (
+            diagnostic.message.as_str(),
+            diagnostic.suggested_action.as_str()
+        ),
+        generic
+    );
+    assert!(!report.render_human().contains("t0ken"), "{report}");
+    assert!(!report.to_json_value().to_string().contains("t0ken"));
+
+    let report = refusal::<Expectations>("own: text\n");
+    let diagnostic = only(&report);
+    assert_eq!(diagnostic.code, "config.invalid-type");
+    assert_eq!(
+        (
+            diagnostic.message.as_str(),
+            diagnostic.suggested_action.as_str()
+        ),
+        generic
+    );
+}
+
+#[test]
+fn cfg_sec_3_expected_text_from_serde_primitives_is_kept() {
+    for (body, message, action) in [
+        (
+            "letter: ab\n",
+            "expected a single character",
+            "Write a single character.",
+        ),
+        (
+            "workers: 0\n",
+            "expected a whole number other than 0",
+            "Write a whole number other than 0.",
+        ),
+    ] {
+        let report = refusal::<Expectations>(body);
+        let diagnostic = only(&report);
+        assert_eq!(diagnostic.code, "config.invalid-value", "{body}");
+        assert_eq!(diagnostic.message, message, "{body}");
+        assert_eq!(diagnostic.suggested_action, action, "{body}");
+    }
 }
 
 #[test]
@@ -1799,6 +1914,147 @@ fn cfg_schema_8_a_try_from_refusal_is_placed_at_the_value() {
         (5, 5),
         "expected text with an even number of characters",
         "Add or remove one character.",
+    );
+}
+
+/// The checking types the README's "Writing a checking type" section shows.
+mod readme {
+    use registry_platform_yaml::Invalid;
+    use serde::{Deserialize, Deserializer};
+
+    /// A queue name: 1 to 32 lowercase letters or `-`.
+    #[derive(Debug, Deserialize)]
+    #[serde(try_from = "String")]
+    pub struct QueueName(#[allow(dead_code)] String);
+
+    impl TryFrom<String> for QueueName {
+        type Error = Invalid;
+
+        fn try_from(text: String) -> Result<QueueName, Invalid> {
+            let valid = (1..=32).contains(&text.len())
+                && text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'-');
+            if !valid {
+                return Err(Invalid::expected(
+                    "a queue name of 1 to 32 lowercase letters or `-`",
+                    "Use lowercase letters and `-` only, at most 32 characters.",
+                ));
+            }
+            Ok(QueueName(text))
+        }
+    }
+
+    /// A worker count: a power of two, at most 64.
+    #[derive(Debug)]
+    pub struct Workers(#[allow(dead_code)] u32);
+
+    impl<'de> Deserialize<'de> for Workers {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Workers, D::Error> {
+            let count = u32::deserialize(deserializer)?;
+            if !(1..=64).contains(&count) {
+                return Err(Invalid::out_of_range(1, 64).into_error());
+            }
+            if !count.is_power_of_two() {
+                return Err(
+                    Invalid::expected("a power of two", "Use 1, 2, 4, 8, 16, 32, or 64.")
+                        .into_error(),
+                );
+            }
+            Ok(Workers(count))
+        }
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    pub struct Pool {
+        pub minimum: u32,
+        pub maximum: u32,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    pub struct Runtime {
+        #[serde(default)]
+        pub queue: Option<QueueName>,
+        #[serde(default)]
+        pub workers: Option<Workers>,
+        #[serde(default)]
+        pub pool: Option<Pool>,
+    }
+}
+
+#[test]
+fn cfg_diag_6_the_readme_checking_types_report_their_own_fix() {
+    let report = refusal::<readme::Runtime>("workers: 6\n");
+    assert_diagnostic(
+        only(&report),
+        "config.invalid-value",
+        "/workers",
+        (3, 10),
+        "expected a power of two",
+        "Use 1, 2, 4, 8, 16, 32, or 64.",
+    );
+    assert!(
+        report.render_human().starts_with(
+            "error[config.invalid-value] runtime.yaml:3:10 /workers\n  expected a power of two\n  next: Use 1, 2, 4, 8, 16, 32, or 64.\n"
+        ),
+        "{report}"
+    );
+    let report = refusal::<readme::Runtime>("workers: 128\n");
+    assert_diagnostic(
+        only(&report),
+        "config.out-of-range",
+        "/workers",
+        (3, 10),
+        "the value is outside its bounds; expected a whole number from 1 to 64",
+        "Write a whole number from 1 to 64.",
+    );
+    let report = refusal::<readme::Runtime>("queue: Jobs\n");
+    assert_diagnostic(
+        only(&report),
+        "config.invalid-value",
+        "/queue",
+        (3, 8),
+        "expected a queue name of 1 to 32 lowercase letters or `-`",
+        "Use lowercase letters and `-` only, at most 32 characters.",
+    );
+    let error = serde_json::from_str::<readme::Runtime>("{\"queue\": \"Jobs\"}").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .starts_with("expected a queue name of 1 to 32 lowercase letters or `-`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn cfg_diag_6_the_readme_cross_member_check_points_at_both_members() {
+    let text = with_envelope("pool:\n  minimum: 8\n  maximum: 4\n");
+    let document = Reader::new(FILE).read(text.as_bytes(), &EXPECT).unwrap();
+    let runtime: readme::Runtime = document.decode().unwrap();
+    let pool = runtime.pool.unwrap();
+    assert!(pool.minimum > pool.maximum);
+    let mut report = Report::new(Vec::new());
+    let mut diagnostic = document.diagnostic_at_value(
+        Severity::Error,
+        "example.pool.minimum-above-maximum",
+        "/pool/minimum",
+        "the minimum is greater than the maximum",
+        "Lower `minimum` to at most `maximum`, or raise `maximum`.",
+    );
+    let maximum = document.span_of("/pool/maximum").map(|span| span.start);
+    diagnostic.related.push(Related {
+        file: document.file().to_string(),
+        line: maximum.map(|position| position.line),
+        column: maximum.map(|position| position.column),
+        path: "/pool/maximum".to_string(),
+        message: "the maximum".to_string(),
+    });
+    report.push(diagnostic);
+    assert_eq!(
+        report.render_human(),
+        "error[example.pool.minimum-above-maximum] runtime.yaml:4:12 /pool/minimum\n  the minimum is greater than the maximum\n  next: Lower `minimum` to at most `maximum`, or raise `maximum`.\n  note: runtime.yaml:5:12 /pool/maximum the maximum\n1 error, 0 warnings in 1 file\n"
     );
 }
 
