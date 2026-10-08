@@ -1116,7 +1116,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Messaging generated document drift check",
             ),
             (
-                'expect_refusal unknown-key listener.port',
+                'expect_refusal unknown-key /listener/port config.unknown-key',
                 "Messaging configuration refusal journeys",
             ),
         ):

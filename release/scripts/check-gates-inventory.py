@@ -475,7 +475,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Messaging configuration refusal journeys",
-        "expect_refusal unknown-key listener.port",
+        "expect_refusal unknown-key /listener/port config.unknown-key",
     ),
     (
         "Messaging runtime PostgreSQL suite",
