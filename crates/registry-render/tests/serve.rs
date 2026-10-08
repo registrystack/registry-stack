@@ -1213,7 +1213,7 @@ fn pathological_renders_are_bounded_and_the_service_recovers() {
     let (_heavy, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n  - id: healthy\n    version: 1\n    entry: templates/healthy.typ\n",
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entryFile: templates/heavy.typ\n  - id: healthy\n    version: 1\n    entryFile: templates/healthy.typ\n",
     )
     .unwrap();
     std::fs::create_dir_all(bundle.join("templates")).unwrap();
@@ -1322,7 +1322,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     let (_heavy, bundle) = physical_tempdir();
     std::fs::write(
         bundle.join("manifest.yaml"),
-        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n",
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entryFile: templates/heavy.typ\n",
     )
     .unwrap();
     std::fs::create_dir_all(bundle.join("templates")).unwrap();

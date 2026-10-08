@@ -88,8 +88,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let bind: SocketAddr = runtime.listener.bind.socket_addr();
     runtime::validate_bind(bind)?;
     let bundle = runtime::load_package(&runtime)?;
-    crate::check::check_script_coverage(&bundle)?;
-    crate::check::check_label_key_sets(&bundle)?;
+    crate::check::check_labels(&bundle)?;
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
     let service = Arc::new(Service {
         caller_fingerprint: registry_platform_authcommon::fingerprint_api_key(

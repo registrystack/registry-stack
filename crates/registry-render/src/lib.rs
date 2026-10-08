@@ -32,6 +32,7 @@ pub mod cli;
 pub mod envelope;
 pub mod hash;
 pub mod init;
+pub mod labels;
 pub mod manifest;
 pub mod openapi;
 pub mod problem;

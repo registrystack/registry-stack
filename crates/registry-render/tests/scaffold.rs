@@ -86,6 +86,34 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
 }
 
 #[test]
+fn cfg_schema_7_init_writes_the_schema_modeline_first() {
+    let dir = tempdir();
+    let init = run(&["init", dir.to_str().unwrap(), "--labels", "en,fr"]);
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    for (file, schema) in [
+        ("manifest.yaml", "render/bundle/bundle"),
+        ("labels/en.yaml", "render/labels/labels"),
+        ("labels/fr.yaml", "render/labels/labels"),
+    ] {
+        let text = std::fs::read_to_string(dir.join(file)).unwrap();
+        assert_eq!(
+            text.lines().next(),
+            Some(
+                format!(
+                    "# yaml-language-server: $schema=https://id.registrystack.org/schemas/{schema}.v1alpha1.schema.json"
+                )
+                .as_str()
+            ),
+            "{file}"
+        );
+    }
+}
+
+#[test]
 fn a_locale_listed_twice_is_refused_before_anything_is_written() {
     let dir = tempdir();
     // A repeated locale would scaffold the same label file twice and write
@@ -490,7 +518,7 @@ fn check_names_a_locale_missing_a_label_key() {
     // would fail at runtime — check must name it up front.
     let fr = dir.join("labels/fr.yaml");
     let text = std::fs::read_to_string(&fr).unwrap();
-    let broken = text.replace("reference: \"Reference\"\n", "");
+    let broken = text.replace("  reference: \"Reference\"\n", "");
     std::fs::write(&fr, broken).unwrap();
     let out = run(&["check", "--bundle", dir.to_str().unwrap()]);
     assert_eq!(
@@ -502,7 +530,9 @@ fn check_names_a_locale_missing_a_label_key() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("reference") && stderr.contains("fr"),
+        stderr.contains("error[render.labels.missing-key]")
+            && stderr.contains("labels/fr.yaml:4:1 /labels")
+            && stderr.contains("the table has no label reference, which labels/en.yaml defines"),
         "the missing key and locale are named: {stderr}"
     );
 }
@@ -513,7 +543,11 @@ fn package_refuses_a_broken_bundle_before_writing_output() {
     run(&["init", dir.to_str().unwrap()]);
     // Break script coverage: a label value in a script no font covers,
     // without adding any font to the bundle.
-    std::fs::write(dir.join("labels/en.yaml"), "title: 你好\n").unwrap();
+    std::fs::write(
+        dir.join("labels/en.yaml"),
+        "apiVersion: id.registrystack.org/formats/render/labels/v1alpha1\nkind: RenderLabels\nlabels:\n  title: 你好\n",
+    )
+    .unwrap();
     let output = tempdir().join("broken-package");
     let out = run(&[
         "package",

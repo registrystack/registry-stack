@@ -1,8 +1,11 @@
-title: Certificate of Registration
-body-1: This certifies that the record identified below is registered in the authoritative registry on the date stated.
-body-2: This certificate is issued by the registry system and carries no signature.
-recipient: Registered party
-identifier: Registry identifier
-recorded: Recorded on
-valid-until: Valid until
-seal: SYSTEM ISSUED
+apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+kind: RenderLabels
+labels:
+  title: Certificate of Registration
+  body-1: This certifies that the record identified below is registered in the authoritative registry on the date stated.
+  body-2: This certificate is issued by the registry system and carries no signature.
+  recipient: Registered party
+  identifier: Registry identifier
+  recorded: Recorded on
+  valid-until: Valid until
+  seal: SYSTEM ISSUED

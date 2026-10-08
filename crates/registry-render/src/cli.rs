@@ -193,13 +193,14 @@ pub fn run(cli: Cli) -> i32 {
                     "detail": problem.detail,
                     "pointers": problem.pointers,
                     "locations": problem.locations,
+                    "diagnostics": problem.diagnostics,
                 });
                 eprintln!(
                     "{}",
                     serde_json::to_string(&document).expect("problem json")
                 );
             } else {
-                eprintln!("registry-render: {problem}");
+                eprint!("{}", problem.render_human());
             }
             problem.exit_code()
         }
@@ -236,8 +237,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             revision,
         } => {
             let loaded = Bundle::load(&bundle)?;
-            crate::check::check_script_coverage(&loaded)?;
-            crate::check::check_label_key_sets(&loaded)?;
+            crate::check::check_labels(&loaded)?;
             let written = registry_platform_config::package::write_package(
                 &output,
                 &loaded.package_inputs(),
@@ -583,7 +583,7 @@ fn watch_loop(
                     }
                 }
                 Err(problem) => {
-                    eprintln!("registry-render: {problem}");
+                    eprint!("{}", problem.render_human());
                 }
             }
             last_fingerprint = Some(fingerprint);

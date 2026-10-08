@@ -23,7 +23,7 @@ pub(super) fn spec(product: ProductKind) -> Option<ProductSpec> {
         ProductKind::Render => (
             "manifest.yaml",
             "apiVersion",
-            "render.registrystack.org/",
+            "id.registrystack.org/formats/render/bundle/",
             "RenderBundle",
             RENDER,
         ),
@@ -223,8 +223,8 @@ const RENDER: &[DocumentRules] = &[DocumentRules {
     declarations: &[NameRule::global("documents/*/id", "document")],
     references: &[],
     files: &[
-        FileRule::root("documents/*/entry", false),
-        FileRule::root("documents/*/schema", false),
+        FileRule::root("documents/*/entryFile", false),
+        FileRule::root("documents/*/schemaFile", false),
         FileRule {
             path: "documents/*/labels/*",
             prefix: "labels/",

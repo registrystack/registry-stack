@@ -8,11 +8,15 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use registry_platform_yaml::{Diagnostic, Document, Report, Source};
 use serde_json::Value;
 use typst::foundations::Bytes;
 
 use crate::hash::sha256_hex;
-use crate::manifest::{DocumentSpec, Manifest, MANIFEST_FILE};
+use crate::labels::{labels_path, read_labels};
+use crate::manifest::{
+    error_at, read_manifest, refused, DocumentSpec, Manifest, ReadManifest, MANIFEST_FILE,
+};
 use crate::problem::{ProblemKind, RenderProblem};
 
 /// Asset policy defaults; a runtime may not raise the request total above
@@ -44,6 +48,9 @@ pub struct Bundle {
     /// manifest digest only for preview output.
     pub bundle_hash: String,
     pub documents: BTreeMap<String, LoadedDocument>,
+    /// Locale name -> the label table as the shared reader accepted it, so a
+    /// later check places its findings at the line and column they concern.
+    pub(crate) label_sources: BTreeMap<String, Document>,
     /// The binary's baseline set (`typst-assets` order) first, then bundle
     /// fonts sorted by path — the same book order the Typst CLI builds, so
     /// library and CLI renders agree byte for byte.
@@ -51,6 +58,19 @@ pub struct Bundle {
     /// Immutable bytes read once and, for a deployment package, bound to the
     /// shared package envelope before any consumer parses or renders them.
     pub(crate) snapshot: BundleSnapshot,
+}
+
+/// The name diagnostics give the bundle file at `relative`: the bundle
+/// directory as it was given, joined with the path inside it (CFG-DIAG-1).
+pub(crate) fn bundle_file_name(root: &Path, relative: &str) -> String {
+    root.join(relative).display().to_string()
+}
+
+/// Read the captured manifest bytes, naming the file under `root`.
+fn parse_manifest(root: &Path, bytes: &[u8]) -> Result<ReadManifest, RenderProblem> {
+    let file = bundle_file_name(root, MANIFEST_FILE);
+    read_manifest(&file, bytes)
+        .map_err(|report| refused(ProblemKind::ManifestInvalid, &file, report))
 }
 
 /// One immutable view of every governed bundle file. The shared `Bytes`
@@ -62,7 +82,7 @@ pub(crate) struct BundleSnapshot {
 }
 
 impl BundleSnapshot {
-    fn load(root: &Path) -> Result<(Self, Manifest, Vec<u8>), RenderProblem> {
+    fn load(root: &Path) -> Result<(Self, ReadManifest, Vec<u8>), RenderProblem> {
         #[cfg(any(target_os = "linux", target_vendor = "apple"))]
         {
             use std::ffi::OsStr;
@@ -73,7 +93,7 @@ impl BundleSnapshot {
                 OsStr::new(MANIFEST_FILE),
                 &root.join(MANIFEST_FILE),
             )?;
-            let manifest = Manifest::parse(&manifest_bytes)?;
+            let manifest = parse_manifest(root, &manifest_bytes)?;
 
             let mut files = BTreeMap::new();
             files.insert(MANIFEST_FILE.to_owned(), Bytes::new(manifest_bytes.clone()));
@@ -407,7 +427,7 @@ impl Bundle {
     ) -> Result<Self, RenderProblem> {
         let (snapshot, manifest_bytes) = BundleSnapshot::load_unparsed(root)?;
         bind_verified_snapshot(&snapshot, verified)?;
-        let manifest = Manifest::parse(&manifest_bytes)?;
+        let manifest = parse_manifest(root, &manifest_bytes)?;
         let bundle_hash = verified
             .digest()
             .strip_prefix("sha256:")
@@ -427,86 +447,118 @@ impl Bundle {
         self.snapshot.package_inputs()
     }
 
+    /// Assemble the documents from the captured bytes, reporting every
+    /// missing or refused file at once.
     fn assemble(
         root: &Path,
-        manifest: Manifest,
+        read: ReadManifest,
         manifest_bytes: Vec<u8>,
         snapshot: BundleSnapshot,
         bundle_hash: String,
     ) -> Result<Self, RenderProblem> {
+        let ReadManifest {
+            manifest,
+            document: manifest_document,
+        } = read;
+        let mut findings = Findings::default();
+        let mut tables: BTreeMap<String, Option<Value>> = BTreeMap::new();
+        let mut label_documents = BTreeMap::new();
         let mut documents = BTreeMap::new();
-        for spec in manifest.documents.clone() {
+        for (index, spec) in manifest.documents.iter().enumerate() {
             let mut labels = BTreeMap::new();
-            for locale in &spec.labels {
-                let rel = format!("labels/{locale}.yaml");
-                let bytes = snapshot.get(&rel).ok_or_else(|| {
-                    RenderProblem::new(
-                        ProblemKind::LabelsInvalid,
-                        format!(
-                            "document {:?} declares label {locale:?}, but {rel} is missing",
-                            spec.id
-                        ),
-                    )
-                    .with_locations(vec![rel.clone()])
-                })?;
-                let table: Value = serde_norway::from_slice(bytes.as_slice()).map_err(|err| {
-                    RenderProblem::new(
-                        ProblemKind::LabelsInvalid,
-                        format!("label file labels/{locale}.yaml is not valid YAML: {err}"),
-                    )
-                })?;
-                let table = require_string_map(&table, locale)?;
-                labels.insert(locale.clone(), table);
+            for (position, locale) in spec.labels.iter().enumerate() {
+                let rel = labels_path(locale);
+                let table = tables.entry(locale.clone()).or_insert_with(|| {
+                    let bytes = snapshot.get(&rel)?;
+                    match read_labels(&bundle_file_name(root, &rel), bytes.as_slice()) {
+                        Ok(read) => {
+                            findings.labels.extend(read.document.warnings());
+                            label_documents.insert(locale.clone(), read.document);
+                            Some(read.table)
+                        }
+                        Err(report) => {
+                            findings.labels.extend(report);
+                            None
+                        }
+                    }
+                });
+                match table {
+                    Some(table) => {
+                        labels.insert(locale.clone(), table.clone());
+                    }
+                    None if snapshot.get(&rel).is_none() => {
+                        findings.manifest.push(error_at(
+                            &manifest_document,
+                            "render.bundle.missing-labels",
+                            &format!("/documents/{index}/labels/{position}"),
+                            &format!("the bundle has no label table {rel}"),
+                            &format!("Write {rel} with the RenderLabels envelope, or remove the locale from the document."),
+                        ));
+                    }
+                    None => {}
+                }
             }
             let schema = match &spec.schema {
                 None => None,
                 Some(rel) => {
-                    let key = relative_path_key(rel)?;
-                    let bytes = snapshot.get(&key).ok_or_else(|| {
-                        RenderProblem::new(
-                            ProblemKind::ManifestInvalid,
-                            format!("document {:?} schema {} is missing", spec.id, rel.display()),
-                        )
-                    })?;
-                    let value: Value = serde_json::from_slice(bytes.as_slice()).map_err(|err| {
-                        RenderProblem::new(
-                            ProblemKind::ManifestInvalid,
-                            format!("schema {} is not valid JSON: {err}", rel.display()),
-                        )
-                    })?;
-                    Some(value)
+                    let pointer = format!("/documents/{index}/schemaFile");
+                    match bundle_key(rel)
+                        .and_then(|key| snapshot.get(&key).map(|bytes| (key, bytes)))
+                    {
+                        None => {
+                            findings.manifest.push(error_at(
+                                &manifest_document,
+                                "render.bundle.missing-schema-file",
+                                &pointer,
+                                "the schema file is not in the bundle",
+                                "Add the schema file at this path inside the bundle, or correct the path.",
+                            ));
+                            None
+                        }
+                        Some((key, bytes)) => {
+                            match serde_json::from_slice::<Value>(bytes.as_slice()) {
+                                Ok(value) => Some(value),
+                                Err(error) => {
+                                    findings.manifest.push(invalid_schema(root, &key, &error));
+                                    None
+                                }
+                            }
+                        }
+                    }
                 }
             };
             // The entry bytes must be in the same snapshot the world will
             // consume; failing here gives a plain problem instead of a
             // compile one.
-            let entry_key = relative_path_key(&spec.entry)?;
-            if snapshot.get(&entry_key).is_none() {
-                return Err(RenderProblem::new(
-                    ProblemKind::ManifestInvalid,
-                    format!(
-                        "document {:?} entry {} does not exist",
-                        spec.id,
-                        spec.entry.display()
-                    ),
+            if bundle_key(&spec.entry).is_none_or(|key| snapshot.get(&key).is_none()) {
+                findings.manifest.push(error_at(
+                    &manifest_document,
+                    "render.bundle.missing-entry-file",
+                    &format!("/documents/{index}/entryFile"),
+                    "the entry file is not in the bundle",
+                    "Add the .typ file at this path inside the bundle, or correct the path.",
                 ));
             }
             documents.insert(
                 spec.id.clone(),
                 LoadedDocument {
-                    spec,
+                    spec: spec.clone(),
                     labels,
                     schema,
                 },
             );
         }
-        let fonts = load_fonts(&snapshot)?;
+        let fonts = load_fonts(root, &snapshot, &mut findings.fonts);
+        if let Some(problem) = findings.into_problem(root) {
+            return Err(problem);
+        }
         Ok(Self {
             root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
             manifest,
             manifest_bytes,
             bundle_hash,
             documents,
+            label_sources: label_documents,
             fonts,
             snapshot,
         })
@@ -580,27 +632,67 @@ fn bind_verified_snapshot(
     }
 }
 
-fn require_string_map(table: &Value, locale: &str) -> Result<Value, RenderProblem> {
-    let ok = table
-        .as_object()
-        .is_some_and(|map| map.values().all(|v| v.is_string()));
-    if ok {
-        Ok(table.clone())
-    } else {
-        Err(RenderProblem::new(
-            ProblemKind::LabelsInvalid,
-            format!(
-                "label file labels/{locale}.yaml must be a flat map of string keys to string values"
-            ),
-        ))
+/// What assembling a bundle found, by the problem kind it maps to.
+#[derive(Default)]
+struct Findings {
+    manifest: Report,
+    labels: Report,
+    fonts: Report,
+}
+
+impl Findings {
+    /// One problem carrying every finding, named by the first kind that
+    /// has an error: the manifest, then the label tables, then the fonts.
+    fn into_problem(self, root: &Path) -> Option<RenderProblem> {
+        let kind = if self.manifest.has_errors() {
+            ProblemKind::ManifestInvalid
+        } else if self.labels.has_errors() {
+            ProblemKind::LabelsInvalid
+        } else if self.fonts.has_errors() {
+            ProblemKind::FontInvalid
+        } else {
+            return None;
+        };
+        let mut diagnostics = self.manifest.into_diagnostics();
+        diagnostics.extend(self.labels.into_diagnostics());
+        diagnostics.extend(self.fonts.into_diagnostics());
+        Some(
+            RenderProblem::new(kind, format!("the bundle {} was refused", root.display()))
+                .with_diagnostics(diagnostics),
+        )
     }
+}
+
+/// The snapshot key of a manifest path, or none when it leaves the bundle.
+fn bundle_key(path: &Path) -> Option<String> {
+    relative_path_key(path).ok()
+}
+
+/// A schema file that is not JSON, placed where the JSON parser stopped.
+fn invalid_schema(root: &Path, key: &str, error: &serde_json::Error) -> Diagnostic {
+    let mut diagnostic = Diagnostic::error(
+        "render.bundle.invalid-schema",
+        "",
+        "the schema file is not valid JSON",
+        "Correct the JSON at this position; the file holds one JSON Schema (draft 2020-12).",
+    );
+    diagnostic.source = Some(Source {
+        file: bundle_file_name(root, key),
+        line: Some(error.line()),
+        column: Some(error.column()),
+    });
+    diagnostic
 }
 
 /// The binary's baseline set (`typst-assets` order) first, then bundle
 /// fonts sorted by relative path — the same book order the Typst CLI
 /// builds. The order is part of byte stability: it decides font fallback,
 /// so it may never depend on filesystem iteration order.
-fn load_fonts(snapshot: &BundleSnapshot) -> Result<Vec<typst::text::Font>, RenderProblem> {
+fn load_fonts(
+    root: &Path,
+    snapshot: &BundleSnapshot,
+    findings: &mut Report,
+) -> Vec<typst::text::Font> {
     let mut fonts = Vec::new();
     let mut files = Vec::new();
     for (path, bytes) in snapshot.iter() {
@@ -642,19 +734,21 @@ fn load_fonts(snapshot: &BundleSnapshot) -> Result<Vec<typst::text::Font>, Rende
             loaded_any = true;
         }
         if !loaded_any {
-            return Err(RenderProblem::new(
-                ProblemKind::FontInvalid,
-                format!(
-                    "font {} is not a loadable font file",
-                    Path::new(path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy())
-                        .unwrap_or_default()
-                ),
-            ));
+            let mut diagnostic = Diagnostic::error(
+                "render.font.invalid",
+                "",
+                "the file is not a loadable font",
+                "Replace it with a TrueType, OpenType, or WOFF font, or move it out of fonts/.",
+            );
+            diagnostic.source = Some(Source {
+                file: bundle_file_name(root, path),
+                line: None,
+                column: None,
+            });
+            findings.push(diagnostic);
         }
     }
-    Ok(fonts)
+    fonts
 }
 
 fn relative_path_key(path: &Path) -> Result<String, RenderProblem> {
@@ -684,6 +778,86 @@ fn relative_path_key(path: &Path) -> Result<String, RenderProblem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LABELS_CAPTURED: &str = "apiVersion: id.registrystack.org/formats/render/labels/v1alpha1\nkind: RenderLabels\nlabels:\n  title: Captured\n";
+
+    fn findings(problem: &RenderProblem) -> Vec<(&str, &str, Option<usize>, Option<usize>)> {
+        problem
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                let source = diagnostic
+                    .source
+                    .as_ref()
+                    .expect("every finding names its file");
+                (
+                    diagnostic.code.as_str(),
+                    diagnostic.path.as_str(),
+                    source.line,
+                    source.column,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cfg_diag_5_every_missing_or_refused_file_is_reported_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_path = dir.path().canonicalize().unwrap();
+        let root = root_path.as_path();
+        for sub in ["templates", "labels", "schemas", "fonts"] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        std::fs::write(
+            root.join(MANIFEST_FILE),
+            "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entryFile: templates/notice.typ\n    schemaFile: schemas/notice.schema.json\n    labels: [en, fr, sw]\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("labels/en.yaml"), LABELS_CAPTURED).unwrap();
+        std::fs::write(root.join("labels/fr.yaml"), "title: Capturé\n").unwrap();
+        std::fs::write(root.join("schemas/notice.schema.json"), "{\n  \"type\": \n").unwrap();
+        std::fs::write(root.join("fonts/broken.ttf"), "not a font").unwrap();
+
+        let problem = Bundle::load(root).expect_err("refused");
+        assert_eq!(problem.kind, ProblemKind::ManifestInvalid);
+        assert_eq!(
+            findings(&problem),
+            [
+                (
+                    "render.bundle.missing-labels",
+                    "/documents/0/labels/2",
+                    Some(9),
+                    Some(22)
+                ),
+                ("render.bundle.invalid-schema", "", Some(3), Some(0)),
+                (
+                    "render.bundle.missing-entry-file",
+                    "/documents/0/entryFile",
+                    Some(7),
+                    Some(16)
+                ),
+                ("config.missing-envelope", "", Some(1), Some(1)),
+                ("render.font.invalid", "", None, None),
+            ]
+        );
+        let files: Vec<String> = problem
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.source.as_ref().unwrap().file.clone())
+            .collect();
+        assert_eq!(files[0], root.join(MANIFEST_FILE).display().to_string());
+        assert_eq!(
+            files[1],
+            root.join("schemas/notice.schema.json")
+                .display()
+                .to_string()
+        );
+        assert_eq!(files[3], root.join("labels/fr.yaml").display().to_string());
+        assert_eq!(
+            files[4],
+            root.join("fonts/broken.ttf").display().to_string()
+        );
+    }
 
     #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     #[test]
@@ -727,11 +901,12 @@ mod tests {
         std::fs::write(root.join(MANIFEST_FILE), "not: [valid").unwrap();
         let malformed = Bundle::load(root).unwrap_err();
         assert_eq!(malformed.kind, ProblemKind::ManifestInvalid);
-        assert!(malformed.detail.contains("manifest.yaml is not valid"));
+        assert!(malformed.detail.contains("manifest.yaml was refused"));
+        assert_eq!(malformed.diagnostics[0].code, "yaml.unexpected-end");
 
         std::fs::write(
             root.join(MANIFEST_FILE),
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments: []\n",
+            "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments: []\n",
         )
         .unwrap();
         let unsafe_entry = Bundle::load(root).unwrap_err();
@@ -749,7 +924,7 @@ mod tests {
         }
         std::fs::write(
             root.join(MANIFEST_FILE),
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entry: templates/notice.typ\n    schema: schemas/notice.schema.json\n    labels: [en]\n",
+            "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entryFile: templates/notice.typ\n    schemaFile: schemas/notice.schema.json\n    labels: [en]\n",
         )
         .unwrap();
         let entry = root.join("templates/notice.typ");
@@ -757,7 +932,7 @@ mod tests {
         let schema = root.join("schemas/notice.schema.json");
         let font = root.join("fonts/NotoSans-Regular.ttf");
         std::fs::write(&entry, "Captured").unwrap();
-        std::fs::write(&labels, "title: Captured\n").unwrap();
+        std::fs::write(&labels, LABELS_CAPTURED).unwrap();
         std::fs::write(&schema, r#"{"type":"object"}"#).unwrap();
         std::fs::write(
             &font,
@@ -802,7 +977,7 @@ mod tests {
         std::fs::create_dir_all(root.join("schemas")).unwrap();
         std::fs::write(
             root.join(MANIFEST_FILE),
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entry: ./templates//notice.typ\n    schema: schemas//./notice.schema.json\n",
+            "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entryFile: ./templates//notice.typ\n    schemaFile: schemas//./notice.schema.json\n",
         )
         .unwrap();
         std::fs::write(root.join("templates/notice.typ"), "= Notice").unwrap();
@@ -831,7 +1006,7 @@ mod tests {
         std::fs::create_dir(source.path().join("templates")).unwrap();
         std::fs::write(
             source.path().join(MANIFEST_FILE),
-            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entry: templates/notice.typ\n",
+            "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entryFile: templates/notice.typ\n",
         )
         .unwrap();
         std::fs::write(source.path().join("templates/notice.typ"), "= Accepted").unwrap();

@@ -163,14 +163,14 @@ fn manifest_navigation_and_completion_respect_dataset_and_entity_scope() {
         .is_empty());
 }
 
-const RENDER: &str = r#"apiVersion: render.registrystack.org/v1alpha1
+const RENDER: &str = r#"apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1
 kind: RenderBundle
 bundleVersion: 1
 documents:
   - id: <|document|>receipt
     version: 1
-    entry: <|entry|>templates/receipt.typ
-    schema: <|schema|>schemas/receipt.json
+    entryFile: <|entry|>templates/receipt.typ
+    schemaFile: <|schema|>schemas/receipt.json
     labels: [<|label|>en]
 "#;
 fn render_project() -> Project {

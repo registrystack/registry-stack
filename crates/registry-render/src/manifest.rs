@@ -5,17 +5,55 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use registry_platform_yaml::{
+    ApiVersion, BoundedU32, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified,
+    LocalId, Reader, RemovedKey, Report, RetiredApiVersion, Severity, UniqueIdList, UniqueList,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::problem::{ProblemKind, RenderProblem};
 
-pub const MANIFEST_API_VERSION: &str = "render.registrystack.org/v1alpha1";
+pub const MANIFEST_API_VERSION: &str = "id.registrystack.org/formats/render/bundle/v1alpha1";
+/// The `apiVersion` bundles wrote before the format moved to
+/// id.registrystack.org.
+pub const RETIRED_MANIFEST_API_VERSION: &str = "render.registrystack.org/v1alpha1";
 pub const MANIFEST_KIND: &str = "RenderBundle";
 pub const MANIFEST_FILE: &str = "manifest.yaml";
+
+/// The bundle manifest as the shared reader accepts it.
+pub(crate) const MANIFEST_FORMAT: FormatSpec<'static> = FormatSpec {
+    kind: MANIFEST_KIND,
+    envelope: EnvelopeRule::ApiVersionKind {
+        api_versions: &[ApiVersion::current(MANIFEST_API_VERSION)],
+        retired_api_versions: &[RetiredApiVersion {
+            api_version: RETIRED_MANIFEST_API_VERSION,
+            replacement:
+                "Change apiVersion to id.registrystack.org/formats/render/bundle/v1alpha1, \
+                          rename each document's entry to entryFile and schema to schemaFile, and \
+                          give each label file the RenderLabels envelope.",
+        }],
+    },
+    removed_keys: &[
+        RemovedKey {
+            pointer: "/hashes",
+            replacement: "Remove hashes, and build a deployment package with \
+                          `registry-render package --bundle <source> --output <directory>`.",
+        },
+        RemovedKey {
+            pointer: "/documents/*/entry",
+            replacement: "Rename entry to entryFile; the value is unchanged.",
+        },
+        RemovedKey {
+            pointer: "/documents/*/schema",
+            replacement: "Rename schema to schemaFile; the value is unchanged.",
+        },
+    ],
+};
 
 /// The PDF standard a document is rendered under. Mirrors the Typst CLI's
 /// spellings exactly so bundles and CLI examples agree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum PdfStandardSpec {
     #[serde(rename = "1.4")]
     V1_4,
@@ -93,24 +131,74 @@ impl fmt::Display for PdfStandardSpec {
     }
 }
 
-/// One document type in a bundle.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `manifest.yaml`: the document types a bundle declares.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ManifestFile {
+    pub(crate) api_version: String,
+    pub(crate) kind: String,
+    /// Author-defined bundle version, monotonic per bundle.
+    pub(crate) bundle_version: BoundedU32<0, { u32::MAX }>,
+    /// The document types, each with an id unique in the bundle.
+    #[serde(default)]
+    pub(crate) documents: UniqueIdList<DocumentFile>,
+}
+
+/// One document type as `manifest.yaml` writes it.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct DocumentFile {
+    /// Stable document identifier used in requests and routes.
+    pub(crate) id: LocalId,
+    /// The document's own version; printed on paper by templates that wish to.
+    pub(crate) version: BoundedU32<0, { u32::MAX }>,
+    /// Entry point relative to the bundle root: a `.typ` file inside the
+    /// bundle.
+    pub(crate) entry_file: String,
+    /// JSON Schema (draft 2020-12) for the request data, relative to the
+    /// bundle root: a `.json` file inside the bundle.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub(crate) schema_file: Option<String>,
+    /// Label tables the template receives, by locale: each names
+    /// `labels/<locale>.yaml`.
+    #[serde(default)]
+    pub(crate) labels: UniqueList<LocalId>,
+    /// PDF standard for this document; plain PDF when absent.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(with = "PdfStandardSpec"))]
+    pub(crate) pdf_standard: Option<PdfStandardSpec>,
+}
+
+impl Identified for DocumentFile {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+}
+
+/// One document type in a bundle.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentSpec {
     /// Stable document identifier used in requests and routes.
     pub id: String,
     /// The document's own version; printed on paper by templates that wish to.
     pub version: u32,
-    /// Entry point relative to the bundle root (a `.typ` file).
+    /// Entry point relative to the bundle root (a `.typ` file), as
+    /// `entryFile` writes it.
+    #[serde(rename = "entryFile")]
     pub entry: PathBuf,
-    /// JSON Schema (draft 2020-12) for the request data, relative to root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// JSON Schema (draft 2020-12) for the request data, relative to root,
+    /// as `schemaFile` writes it.
+    #[serde(rename = "schemaFile", skip_serializing_if = "Option::is_none")]
     pub schema: Option<PathBuf>,
     /// Label tables (in `labels/`) the template receives, by locale.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     /// PDF standard for this document; `None` means plain PDF.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_standard: Option<PdfStandardSpec>,
 }
 
@@ -122,147 +210,118 @@ impl DocumentSpec {
 }
 
 /// The full bundle manifest.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Manifest {
     pub api_version: String,
     pub kind: String,
     /// Author-defined bundle version, monotonic per bundle.
     pub bundle_version: u32,
-    #[serde(default, rename = "documents")]
     pub documents: Vec<DocumentSpec>,
 }
 
-impl Manifest {
-    /// Parse and structurally validate manifest bytes.
-    pub fn parse(bytes: &[u8]) -> Result<Self, RenderProblem> {
-        let value: serde_norway::Value = serde_norway::from_slice(bytes).map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!("manifest.yaml is not valid: {err}"),
-            )
-        })?;
-        if value
-            .as_mapping()
-            .is_some_and(|mapping| mapping.contains_key("hashes"))
-        {
-            return Err(RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                "manifest.yaml key hashes is no longer accepted; remove it and build a deployment package with `registry-render package --bundle <source> --output <directory>`",
-            ));
-        }
-        let manifest: Manifest = serde_norway::from_slice(bytes).map_err(|err| {
-            RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!("manifest.yaml is not valid: {err}"),
-            )
-        })?;
-        let text = std::str::from_utf8(bytes).map_err(|_| {
-            RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                "manifest.yaml is not valid UTF-8",
-            )
-        })?;
-        registry_platform_config::reject_environment_expressions_in_authored_yaml(text).map_err(
-            |error| {
-                RenderProblem::new(ProblemKind::ManifestInvalid, error.message())
-                    .with_locations(vec![MANIFEST_FILE.to_owned()])
-            },
-        )?;
-        if manifest.api_version != MANIFEST_API_VERSION {
-            return Err(RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!(
-                    "manifest apiVersion must be {MANIFEST_API_VERSION}, found {}",
-                    manifest.api_version
-                ),
-            ));
-        }
-        if manifest.kind != MANIFEST_KIND {
-            return Err(RenderProblem::new(
-                ProblemKind::ManifestInvalid,
-                format!(
-                    "manifest kind must be {MANIFEST_KIND}, found {}",
-                    manifest.kind
-                ),
-            ));
-        }
-        manifest.validate()?;
-        Ok(manifest)
-    }
+/// A manifest the reader accepted, with the document its findings are
+/// placed in.
+#[derive(Debug, Clone)]
+pub(crate) struct ReadManifest {
+    pub(crate) manifest: Manifest,
+    pub(crate) document: Document,
+}
 
-    fn validate(&self) -> Result<(), RenderProblem> {
-        let mut seen = std::collections::BTreeSet::new();
-        for doc in &self.documents {
-            if doc.id.is_empty()
-                || !doc
-                    .id
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            {
-                return Err(RenderProblem::new(
-                    ProblemKind::ManifestInvalid,
-                    format!(
-                        "document id must be lowercase kebab-case, found {:?}",
-                        doc.id
-                    ),
-                ));
-            }
-            if !seen.insert(doc.id.as_str()) {
-                return Err(RenderProblem::new(
-                    ProblemKind::ManifestInvalid,
-                    format!("duplicate document id {:?}", doc.id),
-                ));
-            }
-            let entry = doc.entry.to_string_lossy();
-            if entry.is_empty()
-                || !entry.ends_with(".typ")
-                || entry.contains("..")
-                || entry.starts_with('/')
-            {
-                return Err(RenderProblem::new(
-                    ProblemKind::ManifestInvalid,
-                    format!(
-                        "document {:?} entry must be a .typ path inside the bundle",
-                        doc.id
-                    ),
-                ));
-            }
+/// Read `manifest.yaml` through the shared reader, refusing every `${...}`
+/// expression (CFG-SEC-2), and check each document's file paths. `file` is
+/// the name every diagnostic carries.
+pub(crate) fn read_manifest(file: &str, bytes: &[u8]) -> Result<ReadManifest, Report> {
+    let mut hook = registry_platform_config::AuthoredExpressions;
+    let decoded = Reader::new(file)
+        .with_hook(&mut hook)
+        .decode::<ManifestFile>(bytes, &Expect::one(&MANIFEST_FORMAT))?;
+    let document = decoded.document;
+    let mut findings = document.warnings();
+    for (index, spec) in decoded.value.documents.iter().enumerate() {
+        if !is_bundle_path(&spec.entry_file, ".typ") {
+            findings.push(error_at(
+                &document,
+                "render.bundle.invalid-entry-file",
+                &format!("/documents/{index}/entryFile"),
+                "the entry file must be a relative .typ path inside the bundle",
+                "Name a .typ file under the bundle directory, without `..` or a leading `/`.",
+            ));
+        }
+        if let Some(schema) = &spec.schema_file {
             // The schema gets the same containment rule as the entry: a
             // schema outside the bundle would sit outside package governance.
-            if let Some(schema) = doc.schema.as_ref() {
-                let schema = schema.to_string_lossy();
-                if schema.is_empty()
-                    || !schema.ends_with(".json")
-                    || schema.contains("..")
-                    || schema.starts_with('/')
-                {
-                    return Err(RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!(
-                            "document {:?} schema must be a .json path inside the bundle",
-                            doc.id
-                        ),
-                    ));
-                }
-            }
-            for locale in &doc.labels {
-                if locale.is_empty()
-                    || !locale
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-                {
-                    return Err(RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!(
-                            "document {:?} label name must be kebab-case, found {:?}",
-                            doc.id, locale
-                        ),
-                    ));
-                }
+            if !is_bundle_path(schema, ".json") {
+                findings.push(error_at(
+                    &document,
+                    "render.bundle.invalid-schema-file",
+                    &format!("/documents/{index}/schemaFile"),
+                    "the schema file must be a relative .json path inside the bundle",
+                    "Name a .json file under the bundle directory, without `..` or a leading `/`.",
+                ));
             }
         }
-        Ok(())
+    }
+    if findings.has_errors() {
+        return Err(findings);
+    }
+    let file = decoded.value;
+    let manifest = Manifest {
+        api_version: file.api_version,
+        kind: file.kind,
+        bundle_version: file.bundle_version.get(),
+        documents: file
+            .documents
+            .into_vec()
+            .into_iter()
+            .map(|spec| DocumentSpec {
+                id: spec.id.into_string(),
+                version: spec.version.get(),
+                entry: PathBuf::from(spec.entry_file),
+                schema: spec.schema_file.map(PathBuf::from),
+                labels: spec
+                    .labels
+                    .into_vec()
+                    .into_iter()
+                    .map(LocalId::into_string)
+                    .collect(),
+                pdf_standard: spec.pdf_standard,
+            })
+            .collect(),
+    };
+    Ok(ReadManifest { manifest, document })
+}
+
+/// An error placed at the value of the member at `pointer`.
+pub(crate) fn error_at(
+    document: &Document,
+    code: &str,
+    pointer: &str,
+    message: &str,
+    action: &str,
+) -> Diagnostic {
+    document.diagnostic_at_value(Severity::Error, code, pointer, message, action)
+}
+
+/// A relative path with the given suffix that stays inside the bundle.
+fn is_bundle_path(path: &str, suffix: &str) -> bool {
+    !path.is_empty() && path.ends_with(suffix) && !path.contains("..") && !path.starts_with('/')
+}
+
+/// The problem Render reports when the shared reader refused `file`: one
+/// sentence of its own, then the reader's diagnostics unchanged.
+pub(crate) fn refused(kind: ProblemKind, file: &str, report: Report) -> RenderProblem {
+    RenderProblem::new(kind, format!("{file} was refused"))
+        .with_diagnostics(report.into_diagnostics())
+}
+
+impl Manifest {
+    /// Read manifest bytes through the shared reader and check them; the
+    /// diagnostics name the file `manifest.yaml`.
+    pub fn parse(bytes: &[u8]) -> Result<Self, RenderProblem> {
+        read_manifest(MANIFEST_FILE, bytes)
+            .map(|read| read.manifest)
+            .map_err(|report| refused(ProblemKind::ManifestInvalid, MANIFEST_FILE, report))
     }
 
     pub fn document(&self, id: &str) -> Result<&DocumentSpec, RenderProblem> {
@@ -279,12 +338,48 @@ impl Manifest {
 mod tests {
     use super::*;
 
+    const HEAD: &str =
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\n";
+
+    fn refused_codes(text: &str) -> Vec<(String, String)> {
+        let problem = Manifest::parse(text.as_bytes()).expect_err("refused");
+        assert_eq!(problem.kind, ProblemKind::ManifestInvalid);
+        problem
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect()
+    }
+
     #[test]
     fn rejects_unknown_fields_and_wrong_kind() {
-        let bad = b"apiVersion: render.registrystack.org/v1alpha1\nkind: Other\nbundleVersion: 1\n";
-        assert!(Manifest::parse(bad).is_err());
-        let unknown = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\nextra: 1\n";
-        assert!(Manifest::parse(unknown).is_err());
+        let bad = "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: Other\nbundleVersion: 1\n";
+        assert!(Manifest::parse(bad.as_bytes()).is_err());
+        let unknown = format!("{HEAD}bundleVersion: 1\nextra: 1\n");
+        assert_eq!(
+            refused_codes(&unknown),
+            [("config.unknown-key".to_owned(), "/extra".to_owned())]
+        );
+    }
+
+    #[test]
+    fn cfg_diag_5_two_unknown_keys_are_both_reported() {
+        let text = format!(
+            "{HEAD}bundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entryFile: templates/d.typ\n    colour: red\n    size: 2\n"
+        );
+        assert_eq!(
+            refused_codes(&text),
+            [
+                (
+                    "config.unknown-key".to_owned(),
+                    "/documents/0/colour".to_owned()
+                ),
+                (
+                    "config.unknown-key".to_owned(),
+                    "/documents/0/size".to_owned()
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -292,35 +387,159 @@ mod tests {
         // A schema outside the bundle sits outside the package; the entry rule
         // (no `..`, no absolute, correct suffix) applies to it too.
         let doc = |schema: &str| {
-            format!("apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entry: templates/d.typ\n    schema: {schema}\n")
+            format!("{HEAD}bundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entryFile: templates/d.typ\n    schemaFile: {schema}\n")
         };
         assert!(Manifest::parse(doc("schemas/d.schema.json").as_bytes()).is_ok());
-        assert!(Manifest::parse(doc("../outside.schema.json").as_bytes()).is_err());
-        assert!(Manifest::parse(doc("/etc/evil.schema.json").as_bytes()).is_err());
-        assert!(Manifest::parse(doc("schemas/d.yaml").as_bytes()).is_err());
+        for bad in [
+            "../outside.schema.json",
+            "/etc/evil.schema.json",
+            "schemas/d.yaml",
+        ] {
+            assert_eq!(
+                refused_codes(&doc(bad)),
+                [(
+                    "render.bundle.invalid-schema-file".to_owned(),
+                    "/documents/0/schemaFile".to_owned()
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn every_path_finding_is_reported_at_its_value() {
+        let text = format!(
+            "{HEAD}bundleVersion: 1\ndocuments:\n  - id: a\n    version: 1\n    entryFile: ../a.typ\n  - id: b\n    version: 1\n    entryFile: templates/b.txt\n    schemaFile: /b.json\n"
+        );
+        let problem = Manifest::parse(text.as_bytes()).expect_err("refused");
+        let found: Vec<_> = problem
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                let source = diagnostic.source.as_ref().unwrap();
+                (
+                    diagnostic.code.as_str(),
+                    source.file.as_str(),
+                    source.line,
+                    source.column,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "render.bundle.invalid-entry-file",
+                    MANIFEST_FILE,
+                    Some(7),
+                    Some(16)
+                ),
+                (
+                    "render.bundle.invalid-entry-file",
+                    MANIFEST_FILE,
+                    Some(10),
+                    Some(16)
+                ),
+                (
+                    "render.bundle.invalid-schema-file",
+                    MANIFEST_FILE,
+                    Some(11),
+                    Some(17)
+                ),
+            ]
+        );
+        assert_eq!(
+            problem.diagnostics[0].artifact.as_deref(),
+            Some(MANIFEST_KIND)
+        );
     }
 
     #[test]
     fn parses_minimal_manifest() {
-        let good = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 3\ndocuments:\n  - id: receipt\n    version: 3\n    entry: templates/receipt.typ\n    labels: [ar, fr]\n";
-        let m = Manifest::parse(good).expect("parses");
+        let good = format!("{HEAD}bundleVersion: 3\ndocuments:\n  - id: receipt\n    version: 3\n    entryFile: templates/receipt.typ\n    labels: [ar, fr]\n");
+        let m = Manifest::parse(good.as_bytes()).expect("parses");
         assert_eq!(m.documents.len(), 1);
         assert_eq!(m.documents[0].labels, vec!["ar", "fr"]);
         assert_eq!(m.documents[0].pdf_standard.map(|s| s.to_string()), None);
     }
 
     #[test]
-    fn retired_manifest_hashes_name_the_package_replacement() {
-        let manifest = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments: []\nhashes:\n  templates/a.typ: aaaa\n";
-        let problem = Manifest::parse(manifest).expect_err("self-hashing manifest is retired");
-        assert!(problem.detail.contains("hashes"));
-        assert!(problem.detail.contains("registry-render package"));
+    fn duplicate_document_ids_and_labels_are_refused_at_the_repeat() {
+        let labels = format!(
+            "{HEAD}bundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entryFile: templates/d.typ\n    labels: [en, en]\n"
+        );
+        assert_eq!(
+            refused_codes(&labels),
+            [(
+                "config.duplicate-item".to_owned(),
+                "/documents/0/labels/1".to_owned()
+            )]
+        );
+        let ids = format!(
+            "{HEAD}bundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entryFile: templates/d.typ\n  - id: d\n    version: 1\n    entryFile: templates/d.typ\n"
+        );
+        assert_eq!(
+            refused_codes(&ids),
+            [(
+                "config.duplicate-id".to_owned(),
+                "/documents/1/id".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn retired_manifest_keys_name_their_replacement() {
+        let manifest = format!("{HEAD}bundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entry: templates/d.typ\n    schema: schemas/d.json\nhashes:\n  templates/a.typ: aaaa\n");
+        let problem = Manifest::parse(manifest.as_bytes()).expect_err("retired keys");
+        let found: Vec<_> = problem
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code.as_str(),
+                    diagnostic.path.as_str(),
+                    diagnostic.suggested_action.as_str(),
+                )
+            })
+            .collect();
+        // The document also lacks the entryFile its entry was renamed to.
+        assert_eq!(
+            found,
+            [
+                ("config.missing-key", "/documents/0", "Add `entryFile`."),
+                (
+                    "config.removed-key",
+                    "/documents/0/entry",
+                    "Rename entry to entryFile; the value is unchanged."
+                ),
+                (
+                    "config.removed-key",
+                    "/documents/0/schema",
+                    "Rename schema to schemaFile; the value is unchanged."
+                ),
+                (
+                    "config.removed-key",
+                    "/hashes",
+                    "Remove hashes, and build a deployment package with `registry-render package --bundle <source> --output <directory>`."
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn cfg_change_2_the_retired_api_version_names_the_new_one() {
+        let manifest =
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\n";
+        let problem = Manifest::parse(manifest.as_bytes()).expect_err("retired");
+        assert_eq!(problem.diagnostics[0].code, "config.retired-api-version");
+        assert!(problem.diagnostics[0]
+            .suggested_action
+            .contains(MANIFEST_API_VERSION));
     }
 
     #[test]
     fn pdf_standard_roundtrip_kebab() {
-        let good = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: cert\n    version: 1\n    entry: templates/cert.typ\n    pdfStandard: a-4\n";
-        let m = Manifest::parse(good).expect("parses");
+        let good = format!("{HEAD}bundleVersion: 1\ndocuments:\n  - id: cert\n    version: 1\n    entryFile: templates/cert.typ\n    pdfStandard: a-4\n");
+        let m = Manifest::parse(good.as_bytes()).expect("parses");
         assert_eq!(m.documents[0].pdf_standard, Some(PdfStandardSpec::A4));
         assert_eq!(PdfStandardSpec::A4.to_typst(), typst_pdf::PdfStandard::A_4);
         assert_eq!(
@@ -330,20 +549,14 @@ mod tests {
     }
 
     #[test]
-    fn an_authored_manifest_carrying_an_environment_expression_is_refused() {
-        let manifest = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: receipt\n    version: 1\n    entry: templates/${DOCUMENT}.typ\n";
-        let problem = Manifest::parse(manifest).expect_err("expression refused");
-        assert!(matches!(problem.kind, ProblemKind::ManifestInvalid));
-        assert!(
-            problem.detail.contains("documents.0.entry"),
-            "{}",
-            problem.detail
+    fn cfg_sec_2_an_authored_manifest_carrying_an_environment_expression_is_refused() {
+        let manifest = format!("{HEAD}bundleVersion: 1\ndocuments:\n  - id: receipt\n    version: 1\n    entryFile: templates/${{DOCUMENT}}.typ\n");
+        assert_eq!(
+            refused_codes(&manifest),
+            [(
+                "config.substitution-not-allowed".to_owned(),
+                "/documents/0/entryFile".to_owned()
+            )]
         );
-        assert!(
-            problem.detail.contains("runtime.yaml only"),
-            "{}",
-            problem.detail
-        );
-        assert_eq!(problem.locations, vec![MANIFEST_FILE.to_owned()]);
     }
 }

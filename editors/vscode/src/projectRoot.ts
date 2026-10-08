@@ -15,7 +15,7 @@ const PRODUCT_MARKERS = [
   ['scheduling.yaml', 'kind', 'SchedulingPolicyPackage', 'apiVersion', 'registry.registrystack.org/scheduling-policy-package/'],
   ['messaging.yaml', 'kind', 'MessagingPackage', 'apiVersion', 'registry.registrystack.org/messaging-package/'],
   ['origins.yaml', '', '', 'schemaVersion', 'registry-discovery/origins/'],
-  ['manifest.yaml', 'kind', 'RenderBundle', 'apiVersion', 'render.registrystack.org/'],
+  ['manifest.yaml', 'kind', 'RenderBundle', 'apiVersion', 'id.registrystack.org/formats/render/bundle/'],
   ['metadata.yaml', '', '', 'schema_version', 'registry-manifest/v1', true],
 ] as const;
 

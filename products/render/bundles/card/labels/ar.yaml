@@ -1,8 +1,11 @@
-title: بطاقة مستفيد
-program: برنامج الخدمات العامة
-name: الاسم
-id: رقم الهوية
-region: المنطقة
-category: الفئة
-valid: صالحة حتى
-call-center: "الهاتف: 80 00 12 12"
+apiVersion: id.registrystack.org/formats/render/labels/v1alpha1
+kind: RenderLabels
+labels:
+  title: بطاقة مستفيد
+  program: برنامج الخدمات العامة
+  name: الاسم
+  id: رقم الهوية
+  region: المنطقة
+  category: الفئة
+  valid: صالحة حتى
+  call-center: "الهاتف: 80 00 12 12"

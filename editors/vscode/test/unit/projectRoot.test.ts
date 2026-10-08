@@ -131,7 +131,7 @@ for (const [file, content] of [
   ['scheduling.yaml', 'apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1\n'],
   ['messaging.yaml', 'kind: MessagingPackage\n'],
   ['origins.yaml', 'schemaVersion: registry-discovery/origins/v1alpha1\n'],
-  ['manifest.yaml', 'apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\n'],
+  ['manifest.yaml', 'apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\n'],
   ['metadata.yaml', 'schema_version: registry-manifest/v1\n'],
 ]) {
   test(`${file} declares its current product family`, () => {

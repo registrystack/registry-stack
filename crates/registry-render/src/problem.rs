@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use registry_platform_yaml::{Diagnostic, Report};
+
 /// Base URI for RFC 9457 problem types, shared by HTTP responses and CLI
 /// `--json` failure documents.
 pub const PROBLEM_TYPE_BASE: &str = "https://render.registrystack.org/problems";
@@ -146,6 +148,10 @@ pub struct RenderProblem {
     pub pointers: Vec<String>,
     /// Locations inside the bundle or template, for compile failures.
     pub locations: Vec<String>,
+    /// The shared reader's diagnostics, unchanged, when a configuration file
+    /// was refused (CFG-DIAG-1). The detail is the one sentence Render puts
+    /// before them.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl RenderProblem {
@@ -155,6 +161,7 @@ impl RenderProblem {
             detail: detail.into(),
             pointers: Vec::new(),
             locations: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -168,8 +175,24 @@ impl RenderProblem {
         self
     }
 
+    pub fn with_diagnostics(mut self, diagnostics: Vec<Diagnostic>) -> Self {
+        self.diagnostics = diagnostics;
+        self
+    }
+
     pub fn exit_code(&self) -> i32 {
         self.kind.exit_code()
+    }
+
+    /// The problem as an operator reads it on standard error: one line of
+    /// Render's own, then each reader diagnostic in the shared human shape
+    /// with its summary line (CFG-DIAG-2).
+    pub fn render_human(&self) -> String {
+        let mut out = format!("registry-render: {self}\n");
+        if !self.diagnostics.is_empty() {
+            out.push_str(&Report::new(self.diagnostics.clone()).render_human());
+        }
+        out
     }
 }
 
