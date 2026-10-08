@@ -405,8 +405,10 @@ fn valid_jwks_uri(value: &str, allow_loopback_http: bool) -> bool {
 /// The key for the keyed references an audit record carries in place of raw
 /// identifiers, written `audit.hashKeyRef` beside the product's own audit
 /// settings.
-// A product's `audit` block embeds this with `#[serde(flatten)]`, so every
-// product spells the key the same way and one implementation checks it.
+// A product's `audit` block holds this as a member renamed to the reader's
+// shared-block marker `registry-platform-yaml/shared-block/...`, which the
+// reader reads as this block's members inline, so every product spells the key
+// the same way and one implementation checks it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
